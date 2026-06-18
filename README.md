@@ -1,9 +1,9 @@
-# labFlow
+# sampleFlow
 
-> Ingest and reconcile environmental monitoring laboratory data.
+> Ingest and reconcile environmental monitoring sample data.
 > Part of the [`tidyWaste`](https://github.com/vorpalvorpal) family of packages.
 
-`labFlow` is an email-triggered pipeline that turns the messy stream of
+`sampleFlow` is an email-triggered pipeline that turns the messy stream of
 laboratory and field results an environmental monitoring programme receives —
 ALS CSVs, human-made ACIRL spreadsheets, chain-of-custody PDFs, the occasional
 internal or third-party result — into clean, reconciled rows in a DuckDB-backed
@@ -12,7 +12,7 @@ monitoring database, with every value linked back to its archived original file.
 ## Design
 
 The architecture, data model and ingestion-pipeline design live in the pinned
-**[design issue](https://github.com/vorpalvorpal/labFlow/issues/1)**. In short:
+**[design issue](https://github.com/vorpalvorpal/sampleFlow/issues/1)**. In short:
 
 - **Generic/specific divide.** Lab- and format-specific *adapters* parse each
   source into a common **intermediate representation (IR)**. Everything
