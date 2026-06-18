@@ -1,0 +1,35 @@
+Package: labFlow
+Title: Ingest and Reconcile Environmental Monitoring Laboratory Data
+Version: 0.0.0.9000
+Authors@R:
+    person("R. Shannon", role = c("aut", "cre"),
+           email = "burrows_51mustard@icloud.com")
+Description: An email-triggered pipeline that ingests environmental
+    monitoring results from heterogeneous laboratory and field sources
+    (CSV, XLS/XLSX, PDF), reconciles them against a canonical analyte,
+    feature and method registry, and stores them in a DuckDB-backed
+    monitoring database with links to the archived original files.
+    Lab- and format-specific parsers ("adapters") emit a common
+    intermediate representation, so new laboratories, samplers or file
+    formats can be added without touching the shared ingestion,
+    reconciliation and storage machinery. Part of the 'tidyWaste' family
+    of packages.
+URL: https://github.com/vorpalvorpal/labFlow
+BugReports: https://github.com/vorpalvorpal/labFlow/issues
+License: MIT + file LICENSE
+Encoding: UTF-8
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.3.3
+Imports:
+    checkmate,
+    cli,
+    DBI,
+    dplyr,
+    duckdb,
+    purrr,
+    tibble,
+    units
+Suggests:
+    filelock,
+    testthat (>= 3.0.0)
+Config/testthat/edition: 3

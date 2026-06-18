@@ -1,0 +1,8 @@
+^.*\.Rproj$
+^\.Rproj\.user$
+^\.claude$
+^LICENSE\.md$
+^README\.Rmd$
+^\.github$
+^docs$
+^specs$
