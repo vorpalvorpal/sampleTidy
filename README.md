@@ -5,9 +5,9 @@
 
 `sampleFlow` is an email-triggered pipeline that turns the messy stream of
 laboratory and field results an environmental monitoring programme receives —
-ALS CSVs, human-made ACIRL spreadsheets, chain-of-custody PDFs, the occasional
-internal or third-party result — into clean, reconciled rows in a DuckDB-backed
-monitoring database, with every value linked back to its archived original file.
+CSVs, human-made spreadsheets, chain-of-custody PDFs, the internal or third-party 
+results — into clean, reconciled rows in a DuckDB-backed monitoring database, 
+with every value linked back to its archived original file.
 
 ## Design
 
