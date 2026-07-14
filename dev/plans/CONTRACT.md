@@ -129,6 +129,69 @@ for lab reports; `sample.organisation ∈ {ACIRL, Internal, ALS}`;
   `abs(a-b) <= 1e-9 * max(1, abs(a), abs(b))` after unit conversion, plus
   equal `quantified` flag; else conflict.
 
+### Phase 5 adjudications (from the test-suite audit; binding on implementation)
+
+- **A15** ESdat Chemistry2e header is **18 columns incl. `Method_Type`**
+  (between `Result_Type` and `Method_Name`) — verified against the live
+  corpus. `match()` fingerprints the full 18-col header; `Method_Type` is a
+  human method name, `Method_Name` the coded one. `Method_Type` is not mapped
+  into the IR (adapter maps `method_raw ← Method_Name`).
+- **A16** Domain write helpers `add_feature()`/`add_analyte()`/`add_project()`/
+  `correct_value()` resolve their own connection via
+  `with_db_write(st_config("live_db"))` (human-callable, no `con` arg). The
+  generic `db_append()`/`db_update()`/`db_delete()` take an explicit `con`
+  first arg and participate in the caller's open transaction.
+- **A17** The four built-in adapters self-register in `.onLoad()` via
+  `register_adapter()`; ids `esdat`, `als_xtab`, `als_enmrg`,
+  `acirl_field_xlsx`; reached through `adapter_registry()[[id]]`. `ingest_dir()`
+  works with zero setup.
+- **A18** `with_db_write()` lock contention is **cross-process only** — duckdb
+  1.4.1's per-process instance cache shares a same-process RW handle, so the
+  DESIGN §9.2 same-process test can't reproduce a busy lock. Tests use
+  `processx` to hold the lock in a separate OS process; the implementation is
+  unchanged (the real contention is poller-vs-human, i.e. two processes).
+- **A19** Non-lock connect errors in `with_db_write()` are wrapped in
+  `cli::cli_abort(class = "sampletidy_error")` with the original as parent —
+  never bare `stop()`. Lock errors are matched by message and retried.
+- **A20** `ingest_sighting` is deduped by **(hash, path)**: re-routing the
+  identical path adds no sighting; a different path with the same hash adds
+  exactly one. R-3.5's "one new sighting" for same-path re-route was a slip;
+  R-1.6's rule (append only when path ≠ `path_first_seen`) governs.
+- **A21** `route_files(paths, con)` takes a connection (it persists to
+  `ingest_file`). `ingest_file_upsert(con, hash, path, filename = NA,
+  size = NA)`; `path_first_seen` is set once, on first insert.
+- **A22** Assembly marks review-worthy rows **inline** on `event$results`
+  with columns `needs_review` (lgl, default FALSE), `review_kind`,
+  `review_payload`; the event shape (R-7.5) gains these. Reconcile folds them
+  into its own `review` output. Assembly does not emit a separate review
+  bucket.
+- **A23** Assembly groups a zero-row (metadata-only) parsed file by
+  `report$header$work_order` when present, else `meta$work_order_guess`.
+- **A24** The throwaway test schema does **not** create the live views
+  (`v_measurement*` etc.); e2e tests assert the equivalent join directly.
+  `devtools::check()` is a Phase-6/9 CI-level gate, not a `test_that()`.
+- **A25** `normalise_lab_text()` ports the WEM.data table **verbatim** (it maps
+  literal `<XX>` hex-escape strings) **and** adds real-character entries for
+  the bytes real files carry: latin-1/MacRoman `¡`(0xA1)→`°`, and the cp1252
+  `°`/`µ` pairs. Both layers ship.
+- **A26** `pH`/`pH Unit`/`pH_Units` are a dimensionless **identity** in
+  `unify_value()` (must NOT trigger udunits' native logarithmic `pH`);
+  `is_valid_unit()` TRUE for all three; conversion between them returns the
+  value unchanged.
+- **A27** Adapter `parse()` aborts with class `sampletidy_parse_error` on a
+  malformed file (e.g. the invalid-UTF-8 CORRUPT fixture, or a non-ESdat XML);
+  the router marks only that file `failed` and continues.
+- **A28** Accepted auxiliary fixtures (beyond FIXTURES.md's pinned set), each
+  documented in its dir README: `esdat/BADDATE…` (unparseable date → warning),
+  `esdat/CORRUPT…` (parse-crash), `crosstab` WATER+**SOIL** two-section XTAB
+  (per-section matrix), `crosstab/XX1234567_1_XTAB.csv` (rev-1 supersede),
+  `acirl/EDGECASES.xlsx` + `NO_REPORT_NO.xlsx` + `random.xlsx`. ACIRL
+  `report$header` fields: `report_no`, `sampled_by`, `sample_date`.
+- **A29** Open items still needing Robin (parked, non-blocking): confirm
+  ACIRL crosstab real-column layout vs the fixture's chosen interpretation
+  (R-5.1) and whether `LAB_D`/`MS` QC types need adapter-level fixtures
+  (R-4.3); both verified later against the real corpus in the plan-10 gates.
+
 ## Gates
 
 - Per-plan: `testthat::test_file()` green for the plan's own test file(s).

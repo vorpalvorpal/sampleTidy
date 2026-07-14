@@ -81,10 +81,15 @@ Reported → canonical (`unify_value`):
 Stem `PROJ_A.ESDAT_XX1234567_0` with three parts; plus lone
 `PROJ_B.ESDAT_XX7654321_0.Sample2e.CSV`.
 
-**Chemistry2e** columns exactly: `SampleCode,ChemCode,OriginalChemName,Prefix,
-Result,Result_Unit,Total_or_Filtered,Result_Type,Method_Name,Extraction_Date,
-Analysed_Date,EQL,EQL_Units,Comments,Lab_Qualifier,UCL,LCL`. Rows for XX1234567
-(3 samples × the analytes) plus 2 QC rows and 1 NCP row. Pin these data rows:
+**Chemistry2e** columns exactly (18 — matches the real ALS header, incl.
+`Method_Type` between Result_Type and Method_Name; A15): `SampleCode,ChemCode,
+OriginalChemName,Prefix,Result,Result_Unit,Total_or_Filtered,Result_Type,
+Method_Type,Method_Name,Extraction_Date,Analysed_Date,EQL,EQL_Units,Comments,
+Lab_Qualifier,UCL,LCL`. `Method_Type` = human method name (e.g. "pH by PC
+Titrator"); `Method_Name` = coded method ("EA005P: pH by PC Titrator"). Rows
+for XX1234567 (3 samples × the analytes) plus 2 QC rows and 1 NCP row. Pin
+these data rows (Method_Type omitted from the table below for brevity — the
+generator derives it from Method_Name):
 
 | SampleCode | ChemCode | OriginalChemName | Prefix | Result | Result_Unit | T/F | Method_Name | EQL |
 |---|---|---|---|---|---|---|---|---|

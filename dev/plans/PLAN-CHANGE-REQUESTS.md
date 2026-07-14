@@ -1,0 +1,487 @@
+# Plan change requests / ambiguities
+
+Append-only log of ambiguities found while writing tests against the plans.
+Never overwrite; each worker appends its own section. Format:
+`## [worker-tag] R-x.y — <short title>` followed by the detail.
+
+## [pipeline-tests] R-9.2/R-9.3 — `asset` table missing from `seed_db()`
+
+`tests/testthat/helper-db.R` (`seed_db()`, owned by the core-tests agent per
+`dev/plans/FIXTURES.md` "Seed DB") creates the CONTRACT core tables that
+FIXTURES.md pins *rows* for: `feature`, `feature_mask`, `analyte`,
+`lab_method`, `project`, `sample`, `analysis`. FIXTURES.md's "Seed DB"
+section never mentions `asset`, even though `asset` is part of CONTRACT's
+"Existing DB schema" and plan 09 (`archive_file()`, `commit_event()`'s
+archival step, provenance change_log rows) needs a real `asset` table to
+write into.
+
+Resolution taken so the plan-09/10 test suites aren't blocked: added
+`ensure_test_asset_table(con)` to `tests/testthat/helper-corpus.R` (my one
+owned helper file) — an idempotent `CREATE TABLE IF NOT EXISTS asset (...)`
+matching the CONTRACT column list exactly. `test-archive.R`, `test-commit.R`,
+`test-ingest.R` and the plan-10 e2e tests call it right after `seed_con()`.
+
+Suggested upstream fix: have `seed_db()` create an empty `asset` table too
+(no pinned rows needed — plan 09 tests populate it via `archive_file()`),
+at which point `ensure_test_asset_table()` becomes a no-op and can be
+deleted.
+
+## [pipeline-tests] R-7.3/R-7.4 — assembly-stage review-marking interface not pinned
+
+PLAN-07 R-7.3 ("an engineered datetime mismatch produces exactly one review
+payload and does not block the rest of the event") and R-7.4 ("an engineered
+non-NCP foreign row lands in review") both describe assembly-stage rows being
+flagged "for review" — but the pinned event shape (R-7.5) has no `review`
+field, only `report$skipped` (file-level skip reasons) and `report$warnings`
+(chr). Reconcile (plan 08) is the stage that actually produces a `review`
+tibble as an output (R-8's `list(clean, review, skipped, counts)`), so it's
+unclear whether:
+
+(a) assembly marks affected rows in-line on the joined `event$results` tibble
+    (e.g. a `needs_review` lgl column + a payload column) which reconcile
+    later folds into its own `review` output, or
+(b) assembly itself exposes a `review`-shaped bucket not mentioned in R-7.5,
+    or
+(c) something else entirely.
+
+`tests/testthat/test-assemble.R` assumes (a): a `needs_review` (lgl) column
+on `event$results`, defaulting FALSE, set TRUE on the affected row(s). The
+relevant tests assert on that column's presence/count with an informative
+`expect_true(..., info = ...)` message rather than hard-coding a payload
+shape, so a differently-shaped real implementation fails loudly with context
+instead of silently. Please confirm or correct the interface — the two
+affected tests are `"R-7.3: an engineered sample_datetime_raw mismatch..."`
+and `"R-7.4: a non-NCP foreign-work-order row is flagged for review"` in
+`test-assemble.R`.
+
+## [pipeline-tests] R-7.3 — fallback-join "date part" side unclear when `results` carries no datetime field
+
+R-7.3's fallback join key is "(feature_raw after squish/case-fold, date part
+of sample_datetime_raw)" for rows lacking `lab_sample_id`. But
+`sample_datetime_raw` is a `samples`-only column (DESIGN §4.2); the `results`
+IR (§4.1) has no datetime field of its own pre-join, so it's unclear what the
+"date part" on the *results* side of the fallback match is compared against
+when a feature has more than one visit in the same event. The fallback-join
+test in `test-assemble.R` (`"R-7.3: fallback join matches on feature_raw when
+lab_sample_id is absent"`) only exercises the single-visit-per-feature case,
+where matching reduces to `feature_raw` alone, to avoid asserting an
+unspecified mechanism. If a feature can have multiple visits without
+`lab_sample_id` in a single event, the disambiguation mechanism needs pinning
+before that case can be tested.
+
+## [pipeline-tests] R-7.1/R-7.4 — how a zero-row (metadata-only) parsed file is keyed for grouping
+
+R-7.1 groups events by `work_order`, but a file like `Header.XML` (ESdat) or
+an ACIRL front-page-only parse emits zero result/sample rows (PLAN-04 R-4.4),
+so it carries no row-level `work_order` signal for `assemble_events()` to
+group on. `test-assemble.R`'s "three files sharing a work order form one
+event" test supplies **both** `meta$work_order_guess` and
+`report$header$work_order` on the zero-row parsed entry to hedge against
+either being the actual signal `assemble_events()` reads. Please confirm
+which one (or both) plan-07's implementation actually consults.
+
+## [pipeline-tests] R-10.2 — `v_measurement` view not created by the throwaway test schema
+
+PLAN-10 R-10.2 asserts "`v_measurement` joins cleanly for every new analysis
+(no orphan uuids)" but `v_measurement` is a live-DB view (CONTRACT: "views
+v_measurement*, v_analyte_*, v_feature_*") that neither `ensure_schema()`
+(ops tables only) nor `seed_db()`'s core-table DDL creates. `test-e2e-pipeline.R`
+substitutes a manual equivalent (`analysis` LEFT JOIN `sample` LEFT JOIN
+`feature`, asserting no NULL `uuid_feature`/`uuid_sample`) rather than
+querying a view that won't exist in the test DB. If plan 09/10 wants the
+literal view exercised, `seed_db()` (or a plan-09 migration) needs to create
+it.
+
+## [pipeline-tests] R-10.6(a) — `devtools::check()` gate not encoded as a testthat assertion
+
+R-10.6 lists three package gates: (a) `devtools::check()` passes with no
+ERROR/WARNING, (b) NAMESPACE exports equal the CONTRACT public API, (c)
+DESCRIPTION Imports equal the CONTRACT-pinned set. (b) and (c) are
+straightforward testthat assertions (`test-e2e-pipeline.R` covers both).
+(a) is a whole-package, out-of-process CI/manual gate — running
+`devtools::check()` from inside a testthat test is impractical (slow,
+recursive: check() itself runs the test suite) and would need `rcmdcheck`,
+which isn't in the CONTRACT-pinned Imports/Suggests list. Treated as a CI-level
+gate outside the automated suite, not a `test_that()` — flagging per the
+"not tested and why" requirement rather than silently dropping it.
+
+## [pipeline-tests] R-7.2/R-8/R-9/R-10 — assembly `parsed` inputs built directly, not via real adapters/router
+
+Following the explicit instruction for plan-08 tests ("construct it directly
+with the pinned shape ... so plan-08 tests are independent of the
+adapters"), `test-assemble.R` also builds its `parsed` (per-file IR) inputs
+directly via `ir_results()`/`ir_samples()` using the pinned FIXTURES.md
+values, rather than by routing the real esdat/crosstab/acirl fixture files
+through `file_meta()`/`route_files()`/adapter `parse()`. This keeps
+`test-assemble.R` decoupled from plans 04-06's implementation and fixture
+landing order (crosstab/acirl fixtures aren't present in the repo yet at the
+time of writing). `test-commit.R` similarly builds both the `event` (plan-07
+shape) and `resolved` (plan-08 shape, R-8.8) objects directly rather than
+running real `assemble_events()`/`reconcile_event()`, for the same
+independence reason. The plan-09/10 **e2e** tests (`test-ingest.R`,
+`test-e2e-pipeline.R`) do the opposite by design — they exercise the real
+files/adapters/router end to end, since that integration is exactly what
+they're chartered to test, and are expected to fail/be skipped-in-spirit
+(not literally skipped — just red) until plans 04-06 land their fixtures and
+production code.
+
+## [pipeline-tests] R-9.1 — domain-helper signatures assumed to omit `con`
+
+CONTRACT's pinned API line shows `correct_value(uuid_analysis, new_value,
+reason, actor)` with **no** `con`/`db` argument at all, unlike
+`db_append(con, table, df, actor, reason)` which lists `con` first.
+`add_feature(...)`/`add_analyte()` are shown abbreviated (`...`) and
+`add_project(name, type = "Work order", …)` also omits `con` from its shown
+signature. `test-mutate.R` assumes all four domain helpers
+(`add_feature()`, `add_analyte()`, `add_project()`, `correct_value()`)
+resolve their own connection from `st_config("live_db")` (consistent with
+DESIGN §9.3 framing them as human-callable, and with `correct_value`'s fully
+-spelled, `con`-less signature being the one unambiguous example) rather
+than taking an explicit `con` parameter. Tests point `st_config("live_db")`
+at the throwaway seeded DB via `withr::local_options(list("sampletidy.live_db"
+= path))` before calling them. If the real implementation instead takes an
+explicit `con`, these four tests will fail on a signature mismatch rather
+than a real defect — please confirm.
+
+## [pipeline-tests] R-10.1 — "corrupted-ESdat fixture claimed by none" conflicts with the actual fixture + PLAN-04's own match() rule
+
+PLAN-10 R-10.1 says the router matrix test should find "the corrupted-ESdat
+fixture and cruft files ... claimed by none." But
+`tests/testthat/fixtures/esdat/CORRUPT.ESDAT_XX0000000_0.Chemistry2e.CSV`
+(built by the plan-04 test-writing agent) has an exact-matching Chemistry2e
+header row - only a data-row byte is corrupted (a stray 0x80 byte). PLAN-04
+R-4.1's own `match()` rule is header-only ("exact when ... the header row
+equals one of the two pinned column lists"), so this fixture should be
+claimed `exact`, not unclaimed - the corruption is designed to fail at
+`parse()` time (R-9.5's adapter-crash criterion), not at `match()` time.
+`test-e2e-pipeline.R`'s router-matrix test follows the concrete, testable
+match() rule (treats CORRUPT as claimed exact like any Chemistry2e file) and
+only asserts "claimed by none" for `random.csv`/`NOT_ESDAT.xml`
+(PLAN-04's own R-4.1 "match no" fixtures). Flagging the prose conflict for
+orchestrator adjudication.
+
+## [pipeline-tests] R-10.3 — sighting semantics: per-scan vs per-(hash,path) log
+
+PLAN-03 R-3.5's own bullet says "re-routing the same path is a no-op (state
+unchanged, one new sighting)" - taken literally, every re-scan of any
+already-terminal file logs a new `ingest_sighting` row, even for the exact
+same path. But PLAN-10 R-10.3 explicitly says repeat-scans of an unchanged
+(or touched) directory produce "zero deltas everywhere" for the second and
+third runs, reserving "one new ingest_sighting" specifically for the
+different-path/same-hash (copy/rename) case. These two readings conflict.
+`test-e2e-pipeline.R`'s idempotency test follows the more specific/
+authoritative PLAN-10 e2e statement: `ingest_sighting` is treated as deduped
+by (hash, path) pair (a repeat scan of the identical path adds nothing; a
+new path with the same hash adds exactly one row). Please confirm this
+against the intended `ingest_sighting` semantics.
+
+## [pipeline-tests] R-10.4 — the "_1_" revision fixture isn't in plan 05's own fixture list
+
+FIXTURES.md's "Cross-plan expectations" pins a supersede e2e fixture pair:
+`XX1234567_0_XTAB.csv` then `XX1234567_1_XTAB.csv` (T.S01 Fluoride changed to
+`0.3 mg/L`). But PLAN-05's own "Fixtures" section only lists
+`XX1234567_0_XTAB.csv`/`.XLS`, `XX1234567_0_ENMRG.CSV`, and
+`ZZ9999999_0_XTAB.csv` - no `_1_` revision variant. Since fixture creation
+under `tests/testthat/fixtures/crosstab/` is plan 05's ownership (not
+plan 10's, per the CONTRACT file-layout table), `test-e2e-pipeline.R`'s
+R-10.4 test references the pinned `XX1234567_1_XTAB.csv` path and asserts it
+exists rather than creating it itself; that assertion will fail (a
+legitimate, informative red) until whoever owns `fixtures/crosstab/` adds
+this supplementary revision-1 file.
+
+## [pipeline-tests] R-10.5 — a second, narrower skip for `SAMPLETIDY_CORPUS_DB`
+
+The brief says `skip_if_no_corpus()` is "the ONLY permitted skip." R-10.5's
+dry-run-against-a-real-DB-copy gate is additionally conditioned on
+`SAMPLETIDY_CORPUS_DB` ("a temp copy of the real monitoring.duckdb if
+SAMPLETIDY_CORPUS_DB also set" - FIXTURES.md/PLAN-10 R-10.5), which is an
+even more sensitive artifact than the corpus files themselves and is
+explicitly optional per the plan text. `test-e2e-corpus.R`'s last test adds
+one narrowly-scoped second skip, gated on this second real-data env var,
+after the mandatory `skip_if_no_corpus()` already ran. Treated as within the
+spirit of the A3 allowance (real, private data availability) rather than a
+new category of skip - flagging for confirmation since it's a literal second
+`skip()` call in the suite.
+
+## [pipeline-tests] R-9.5/R-9.6 — built-in adapters assumed to self-register on package load
+
+`ingest_dir()` needs `esdat`/`als_xtab`/`als_enmrg`/`acirl_field_xlsx`
+registered via `register_adapter()` to do anything. No plan explicitly pins
+*where* that registration happens (e.g. a package `.onLoad()` calling
+`register_adapter()` once per built-in adapter vs. some other bootstrap).
+The e2e ingest tests in `test-ingest.R`/`test-e2e-pipeline.R` assume the
+built-ins self-register when the package loads (the standard R package
+pattern, and the only reading consistent with `ingest_dir()` being usable
+with zero setup per CONTRACT/DESIGN §1). If that's wrong, those tests will
+fail for a registration reason rather than a real defect — please confirm
+where registration happens.
+
+## [core-tests] R-1.3 — DESIGN §9.2's "second connection, same process" test
+method does not reproduce RW lock contention with duckdb 1.4.1 [MEASURE TWICE]
+
+PLAN-01 R-1.3 says to test the busy-retry path "with a second connection in
+the same process - duckdb enforces one RW per file across connections via a
+second `duckdb::duckdb()` driver instance." Verified empirically before
+writing the test: with the installed duckdb R package (1.4.1), two
+`duckdb::duckdb()` driver instances opened read-write to the *same path in
+the same process* silently succeed and share state (confirmed by writing via
+one and reading via the other) - no lock error at all. `?duckdb::duckdb` now
+documents this: "`duckdb()` creates or reuses a database instance." A
+genuinely separate OS process, however, does reproduce the documented
+`Could not set lock on file ...: Conflicting lock is held` error (confirmed
+via a two-process shell test).
+
+Resolution taken in `test-db-connect.R`: the busy-retry test spawns a real
+second process via `processx::process$new()` to hold the RW lock, then
+calls `with_db_write()` in the test process and asserts the retry-then-abort
+behaviour. The same instance-cache issue also breaks any "is the connection
+really closed?" check done via a same-process reconnect (it would trivially
+succeed even if `with_db_write()` leaked its connection), so the "returns
+fn(con)'s value; connection closes after" and "fn throwing still closes the
+connection" tests also spawn a probe subprocess
+(`subprocess_can_connect_rw()`) rather than reconnecting in-process.
+
+## [core-tests] R-1.3 — non-lock connect-error path: CONTRACT's "never
+`stop()` bare" vs. DESIGN §9.2's reference `stop(last_err)`
+
+The DESIGN §9.2 reference implementation re-throws a non-lock connect error
+via bare `stop(last_err)`, but CONTRACT's blanket convention says "Errors via
+`cli::cli_abort(class = "sampletidy_error")`; never `stop()` bare." Plan-01
+says to "copy the reference implementation; it is normative," creating a
+direct conflict for this one line. Rather than assert a specific error class
+for this path (which could be wrong under either reading), `test-db-connect.R`'s
+"a non-lock connect error ... aborts immediately" test only asserts on
+message content (`"directory"`, matching the underlying DuckDB IO error text
+verified empirically) and elapsed time, leaving the class/wrapping choice to
+whoever implements it.
+
+## [core-tests] R-1.6 — `ingest_file_upsert()`'s argument names beyond `con,
+hash` are not pinned
+
+PLAN-01 only sketches `ingest_file_upsert(con, hash, ...)`. `test-db-schema.R`
+assumes the current path being observed is passed as `path` (not
+`path_first_seen`, which is the DDL *column* name and — per its name — is
+only ever set on a hash's first insert; later upserts with a different path
+must not overwrite it, only append an `ingest_sighting` row). Also assumed:
+`filename` and `size` as additional named args. If the real signature differs
+(e.g. positional, or a single `meta` list), the calls in
+`test-db-schema.R`/`test-router.R` will need a mechanical rename, not a
+semantic rewrite.
+
+## [core-tests] R-2.1 — mojibake table entries are literal hex-escape-string
+patterns, not raw bytes
+
+`WEM.data/R/new/data/normalise_lab_text.R`'s `.lab_text_mojibake_fixes` table
+maps literal strings like `"<c2><b0>"` (the nine characters `<`, `c`, `2`,
+`>`, ...) to real Unicode characters, not raw UTF-8/cp1252 byte sequences -
+presumably reflecting some upstream step in the WEM.data pipeline that
+renders unrepresentable bytes as `<XX>` hex-escape text before this function
+runs. CONTRACT/PLAN-02 says to port this table "verbatim," so
+`test-text-normalise.R` tests the literal hex-escape-string patterns exactly
+as written in the source file, alongside the newly-pinned entries that *do*
+use real Unicode characters (`¡`, `<U+FFFD>`) for the MacRoman-degree and
+cp1252 cases. Confirm this reading is intended (vs. re-deriving the table to
+operate on real raw bytes).
+
+## [core-tests] R-2.2 — CONTRACT's claim that udunits doesn't know `pH` is
+empirically imprecise, but the pinned *behaviour* is still testable
+[MEASURE TWICE]
+
+CONTRACT/PLAN-02 says "`pH`/`pH Unit`/`pH_Units` are registered as valid
+dimensionless units (udunits doesn't know them; maintain a package-level
+`.unitless_aliases` set)." Verified empirically: raw `units::set_units(1,
+"pH", mode = "standard")` already succeeds - udunits2 *does* have a native
+(logarithmic) `pH` unit - while `"pH Unit"` and `"pH_Units"` do not resolve.
+This doesn't change what's testable: `test-units.R` asserts the pinned
+observable behaviour (`is_valid_unit()`/`are_compatible_units()` TRUE for all
+three strings, and `unify_value()` converts between them unchanged), which
+holds regardless of whether the implementation's `.unitless_aliases` set
+needs to shadow udunits' own `pH` entry or just cover the two variant
+spellings.
+
+## [core-tests] R-3.1 — `ir_results(...)`/`ir_samples(...)` argument-passing
+convention beyond the zero-arg prototype is not pinned
+
+PLAN-03 pins only `ir_results()` (no args) returning the zero-row prototype.
+`test-ir.R` additionally exercises one call with named arguments matching the
+column names (tibble-constructor style, single values per column) as the
+most natural reading of "build validated tibbles ... exactly the columns" —
+but this is the only test built on that assumption; every `ir_validate()`
+violation test instead builds its fixture row via plain `tibble::tibble()`
+so those tests don't depend on the constructor's exact calling convention.
+
+## [core-tests] R-3.5 — `route_files()`'s signature beyond `paths`, and a
+wording tension with R-1.6 on same-path re-routing
+
+Two related gaps in PLAN-03/CONTRACT:
+
+1. CONTRACT's bare-call example shows only `route_files(paths)`, but R-3.5
+   says it "persists to `ingest_file` via plan-01 helpers," which require a
+   connection. `test-router.R` assumes `route_files(paths, con)`.
+2. R-3.5 says "re-routing the same path is a no-op (state unchanged, **one
+   new sighting**)," but R-1.6 says a sighting is appended only "when the
+   path differs from `path_first_seen`." Taken literally, re-routing the
+   *same* path should **not** add a sighting under R-1.6's rule, directly
+   contradicting R-3.5's parenthetical. `test-router.R` follows R-1.6 (the
+   more precise, lower-level spec): re-routing the identical path asserts
+   **no new sighting row**; a *different* path with an identical file/hash is
+   the one asserted to add exactly one sighting (both plans agree on that
+   case). Please confirm R-3.5's wording was a slip, or correct the test if
+   sightings are actually meant to accumulate on every re-route regardless of
+   path.
+
+## [core-tests] `seed_db()` now creates an empty `asset` table
+
+Per this file's own `[pipeline-tests] R-9.2/R-9.3` entry above requesting it:
+added an `asset` table (CONTRACT's full column list, no pinned rows - none
+are specified in FIXTURES.md) to `tests/testthat/helper-db.R`'s
+`.st_test_core_ddl`. `helper-corpus.R`'s `ensure_test_asset_table()` uses
+`CREATE TABLE IF NOT EXISTS` with an identical column list, so it becomes a
+harmless no-op wherever `seed_db()` already ran and can be deleted whenever
+convenient.
+
+## [adapter-tests] R-4.x/R-5.x/R-6.x — adapter accessor not literally pinned
+
+CONTRACT.md's pinned public API only names the *registry* functions
+(`register_adapter()`, `adapter_registry()`, `clear_adapters()`); no CONTRACT
+line pins a literal object name for a given built-in adapter (e.g. `esdat` vs
+`esdat_adapter`). Per orchestrator instruction, `test-adapter-esdat.R` /
+`test-adapter-crosstab.R` / `test-adapter-acirl.R` all default to the
+**registry route**: `sampleTidy:::adapter_registry()[["esdat"]]`,
+`[["als_xtab"]]`, `[["als_enmrg"]]`, `[["acirl_field_xlsx"]]` (ids per
+DESIGN §5's planned-adapters list), assuming the built-ins self-register on
+package load (same assumption `[pipeline-tests] R-9.5/R-9.6` already flagged
+for `ingest_dir()`). If registration instead happens some other way (e.g. an
+explicit bootstrap the caller must invoke), these three test files will fail
+on a registration/lookup reason rather than a real adapter defect - please
+confirm where/how the four built-ins get registered.
+
+## [adapter-tests] R-4.2 — Chemistry2e pinned header list conflicts between FIXTURES.md and PLAN-04
+
+PLAN-04's prose lists Chemistry2e's columns as `SampleCode, ChemCode,
+OriginalChemName, Prefix, Result, Result_Unit, Total_or_Filtered,
+Result_Type, Method_Type, Method_Name, Extraction_Date, Analysed_Date, EQL,
+EQL_Units, Comments, Lab_Qualifier, UCL, LCL` (18 columns, including
+`Method_Type`), while FIXTURES.md's own pinned "Chemistry2e columns exactly"
+list omits `Method_Type` entirely (17 columns). Since match() (R-4.1) hinges
+on "the header row equals one of the two pinned column lists" byte-for-byte,
+these two specs cannot both be followed literally. `fixtures/esdat/generate.R`
+and `test-adapter-esdat.R` follow **FIXTURES.md** (the file explicitly
+designated "THE synthetic universe" pinning exact columns/rows/values) and
+omit `Method_Type`. If `Method_Type` is actually required, the fixture header
+and every `match()`/parse() test in `test-adapter-esdat.R` need it re-added.
+
+## [adapter-tests] R-4.3 — Sample2e row/sample-type coverage conflicts between FIXTURES.md and PLAN-04
+
+PLAN-04 R-4.3's criterion describes "fixture (8 Normal + LCS/MB/LAB_D/MS/NCP
+rows) maps 1:1," implying 8 `Normal` rows plus all five non-Normal sample
+types (`LCS`, `MB`, `LAB_D`, `MS`, `NCP`). FIXTURES.md's own pinned Sample2e
+table has only **3** `Normal` rows (`XX1234567001/002/003`) plus one each of
+`LCS`, `MB`, `NCP` - 6 rows total, and never mentions `LAB_D` or `MS` at all.
+`fixtures/esdat/PROJ_A.ESDAT_XX1234567_0.Sample2e.CSV` and
+`test-adapter-esdat.R`'s "R-4.3: Sample2e fixture maps 1:1 (6 rows)" test
+follow FIXTURES.md's literal pinned table (6 rows, no `LAB_D`/`MS` coverage).
+`LAB_D`/`MS` sample types remain untested at the adapter level as a result -
+if that coverage is actually required, FIXTURES.md needs an update pinning
+concrete `LAB_D`/`MS` row values before a test can assert on them without
+inventing data.
+
+## [adapter-tests] R-4.5 — no fixture data for the "unparseable date -> warnings" criterion
+
+FIXTURES.md's pinned 10-row Chemistry2e table always uses the clean
+`26 May 2025` `Analysed_Date`, leaving no data to exercise R-4.5's "an
+unparseable date lands in `warnings` with its `source_ref`, the row still
+emitted with `analysed_date` NA" criterion. Added a small auxiliary fixture,
+`fixtures/esdat/BADDATE.ESDAT_XX5555555_0.Chemistry2e.CSV` (same pinned
+header, one row, `Analysed_Date = "31 Undecember 2025"`), documented in
+`fixtures/esdat/README.md`.
+
+## [adapter-tests] R-4.2/R-9 — assumed error class `sampletidy_parse_error` for the corrupted-CSV crash fixture
+
+The plan-09/10-requested `CORRUPT.ESDAT_XX0000000_0.Chemistry2e.CSV` fixture
+(same pinned header so `match()` still claims it; one data row with a bare
+invalid UTF-8 continuation byte `0x80` in `OriginalChemName` - verified to
+make base R's `nchar()`/`toupper()` throw "invalid multibyte string," while
+`readr::read_csv()` itself reads the row without error - see
+`fixtures/esdat/README.md`) needs `parse()` to actually abort for plan-09's
+"adapter crash on one file -> that file `failed`" scenario to be reachable.
+`test-adapter-esdat.R`'s "R-4.2: corrupted Chemistry2e data causes parse() to
+abort loudly" test asserts `class = "sampletidy_parse_error"`, reusing R-4.4's
+already-established precedent (non-ESdat XML aborts with that same class) and
+CONTRACT's "errors via `cli::cli_abort(class = "sampletidy_error")`" blanket
+rule. No plan pins this exact class for this exact scenario - if a differently
+-classed (or differently-worded) abort is intended, this one test's `class=`
+argument needs updating, not the fixture.
+
+## [adapter-tests] R-5.1/R-5.2 — crosstab column-layout (label positions, "Analyte grouping/Analyte") is under-specified
+
+PLAN-05 explicitly forbids fixing column indices in the *parser* ("do not fix
+column indices - locate labels by regex in each row - observed files vary")
+but its own layout-facts table pins two very specific real-file *observations*
+that fixtures should reproduce: the `ALS Sample Number:`/`ALS Sample number:`
+label sits at column index 3 (XTAB) vs 4 (ENMRG) (0-based), and the header row
+starts with "`Analyte grouping/Analyte`" (a slash-joined pair, ambiguous
+whether that's one column with dialect-dependent wording or two separate
+columns). Neither the real ALS crosstab files nor a captured sample were
+available to resolve this definitively, so `fixtures/crosstab/generate.R`
+commits to one self-consistent, documented interpretation (detailed in
+`fixtures/crosstab/README.md`): XTAB has 4 label columns (`Analyte`,
+`CAS Number`, `Unit`, `Limit of reporting`) with sample data from column 4;
+ENMRG has 5 (`Analyte grouping`, `Analyte`, `CAS Number`, `Unit`,
+`Limit of reporting`, as two separate analyte-name columns) with sample data
+from column 5 - which reproduces both pinned "label col index" facts (3 vs 4)
+exactly. `test-adapter-crosstab.R`'s assertions read `analyte_raw` etc. by
+*name*/regex-matched row & column position already implied by the fixture, so
+they do not hard-code these indices, but the fixture's own shape is this
+chosen interpretation, not a literal capture of a real file. If the real
+column layout differs meaningfully (e.g. `Analyte grouping` genuinely holds a
+broader category, not a duplicate analyte-name column), the fixture's data
+(not the test assertions) would need adjusting.
+
+## [adapter-tests] R-5.1 — FIXTURES.md's "two stacked sections WATER+the same analytes" resolved via PLAN-05's explicit "WATER+SOIL" wording
+
+FIXTURES.md describes the XTAB fixture as having "two stacked sections
+WATER+the same analytes," which is ambiguous about whether the second section
+is also `WATER` (mere duplication) or a different matrix. PLAN-05 R-5.1's own
+criterion is unambiguous: "two-section fixture: rows carry their own
+section's matrix and dates" - only meaningfully testable if the two sections
+carry *different* matrix values. `fixtures/crosstab/XX1234567_0_XTAB.csv`
+therefore has a `WATER` section (the one pinned/cross-checked against the
+ESdat fixture's XX1234567001-003 values) followed by a second, independent
+`SOIL` section (1 extra sample, plain-ASCII analyte spellings so it can never
+be confused with the mojibake-bearing WATER section in test assertions).
+
+## [adapter-tests] R-6.x — several ACIRL criteria have no data in FIXTURES.md's pinned single workbook
+
+FIXTURES.md pins exactly one ACIRL workbook (`2400-9999-01 Test Month
+WMF.xlsx`, Front/Method/Dust/two-water-sheet shape) with no genuinely-empty
+front-page field, no >20-row field block, and no water sheet lacking a
+`Units` marker - so PLAN-06's R-6.1 ("a random xlsx -> `no`"), R-6.2
+("missing `REPORT NO:` -> ... `work_order = NA`"), and two of R-6.3's branches
+("`>20`-row block emits a warning ... still parses"; "a sheet with no `Units`
+marker -> sheet skipped ... other sheets still parse") have no fixture data to
+exercise them. Added three small auxiliary workbooks, documented in
+`fixtures/acirl/README.md`: `EDGECASES.xlsx` (a 24-row `Field Data Big` sheet
++ a `Field Data NoUnits` sheet with no `Units` cell anywhere, alongside a
+normal front page so the file still gets routed), `NO_REPORT_NO.xlsx` (front
+page missing `REPORT NO:` entirely), and `random.xlsx` (unrelated trivial
+workbook). The pinned main workbook itself is unchanged from FIXTURES.md's
+spec (still exactly Front/Methods/Dust/2 water sheets).
+
+## [adapter-tests] R-6.2/R-6.3 — `report$header`/`report$skipped` field names assumed by analogy, not literally pinned
+
+Neither PLAN-06 nor CONTRACT pins the literal field names inside
+`report$header` for the ACIRL adapter (only the *values* - report number,
+sampled-by, sample date - and their front-page provenance are pinned).
+`test-adapter-acirl.R` assumes `report$header$report_no` /
+`$sampled_by` / `$sample_date`, matching the front page's own "REPORT NO:" /
+"SAMPLED BY:" / "SAMPLE DATE:" terminology (parallel to how R-4.4's ESdat
+`report$header` uses `work_order`/`date_reported`/`project_id`/`lab_name`,
+matching Header.XML's own attribute names). Similarly, `report$skipped`'s
+`reason` values (`"lab_data_dropped"`, `"dust_sheet_ignored"`, `"empty"`,
+`"not_computable"`) and its `source_ref` format (`"r<row>c<col>"` for
+crosstab, per R-5.1's own explicit text) are asserted verbatim from each
+plan's own quoted strings; anywhere a plan doesn't quote an exact string
+(e.g. the crosstab mismatch-precedence warning's exact wording), tests assert
+on substring content (`grepl()`) rather than an exact message, to avoid
+over-fitting an unpinned detail.

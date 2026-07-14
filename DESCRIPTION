@@ -41,6 +41,7 @@ Imports:
 Suggests:
     ellmer,
     filelock,
+    openxlsx,
     processx,
     sf,
     testthat (>= 3.0.0),

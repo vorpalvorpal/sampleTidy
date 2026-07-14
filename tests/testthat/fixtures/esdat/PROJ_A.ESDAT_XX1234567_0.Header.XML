@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ESdat xmlns="http://www.escis.com.au/2013/XML" fileType="eLabResultsHeader">
+  <LabReport Lab_Report_Number="XX1234567" Date_Reported="2025-05-28" Project_ID="PROJ_A" Lab_Name="ALSE-Sydney" Lab_Signatory="J. Signatory">
+    <eCoCs>
+      <eCoC COC_Number="COC-0001"/>
+    </eCoCs>
+  </LabReport>
+</ESdat>
