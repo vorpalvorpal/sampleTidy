@@ -1,7 +1,9 @@
 # sampleFlow
 
+> A project of [`tidyWaste`](https://github.com/vorpalvorpal/tidyWaste) — an ecosystem of R packages for waste management facilities.
+
 > Ingest and reconcile environmental monitoring sample data.
-> Part of the [`tidyWaste`](https://github.com/vorpalvorpal) family of packages.
+> Part of the [`tidyWaste`](https://github.com/vorpalvorpal/tidyWaste) family of packages.
 
 `sampleFlow` is an email-triggered pipeline that turns the messy stream of
 laboratory and field results an environmental monitoring programme receives —
