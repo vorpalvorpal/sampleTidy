@@ -1,4 +1,4 @@
-Package: sampleFlow
+Package: sampleTidy
 Title: Ingest and Reconcile Environmental Monitoring Sample Data
 Version: 0.0.0.9000
 Authors@R:
@@ -14,8 +14,8 @@ Description: An email-triggered pipeline that ingests environmental
     formats can be added without touching the shared ingestion,
     reconciliation and storage machinery. Part of the 'tidyWaste' family
     of packages.
-URL: https://github.com/vorpalvorpal/sampleFlow
-BugReports: https://github.com/vorpalvorpal/sampleFlow/issues
+URL: https://github.com/vorpalvorpal/sampleTidy
+BugReports: https://github.com/vorpalvorpal/sampleTidy/issues
 License: MIT + file LICENSE
 Encoding: UTF-8
 Roxygen: list(markdown = TRUE)
