@@ -24,12 +24,25 @@ Imports:
     checkmate,
     cli,
     DBI,
+    digest,
     dplyr,
     duckdb,
+    fs,
     purrr,
+    readr,
+    readxl,
+    rlang,
+    stringr,
     tibble,
-    units
+    tidyr,
+    units,
+    uuid,
+    xml2
 Suggests:
+    ellmer,
     filelock,
-    testthat (>= 3.0.0)
+    processx,
+    sf,
+    testthat (>= 3.0.0),
+    withr
 Config/testthat/edition: 3
