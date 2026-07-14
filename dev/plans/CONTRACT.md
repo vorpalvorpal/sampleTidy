@@ -194,6 +194,13 @@ for lab reports; `sample.organisation ∈ {ACIRL, Internal, ALS}`;
   broadened it to satisfy `test-db-schema.R`'s terminal-state check; tests
   win). Harmless — the router only ever drives `seen → ignored`; assembly
   drives `parsed → ignored`.
+- **A32** ALL raw DB writes are confined to two files: `mutate.R` (core data
+  tables, audited via change_log) and `db-schema.R` (ops tables + DDL). The
+  R-9.1 lint enforces this. Pipeline modules (router, assemble, reconcile,
+  ingest) write ops tables only through db-schema.R helpers:
+  `ingest_file_upsert()`, `ingest_file_set_state()`, `ingest_file_set_route()`,
+  `review_queue_add(con, kind, work_order, source_hash, payload)`. Plans 07/08
+  MUST reuse `review_queue_add()` rather than raw `INSERT INTO review_queue`.
 - **A29** Open items still needing Robin (parked, non-blocking): confirm
   ACIRL crosstab real-column layout vs the fixture's chosen interpretation
   (R-5.1) and whether `LAB_D`/`MS` QC types need adapter-level fixtures
