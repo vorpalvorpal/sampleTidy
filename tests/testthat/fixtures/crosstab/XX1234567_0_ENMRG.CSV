@@ -1,0 +1,15 @@
+Client - Matrix:,WATER,,,,,,,,
+Workgroup:,XX1234567,,,,,,,,
+Project name/number:,Test Project A / XX1234567,,,,,,,,
+Sample Type:,,,,,REG,REG,REG,LCS,MB
+Sample Date:,,,,,24/05/2025,24/05/2025,24/05/2025,,
+Client sample ID (1st):,,,,,T.S01,T.S02,T.MW01,,
+Depth (m):,,,,,,,,,
+,,,,ALS Sample number:,XX1234567001,XX1234567002,XX1234567003,QC-000001,QC-000002
+Analyte grouping,Analyte,CAS Number,Unit,Limit of reporting,,,,,
+EA005P: pH by PC Titrator,,,,,,,,,
+Physical,pH,,pH Unit,0.01,6.40,----,,7.00,
+EK040P: Fluoride by PC Titrator,,,,,,,,,
+Anions,Fluoride,16984-48-8,mg/L,0.1,<0.1,2.3,>2000,0.5,
+EA010P: Conductivity by PC Titrator,,,,,,,,,
+Physical,Electrical Conductivity @ 25°C,,µS/cm,1,185,965,,,600

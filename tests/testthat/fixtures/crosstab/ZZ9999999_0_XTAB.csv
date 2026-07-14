@@ -1,0 +1,9 @@
+Matrix:,WATER,,,
+Workgroup:,XX1234567,,,
+Sample Type:,,,,REG
+Sample Date:,,,,05/01/2026
+Client sample ID (1st):,,,,T.S01
+,,,ALS Sample Number:,ZZ9999999001
+Analyte,CAS Number,Unit,Limit of reporting,
+EA005P: pH by PC Titrator,,,,
+pH,,pH Unit,0.01,6.90

@@ -1,0 +1,2 @@
+SampleCode,ChemCode,OriginalChemName,Prefix,Result,Result_Unit,Total_or_Filtered,Result_Type,Method_Type,Method_Name,Extraction_Date,Analysed_Date,EQL,EQL_Units,Comments,Lab_Qualifier,UCL,LCL
+XX5555555001,,pH Value,,6.90,pH Unit,T,Numeric,pH by PC Titrator,EA005P: pH by PC Titrator,,31 Undecember 2025,0.01,pH Unit,,,,
