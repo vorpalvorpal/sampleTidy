@@ -267,3 +267,36 @@ ingest_file_set_state <- function(con, hash, state, reason = NA_character_, rese
 
   invisible(NULL)
 }
+
+# Record the routing outcome (adapter id + winning tier) on an ingest_file row.
+# An ops-table write, kept here so all raw ingest_file SQL lives in one place
+# (db-schema.R) rather than leaking into the router/pipeline modules.
+ingest_file_set_route <- function(con, hash, adapter = NA_character_, tier = NA_character_) {
+  checkmate::assert_string(hash)
+  DBI::dbExecute(
+    con,
+    "UPDATE ingest_file SET adapter = ?, tier = ?, updated_at = ? WHERE hash = ?",
+    params = list(adapter, tier, Sys.time(), hash)
+  )
+  invisible(NULL)
+}
+
+# Append a review_queue item. Ops-table write shared by the router (adapter
+# ties) and later the assembly/reconcile stages (unknown feature/analyte/unit,
+# value conflicts). Centralised here so review_queue INSERTs never scatter as
+# raw SQL across pipeline modules.
+review_queue_add <- function(con, kind, work_order = NA_character_,
+                             source_hash = NA_character_, payload = NA_character_,
+                             uuid = NULL, created_at = NULL) {
+  checkmate::assert_string(kind)
+  if (is.null(uuid)) uuid <- uuid::UUIDgenerate()
+  if (is.null(created_at)) created_at <- Sys.time()
+  DBI::dbExecute(
+    con,
+    "INSERT INTO review_queue
+       (uuid, created_at, kind, work_order, source_hash, payload, status)
+     VALUES (?, ?, ?, ?, ?, ?, 'open')",
+    params = list(uuid, created_at, kind, work_order, source_hash, payload)
+  )
+  invisible(uuid)
+}

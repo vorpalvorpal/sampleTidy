@@ -48,7 +48,7 @@ st_config <- function(key, value) {
   option_name <- paste0("sampletidy.", key)
 
   if (!missing(value)) {
-    opts <- stats::setNames(list(value), option_name)
+    opts <- rlang::set_names(list(value), option_name)
     options(opts)
     return(invisible(value))
   }
