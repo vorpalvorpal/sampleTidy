@@ -187,6 +187,13 @@ for lab reports; `sample.organisation ∈ {ACIRL, Internal, ALS}`;
   (per-section matrix), `crosstab/XX1234567_1_XTAB.csv` (rev-1 supersede),
   `acirl/EDGECASES.xlsx` + `NO_REPORT_NO.xlsx` + `random.xlsx`. ACIRL
   `report$header` fields: `report_no`, `sampled_by`, `sample_date`.
+- **A30** `change_log.at` must be quoted as `"at"` in all SQL — `AT` is a
+  DuckDB reserved word (unquoted DDL/DML errors). Applies to plan-09's
+  mutation layer especially.
+- **A31** `claimed → ignored` is a legal state transition (plan-01 worker
+  broadened it to satisfy `test-db-schema.R`'s terminal-state check; tests
+  win). Harmless — the router only ever drives `seen → ignored`; assembly
+  drives `parsed → ignored`.
 - **A29** Open items still needing Robin (parked, non-blocking): confirm
   ACIRL crosstab real-column layout vs the fixture's chosen interpretation
   (R-5.1) and whether `LAB_D`/`MS` QC types need adapter-level fixtures
