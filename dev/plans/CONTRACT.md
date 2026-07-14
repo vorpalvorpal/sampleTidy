@@ -201,6 +201,13 @@ for lab reports; `sample.organisation ∈ {ACIRL, Internal, ALS}`;
   `ingest_file_upsert()`, `ingest_file_set_state()`, `ingest_file_set_route()`,
   `review_queue_add(con, kind, work_order, source_hash, payload)`. Plans 07/08
   MUST reuse `review_queue_add()` rather than raw `INSERT INTO review_queue`.
+- **A33** Built-in adapter registration lives in `R/zzz.R` as
+  `register_builtin_adapters()` (registers all four built-ins via
+  `register_adapter()`, idempotent since register overwrites by id).
+  `.onLoad()` calls it, AND `ingest_dir()` calls it at its start — so a prior
+  `clear_adapters()` (e.g. the registry test's deferred cleanup) can't leave
+  the pipeline with no adapters. Each adapter plan (04/05/06) adds its
+  constructor to this one function; the orchestrator wires it as each lands.
 - **A29** Open items still needing Robin (parked, non-blocking): confirm
   ACIRL crosstab real-column layout vs the fixture's chosen interpretation
   (R-5.1) and whether `LAB_D`/`MS` QC types need adapter-level fixtures
