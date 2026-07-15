@@ -282,6 +282,36 @@ test_that("R-7.3: ESdat event gains Sample2e datetime and sample_type, unknowns 
   expect_identical(row1$sample_datetime_raw[[1]], "24 May 2025 11:45")
 })
 
+test_that("R-7.3: ESdat results (feature_raw NA) gain feature_raw from the Sample2e join - A44", {
+  # Real ESdat Chemistry2e carries no feature - it lives only on Sample2e, so
+  # results start with feature_raw = NA and MUST be filled from the joined
+  # sample. Without this, every ESdat row is an unknown feature and (before the
+  # reconcile NA-guard) became an orphan sample/analysis at commit.
+  parsed <- list(
+    "h-chem" = mk_parsed_entry(
+      results = dplyr::bind_rows(
+        mk_result(source_hash = "h-chem", lab_sample_id = "XX1234567001", feature_raw = NA_character_),
+        mk_result(source_hash = "h-chem", lab_sample_id = "XX1234567002", feature_raw = NA_character_)
+      ),
+      meta = list(work_order_guess = "XX1234567")
+    ),
+    "h-samp" = mk_parsed_entry(
+      samples = dplyr::bind_rows(
+        mk_sample(source_hash = "h-samp", lab_sample_id = "XX1234567001", feature_raw = "T.S01",
+                  sample_datetime_raw = "24 May 2025 11:45"),
+        mk_sample(source_hash = "h-samp", lab_sample_id = "XX1234567002", feature_raw = "T.S02",
+                  sample_datetime_raw = "24 May 2025 11:10")
+      ),
+      meta = list(work_order_guess = "XX1234567")
+    )
+  )
+  out <- assemble_events(parsed)
+  event <- out$events[[1]]
+  expect_false(any(is.na(event$results$feature_raw)))
+  expect_identical(event$results$feature_raw[event$results$lab_sample_id == "XX1234567001"][[1]], "T.S01")
+  expect_identical(event$results$feature_raw[event$results$lab_sample_id == "XX1234567002"][[1]], "T.S02")
+})
+
 test_that("R-7.3: fallback join matches on feature_raw when lab_sample_id is absent", {
   # Single visit per feature - avoids the unresolved "date part" mechanism
   # for results (see PLAN-CHANGE-REQUESTS.md).

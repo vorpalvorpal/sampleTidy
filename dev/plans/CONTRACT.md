@@ -340,6 +340,28 @@ for lab reports; `sample.organisation ∈ {ACIRL, Internal, ALS}`;
   dir on the helper's own return); fixed identically (`dest = NULL` +
   `.local_envir = parent.frame()`). test-ingest.R now 10/10.
 
+- **A44** (plan-10 e2e — two real defects found by the synthetic e2e run, fixed
+  in their owning plans per PLAN-10's "defects go back as a delta"):
+  1. **reconcile.R (plan 08):** `.rc_feature_candidates(NA)` returned a phantom
+     single `NA` candidate (`uuid[c(NA,NA,NA)]` → NAs → `unique()` collapses to
+     one `NA`), which `.rc_resolve_features()` mis-read as a length-1 "hit" and
+     kept in `clean` with `uuid_feature = NA` — an orphan sample/analysis at
+     commit (the e2e "no orphan uuids" test found 8). Fixed: NA-key guard →
+     `character(0)`, drop stray NA candidates, and map NA feature_raw to a
+     sentinel group key so those rows still reach review (R-8.8 completeness).
+  2. **assemble.R (plan 07):** `.st_join_samples_onto_results()` copied
+     datetime/type/sampler/matrix/parent from the matched sample but **not
+     `feature_raw`**. Real ESdat Chemistry2e sets `feature_raw = NA` (the feature
+     is only on Sample2e), so every ESdat result stayed feature-less — masked
+     until now by defect #1. Fixed: fill `feature_raw` from the matched sample,
+     `is.na()`-guarded so crosstab results (feature inline) are not clobbered.
+  Both landed with regression tests (test-reconcile.R, test-assemble.R). After
+  the fix, ESdat features resolve and the µS/cm→mS/cm EC conversion commits
+  (e.g. 965→0.965 at f-0002). Note the e2e R-10.2 EC test's *pinned* f-0001 row
+  is a legitimate `value_conflict` (the ACIRL field fixture measures EC — analyte
+  a-0003 — at the same feature+date as the ESdat lab EC), correct design
+  behaviour, not a defect.
+
 ## Gates
 
 - Per-plan: `testthat::test_file()` green for the plan's own test file(s).

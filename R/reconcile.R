@@ -69,9 +69,15 @@
 #' @noRd
 .rc_feature_candidates <- function(feature_raw, registry) {
   key <- .rc_key(feature_raw)
+  # A missing/blank feature_raw has no candidates. Without this guard, `x[NA]`
+  # returns an NA element that `unique()` collapses to a single value, which
+  # `.rc_resolve_features()` then mis-reads as a length-1 "hit" and keeps in
+  # `clean` with `uuid_feature = NA` - creating an orphan sample/analysis (A44).
+  if (is.na(key)) return(character(0))
   direct <- registry$feature$uuid[.rc_key(registry$feature$name) == key]
   masked <- registry$feature_mask$uuid_feature[.rc_key(registry$feature_mask$name) == key]
-  unique(c(direct, masked))
+  cand <- unique(c(direct, masked))
+  cand[!is.na(cand)] # drop any stray NA from a registry row with a NA name
 }
 
 #' Resolve `feature_raw` -> `uuid_feature` for every row (R-8.2)
@@ -114,7 +120,12 @@
   for (sub in c("unknown", "ambiguous")) {
     idx <- which(status == sub)
     if (length(idx) == 0) next
-    groups <- split(idx, .rc_key(rows$feature_raw[idx]))
+    # split() silently drops NA group keys; a NA feature_raw would then be lost
+    # from both clean and review (breaking R-8.8 completeness), so map NA to a
+    # sentinel key to keep those rows grouped into a review item (A44).
+    grp_key <- .rc_key(rows$feature_raw[idx])
+    grp_key[is.na(grp_key)] <- "na"
+    groups <- split(idx, grp_key)
     for (g in groups) {
       refs <- rows$source_ref[g]
       fr <- rows$feature_raw[[g[[1]]]]

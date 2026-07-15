@@ -23,15 +23,20 @@ all_table_counts <- function(db_path) {
 }
 
 e2e_setup <- function() {
-  db_path <- seed_db()
+  # Bind every withr cleanup to the *calling test's* frame (parent.frame()),
+  # not this helper's - otherwise seed_db()'s tempdir, the archive/snapshot
+  # tempdirs, and the options are all torn down the instant e2e_setup()
+  # returns (the A38/A41/A43 withr frame bug). See CONTRACT A41/A43.
+  env <- parent.frame()
+  db_path <- seed_db(dir = withr::local_tempdir(.local_envir = env))
   con <- seed_con(db_path)
   ensure_test_asset_table(con)
   DBI::dbDisconnect(con, shutdown = TRUE)
   withr::local_options(list(
-    "sampletidy.archive_dir" = withr::local_tempdir(),
-    "sampletidy.snapshot_dir" = withr::local_tempdir(),
+    "sampletidy.archive_dir" = withr::local_tempdir(.local_envir = env),
+    "sampletidy.snapshot_dir" = withr::local_tempdir(.local_envir = env),
     "sampletidy.remove_ingested" = FALSE
-  ))
+  ), .local_envir = env)
   db_path
 }
 

@@ -164,6 +164,26 @@ test_that("R-8.2: no fuzzy matching - a Levenshtein-1 miss stays unknown_feature
   expect_false("r1" %in% out$clean$source_ref)
 })
 
+test_that("R-8.2: a NA feature_raw is unknown (never a phantom hit into clean) - A44", {
+  path <- seed_db()
+  con <- seed_con(path)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  # Regression: a missing feature_raw once produced a phantom single NA
+  # candidate (x[NA] -> NA -> unique() collapses to length 1), which was
+  # mis-read as a "hit" and kept in clean with uuid_feature = NA - an orphan
+  # sample/analysis at commit. It must go to review, and never to clean, and
+  # never be silently dropped (R-8.8 completeness).
+  event <- mk_event(mk_row(source_ref = "r1", feature_raw = NA_character_))
+  out <- reconcile_event(event, con)
+  expect_false("r1" %in% out$clean$source_ref)
+  expect_true("r1" %in% out$review$source_ref)
+  in_review <- "r1" %in% out$review$source_ref
+  in_skipped <- "r1" %in% out$skipped$source_ref
+  in_clean <- "r1" %in% out$clean$source_ref
+  expect_equal(sum(in_review, in_skipped, in_clean), 1) # exactly one disposition
+})
+
 # ---- R-8.3: analyte / method resolution ----------------------------------
 
 test_that("R-8.3: org-scoped analyte name hit resolves", {

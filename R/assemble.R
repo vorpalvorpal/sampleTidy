@@ -157,6 +157,7 @@
     m_sampler <- samples$sampler[match_idx]
     m_matrix <- samples$matrix_raw[match_idx]
     m_parent <- samples$parent_sample[match_idx]
+    m_feature <- samples$feature_raw[match_idx]
 
     non_na_dates <- unique(m_date[!is.na(m_date)])
     if (length(non_na_dates) > 1) {
@@ -193,6 +194,14 @@
     if (is.na(results$parent_sample[[i]])) {
       nn <- m_parent[!is.na(m_parent)]
       if (length(nn) > 0) results$parent_sample[[i]] <- nn[[1]]
+    }
+    # ESdat carries the feature only on Sample2e, so its Chemistry2e results
+    # start with feature_raw = NA; fill it from the matched sample. Guarded by
+    # is.na() so crosstab results, which already carry feature_raw inline, are
+    # never clobbered (A44).
+    if (is.na(results$feature_raw[[i]])) {
+      nn <- m_feature[!is.na(m_feature)]
+      if (length(nn) > 0) results$feature_raw[[i]] <- nn[[1]]
     }
   }
 
