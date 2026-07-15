@@ -309,6 +309,17 @@ for lab reports; `sample.organisation ∈ {ACIRL, Internal, ALS}`;
   withr::local_tempdir(.local_envir = env))`. Verified: test-archive.R 5/5
   green after the fix. Same mechanical fix applied to the commit/ingest helpers
   so those suites aren't blocked by the harness.
+- **A42** (plan-09 commit build) `test-commit.R:181` (the supersede test's final
+  verification query) used unquoted `ORDER BY at DESC` — the identical A40 bug
+  (`at` is a DuckDB reserved word; unquoted it is a parser syntax error,
+  reproduced directly). The earlier assertions in the same `test_that`
+  (`count_rows` unchanged, `updated$value == 300`) already pass, proving
+  `commit_event()`'s supersede logic is correct — only the trailing raw-SQL
+  read was broken. Fixed to `ORDER BY "at" DESC` (trivial test typo, no
+  assertion weakened); test-commit.R now 8/8 green. Determinism confirmed: the
+  supersede `db_update` lists `value` first, and DuckDB returns the
+  first-inserted row among equal-`"at"` ties, so `LIMIT 1` deterministically
+  yields the `value` row (`old="100"`, `new="300"`).
 
 ## Gates
 

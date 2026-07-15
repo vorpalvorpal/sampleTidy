@@ -181,7 +181,7 @@ test_that("R-9.2: supersede updates the analysis in place with no duplicate row"
   updated <- DBI::dbGetQuery(con, "SELECT value, quantified FROM analysis WHERE uuid = 'an-0001'")
   expect_equal(updated$value, 300)
 
-  log_row <- DBI::dbGetQuery(con, "SELECT * FROM change_log WHERE uuid_row = 'an-0001' ORDER BY at DESC LIMIT 1")
+  log_row <- DBI::dbGetQuery(con, "SELECT * FROM change_log WHERE uuid_row = 'an-0001' ORDER BY \"at\" DESC LIMIT 1")
   expect_equal(log_row$action, "update")
   expect_equal(log_row$old, "100")
   expect_equal(log_row$new, "300")
