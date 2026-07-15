@@ -1,6 +1,7 @@
 # sampleTidy — build handover
 
-_Last updated: 2026-07-15. Branch: `tdd-mvp-implementation` (pushed to `origin`)._
+_Last updated: 2026-07-16. Branch: `tdd-mvp-implementation` (pushed to `origin`).
+**MVP complete — all plans 01–10 green.**_
 
 ## What we're building
 
@@ -23,7 +24,7 @@ cheap models implement, expensive models audit/adjudicate. Key artifacts in
 
 | file | role |
 |---|---|
-| `CONTRACT.md` | **single source of truth**: pinned APIs, file-ownership partition, conventions, and the **adjudication log (A1–A37)**. Read this + your own plan, not the whole corpus. |
+| `CONTRACT.md` | **single source of truth**: pinned APIs, file-ownership partition, conventions, and the **adjudication log (A1–A45)**. Read this + your own plan, not the whole corpus. |
 | `PLAN-0N-*.md` | per-plan specs with correctness criteria |
 | `PARKED-QUESTIONS.md` | questions raised for Robin — **all resolved** (see below) |
 | `PLAN-CHANGE-REQUESTS.md` | append-only ambiguity log from the test-writing phase |
@@ -35,7 +36,7 @@ Tests: `tests/testthat/test-<module>.R`, one per `R/` file. Fixtures in
 
 ## Where we're up to
 
-**Plans 01–09 are DONE and green. Only plan 10 remains (TDD-red).**
+**All plans 01–10 are DONE and green — the MVP is complete.**
 
 | plan | module(s) | status |
 |---|---|---|
@@ -48,15 +49,33 @@ Tests: `tests/testthat/test-<module>.R`, one per `R/` file. Fixtures in
 | 07 | assemble | ✅ green |
 | 08 | reconcile | ✅ green |
 | 09 | mutate, commit, archive, snapshot, ingest | ✅ green |
-| 10 | e2e-pipeline, e2e-corpus | 🔴 not started |
+| 10 | e2e-pipeline, e2e-corpus | ✅ green |
 
-Full suite: **298 tests green across plans 01–09** (0 fail/0 error). The only
-red file is `test-e2e-pipeline.R` (plan 10, 22F/8E) — and those failures are all
-the **same A41/A43 `withr` frame bug in plan 10's own `e2e_setup()` helper**
-(`cannot open '.../seed.duckdb'`), NOT missing code: plan 09 already shipped the
-production functions plan 10's e2e tests exercise. `test-e2e-corpus.R` is
-green-by-skip (needs `SAMPLETIDY_CORPUS`). `ingest_dir()` was independently
-validated end-to-end over the full fixture corpus by direct probe (see A43).
+Full suite: **301 tests, 0 fail / 0 error**, 4 skipped (the `SAMPLETIDY_CORPUS`-
+gated real-corpus tests in `test-e2e-corpus.R`, R-10.5). `test-e2e-pipeline.R`
+is 11/11.
+
+**Plan 10 (tests-only) surfaced five real defects — all fixed in their owning
+plans with regression tests (A44, A45):**
+- **A44.1 reconcile:** `.rc_feature_candidates(NA)` returned a phantom NA "hit" →
+  orphan `uuid_feature = NA` rows. Fixed with a NA guard + sentinel review group.
+- **A44.2 assemble:** the sample→result join never copied `feature_raw`, so every
+  ESdat result was feature-less (masked by A44.1). Fixed (guarded fill).
+- **A44.3 commit:** sample `date` built in AEST was UTC-shifted to the previous
+  day on write, breaking cross-run sample reuse. Fixed (`tz = "UTC"` midnight).
+- **A45 reconcile (domain correction from Robin):** the analysis uniqueness key
+  is **(feature, datetime, analyte, method)** — a field EC and a lab EC of the
+  same analyte are distinct rows, not a `value_conflict`. Added `uuid_lab` to the
+  three-way match.
+- Plus test-only fixes: the recurring `withr` frame bug in every plan-09/10 setup
+  helper (A41/A43), unquoted `ORDER BY "at"` (A40/A42), NA-unsafe row filters
+  (A43), a cross-file adapter-registry leak (R-10.1 passed alone, failed in
+  suite), export drift trimmed to the CONTRACT's 19 public functions (R-10.6),
+  and the plan-10 revision-supersede fixture `XX1234567_1_XTAB.csv`.
+
+The through-line: **every unit suite was green while three real bugs lived in the
+module seams** — only the e2e suite over realistic fixtures caught them. That
+lesson drove the skill-improvement research in `dev/tdd-skill-improvements.md`.
 
 Recent commits: `6b3ccc0` (plan 07 assemble) → `d21c386` (plan 08 reconcile) →
 `d2e510e` (plan 09 mutate) → `+3` (plan 09 archive/snapshot, commit, ingest).
@@ -109,21 +128,25 @@ parked). Plan 08–09 build: **A38** (`seed_db()` withr default-arg), **A39**
 (reconcile fixture feature_raw), **A40** (`db_transaction` hook + `"at"` quoting),
 **A41** (the plan-09 setup helpers re-triggered A38 one frame removed), **A42**
 (test-commit.R `ORDER BY "at"`), **A43** (test-ingest NA-safe filtering + the
-`build_e2e_input_dir` withr bug). See `CONTRACT.md`.
+`build_e2e_input_dir` withr bug). Plan-10 build: **A44** (three real defects —
+reconcile NA-feature, assemble feature-join, commit date-tz), **A45** (uniqueness
+key includes method — field vs lab coexist). See `CONTRACT.md`.
 
 ## Loose ends / next steps
 
-**To resume the build — only plan 10 remains:**
-- **Plan 10 — e2e** (`test-e2e-pipeline.R` R-10.1..R-10.6; `test-e2e-corpus.R`
-  R-10.5). The production chain it exercises (router→adapters→assemble→reconcile→
-  commit→ingest) is all built and green. **Fix its harness first**: `e2e_setup()`
-  in `test-e2e-pipeline.R` carries the *same* A41/A43 `withr` default-arg /
-  frame-lifetime bug (every failure is `cannot open '.../seed.duckdb'`); apply the
-  `parent.frame()` / `.local_envir` fix before assuming any real e2e defect.
-- **Recreate the plan-10 rev-1 fixture** `XX1234567_1_XTAB.csv` (dropped in the
-  crosstab regen) for the R-10.4 revision-supersede e2e.
-- Green ≠ correct on real data — **validate against the real corpus** (set
-  `SAMPLETIDY_CORPUS`, wire `test-e2e-corpus.R`), not only synthetic fixtures.
+**The MVP build is complete (plans 01–10 green).** Remaining follow-ups are
+polish / post-MVP, not blockers:
+
+- **Validate against the real corpus** — the whole point-of-truth: set
+  `SAMPLETIDY_CORPUS` (and `SAMPLETIDY_CORPUS_DB` for R-10.5's dry-run gate) and
+  run `test-e2e-corpus.R`. Plan 10 proved *again* that green-on-synthetic ≠
+  correct-on-real; the real-corpus gates are the last unproven surface.
+- **`devtools::check()`** — run the full R CMD check (R-10.6's prose mentions a
+  no-ERROR/WARNING gate; the NAMESPACE/DESCRIPTION drift-guard tests pass, but a
+  full `check()` hasn't been run this session).
+- **Act on `dev/tdd-skill-improvements.md`** — the research report on hardening
+  the tdd-plan skill so its generated suites catch seam bugs, non-determinism,
+  and harness-lifetime bugs earlier (its top 5 edits are summarised at the end).
 
 **Plan-09 follow-ups worth a look:**
 - **`dry_run` persists `ingest_file` state transitions** (ops-table only — the
@@ -134,6 +157,11 @@ parked). Plan 08–09 build: **A38** (`seed_db()` withr default-arg), **A39**
 - **Orphan/no-work-order events** commit with a project named `NA`
   (`commit_event: NA` in `state_reason`). Fine for the fixtures; decide the
   intended behaviour for genuinely orphan lab files.
+- **Sample `datetime` UTC-shift (A44 note):** commit stores the sample `datetime`
+  as the correct *instant* but a UTC-shifted wall clock (11:45 AEST reads back
+  01:45). Comparisons are instant-based so matching is unaffected, but the stored
+  display is off — revisit whether the schema wants naive-AEST wall-clock storage
+  (the `date` column was fixed in A44.3; `datetime` was left as-is deliberately).
 
 **Deferred / to revisit:**
 - **Real ACIRL fixture:** Robin's `2400-7399-08…Blaxland WMF.xls` is genuine

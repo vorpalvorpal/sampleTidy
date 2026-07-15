@@ -453,6 +453,39 @@ test_that("R-8.7: a fresh row is new/clean", {
   expect_true(is.na(row$supersedes))
 })
 
+test_that("R-8.7: a lab measurement is distinct from a field measurement of the same analyte (A45)", {
+  path <- seed_db()
+  con <- seed_con(path)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  # A45: uniqueness is (feature, datetime, analyte, METHOD). A field EC (ACIRL
+  # method lm-0006) and a lab EC (ALS method lm-0003) both resolve to analyte
+  # a-0003 at the same feature+date, but different methods -> two distinct
+  # measurements, NOT a conflict. Seed an existing FIELD EC, then reconcile an
+  # incoming LAB EC and assert it lands clean/new (not already_present/conflict).
+  DBI::dbExecute(con, "INSERT INTO \"sample\" (uuid, uuid_feature, uuid_project, date, organisation)
+    VALUES ('s-field', 'f-0001', 'p-0001', TIMESTAMP '2025-05-24 00:00:00', 'ACIRL')")
+  DBI::dbExecute(con, "INSERT INTO analysis (uuid, uuid_sample, uuid_lab, value, quantified)
+    VALUES ('an-field-ec', 's-field', 'lm-0006', 0.45, TRUE)")
+
+  event <- mk_event(mk_row(
+    source_ref = "r1", feature_raw = "T.S01",
+    analyte_raw = "Electrical Conductivity @ 25°C",
+    method_raw = "EA010P: Conductivity by PC Titrator", cas_number = NA_character_,
+    org = "ALS", units_raw = "µS/cm", value_raw = "185", value_num = 185,
+    below_detection = FALSE, rl = 1, sample_datetime_raw = "24 May 2025 11:45"
+  ))
+  out <- reconcile_event(event, con)
+
+  expect_true("r1" %in% out$clean$source_ref)
+  expect_false("r1" %in% out$review$source_ref)
+  expect_false("r1" %in% out$skipped$source_ref)
+  row <- out$clean[out$clean$source_ref == "r1", ]
+  expect_true(is.na(row$supersedes))            # distinct measurement, not a supersede
+  expect_identical(row$uuid_lab, "lm-0003")     # resolved to the lab method
+  expect_equal(row$value_converted, 0.185, tolerance = 1e-9) # uS/cm -> mS/cm
+})
+
 test_that("R-8.7: an identical re-ingest row is already_present", {
   path <- seed_db()
   con <- seed_con(path)

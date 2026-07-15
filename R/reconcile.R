@@ -417,12 +417,15 @@
 # ---- R-8.7: three-way outcome vs DB -----------------------------------------
 
 #' Find an existing `analysis` row matching `(uuid_feature, sample_date,
-#' sample_datetime, uuid_analyte)` (A11: date-granularity first, then
-#' datetime to disambiguate when both sides have one).
+#' sample_datetime, uuid_analyte, uuid_lab)` (A11/A45: date-granularity first,
+#' then datetime to disambiguate when both sides have one). The uniqueness key
+#' includes the **method** (`uuid_lab`), so a field measurement and a lab
+#' measurement of the same analyte at the same location/time are distinct rows,
+#' not a conflict (A45: different method -> different measurement).
 #' @return a one-row data frame, or `NULL` if no candidate.
 #' @keywords internal
 #' @noRd
-.rc_find_existing <- function(con, uuid_feature, sample_date, sample_datetime, uuid_analyte) {
+.rc_find_existing <- function(con, uuid_feature, sample_date, sample_datetime, uuid_analyte, uuid_lab) {
   cand <- DBI::dbGetQuery(
     con,
     '
@@ -431,9 +434,9 @@
     FROM "sample" s
     JOIN analysis a ON a.uuid_sample = s.uuid
     JOIN lab_method lm ON lm.uuid = a.uuid_lab
-    WHERE s.uuid_feature = ? AND CAST(s.date AS DATE) = ? AND lm.uuid_analyte = ?
+    WHERE s.uuid_feature = ? AND CAST(s.date AS DATE) = ? AND lm.uuid_analyte = ? AND a.uuid_lab = ?
     ',
-    params = list(uuid_feature, as.character(sample_date), uuid_analyte)
+    params = list(uuid_feature, as.character(sample_date), uuid_analyte, uuid_lab)
   )
   if (nrow(cand) == 0) return(NULL)
 
@@ -522,7 +525,8 @@
 
   for (i in seq_len(n)) {
     existing <- .rc_find_existing(
-      con, rows$uuid_feature[[i]], rows$sample_date[[i]], rows$sample_datetime[[i]], rows$uuid_analyte[[i]]
+      con, rows$uuid_feature[[i]], rows$sample_date[[i]], rows$sample_datetime[[i]],
+      rows$uuid_analyte[[i]], rows$uuid_lab[[i]]
     )
     if (is.null(existing)) next
 

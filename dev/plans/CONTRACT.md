@@ -372,6 +372,22 @@ for lab reports; `sample.organisation ∈ {ACIRL, Internal, ALS}`;
   sample `datetime` as a correct instant but a UTC-shifted wall clock (e.g.
   11:45 AEST reads back 01:45) — a display/convention wart, not a matching bug
   (comparisons are instant-based); revisit the naive-AEST storage convention.
+- **A45** (plan-10 e2e — domain correction from the user; amends A11/A14) The
+  analysis uniqueness key is **(sampling location, datetime, analyte, method)** —
+  **method included**. A field measurement (e.g. ACIRL field EC, method lm-0006)
+  and a lab measurement (ALS lab EC, method lm-0003) resolve to the *same*
+  analyte (a-0003) at the same feature+date, but are DISTINCT measurements, not a
+  conflict — the DB legitimately holds both a field and a lab version. The
+  reconciler's three-way match (`.rc_find_existing`, R-8.7) previously keyed on
+  (feature, date, analyte) only, so it wrongly flagged the second source as a
+  `value_conflict` (the plan-10 R-10.2 EC test exposed this: the ESdat lab EC
+  couldn't commit because the ACIRL field EC already occupied the
+  feature+date+analyte slot). **Fixed:** added `a.uuid_lab = ?` (method) to the
+  match, so different methods are distinct rows. R-8.6's within-file duplicate-
+  method dedup is unaffected (it collapses same-analyte/different-method rows
+  *within one report* before the DB match). After the fix all 11 e2e tests pass,
+  including R-10.2 EC as originally pinned (0.185 mS/cm at f-0001/lm-0003).
+  Regression test in test-reconcile.R (field EC vs lab EC → two rows).
 
 ## Gates
 
