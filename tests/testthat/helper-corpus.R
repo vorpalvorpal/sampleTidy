@@ -59,7 +59,15 @@ corpus_db_path <- function() {
 #' @param dest destination directory (defaults to a fresh withr temp dir
 #'   scoped to the calling test)
 #' @return the path to `dest`, invisibly usable directly as `ingest_dir(path=)`
-build_e2e_input_dir <- function(dest = withr::local_tempdir()) {
+build_e2e_input_dir <- function(dest = NULL) {
+  # NB: a bare `withr::local_tempdir()` used as a *default argument* would
+  # bind its deferred cleanup to this helper's own frame (default-arg
+  # promises evaluate in the function's frame), deleting the tempdir the
+  # instant this function returns and handing the caller a dead path - the
+  # same class of bug as CONTRACT A38/A41. Bind cleanup to the *caller's*
+  # frame instead so the directory lives for the whole calling test.
+  env <- parent.frame()
+  if (is.null(dest)) dest <- withr::local_tempdir(.local_envir = env)
   fixture_root <- testthat::test_path("fixtures")
   families <- c("esdat", "crosstab", "acirl")
 

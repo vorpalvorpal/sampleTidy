@@ -320,6 +320,25 @@ for lab reports; `sample.organisation ∈ {ACIRL, Internal, ALS}`;
   supersede `db_update` lists `value` first, and DuckDB returns the
   first-inserted row among equal-`"at"` ties, so `LIMIT 1` deterministically
   yields the `value` row (`old="100"`, `new="300"`).
+- **A43** (plan-09 ingest build) All 9 initial `test-ingest.R` failures were an
+  A39-class fixture/harness collision, NOT an `ingest_dir()` defect: `seed_db()`
+  seeds a legacy `ingest_file` row (`legacy-hash-XX`, `state='archived'`,
+  `filename=NA`) for the supersede fixture. The ingest tests filtered
+  `ingest_file` rows with bare `states$filename == "x"` / `states$state %in% ...`;
+  the NA filename makes the comparison `NA`, and base-R `df[<logical with NA>, ]`
+  splices in a phantom all-NA row — inflating `nrow(bak_state)`/`ds_state`/
+  `corrupt_state` to 2 (`actual: NA "ignored"` etc.) and, in the missing-copy
+  test, making `committed$hash[[1]]` select `legacy-hash-XX` (an archived row
+  with no asset of its own). **Verified `ingest_dir()` is correct** by direct
+  probe over the full fixture corpus: `.DS_Store`/`.bak` → `ignored`, XTAB/ENMRG
+  twins → `ignored`/`superseded_by_better_source`, corrupt ESdat → `failed` with
+  a real reason, unmatched → `quarantined`, review-only events → `needs_review`,
+  real data committed + archived, snapshot written. **Fixed** the three affected
+  filters to be NA-safe (`!is.na(states$filename) & ...`) — no assertion
+  weakened. Also: `helper-corpus.R`'s `build_e2e_input_dir()` had the same A41
+  `withr` default-arg bug (`dest = withr::local_tempdir()` deleting the returned
+  dir on the helper's own return); fixed identically (`dest = NULL` +
+  `.local_envir = parent.frame()`). test-ingest.R now 10/10.
 
 ## Gates
 
