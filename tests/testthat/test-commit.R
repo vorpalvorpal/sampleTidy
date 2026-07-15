@@ -105,6 +105,13 @@ test_that("R-9.2: committing new clean rows creates exactly matching sample/anal
   commit_event(event, resolved, con)
   expect_equal(count_rows(con, "sample") - before_sample, 2)
   expect_equal(count_rows(con, "analysis") - before_analysis, 2)
+
+  # A44: the stored sample date must read back as the intended calendar day.
+  # Building midnight in AEST would shift it to the previous day on write (the
+  # duckdb driver stores POSIXct as UTC), which desynced cross-run sample reuse.
+  new_dates <- DBI::dbGetQuery(con,
+    "SELECT CAST(date AS DATE) AS d FROM \"sample\" WHERE uuid_feature IN ('f-0001','f-0002') AND uuid != 's-0001'")
+  expect_setequal(as.character(new_dates$d), c("2025-06-10", "2025-06-11"))
 })
 
 test_that("R-9.2: a second commit_event() call on already-terminal files aborts", {
