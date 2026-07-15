@@ -292,6 +292,23 @@ for lab reports; `sample.organisation ∈ {ACIRL, Internal, ALS}`;
   `db_append/update/delete` participate without a second `BEGIN` —
   `commit_event()` must run its whole body inside one `db_transaction()` and
   use the con handed to `fn`.
+- **A41** (plan-09 archive/commit/ingest build) The three plan-09 test setup
+  helpers — `archive_test_setup()` (test-archive.R), `commit_test_setup()`
+  (test-commit.R), `ingest_test_setup()` (test-ingest.R) — re-triggered the A38
+  `withr` frame bug **one level removed**: a bare `withr::local_tempdir()` /
+  `withr::local_options()` / `seed_db()` (whose A38 fix binds to
+  `parent.frame()`) called *inside a helper* registers its cleanup on the
+  **helper's** frame, so the temp dirs and the `sampletidy.archive_dir` /
+  `snapshot_dir` options were torn down the instant the helper returned —
+  before the test body ran. Symptom: `archive_file()` aborted with
+  `st_config("archive_dir")` "No value is set" (verified directly — 5/5
+  test-archive.R errors, all in `st_config`, with a correct `archive_file()`).
+  **Fixed** (harness only, no assertion touched) by capturing
+  `env <- parent.frame()` in each helper and threading `.local_envir = env`
+  through every `withr::local_*()` call plus `seed_db(dir =
+  withr::local_tempdir(.local_envir = env))`. Verified: test-archive.R 5/5
+  green after the fix. Same mechanical fix applied to the commit/ingest helpers
+  so those suites aren't blocked by the harness.
 
 ## Gates
 

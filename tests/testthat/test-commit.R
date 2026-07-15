@@ -16,14 +16,17 @@
 #' state commit_event() should find files in, per R-1.6).
 commit_test_setup <- function(filename = "PROJ_A.ESDAT_XX1234567_0.Chemistry2e.CSV",
                                 work_order = "XX1234567", revision = 0L) {
-  db_path <- seed_db()
+  # Bind withr cleanups to the calling test's frame, not this helper's - see
+  # CONTRACT A41 (the A38 bug, one frame removed).
+  env <- parent.frame()
+  db_path <- seed_db(dir = withr::local_tempdir(.local_envir = env))
   con <- seed_con(db_path)
   ensure_test_asset_table(con)
 
-  archive_dir <- withr::local_tempdir()
-  withr::local_options(list("sampletidy.archive_dir" = archive_dir))
+  archive_dir <- withr::local_tempdir(.local_envir = env)
+  withr::local_options(list("sampletidy.archive_dir" = archive_dir), .local_envir = env)
 
-  src_dir <- withr::local_tempdir()
+  src_dir <- withr::local_tempdir(.local_envir = env)
   src_path <- file.path(src_dir, filename)
   writeLines(paste("SampleCode,ChemCode", filename), src_path)
   hash <- hash_file(src_path)

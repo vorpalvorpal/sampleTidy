@@ -15,11 +15,17 @@
 # seeded, so `event <- list(work_order = "XX1234567")` resolves to it.
 
 archive_test_setup <- function() {
-  db_path <- seed_db()
+  # Bind every withr cleanup to the *calling test's* frame (parent.frame()),
+  # not this helper's frame. A bare withr::local_*() / seed_db() here tears its
+  # resource down the instant archive_test_setup() returns - the A38 bug, one
+  # frame removed - so the archive_dir option would be unset before the test
+  # body ever calls archive_file(). See CONTRACT A41.
+  env <- parent.frame()
+  db_path <- seed_db(dir = withr::local_tempdir(.local_envir = env))
   con <- seed_con(db_path)
   ensure_test_asset_table(con)
-  archive_dir <- withr::local_tempdir()
-  withr::local_options(list("sampletidy.archive_dir" = archive_dir))
+  archive_dir <- withr::local_tempdir(.local_envir = env)
+  withr::local_options(list("sampletidy.archive_dir" = archive_dir), .local_envir = env)
   list(con = con, archive_dir = archive_dir)
 }
 
