@@ -65,7 +65,11 @@ test_that("R-10.1: router_matrix() claims every fixture at exactly one winning t
   # any other Chemistry2e file. Logged as a plan-text conflict in
   # dev/plans/PLAN-CHANGE-REQUESTS.md; this test follows the concrete,
   # testable match() rule over the PLAN-10 prose.
-  never_claimed <- c("random.csv", "NOT_ESDAT.xml")
+  # Also unclaimed by design: ES2600185_0_XTAB.XLS is a SpreadsheetML-XML
+  # ".XLS" whose parsing is parked post-MVP (A37 - readxl can't read it and
+  # match() returns "no"); random.xlsx is a structureless workbook no adapter
+  # claims. Both correctly claim no adapter, like random.csv/NOT_ESDAT.xml.
+  never_claimed <- c("random.csv", "NOT_ESDAT.xml", "ES2600185_0_XTAB.XLS", "random.xlsx")
 
   for (p in paths) {
     claims <- matrix[matrix$path == p & matrix$tier != "no", ]
@@ -257,7 +261,7 @@ test_that("R-10.4: ingesting a _1_ revision XTAB after the _0_ updates the chang
   expect_equal(updated$value, 300, tolerance = 1e-6) # 0.3 mg/L -> 300 ug/L
   expect_identical(v0_state_after$state, v0_state$state) # v0's state is not rewritten
 
-  log_row <- DBI::dbGetQuery(con, "SELECT * FROM change_log WHERE uuid_row = 'an-0001' AND action = 'update' ORDER BY at DESC LIMIT 1")
+  log_row <- DBI::dbGetQuery(con, "SELECT * FROM change_log WHERE uuid_row = 'an-0001' AND action = 'update' ORDER BY \"at\" DESC LIMIT 1")
   expect_equal(nrow(log_row), 1)
   expect_equal(log_row$old, "100")
   expect_equal(log_row$new, "300")

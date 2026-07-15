@@ -18,7 +18,8 @@
 #'   `TRUE`.
 #' @return a [tibble::tibble()] with integer columns `row` and `col`, one row
 #'   per matching cell (zero rows if there are no matches).
-#' @export
+#' @keywords internal
+#' @noRd
 str_which_df <- function(df, pattern, ignore_case = TRUE,
                           multiple_matches = FALSE, squish = TRUE) {
   checkmate::assert_data_frame(df)
@@ -79,7 +80,8 @@ str_which_df <- function(df, pattern, ignore_case = TRUE,
 #' @param remove_na drop `NA`s from the extracted vector before the
 #'   `vector_length` check? Default `TRUE`.
 #' @return a character vector.
-#' @export
+#' @keywords internal
+#' @noRd
 vector_from_key <- function(df, pattern, direction = "right",
                              vector_length = NULL, ignore_case = TRUE,
                              remove_na = TRUE) {

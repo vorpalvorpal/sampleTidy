@@ -59,7 +59,8 @@
 #' @return same shape as `x`, with known mojibake substituted to proper
 #'   UTF-8. `NULL` and zero-length input are returned as-is. `NA` elements
 #'   stay `NA`.
-#' @export
+#' @keywords internal
+#' @noRd
 normalise_lab_text <- function(x) {
   if (is.null(x) || length(x) == 0) {
     return(x)

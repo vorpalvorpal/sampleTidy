@@ -33,7 +33,8 @@
 #' @param tz timezone to interpret naive lab datetimes in. Defaults to
 #'   `"Australia/Sydney"` (CONTRACT A9).
 #' @return a `POSIXct` vector, same length as `x`, in `tz`.
-#' @export
+#' @keywords internal
+#' @noRd
 parse_lab_datetime <- function(x, formats, tz = "Australia/Sydney") {
   checkmate::assert_character(x, min.len = 0)
   checkmate::assert_string(tz)
@@ -71,7 +72,8 @@ parse_lab_datetime <- function(x, formats, tz = "Australia/Sydney") {
 #'
 #' @param x character vector of raw datetime strings.
 #' @return logical vector, same length as `x`.
-#' @export
+#' @keywords internal
+#' @noRd
 has_clock_time <- function(x) {
   checkmate::assert_character(x, min.len = 0)
   stringr::str_detect(x, "\\d{1,2}:\\d{2}")
@@ -85,7 +87,8 @@ has_clock_time <- function(x) {
 #'
 #' @param n numeric vector of Excel serial date numbers.
 #' @return a `Date` vector, same length as `n`.
-#' @export
+#' @keywords internal
+#' @noRd
 excel_date <- function(n) {
   checkmate::assert_numeric(n, min.len = 0)
   as.Date(n, origin = "1899-12-30")
