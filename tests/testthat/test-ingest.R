@@ -72,11 +72,13 @@ test_that("R-9.5: subdirectory content is untouched and cruft files are ignored"
   # contain "subdir")
   expect_false(any(grepl("subdir", states$filename, fixed = TRUE)))
 
-  # cruft is ignored
-  bak_state <- states[states$filename == "old_export.bak", ]
+  # cruft is ignored. NA-safe filter: seed_db() seeds a legacy ingest_file row
+  # (legacy-hash-XX) with filename = NA; a bare `== "x"` yields NA for it and
+  # base-R row-subsetting would splice in a phantom all-NA row (CONTRACT A43).
+  bak_state <- states[!is.na(states$filename) & states$filename == "old_export.bak", ]
   expect_equal(nrow(bak_state), 1)
   expect_identical(bak_state$state, "ignored")
-  ds_state <- states[states$filename == ".DS_Store", ]
+  ds_state <- states[!is.na(states$filename) & states$filename == ".DS_Store", ]
   expect_equal(nrow(ds_state), 1)
   expect_identical(ds_state$state, "ignored")
 })
@@ -122,7 +124,7 @@ test_that("R-9.5: an adapter crash on one file is recorded as failed and the run
 
   expect_no_error(report <- ingest_dir(input_dir, db = setup$db_path))
   states <- ingest_file_states(setup$db_path)
-  corrupt_state <- states[states$filename == basename(corrupt_src), ]
+  corrupt_state <- states[!is.na(states$filename) & states$filename == basename(corrupt_src), ]  # NA-safe, A43
   expect_equal(nrow(corrupt_state), 1)
   expect_identical(corrupt_state$state, "failed")
   expect_false(is.na(corrupt_state$state_reason))
@@ -219,7 +221,9 @@ test_that("R-9.6: a source with a missing archive copy is kept, never deleted wi
   # first pass: commit + archive with remove OFF, so files stay put
   ingest_dir(input_dir, db = setup$db_path)
   states <- ingest_file_states(setup$db_path)
-  committed <- states[states$state %in% c("committed", "archived"), ]
+  # Exclude the seeded legacy-hash-XX row (state 'archived', filename NA, no
+  # asset of its own) so we tamper with a file actually committed this run (A43).
+  committed <- states[!is.na(states$filename) & states$state %in% c("committed", "archived"), ]
   expect_gt(nrow(committed), 0)
   tampered_hash <- committed$hash[[1]]
   tampered_filename <- committed$filename[[1]]
