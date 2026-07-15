@@ -43,6 +43,13 @@ e2e_setup <- function() {
 # ---- R-10.1: router cross-match matrix -------------------------------------
 
 test_that("R-10.1: router_matrix() claims every fixture at exactly one winning tier; cruft/random files claim none", {
+  # router_matrix() reads the global adapter registry. test-adapter-registry.R
+  # leaves it cleared (withr::defer(clear_adapters())), so this test passes in
+  # isolation but not in the full suite unless we restore the canonical builtin
+  # set first. (ingest_dir() self-registers per A33; router_matrix() does not.)
+  clear_adapters()
+  register_builtin_adapters()
+
   fixture_root <- testthat::test_path("fixtures")
   families <- c("esdat", "crosstab", "acirl")
   paths <- character(0)
