@@ -104,7 +104,13 @@
   }
 
   new_uuid <- uuid::UUIDgenerate()
-  midnight <- as.POSIXct(paste(as.character(sample_date), "00:00:00"), tz = "Australia/Sydney")
+  # Store the calendar date as a naive midnight (tz = "UTC"), NOT AEST: the
+  # duckdb driver converts a POSIXct to UTC on write, so midnight AEST would be
+  # stored as the *previous* day's 14:00 and CAST(date AS DATE) would read back
+  # one day early - misaligning with the naive-literal seed dates and breaking
+  # cross-run sample reuse (a re-ingest can't find the day-early sample and
+  # duplicates it). tz = "UTC" preserves the intended calendar day (A44).
+  midnight <- as.POSIXct(paste(as.character(sample_date), "00:00:00"), tz = "UTC")
   row <- tibble::tibble(
     uuid = new_uuid, uuid_feature = uuid_feature, uuid_project = uuid_project,
     date = midnight, date_start = as.POSIXct(NA), datetime = sample_datetime,

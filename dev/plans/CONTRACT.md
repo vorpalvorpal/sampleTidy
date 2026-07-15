@@ -355,12 +355,23 @@ for lab reports; `sample.organisation ∈ {ACIRL, Internal, ALS}`;
      is only on Sample2e), so every ESdat result stayed feature-less — masked
      until now by defect #1. Fixed: fill `feature_raw` from the matched sample,
      `is.na()`-guarded so crosstab results (feature inline) are not clobbered.
-  Both landed with regression tests (test-reconcile.R, test-assemble.R). After
-  the fix, ESdat features resolve and the µS/cm→mS/cm EC conversion commits
-  (e.g. 965→0.965 at f-0002). Note the e2e R-10.2 EC test's *pinned* f-0001 row
-  is a legitimate `value_conflict` (the ACIRL field fixture measures EC — analyte
-  a-0003 — at the same feature+date as the ESdat lab EC), correct design
-  behaviour, not a defect.
+  3. **commit.R (plan 09)** — `.ct_find_or_create_sample()` built the stored
+     sample `date` as `as.POSIXct(..., tz = "Australia/Sydney")`. The duckdb
+     driver writes a POSIXct as UTC, so midnight AEST was stored as the
+     *previous* day's 14:00 and `CAST(date AS DATE)` read back one day early —
+     misaligned with the naive-literal seed dates, so a re-ingest (R-10.4)
+     couldn't find the day-early sample and duplicated it. Fixed: build midnight
+     with `tz = "UTC"` so the calendar day survives the round-trip (verified
+     empirically). Regression test in test-commit.R.
+  All three landed with regression tests (test-reconcile/assemble/commit.R).
+  After the fixes, ESdat features resolve, the µS/cm→mS/cm EC conversion runs,
+  and revision-supersede re-ingest is duplicate-free. Note the e2e R-10.2 EC
+  test's *pinned* f-0001 row is a legitimate `value_conflict` (the ACIRL field
+  fixture measures EC — analyte a-0003 — at the same feature+date as the ESdat
+  lab EC), correct design behaviour, not a defect. Follow-up: commit stores the
+  sample `datetime` as a correct instant but a UTC-shifted wall clock (e.g.
+  11:45 AEST reads back 01:45) — a display/convention wart, not a matching bug
+  (comparisons are instant-based); revisit the naive-AEST storage convention.
 
 ## Gates
 
