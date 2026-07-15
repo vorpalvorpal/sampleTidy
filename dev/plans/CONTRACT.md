@@ -279,6 +279,19 @@ for lab reports; `sample.organisation ∈ {ACIRL, Internal, ALS}`;
   adding the intended `feature_raw = "T.S02"` (or, for the two feature/datetime-
   under-test cases, a non-colliding date) so each row is genuinely fresh; **no
   assertion was weakened**. Reconciler R-8.7 verified correct.
+- **A40** (plan-09 mutate build) Two `test-mutate.R` verification queries
+  (`db_delete`, `correct_value`) used `ORDER BY at DESC` with **unquoted** `at`
+  — a self-inflicted A30 violation (verified: DuckDB throws `syntax error at or
+  near "DESC"`). Fixed to `ORDER BY "at" DESC`; `mutate.R` itself quotes `"at"`
+  correctly. Separately, the R-9.1 direct-write lint's bare `dbAppendTable`
+  alternative false-positived on a **comment** in `reconcile.R` (which listed
+  the forbidden function names to say it uses none). Reworded the comment to
+  "no raw table-write calls"; the lint is now clean and still guards real
+  writes. `mutate.R`'s transaction hook for `commit.R` is `db_transaction(con,
+  fn)`: it tags a copy of `con` (sharing the same underlying pointer) so nested
+  `db_append/update/delete` participate without a second `BEGIN` —
+  `commit_event()` must run its whole body inside one `db_transaction()` and
+  use the con handed to `fn`.
 
 ## Gates
 

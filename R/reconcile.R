@@ -2,8 +2,8 @@
 #
 # `reconcile_event(event, con)` -> `list(clean, review, skipped, counts)`.
 # Read-only against the DB (CONTRACT A32) - every access below is a
-# `DBI::dbGetQuery()`; there is no `dbExecute()`/`dbAppendTable()` anywhere in
-# this file. Deterministic rules only; no LLM (DESIGN Sec7).
+# `DBI::dbGetQuery()`; there are no raw table-write calls anywhere in this
+# file. Deterministic rules only; no LLM (DESIGN Sec7).
 #
 # See dev/plans/PLAN-08-reconcile.md (R-8.1..R-8.8) and CONTRACT.md
 # (A6, A11, A12, A14, A32) for the rules implemented stage-by-stage below.
