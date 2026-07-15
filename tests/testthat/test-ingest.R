@@ -11,18 +11,21 @@
 # generic sanity properties of the returned report object itself.
 
 ingest_test_setup <- function() {
-  db_path <- seed_db()
+  # Bind withr cleanups to the calling test's frame, not this helper's - see
+  # CONTRACT A41 (the A38 bug, one frame removed).
+  env <- parent.frame()
+  db_path <- seed_db(dir = withr::local_tempdir(.local_envir = env))
   con <- seed_con(db_path)
   ensure_test_asset_table(con)
   DBI::dbDisconnect(con, shutdown = TRUE) # ingest_dir() opens its own connections
 
-  archive_dir <- withr::local_tempdir()
-  snapshot_dir <- withr::local_tempdir()
+  archive_dir <- withr::local_tempdir(.local_envir = env)
+  snapshot_dir <- withr::local_tempdir(.local_envir = env)
   withr::local_options(list(
     "sampletidy.archive_dir" = archive_dir,
     "sampletidy.snapshot_dir" = snapshot_dir,
     "sampletidy.remove_ingested" = FALSE
-  ))
+  ), .local_envir = env)
   list(db_path = db_path, archive_dir = archive_dir, snapshot_dir = snapshot_dir)
 }
 
