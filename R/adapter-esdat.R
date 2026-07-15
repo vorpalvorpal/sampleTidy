@@ -68,16 +68,61 @@ esdat_adapter <- function() {
 }
 
 # First-line field names of a CSV, read with every column forced to
-# character (avoids type-guessing surprises on header-only reads) and BOM
-# handled transparently by readr.
+# character (avoids type-guessing surprises on header-only reads). Real
+# Chemistry2e/Sample2e CSVs are latin-1 (A35), so the read always uses a
+# latin-1 locale - readr strips a literal UTF-8 BOM at the byte level before
+# applying that locale (verified empirically), but `.st_strip_bom()` is kept
+# as a defensive second layer over the first header cell per PLAN-04.
 .st_esdat_read_header <- function(path) {
   df <- readr::read_csv(
     path,
     n_max = 0,
     col_types = readr::cols(.default = readr::col_character()),
+    locale = readr::locale(encoding = "latin1"),
     show_col_types = FALSE
   )
-  names(df)
+  nms <- names(df)
+  if (length(nms) >= 1) {
+    nms[1] <- .st_strip_bom(nms[1])
+  }
+  nms
+}
+
+# Defensive BOM strip (A35): guards against a UTF-8 BOM (bytes EF BB BF)
+# surviving onto the first header cell, whether as the single Unicode
+# codepoint U+FEFF (if ever decoded as UTF-8) or as its latin-1 mis-decode
+# "ï»¿" (if a latin-1 locale ever reads the raw BOM bytes
+# without stripping them).
+.st_strip_bom <- function(x) {
+  x <- sub("^﻿", "", x)
+  sub("^ï»¿", "", x)
+}
+
+# Structural sanity check shared by both ESdat CSV parsers (A27 refined / A35).
+# A genuinely corrupt CSV body - e.g. an unterminated quoted field - makes
+# readr/vroom silently swallow every remaining data line into one runaway field
+# and yield ZERO rows with no error or warning (verified). A27/A35 require the
+# adapter to fail loudly on that. We detect it *after* the read: a file that
+# carries data lines beyond the header yet parsed to zero rows is corrupt. A
+# legitimately empty file (header only, no data lines) is NOT flagged, and -
+# unlike a raw quote-count heuristic - this never rejects a well-formed real
+# file whose data legitimately contains a lone `"` (verified against the real
+# corpus: one real file has an odd raw quote count yet parses cleanly to 45
+# rows; a parity check would wrongly fail it).
+.st_esdat_check_parseable <- function(path, df) {
+  if (nrow(df) > 0L) {
+    return(invisible(TRUE))
+  }
+  lines <- readLines(path, warn = FALSE)
+  n_data_lines <- sum(nzchar(trimws(lines))) - 1L # minus the header line
+  if (n_data_lines > 0L) {
+    cli::cli_abort(
+      "{.path {path}} has {n_data_lines} data line{?s} but parsed to zero rows -
+       the CSV body is structurally corrupt (e.g. an unterminated quoted field).",
+      class = "sampletidy_parse_error"
+    )
+  }
+  invisible(TRUE)
 }
 
 # --- parse() dispatch + crash containment -----------------------------------
@@ -123,8 +168,10 @@ esdat_adapter <- function() {
   df <- readr::read_csv(
     path,
     col_types = readr::cols(.default = readr::col_character()),
+    locale = readr::locale(encoding = "latin1"),
     show_col_types = FALSE
   )
+  .st_esdat_check_parseable(path, df)
   n <- nrow(df)
   source_ref <- paste0("row", seq_len(n))
 
@@ -210,8 +257,10 @@ esdat_adapter <- function() {
   df <- readr::read_csv(
     path,
     col_types = readr::cols(.default = readr::col_character()),
+    locale = readr::locale(encoding = "latin1"),
     show_col_types = FALSE
   )
+  .st_esdat_check_parseable(path, df)
   n <- nrow(df)
   source_ref <- paste0("row", seq_len(n))
 
