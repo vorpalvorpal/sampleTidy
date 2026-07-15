@@ -35,7 +35,7 @@ Tests: `tests/testthat/test-<module>.R`, one per `R/` file. Fixtures in
 
 ## Where we're up to
 
-**Plans 01–06 are DONE and green. Plans 07–10 are not started (TDD-red).**
+**Plans 01–09 are DONE and green. Only plan 10 remains (TDD-red).**
 
 | plan | module(s) | status |
 |---|---|---|
@@ -45,18 +45,21 @@ Tests: `tests/testthat/test-<module>.R`, one per `R/` file. Fixtures in
 | 04 | **adapter-esdat** | ✅ green — **reworked** for real files (latin-1) |
 | 05 | **adapter-crosstab** (als_xtab/als_enmrg) | ✅ green — **reworked** for real layout |
 | 06 | adapter-acirl-field | ✅ green |
-| 07 | assemble | 🔴 not started |
-| 08 | reconcile | 🔴 not started |
-| 09 | mutate, commit, archive, snapshot, ingest | 🔴 not started |
+| 07 | assemble | ✅ green |
+| 08 | reconcile | ✅ green |
+| 09 | mutate, commit, archive, snapshot, ingest | ✅ green |
 | 10 | e2e-pipeline, e2e-corpus | 🔴 not started |
 
-Adapter tests: **esdat 78 / crosstab 95 / acirl 41**, all green. The RED test
-files (`test-assemble/reconcile/commit/archive/ingest/mutate/snapshot/e2e-pipeline`)
-are the pre-written plan-07→10 suites waiting for their production code.
-`test-e2e-corpus.R` is green-by-skip (needs `SAMPLETIDY_CORPUS` set).
+Full suite: **298 tests green across plans 01–09** (0 fail/0 error). The only
+red file is `test-e2e-pipeline.R` (plan 10, 22F/8E) — and those failures are all
+the **same A41/A43 `withr` frame bug in plan 10's own `e2e_setup()` helper**
+(`cannot open '.../seed.duckdb'`), NOT missing code: plan 09 already shipped the
+production functions plan 10's e2e tests exercise. `test-e2e-corpus.R` is
+green-by-skip (needs `SAMPLETIDY_CORPUS`). `ingest_dir()` was independently
+validated end-to-end over the full fixture corpus by direct probe (see A43).
 
-Recent commits: `d26f707` (plan 06 + plan-05 WIP + real fixtures) → `48ab60d`
-(plan 04 rework) → `c9bc4f3` (plan 05 rework).
+Recent commits: `6b3ccc0` (plan 07 assemble) → `d21c386` (plan 08 reconcile) →
+`d2e510e` (plan 09 mutate) → `+3` (plan 09 archive/snapshot, commit, ingest).
 
 ## The big arc of this session
 
@@ -100,21 +103,37 @@ file — which was replaced with an encoding-safe corruption check.)
    take explicit `con`.
 4. **Assembly→review seam** → inline flags on `event$results` (A22).
 
-Adjudications added this session: **A29 (resolved), A34** (crosstab real layout),
-**A35** (ESdat latin-1 + CORRUPT reconciliation), **A36** (QC types), **A37**
-(SpreadsheetML parked / prefer-`.csv`). See `CONTRACT.md`.
+Adjudications across the build: **A29 (resolved), A34** (crosstab real layout),
+**A35** (ESdat latin-1 + CORRUPT), **A36** (QC types), **A37** (SpreadsheetML
+parked). Plan 08–09 build: **A38** (`seed_db()` withr default-arg), **A39**
+(reconcile fixture feature_raw), **A40** (`db_transaction` hook + `"at"` quoting),
+**A41** (the plan-09 setup helpers re-triggered A38 one frame removed), **A42**
+(test-commit.R `ORDER BY "at"`), **A43** (test-ingest NA-safe filtering + the
+`build_e2e_input_dir` withr bug). See `CONTRACT.md`.
 
 ## Loose ends / next steps
 
-**To resume the build (in order):**
-- **Plan 07 — assemble** (`R/assemble.R`). Groups parsed files into per-work-order
-  events (A23), joins results↔samples, flags review rows inline (A22). Tests in
-  `test-assemble.R` build IR inputs directly, so it's decoupled from the adapters.
-- **Plan 08 — reconcile**, **09 — mutate/commit/archive/snapshot/ingest**,
-  **10 — e2e**. Run sub-agents **in series** (one at a time).
-- Reworks proved green ≠ correct on real data — **validate 07→10 against the real
-  corpus**, not only the synthetic tests. Consider wiring `test-e2e-corpus.R` to
-  the real input dir (set `SAMPLETIDY_CORPUS`).
+**To resume the build — only plan 10 remains:**
+- **Plan 10 — e2e** (`test-e2e-pipeline.R` R-10.1..R-10.6; `test-e2e-corpus.R`
+  R-10.5). The production chain it exercises (router→adapters→assemble→reconcile→
+  commit→ingest) is all built and green. **Fix its harness first**: `e2e_setup()`
+  in `test-e2e-pipeline.R` carries the *same* A41/A43 `withr` default-arg /
+  frame-lifetime bug (every failure is `cannot open '.../seed.duckdb'`); apply the
+  `parent.frame()` / `.local_envir` fix before assuming any real e2e defect.
+- **Recreate the plan-10 rev-1 fixture** `XX1234567_1_XTAB.csv` (dropped in the
+  crosstab regen) for the R-10.4 revision-supersede e2e.
+- Green ≠ correct on real data — **validate against the real corpus** (set
+  `SAMPLETIDY_CORPUS`, wire `test-e2e-corpus.R`), not only synthetic fixtures.
+
+**Plan-09 follow-ups worth a look:**
+- **`dry_run` persists `ingest_file` state transitions** (ops-table only — the
+  tested "zero core writes" holds). Harmless for MVP, but a `dry_run` followed by
+  a real run would find files already past `seen`, so `route_files` no-ops them
+  and the real run does nothing. Consider making `dry_run` non-persistent (or
+  `reset`) if that flow matters.
+- **Orphan/no-work-order events** commit with a project named `NA`
+  (`commit_event: NA` in `state_reason`). Fine for the fixtures; decide the
+  intended behaviour for genuinely orphan lab files.
 
 **Deferred / to revisit:**
 - **Real ACIRL fixture:** Robin's `2400-7399-08…Blaxland WMF.xls` is genuine
