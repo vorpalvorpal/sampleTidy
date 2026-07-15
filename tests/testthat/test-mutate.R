@@ -107,7 +107,7 @@ test_that("R-9.1: db_delete() removes the row and writes a change_log delete ent
   expect_equal(n_left, 0)
   after <- count_change_log(con)
   expect_equal(after - before, 1)
-  log_row <- DBI::dbGetQuery(con, "SELECT * FROM change_log WHERE uuid_row = 'f-9999' ORDER BY at DESC LIMIT 1")
+  log_row <- DBI::dbGetQuery(con, "SELECT * FROM change_log WHERE uuid_row = 'f-9999' ORDER BY \"at\" DESC LIMIT 1")
   expect_equal(log_row$action, "delete")
 })
 
@@ -191,7 +191,7 @@ test_that("R-9.1: correct_value() updates the analysis and logs the old value", 
   expect_equal(updated$value, 150)
   after <- count_change_log(con)
   expect_gt(after, before)
-  log_row <- DBI::dbGetQuery(con, "SELECT * FROM change_log WHERE uuid_row = 'an-0001' ORDER BY at DESC LIMIT 1")
+  log_row <- DBI::dbGetQuery(con, "SELECT * FROM change_log WHERE uuid_row = 'an-0001' ORDER BY \"at\" DESC LIMIT 1")
   expect_equal(log_row$old, "100")
 })
 
