@@ -1,0 +1,75 @@
+Matrix:,WATER,,Sample Type:,,REG,REG,REG
+Workgroup:,ES2600185,,ALS Sample Number:,,ES2600185001,ES2600185002,ES2600185003
+Project name/number:,SiteB Monthly,,Sample Date:,,05/01/2026,05/01/2026,05/01/2026
+,,,Client sample ID (1st):,,P.S03,P.S07,P.S09
+,,,Client sample ID (2nd):,,,,
+,,,Depth Type:,,,,
+,,,Depth (m):      ,,,,
+,,,Site:      ,,Site C,Site C,Site C
+,,,Purchase Order:      ,,40263,40263,40263
+,,,,,,,
+Analyte grouping/Analyte,CAS Number,Unit,Limit of reporting,,,,
+,,,,,,,
+EA005P: pH by PC Titrator,,,,,,,
+pH Value,,pH Unit,0.01,,----,3.63,6.74
+,,,,,,,
+EA006: Sodium Adsorption Ratio (SAR),,,,,,,
+Sodium Adsorption Ratio,,,0.01,,----,0.96,0.29
+,,,,,,,
+EA010P: Conductivity by PC Titrator,,,,,,,
+Electrical Conductivity @ 25�C,,�S/cm,1,,----,148,144
+,,,,,,,
+EA016: Calculated TDS (from Electrical Conductivity),,,,,,,
+Total Dissolved Solids (Calc.),,mg/L,1,,----,96,94
+,,,,,,,
+EA065: Total Hardness as CaCO3,,,,,,,
+Total Hardness as CaCO3,,mg/L,1,,----,<1,58
+,,,,,,,
+ED037P: Alkalinity by PC Titrator,,,,,,,
+Hydroxide Alkalinity as CaCO3,,mg/L,1,,----,<1,<1
+Carbonate Alkalinity as CaCO3,3812-32-6,mg/L,1,,----,<1,<1
+Bicarbonate Alkalinity as CaCO3,71-52-3,mg/L,1,,----,<1,52
+Total Alkalinity as CaCO3,,mg/L,1,,----,<1,52
+,,,,,,,
+ED041G: Sulfate (Turbidimetric) as SO4 2- by DA,,,,,,,
+Sulfate as SO4 - Turbidimetric,14808-79-8,mg/L,1,,----,<1,13
+,,,,,,,
+ED045G: Chloride by Discrete Analyser,,,,,,,
+Chloride,16887-00-6,mg/L,1,,----,5,6
+,,,,,,,
+ED093F: Dissolved Major Cations,,,,,,,
+Calcium,7440-70-2,mg/L,1,,----,<1,20
+Magnesium,7439-95-4,mg/L,1,,----,<1,2
+Sodium,7440-23-5,mg/L,1,,----,4,5
+Potassium,7440-09-7,mg/L,1,,----,<1,2
+,,,,,,,
+EK040P: Fluoride by PC Titrator,,,,,,,
+Fluoride,16984-48-8,mg/L,0.1,,----,<0.1,<0.1
+,,,,,,,
+EK055G: Ammonia as N by Discrete Analyser,,,,,,,
+Ammonia as N,7664-41-7,mg/L,0.01,,0.09,0.08,0.02
+,,,,,,,
+EK057G:  Nitrite as N by Discrete Analyser,,,,,,,
+Nitrite as N,14797-65-0,mg/L,0.01,,----,<0.01,<0.01
+,,,,,,,
+EK058G:  Nitrate as N by Discrete Analyser,,,,,,,
+Nitrate as N,14797-55-8,mg/L,0.01,,----,0.15,0.38
+,,,,,,,
+EK059G:  Nitrite plus Nitrate as N (NOx)  by Discrete Analyser,,,,,,,
+Nitrite + Nitrate as N,,mg/L,0.01,,0.14,0.15,0.38
+,,,,,,,
+EK061G: Total Kjeldahl Nitrogen By Discrete Analyser,,,,,,,
+Total Kjeldahl Nitrogen as N,,mg/L,0.1,,----,<0.1,<0.1
+,,,,,,,
+EK062G: Total Nitrogen as N (TKN + NOx) by Discrete Analyser,,,,,,,
+Total Nitrogen as N,,mg/L,0.1,,----,0.2,0.4
+,,,,,,,
+EK067G: Total Phosphorus as P by Discrete Analyser,,,,,,,
+Total Phosphorus as P,,mg/L,0.01,,----,0.03,0.02
+,,,,,,,
+EK071G: Reactive Phosphorus as P by discrete analyser,,,,,,,
+Reactive Phosphorus as P,14265-44-2,mg/L,0.01,,----,<0.01,<0.01
+,,,,,,,
+EN055: Ionic Balance,,,,,,,
+Total Anions,,meq/L,0.01,,----,0.14,1.48
+Total Cations,,meq/L,0.01,,----,0.17,1.43

@@ -91,14 +91,20 @@ test_that("R-6.3: EC mojibake unit variant and Temperature 'oC' both normalise c
   expect_true(all(temp_rows$units_raw == "°C"))   # 'oC' repaired to the real degree sign
 })
 
+# NOTE (orchestrator fix): date fill-down is a `samples`-level property -
+# `sample_datetime_raw` is a samples-only IR column (R/ir.R), not on `results`.
+# The original test read `out$results$sample_datetime_raw` (always NULL), a
+# copy-paste slip from the results-based tests; test 10 below already asserts
+# the same per-visit fill-down correctly via `out$samples`. Retargeted to
+# `out$samples` per [NO SILENT DEVIATION] (trivial test bug, fixed with a note).
 test_that("R-6.3: date fill-down - second-visit rows carry the second date (25/05/2025)", {
   meta <- sampleTidy:::file_meta(main_path)
   out <- acirl_adapter()$parse(main_path, meta)
-  visit1 <- out$results[out$results$sample_datetime_raw == "24/05/2025", ]
-  visit2 <- out$results[out$results$sample_datetime_raw == "25/05/2025", ]
+  visit1 <- out$samples[out$samples$sample_datetime_raw == "24/05/2025", ]
+  visit2 <- out$samples[out$samples$sample_datetime_raw == "25/05/2025", ]
   expect_true(nrow(visit1) > 0)
   expect_true(nrow(visit2) > 0)
-  expect_equal(nrow(visit1) + nrow(visit2), nrow(out$results))
+  expect_equal(nrow(visit1) + nrow(visit2), nrow(out$samples))
 })
 
 test_that("R-6.3: Comments cell text lands on the matching ir_samples row, not as a result", {

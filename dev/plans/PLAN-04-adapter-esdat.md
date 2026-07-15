@@ -14,7 +14,17 @@ adapter parses **each file independently** (assembly joins them, plan 07).
 Chemistry2e: `SampleCode, ChemCode, OriginalChemName, Prefix, Result,
 Result_Unit, Total_or_Filtered, Result_Type, Method_Type, Method_Name,
 Extraction_Date, Analysed_Date, EQL, EQL_Units, Comments, Lab_Qualifier,
-UCL, LCL`. Dates like `26 May 2025`. Encoding UTF-8 (possibly BOM).
+UCL, LCL`. Dates like `26 May 2025`.
+
+**Encoding — CORRECTED (A35, 2026-07-15):** real Chemistry2e/Sample2e CSVs are
+**latin-1**, not UTF-8: names such as `Electrical Conductivity @ 25°C` carry the
+raw byte `0xB0` (`°`), and `µ` (`0xB5`) appears in units. The adapter MUST read
+CSVs with `readr::locale(encoding = "latin1")` (as the XTAB crosstab dialect
+does), then `normalise_lab_text()` repairs any residual mojibake. Reading as
+UTF-8 makes `normalise_lab_text()`'s `gsub()` abort ("input string is invalid
+UTF-8") on ordinary valid files (verified: 17 affected rows in one real file). A
+leading UTF-8 BOM may still appear on the first header cell and must be stripped
+before the header fingerprint compare (R-4.1).
 
 Sample2e: `SampleCode, Sampled_Date_Time, Field_ID, Blank1, Depth, Blank2,
 Matrix_Type, Sample_Type, Parent_Sample, Blank3, SDG, Lab_Name, Lab_SampleID,
@@ -53,7 +63,9 @@ Criteria (fixture: 2 work orders × 3 samples × 3 analytes + 2 QC rows +
 - multi-work-order partitioning: `work_order` column has both ids; rows are
   NOT filtered by work order (reconciler/assembly decide);
 - `value_raw` for the `<` row is `"<0.1"`, `below_detection` TRUE, `rl` 0.1;
-- µS/cm survives byte-exact (UTF-8 handling);
+- a latin-1 `µ`/`°` in a unit/analyte name is decoded and normalised (A35) —
+  `µS/cm` and `25°C` in the output — from a fixture that carries the real raw
+  bytes, not pre-decoded Unicode;
 - `ir_validate()` passes on the output.
 
 ## R-4.3 Sample2e → `ir_samples`
@@ -62,9 +74,12 @@ Mapping: `lab_sample_id` ← `SampleCode`; `feature_raw` ← `Field_ID`;
 `sample_datetime_raw` ← `Sampled_Date_Time` verbatim; `sample_type`,
 `parent_sample`, `matrix_raw` (← `Matrix_Type`), `work_order` ←
 `Lab_Report_Number` (fallback SampleCode prefix); `org = "ALS"`; `sampler` NA
-(not in ESdat). Criteria: fixture (8 Normal + LCS/MB/LAB_D/MS/NCP rows) maps
-1:1; `Sample_Type` values pass through verbatim; `ir_validate()` passes;
-Header-less/Chemistry-less lone Sample2e parses fine.
+(not in ESdat). Criteria: fixture (Normal + one each of `LCS`/`MB`/`LAB_D`/`MS`/
+`NCP` — all five confirmed present in the real corpus per A36) maps 1:1;
+`Sample_Type` values pass through verbatim; `ir_validate()` passes;
+Header-less/Chemistry-less lone Sample2e parses fine. `MS` rows carry a
+`Parent_Sample`; the adapter copies it through and never filters QC (the
+reconciler filters ≠ `Normal` in the MVP).
 
 ## R-4.4 Header.XML → report metadata
 
@@ -89,3 +104,14 @@ Header.XML}` + a lone `PROJ_B.ESDAT_XX7654321_0.Sample2e.CSV`. Feature names
 `Electrical Conductivity @ 25°C`; values chosen so every parse_value branch
 in the fixture is hit. A `README.md` in the fixture dir records the real-file
 provenance of each structural property ([MEASURE TWICE] trace).
+
+**Rework note (A35, 2026-07-15):** the Chemistry2e fixture must be **regenerated
+to carry the real raw latin-1 bytes** (`0xB0` in `…25°C`, `0xB5` in a `µS/cm`
+unit), so `match()`/parse exercise the latin-1 read path against real-shaped
+bytes rather than pre-decoded UTF-8. The Sample2e fixture gains one `LAB_D` and
+one `MS` row (A36). The `CORRUPT.…Chemistry2e.CSV` fixture, which currently
+relies on a bare non-UTF-8 byte to force an abort, must be revised: under A35 a
+non-UTF-8 byte is *normal* and read as latin-1, so genuine corruption must be
+represented some other way (e.g. a byte invalid even under latin-1, a truncated
+row, or a structurally broken header) — otherwise the "adapter crash → file
+`failed`" path (R-9.5) is no longer reachable by that fixture.

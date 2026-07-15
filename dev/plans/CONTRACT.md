@@ -208,10 +208,38 @@ for lab reports; `sample.organisation ∈ {ACIRL, Internal, ALS}`;
   `clear_adapters()` (e.g. the registry test's deferred cleanup) can't leave
   the pipeline with no adapters. Each adapter plan (04/05/06) adds its
   constructor to this one function; the orchestrator wires it as each lands.
-- **A29** Open items still needing Robin (parked, non-blocking): confirm
-  ACIRL crosstab real-column layout vs the fixture's chosen interpretation
-  (R-5.1) and whether `LAB_D`/`MS` QC types need adapter-level fixtures
-  (R-4.3); both verified later against the real corpus in the plan-10 gates.
+- **A29** ~~Open items still needing Robin~~ **RESOLVED 2026-07-15** against the
+  real corpus (`…/assets/input`). (1) The crosstab `Analyte grouping/Analyte`
+  header is a **single combined column** in both XTAB and ENMRG — grouping is by
+  method-group rows (see A34). (2) All five QC types appear in real Sample2e
+  files (LCS/LAB_D/NCP/MB/MS/Normal); `LAB_D`+`MS` added to the Sample2e fixture
+  (see A36). A16 (keep the split) and A22 (inline review) confirmed by Robin,
+  unchanged. Full write-up: `PARKED-QUESTIONS.md`.
+- **A34** Real ALS crosstab layout (supersedes the synthetic fixture's guess;
+  drives PLAN-05 rework). Verified against real XTAB + ENMRG files:
+  (a) `Analyte grouping/Analyte` is ONE column (col 0) holding both method-group
+  rows and analyte rows — never two columns; (b) per-sample metadata labels
+  (`Sample Type:`, `ALS Sample Number:`/`ALS Sample number:`, `Sample date:`,
+  `Client sample ID (…)`, `Sample Site:`, `Purchase Order:`) sit at **col 3
+  (XTAB) / col 4 (ENMRG)**, packed multiple-labels-per-row, with per-sample
+  values under the sample columns (col 5+) — so the parser must regex-scan the
+  **whole row** for each label and read its values at the sample-column indices,
+  not just col 0; (c) header spellings differ — XTAB `Unit`/`Limit of reporting`,
+  ENMRG `Units`/`LOR` — match both; (d) recent files carry a single `Matrix:`
+  section (keep multi-section support; it is legacy/rare). Section-scalar labels
+  (`Matrix:`/`Client - Matrix:`, `Workgroup:`, `Project name/number:`) remain at
+  col 0 with value at col 1.
+- **A35** ESdat CSV encoding (drives PLAN-04 fix; reconciles A27). Real
+  Chemistry2e/Sample2e CSVs carry **latin-1** bytes (e.g. `0xB0` = `°`); the
+  adapter MUST read them with a latin-1 locale (as the XTAB dialect does) then
+  let `normalise_lab_text()` repair the mojibake — reading as UTF-8 makes
+  `gsub()` abort on valid legacy files. **A27 refined:** a file is `failed`
+  (parse crash) only on genuine structural failure (unreadable, or invalid even
+  under latin-1), NOT merely for containing a non-UTF-8 byte. The CORRUPT
+  fixture must be revised to represent true corruption under this rule.
+- **A36** Sample2e fixture gains one `LAB_D` and one `MS` row (both `≠ Normal`,
+  copied through verbatim by the adapter; still filtered by the reconciler in
+  the MVP) so all five real QC types are exercised at the adapter level.
 
 ## Gates
 

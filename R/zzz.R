@@ -10,6 +10,9 @@
 #' @noRd
 register_builtin_adapters <- function() {
   register_adapter(esdat_adapter())
+  register_adapter(als_xtab_adapter())
+  register_adapter(als_enmrg_adapter())
+  register_adapter(acirl_field_xlsx_adapter())
   invisible(NULL)
 }
 

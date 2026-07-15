@@ -26,7 +26,32 @@ grouping/Analyte` with columns `CAS Number, Unit, Limit of reporting`, then:
 method-group rows (non-empty first cell, **no values** in sample columns,
 e.g. `EA005P: pH by PC Titrator`) and analyte rows (values present). A file
 may contain **multiple stacked Matrix: sections** (old reader handled
-several). `----` = not computable. Values may carry `<`/`>` prefixes.
+several; recent real files carry a single section — keep support, it is
+legacy/rare). `----` = not computable. Values may carry `<`/`>` prefixes.
+
+> **Real-corpus correction (A34, 2026-07-15).** Verified against real (now
+> committed, anonymized) XTAB + ENMRG fixtures. The plan above is right; the
+> plan-05 **WIP parser silently deviated from it** and the synthetic fixture was
+> generated to match the deviated parser, so its green tests were misleading.
+> Bring the parser back to this spec:
+> - **`Analyte grouping/Analyte` is ONE column** (col 0), holding both
+>   method-group rows and analyte rows. The WIP parser located the analyte
+>   column with `^Analyte$` (never matches the real combined header); read
+>   `analyte_raw` from the `Analyte grouping/Analyte` column instead. Drop the
+>   synthetic ENMRG's two-column split.
+> - **Locate every metadata label by regex across the WHOLE row**, per this
+>   plan's own rule. Real per-sample labels (`Sample Type:`, `ALS Sample
+>   Number:`/`number:`, `Sample date:`, `Client sample ID (…)`, `Sample Site:`,
+>   `Purchase Order:`) sit at **col 3 (XTAB) / col 4 (ENMRG)**, packed
+>   multiple-labels-per-row (`Matrix:`+`Sample Type:` share a row), values under
+>   the sample columns (col 5+). The WIP parser inspected only col 0 and so
+>   captured no sample type/date/feature on real files. Read each label's
+>   per-sample values at the sample-column indices fixed by the `ALS Sample
+>   Number` row. Section-scalar labels (`Matrix:`/`Client - Matrix:`,
+>   `Workgroup:`, `Project name/number:`) stay at col 0, value at col 1.
+> - **Header spellings differ by dialect** (fact absent from the table below):
+>   XTAB writes `Unit` / `Limit of reporting`; ENMRG writes `Units` / `LOR`.
+>   Match both spellings when locating the unit and reporting-limit columns.
 
 ## R-5.1 Shared parser `parse_crosstab(path, dialect)`
 
