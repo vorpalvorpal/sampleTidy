@@ -240,6 +240,22 @@ for lab reports; `sample.organisation ∈ {ACIRL, Internal, ALS}`;
 - **A36** Sample2e fixture gains one `LAB_D` and one `MS` row (both `≠ Normal`,
   copied through verbatim by the adapter; still filtered by the reconciler in
   the MVP) so all five real QC types are exercised at the adapter level.
+- **A37** Real ALS XTAB "`.XLS`" files are **SpreadsheetML XML**, not binary
+  BIFF — `readxl` cannot read them (verified: `xml2` parses ~146 `Row`
+  elements; `readxl::read_excel` errors). **Decision (Robin, 2026-07-15):
+  SpreadsheetML parsing is PARKED post-MVP** — the `.csv` is the primary
+  export and carries the same data (in WEM.data the `.XLS` was handled by an
+  external automated-Excel workflow, not R). **MVP behaviour:** the crosstab
+  `match()` already returns `"no"` for a SpreadsheetML `.XLS` (its `readxl`
+  peek fails), so the router leaves it **unclaimed (cruft)** and no data is
+  lost — the `.csv` twin is ingested. The crosstab rework must only guarantee
+  this stays graceful (no crash) and add a test asserting `match() == "no"` on
+  the real anonymized `ES2600185_0_XTAB.XLS`; the fixture is retained for the
+  post-MVP SpreadsheetML path. **R-5.2's "xls twin" (`.XLS` parses equal to
+  `.csv`) is deferred to post-MVP.** Genuine binary `.xls` (BIFF, magic
+  `D0CF11E0`) is still required for **ACIRL** — its workbook IS BIFF and
+  `readxl` reads it; that real ACIRL fixture is anonymized via
+  `readxl`→`openxlsx`→`.xlsx`.
 
 ## Gates
 

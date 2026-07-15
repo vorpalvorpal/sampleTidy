@@ -19,12 +19,15 @@ done at the **byte level** on ASCII substrings only, so the raw `0xB0` (`°`) /
 | `esdat/….ES2617126_0.Sample2e.CSV` | ES2617126 | ESdat samples; **all five QC types present** (LAB_D 20, LCS 18, NCP 18, MB 9, MS 6, Normal 1) |
 | `esdat/….ES2617126_0.Header.XML` | ES2617126 | ESdat header (`Lab_Report_Number`, `Project_ID`, `Lab_Name`, …) |
 | `crosstab/ES2600185_0_XTAB.csv` | ES2600185 | ALS XTAB crosstab, latin-1, single `Matrix:` section, `Unit`/`Limit of reporting` header spellings, a `----` not-computable cell |
+| `crosstab/ES2600185_0_XTAB.XLS` | ES2600185 | **SpreadsheetML XML** twin of the `.csv` above (declares `ISO-8859-1`; `xml2` parses ~146 `Row` elements — `readxl` cannot read it). The real XTAB "`.XLS`" is XML, not binary BIFF (A37); anonymized as text with the same map. **SpreadsheetML parsing is parked post-MVP** — MVP asserts `match()=="no"` (graceful non-claim); the `.csv` twin carries the data. |
 | `crosstab/ES2537534_0_ENMRG.CSV` | ES2537534 | ALS ENMRG crosstab, UTF-8, 7 samples, `Units`/`LOR` header spellings |
 
-(The real `.XLS` binary XTAB twin will be re-derived as a clean `.xlsx` from the
-anonymized XTAB grid during the crosstab rework — a genuine legacy `.xls` can't
-be safely byte-anonymized because place-name replacements change string
-lengths.)
+The ACIRL real fixture (a genuine **binary BIFF** `.xls`, `readxl`-readable —
+sheets `Front Page / Sampling Sites 1–4 / Dust… / Water Methodology`) will be
+added for plan 06 by reading it with `readxl`, anonymizing the cell grid, and
+re-writing as `.xlsx` (binary BIFF can't be byte-anonymized because
+variable-length place-name replacements shift OLE offsets). Source set curated
+by Robin under `…/assets/input/sampleTidy example`.
 
 ## Anonymization map (applied identically across all files)
 

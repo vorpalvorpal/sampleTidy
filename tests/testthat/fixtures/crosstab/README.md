@@ -1,50 +1,86 @@
 # Crosstab fixtures (plan 05: `als_xtab`, `als_enmrg`)
 
-Synthetic, structurally-exact fixtures for the shared crosstab parser (A3 -
-no real lab data committed). Generated deterministically by `generate.R`; re-
-run with `Rscript tests/testthat/fixtures/crosstab/generate.R`.
+CONTRACT A34 (2026-07-15): the primary fixtures for this adapter are now the
+two REAL, anonymized ALS crosstab exports (see
+`tests/testthat/fixtures/REAL-FIXTURES.md` for the full provenance/
+anonymization write-up). A small set of SYNTHETIC fixtures, generated
+deterministically by `generate.R` (re-run with
+`Rscript tests/testthat/fixtures/crosstab/generate.R`), cover only the
+criteria the two real files do not exercise. An earlier synthetic-only
+fixture set encoded the WRONG layout (column 0 only for per-sample
+metadata, a bare `Analyte` header) and has been deleted/regenerated in the
+CORRECT real layout described below.
 
-## Column layout chosen for these fixtures
+## Real fixtures
 
-Real ALS crosstab exports vary in exact column position (PLAN-05: "do not fix
-column indices - locate labels by regex in each row"), so the fixtures encode
-one concrete, self-consistent, documented layout rather than a literal
-capture of a real file:
+| file | notes |
+|---|---|
+| `ES2600185_0_XTAB.csv` | latin-1, single `Matrix: WATER` section, 3 REG samples (`ES2600185001-003`), 26 distinct analytes. Exercises: real per-sample-label row layout (col 3, values from col 5), the combined `Analyte grouping/Analyte` header, `Unit`/`Limit of reporting` spellings, `----` skips (24 of them, no genuinely blank cells), multi-analyte method groups (e.g. `ED037P: Alkalinity by PC Titrator` covers 4 analyte rows), and a real degree-sign mojibake cell (see finding below). |
+| `ES2600185_0_XTAB.XLS` | SpreadsheetML XML twin of the above (A37) - `readxl` cannot read it; the adapter's `match()` must return `"no"` for it (graceful non-claim, no crash) and MVP does not attempt to parse it. |
+| `ES2537534_0_ENMRG.CSV` | genuine UTF-8, single `Client - Matrix: WATER` section, 7 REG samples (`ES2537534001-007`), 27 distinct analytes, `Units`/`LOR` header spellings, no mojibake (already correct Unicode). Also carries a trailing `QC - Matrix:` reconciliation block that reuses/extends the same sample-column indices for QC codes AND for other, unrelated work orders' primary samples - see "Unsupported trailing section" below. |
 
-- **XTAB**: column 0 = row label / `Analyte`, 1 = `CAS Number`, 2 = `Unit`,
-  3 = `Limit of reporting`, 4.. = one column per sample. The
-  `ALS Sample Number:` label sits at column index **3** (0-based) - matching
-  PLAN-05's documented real-file observation - with sample numbers starting
-  at column 4.
-- **ENMRG**: column 0 = `Analyte grouping`, 1 = `Analyte` (kept as two
-  separate columns, unlike XTAB's single combined `Analyte` column - our
-  reading of PLAN-05's "header row starting `Analyte grouping/Analyte`"),
-  2 = `CAS Number`, 3 = `Unit`, 4 = `Limit of reporting`, 5.. = sample
-  columns (3 regular + 2 QC). The `ALS Sample number:` label sits at column
-  index **4**, matching PLAN-05's pinned "label col index: 4" fact. This
-  column-layout interpretation is flagged as an ambiguity resolution in
-  `dev/plans/PLAN-CHANGE-REQUESTS.md`.
+### Finding: real XTAB mojibake is a UTF-8-encoded U+FFFD, not a raw latin-1 byte
 
-## Files
+`ES2600185_0_XTAB.csv`'s only two non-ASCII byte runs (the EC analyte name's
+degree sign and its unit's micro sign) are each the 3-byte sequence
+`EF BF BD` - the valid UTF-8 encoding of U+FFFD (REPLACEMENT CHARACTER), not
+a single raw latin-1 high byte (e.g. `0xB0`). Decoded under the dialect's
+pinned latin-1 locale (CONTRACT A34/A35), those 3 bytes become three
+separate Latin-1 characters ("ï¿½"), which does not match any
+`normalise_lab_text()` substitution (its table matches a literal single
+U+FFFD, or the specific `0xA1`-derived "¡" mojibake) - so it passes through
+**unfixed**: `analyte_raw` ends up `"Electrical Conductivity @ 25ï¿½C"`, not
+`"...25°C"`. This differs from `REAL-FIXTURES.md`'s general claim that raw
+`0xB0`/`0xB5` bytes are "untouched" in these files - for this specific cell
+they are not raw `0xB0`/`0xB5` at all. `test-adapter-crosstab.R` asserts the
+actual (unfixed) behaviour rather than an assumed one; `normalise_lab_text()`
+itself (and its raw-latin1-byte fix path) remains covered by its own
+dedicated tests from plan 02, outside this adapter's ownership.
 
-| file | structural property | provenance |
+### Unsupported trailing section ("QC - Matrix:")
+
+`ES2537534_0_ENMRG.CSV` carries a second block, headed `QC - Matrix:`
+(not `Client - Matrix:`), whose own `ALS Sample number:` row reuses the
+SAME column indices as the primary section for a much wider set of QC codes
+and other work orders' primary samples (`ES2537304001`, `EW2505874001`,
+...). This is not one of the two dialects' recognised section markers,
+its shape doesn't match the documented single-Matrix:-section norm (CONTRACT
+A34d), and blindly parsing it would corrupt the primary section's
+already-emitted per-column state by reusing the same column indices for
+unrelated samples. The parser's `.ST_CROSSTAB_ANY_MARKER_RE` mechanism
+detects any `...Matrix:`-suffixed cell; if it isn't the dialect's own
+recognised marker, that row and everything after it (until a recognised
+marker reappears, if ever) is skipped outright - never treated as data.
+This is why, from the adapter's perspective, `ES2537534_0_ENMRG.CSV` is
+"all-REG, no QC" even though the raw file contains a QC-labelled block.
+
+## Synthetic fixtures (minimal; correct real layout)
+
+Column layout used by every synthetic file below (0-based, matching the
+real files): section-scalar labels (`Matrix:`/`Client - Matrix:`,
+`Workgroup:`, `Project name/number:`) at column 0, value at column 1.
+Per-sample labels (`Sample Type:`, `ALS Sample Number:`/`ALS Sample
+number:`, `Sample Date:`, `Client sample ID (1st)`/`(Primary)`, `Site:`/
+`Sample Site:`) at column 3 (XTAB) / column 4 (ENMRG); XTAB's per-sample
+values start two columns after the label (column 5 - one empty gap
+column), ENMRG's start immediately the next column (no gap). The analyte
+header is always the single combined `Analyte grouping/Analyte` column.
+
+| file | criterion covered | content |
 |---|---|---|
-| `XX1234567_0_XTAB.csv` | **latin-1 encoded**; two stacked `Matrix:` sections (`WATER` then `SOIL`) | FIXTURES.md "two stacked sections"; PLAN-05's explicit "two-section WATER+SOIL fixture" criterion resolves FIXTURES.md's more ambiguous wording (see `PLAN-CHANGE-REQUESTS.md`) |
-| " | WATER section: samples `XX1234567001/002/003` (`T.S01/T.S02/T.MW01`), `Sample Date: 24/05/2025` (d/m/y), analytes `pH`, `Fluoride` (CAS `16984-48-8`), `Electrical Conductivity @ 25<0xA1>C` | FIXTURES.md's pinned crosstab sample/analyte/value table; values for Fluoride (`<0.1`, `2.3`, `>2000`) and EC (`185`, `965`) are **byte-for-byte the same value strings as the ESdat fixture's XX1234567001-003 rows**, so cross-format equivalence (plan 07/10) holds |
-| " | the literal byte `0xA1` sits between "25" and "C" in the EC analyte-row cell. Decoded under a **correct latin-1 locale** this reads as `25¡C` - the documented MacRoman-degree-sign mojibake (PLAN-02 R-2.1) that `normalise_lab_text()` must fix to `25°C`. Decoded incorrectly as UTF-8 the byte is not valid UTF-8 at all (verified in `generate.R`'s checks: `read_csv()` without a latin-1 locale throws "invalid multibyte string" warnings) | PLAN-02 R-2.1 / PLAN-05 R-5.1 "mojibake analyte normalised (`25°C` in output)" criterion; FIXTURES.md "`25¡C` mojibake in the EC group header" |
-| " | the literal byte `0xB5` (correct latin-1 codepoint for `µ`) in the Unit cell `µS/cm` for the same EC row | native latin-1 micro sign, no mojibake-table fix needed, just correct decoding |
-| " | pH row: one `----` cell (not-computable) and one empty cell; EC row: one empty cell (no EC recorded for sample 003, mirroring the ESdat fixture's own gap) | PLAN-05 R-5.1 "`----` and empty cells land in `report$skipped`" criterion |
-| " | SOIL section: 1 sample (`XX1234567004`, feature `T.S03`), `Sample Date: 25/05/2025`, plain-ASCII analyte spellings (no mojibake) so the two sections are trivially distinguishable in test assertions | supports R-5.1 "two-section fixture: rows carry their own section's matrix and dates" |
-| `XX1234567_0_XTAB.xlsx` | **xlsx substitutes for legacy `.xls`** (writing genuine binary `.xls` was impractical in this environment; `openxlsx` produces `.xlsx` instead - PLAN-05/PLAN-06 both anticipate this substitution). Same logical grid as the `.csv` twin, both sections, **but with the correct Unicode `°`/`µ` characters** instead of the CSV's legacy mojibake bytes - xlsx is natively Unicode and was never subject to the CSV's byte-encoding bug, so "identical content" means the same *data*, not byte-identical raw encoding. Adapter output (IR) from the two files must match after `normalise_lab_text()` fixes the CSV's mojibake (R-5.2: "same IR, ignoring `source_ref`") | task-orchestrator instructions + PLAN-05 fixtures section |
-| `XX1234567_0_ENMRG.CSV` | UTF-8, single `WATER` section, same 3 regular samples/analytes/values as the XTAB WATER section (correct Unicode `°`/`µ`, no mojibake - ENMRG is UTF-8 natively) **plus 2 QC sample columns** (`Sample Type:` = `LCS`, `MB`) reusing the same QC codes/values as the ESdat fixture (`QC-000001` Fluoride `0.5`, `QC-000002` pH `7.00`) for cross-format consistency | FIXTURES.md "ENMRG is UTF-8 with 2 extra QC columns" |
-| `ZZ9999999_0_XTAB.csv` | filename encodes work order `ZZ9999999`, but the `Workgroup:` cell inside the file says `XX1234567` - single minimal `WATER` section, 1 sample, 1 analyte (`pH`) | FIXTURES.md "mismatch-precedence test"; PLAN-05 R-5.3 "Workgroup cell > filename guess ... mismatch ... `report$warnings` records it" |
+| `XX1234567_0_XTAB.csv` | (a) two-section: rows carry their own section's matrix/date (R-5.1) | `Matrix: WATER` (samples `XX1234567001/002`, features `T.S01/T.S02`, `Sample Date: 24/05/2025`, pH `6.40`/`6.90`) then `Matrix: SOIL` (sample `XX1234567003`, feature `T.S03`, `Sample Date: 25/05/2025`, pH `6.80`). Same `Workgroup: XX1234567` in both sections. 3 results, 3 samples total. |
+| `XX1234567_0_XTAB.xlsx` | binary/xlsx twin, kept ONLY so `test-adapter-acirl.R`'s "a foreign xlsx matches no" cross-adapter check has a file to point at (R-5.2's real xls-twin-equals-csv criterion is deferred post-MVP per CONTRACT A37 - not asserted here). Same grid as the two-section csv above. |
+| `XX1234567_0_ENMRG.CSV` | (c) ENMRG with QC sample columns (R-5.1) | `Client - Matrix: WATER`, 1 REG sample (`XX1234567001`/`T.S01`) + 2 QC columns (`QC-000001`=`LCS`, `QC-000002`=`MB`), 3 analytes (pH, Fluoride, EC). Results: REG all 3 valid; LCS pH `7.00` + Fluoride `0.5` valid, LCS EC empty (skipped `empty`); MB pH `----` (skipped `not_computable`), MB Fluoride empty (skipped `empty`), MB EC `600` valid. 6 results total, `n_by_sample_type` = Normal 3 / LCS 2 / MB 1. |
+| `ZZ9999999_0_XTAB.csv` | (b) Workgroup-cell-vs-filename mismatch (R-5.3) + d/m/y disambiguation (R-5.1) | Filename encodes work order `ZZ9999999`; `Workgroup:` cell says `XX1234567` (must win, with a `report$warnings` entry naming both). Single `Matrix: WATER` section, 1 sample (`ZZ9999999001`/`T.S01`), 1 analyte (pH `6.90`). `Sample Date: 05/01/2026` is unambiguous only under d/m/y (-> 5 January). |
+
+`XX1234567_1_XTAB.csv` (the old revision-1 supersede fixture) has been
+deleted - it is not required by any test this rework owns; plan 10's
+(currently unimplemented, intentionally red) e2e fixture-existence check is
+out of scope here.
 
 ## Verification performed
 
-`generate.R`'s companion checks (rerun via `test-adapter-crosstab.R`) confirm:
-raw bytes `0xA1` and `0xB5` are present in `XX1234567_0_XTAB.csv` at the
-expected offsets; a correct latin-1 locale decodes them to `¡`/`µ`; a UTF-8
-locale read of the same file throws/warns on invalid encoding; the `.xlsx`
-twin round-trips via `readxl`/`openxlsx` with the clean, non-mojibake text;
-the ENMRG and mismatch CSVs are plain UTF-8/ASCII and round-trip via
-`readr::read_csv`.
+Every count/name/value documented above (and asserted in
+`test-adapter-crosstab.R`) was derived by actually parsing the fixture with
+the corrected adapter and reading off the result - not hand-guessed. See
+`generate.R` for the exact synthetic fixture content.
