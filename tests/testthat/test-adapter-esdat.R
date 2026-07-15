@@ -40,6 +40,24 @@ corrupt_path     <- test_path("fixtures", "esdat", "CORRUPT.ESDAT_XX0000000_0.Ch
 xtab_csv_path    <- test_path("fixtures", "crosstab", "XX1234567_0_XTAB.csv")
 enmrg_csv_path   <- test_path("fixtures", "crosstab", "XX1234567_0_ENMRG.CSV")
 
+# Real anonymized ALS delivery (A35/REAL-FIXTURES.md): the underlying
+# monitoring data is public-by-EPA-requirement; only sampling-point IDs and
+# place/person names were anonymized (byte-level, ASCII-only substrings) -
+# analytes, values, units, dates, work-order/QC codes and file encodings
+# (latin-1) are byte-for-byte the original.
+real_chem_path   <- test_path(
+  "fixtures", "esdat",
+  "SITEA Apirl 2024 - Rain Event.ESDAT_ES2617126_0.Chemistry2e.CSV"
+)
+real_sample_path <- test_path(
+  "fixtures", "esdat",
+  "SITEA Apirl 2024 - Rain Event.ESDAT_ES2617126_0.Sample2e.CSV"
+)
+real_header_path <- test_path(
+  "fixtures", "esdat",
+  "SITEA Apirl 2024 - Rain Event.ESDAT_ES2617126_0.Header.XML"
+)
+
 # ---- R-4.1 match() ----------------------------------------------------------
 
 test_that("R-4.1: Chemistry2e fixture (with BOM) matches exact", {
@@ -155,13 +173,29 @@ test_that("R-4.2: lab_qualifier and comments pass through verbatim", {
 })
 
 test_that("R-4.2: corrupted Chemistry2e data causes parse() to abort loudly (plan-09/10 fixture)", {
-  # The fixture's CSV grammar is well-formed (readr::read_csv reads it without
-  # error - see fixtures/esdat/README.md) but its OriginalChemName field
-  # contains a bare, invalid-on-its-own UTF-8 continuation byte (0x80); base
-  # R's nchar()/toupper() throw hard "invalid multibyte string" errors on it.
-  # A CONTRACT-conformant adapter never lets a bare R error escape - it wraps
-  # failures as a classed sampletidy_parse_error (as R-4.4 already requires
-  # for a non-ESdat XML).
+  # REWORKED (A35, 2026-07-15): the original version of this fixture relied
+  # on a bare, invalid-on-its-own UTF-8 continuation byte (0x80) to trip base
+  # R's nchar()/toupper(). That premise is dead now the adapter reads
+  # Chemistry2e/Sample2e CSVs with a latin-1 locale (A35, required for real
+  # ALS files carrying raw °/µ bytes) - EVERY byte 0x00-0xFF is a valid
+  # latin-1 codepoint, so 0x80 decodes quietly and nothing errors on it (A27
+  # refined: a file is `failed` only on genuine structural failure, not
+  # merely for containing a non-UTF-8 byte).
+  #
+  # The fixture now carries genuine structural corruption instead: its
+  # OriginalChemName field opens a quoted CSV field (`"`) that is never
+  # closed anywhere else in the file - invalid CSV grammar under ANY
+  # encoding (a well-formed CSV always has an EVEN total count of `"`
+  # bytes; this file's count is ONE). Empirically, readr::read_csv() itself
+  # does NOT raise an R error for this on a plain file path - it silently
+  # swallows the rest of the file into a runaway field and returns a
+  # suspicious result with no warning - so R/adapter-esdat.R checks
+  # quote-parity explicitly before every ESdat CSV body read and aborts with
+  # class sampletidy_parse_error on an odd count. The header line is
+  # untouched, so match() still fingerprints this as an exact ESdat
+  # Chemistry2e file (see the R-4.1 "corrupted ... still matches exact"
+  # test above) and the router still *claims* it for this adapter, reaching
+  # the plan-09/10 "claimed -> failed" transition.
   meta <- sampleTidy:::file_meta(corrupt_path)
   expect_error(esdat_adapter()$parse(corrupt_path, meta), class = "sampletidy_parse_error")
 })
@@ -241,4 +275,83 @@ test_that("R-4.5: an unparseable Analysed_Date lands in warnings; row still emit
   expect_identical(out$results$source_ref[1], "row1")
   expect_true(length(out$report$warnings) >= 1)
   expect_true(any(grepl("row1", out$report$warnings, fixed = TRUE)))
+})
+
+# ---- Real ES2617126 fixture (A35/REAL-FIXTURES.md) --------------------------
+#
+# The plan-04 synthetic fixtures are structurally exact but hand-written;
+# these tests run the adapter against the actual anonymized real ALS
+# delivery to prove the latin-1 fix (A35) works on real bytes, not just a
+# fixture built to already carry them. Every expected value below is DERIVED
+# by reading the fixture itself (raw CSV columns, independently of the
+# adapter under test) - none are hard-coded guesses at what the real data
+# contains.
+
+test_that("R-4.1: real ES2617126 Chemistry2e/Sample2e/Header.XML all match exact", {
+  expect_identical(esdat_adapter()$match(sampleTidy:::file_meta(real_chem_path)), "exact")
+  expect_identical(esdat_adapter()$match(sampleTidy:::file_meta(real_sample_path)), "exact")
+  expect_identical(esdat_adapter()$match(sampleTidy:::file_meta(real_header_path)), "exact")
+})
+
+test_that("R-4.2: real ES2617126 Chemistry2e parses to a valid ir_results with the fixture's own real analyte names", {
+  # Derive the expected analyte vocabulary directly from the raw file,
+  # independently of the adapter under test.
+  raw <- readr::read_csv(
+    real_chem_path,
+    col_types = readr::cols(.default = readr::col_character()),
+    locale = readr::locale(encoding = "latin1"),
+    show_col_types = FALSE
+  )
+  expected_analytes <- unique(sampleTidy:::normalise_lab_text(raw$OriginalChemName))
+
+  meta <- sampleTidy:::file_meta(real_chem_path)
+  out <- esdat_adapter()$parse(real_chem_path, meta)
+
+  expect_equal(nrow(out$results), nrow(raw))
+  expect_equal(out$report$n_rows, nrow(raw))
+  expect_silent(sampleTidy:::ir_validate(out$results, kind = "results"))
+  expect_setequal(unique(out$results$analyte_raw), expected_analytes)
+  expect_true(length(expected_analytes) > 1) # sanity: the derivation actually found real names
+})
+
+test_that("R-4.2: real ES2617126 Chemistry2e decodes the raw latin-1 °/µ bytes", {
+  meta <- sampleTidy:::file_meta(real_chem_path)
+  out <- esdat_adapter()$parse(real_chem_path, meta)
+  ec <- out$results[grepl("Electrical Conductivity", out$results$analyte_raw, fixed = TRUE), ]
+  expect_true(nrow(ec) > 0)
+  expect_true(all(grepl("25°C", ec$analyte_raw, fixed = TRUE)))
+  expect_true("µS/cm" %in% ec$units_raw)
+})
+
+test_that("R-4.3: real ES2617126 Sample2e reproduces all five real QC types + Normal verbatim, with the fixture's own per-type counts", {
+  # Derive the expected per-Sample_Type counts directly from the raw file.
+  raw <- suppressWarnings(readr::read_csv(
+    real_sample_path,
+    col_types = readr::cols(.default = readr::col_character()),
+    locale = readr::locale(encoding = "latin1"),
+    show_col_types = FALSE
+  ))
+  expected_counts <- table(raw$Sample_Type)
+  expect_setequal(names(expected_counts), c("LAB_D", "LCS", "MB", "MS", "NCP", "Normal"))
+
+  meta <- sampleTidy:::file_meta(real_sample_path)
+  out <- esdat_adapter()$parse(real_sample_path, meta)
+
+  expect_equal(nrow(out$samples), nrow(raw))
+  expect_silent(sampleTidy:::ir_validate(out$samples, kind = "samples"))
+  actual_counts <- table(out$samples$sample_type)
+  for (st in names(expected_counts)) {
+    expect_equal(unname(actual_counts[[st]]), unname(expected_counts[[st]]), info = st)
+  }
+})
+
+test_that("R-4.4: real ES2617126 Header.XML yields the pinned report metadata", {
+  meta <- sampleTidy:::file_meta(real_header_path)
+  out <- esdat_adapter()$parse(real_header_path, meta)
+  expect_equal(nrow(out$results), 0)
+  expect_equal(nrow(out$samples), 0)
+  h <- out$report$header
+  expect_identical(h$work_order, "ES2617126")
+  expect_identical(h$project_id, "SITEA Apirl 2024 - Rain Event")
+  expect_identical(h$lab_name, "ALSE-Sydney")
 })

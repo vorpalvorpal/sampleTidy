@@ -87,10 +87,23 @@ chem_lines <- c(csv_line(chem_header), vapply(chem_rows, csv_line, character(1))
 chem_text <- paste(chem_lines, collapse = "\r\n")
 chem_text <- paste0(chem_text, "\r\n")
 
+# A35 rework (2026-07-15): real Chemistry2e/Sample2e CSVs are latin-1, not
+# UTF-8 - `°`/`µ` (typed here as ordinary UTF-8 characters, since this
+# script's own source is UTF-8) must be written to the fixture as their raw
+# single-byte latin-1 codepoints (0xB0/0xB5), NOT the two-byte UTF-8
+# sequences (0xC2 0xB0/0xC2 0xB5) a plain `enc2utf8()`+`charToRaw()` write
+# would produce. `iconv(..., to = "latin1")` performs the actual byte
+# transcoding (verified: the degree sign becomes the single byte 0xB0).
+# The leading UTF-8 BOM is kept regardless - real-world files sometimes
+# staple a UTF-8 BOM onto an otherwise latin-1 body (PLAN-04 "Encoding -
+# CORRECTED (A35)"), and R-4.1's "(with BOM)" test exercises exactly that.
+chem_text_latin1 <- iconv(chem_text, from = "UTF-8", to = "latin1")
+stopifnot(identical(Encoding(chem_text_latin1), "latin1"))
+
 chem_path <- file.path(here, "PROJ_A.ESDAT_XX1234567_0.Chemistry2e.CSV")
 con <- file(chem_path, open = "wb")
 writeBin(as.raw(c(0xEF, 0xBB, 0xBF)), con)                 # UTF-8 BOM
-writeBin(charToRaw(enc2utf8(chem_text)), con)
+writeBin(charToRaw(chem_text_latin1), con)
 close(con)
 
 # ---- Sample2e.CSV (UTF-8, no BOM) ------------------------------------------
@@ -176,38 +189,50 @@ writeLines(baddate_lines, file.path(here, "BADDATE.ESDAT_XX5555555_0.Chemistry2e
            sep = "\r\n", useBytes = FALSE)
 
 # ---- Deliberately corrupted ESdat Chemistry2e CSV (plan-09/10) -------------
-# Same pinned header verbatim (so match() still fingerprints it as an exact
-# ESdat Chemistry2e file and the router *claims* it for the esdat adapter -
-# a genuinely unclaimed/no-match file would never reach "claimed -> failed").
-# The single data row is well-formed CSV (correct field count, readable by
-# readr::read_csv without error - verified empirically, see below) but its
-# OriginalChemName field contains a bare UTF-8 continuation byte (0x80),
-# which is not valid on its own in any UTF-8 sequence. This is realistic
-# corruption (a truncated/mis-transcoded multibyte character, e.g. from a
-# dropped byte in transfer) and is a reliable landmine: base R's nchar(),
-# toupper()/tolower() (utf8towcs-based) throw a hard "invalid multibyte
-# string" error on it, which is exactly the crash plan-09/10's "adapter
-# crash on one file" test needs - regardless of whether the eventual
-# esdat parse() implementation uses those functions directly or via a
-# stringr/base helper that calls them internally for validation/casing.
-corrupt_row <- splice_method_type(
-  c("XX0000000001", "", "pH Value\x80", "", "6.40", "pH Unit",
-    "T", "Numeric", "EA005P: pH by PC Titrator", "",
-    "26 May 2025", "0.01", "pH Unit", "", "", "", ""))
-stopifnot(length(corrupt_row) == length(chem_header))
-corrupt_text <- paste0(
-  paste(chem_header, collapse = ","), "\r\n",
-  paste(corrupt_row, collapse = ","), "\r\n"
-)
+# REWORKED (A35, 2026-07-15): the original version of this fixture relied on
+# a bare, invalid-on-its-own UTF-8 continuation byte (0x80) to trip base R's
+# nchar()/toupper(). That premise is now dead - under the latin-1 locale the
+# adapter must use for real Chemistry2e/Sample2e files (A35), EVERY byte
+# 0x00-0xFF is a valid latin-1 codepoint, so 0x80 just decodes quietly (as
+# U+0080) and no read/normalise step errors on it. A27 was refined
+# accordingly: a file is `failed` only on genuine structural failure
+# (unreadable, or invalid even under latin-1), not merely for a non-UTF-8
+# byte.
+#
+# The new corruption is a genuinely unterminated quoted field: the
+# OriginalChemName cell opens with `"` but the field, and the row, are never
+# closed - the character never reappears anywhere else in the file. This is
+# realistic corruption (a truncated CSV export / a stray unescaped `"` in a
+# text field) and is invalid CSV structure under ANY encoding, latin-1
+# included: RFC 4180 requires every quoted field's opening quote to be
+# matched by a closing quote (and an escaped `""` still contributes an even
+# number to the total), so a well-formed CSV always has an EVEN total count
+# of `"` bytes. This file's total count is ONE (odd) - deliberately.
+# Empirically, `readr::read_csv()` itself does *not* raise an R error for
+# this on a plain file path - it silently swallows the rest of the file into
+# one runaway field and returns a suspicious near-empty/zero-row result with
+# no warning. That silent failure is precisely the "genuine structural
+# corruption" A27/A35 need surfaced loudly, so `R/adapter-esdat.R` checks
+# quote-parity explicitly (`.st_esdat_check_quote_parity()`) before every
+# ESdat CSV body read and aborts with class `sampletidy_parse_error` on an
+# odd count - this is what the plan-09/10 "adapter crash -> file `failed`"
+# scenario now exercises. See "R-4.2: corrupted CSV data" in
+# test-adapter-esdat.R.
+#
+# The header line is written verbatim and unmodified (so match() still
+# fingerprints this file as an exact ESdat Chemistry2e file and the router
+# *claims* it for the esdat adapter - a genuinely unclaimed/no-match file
+# would never reach "claimed -> failed").
 corrupt_path <- file.path(here, "CORRUPT.ESDAT_XX0000000_0.Chemistry2e.CSV")
 con <- file(corrupt_path, open = "wb")
 writeBin(charToRaw(paste(chem_header, collapse = ",")), con)
 writeBin(as.raw(c(0x0d, 0x0a)), con)
-writeBin(charToRaw("XX0000000001,,pH Value"), con)
-writeBin(as.raw(0x80), con)  # the deliberate lone continuation byte
-writeBin(charToRaw(paste0(",,6.40,pH Unit,T,Numeric,pH by PC Titrator,",
-                           "EA005P: pH by PC Titrator,,26 May 2025,0.01,",
-                           "pH Unit,,,,\r\n")), con)
+writeBin(charToRaw(paste0(
+  'XX0000000001,,"pH Value,,6.40,pH Unit,T,Numeric,pH by PC Titrator,',
+  "EA005P: pH by PC Titrator,,26 May 2025,0.01,pH Unit,,,,\r\n"
+)), con)
 close(con)
+corrupt_bytes <- readBin(corrupt_path, "raw", n = file.info(corrupt_path)$size)
+stopifnot(sum(corrupt_bytes == as.raw(0x22)) %% 2 == 1) # odd quote count, deliberately
 
 message("esdat fixtures written to ", normalizePath(here))

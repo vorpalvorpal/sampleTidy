@@ -1,9 +1,9 @@
 ï»¿SampleCode,ChemCode,OriginalChemName,Prefix,Result,Result_Unit,Total_or_Filtered,Result_Type,Method_Type,Method_Name,Extraction_Date,Analysed_Date,EQL,EQL_Units,Comments,Lab_Qualifier,UCL,LCL
 XX1234567001,,pH Value,,6.40,pH Unit,T,Numeric,pH by PC Titrator,EA005P: pH by PC Titrator,,26 May 2025,0.01,pH Unit,,,,
 XX1234567001,16984-48-8,Fluoride,<,0.1,mg/L,T,Numeric,Fluoride by PC Titrator,EK040P: Fluoride by PC Titrator,26 May 2025,26 May 2025,0.1,mg/L,,,,
-XX1234567001,,Electrical Conductivity @ 25Â°C,,185,ÂµS/cm,T,Numeric,Conductivity by PC Titrator,EA010P: Conductivity by PC Titrator,26 May 2025,26 May 2025,1,ÂµS/cm,,,,
+XX1234567001,,Electrical Conductivity @ 25°C,,185,µS/cm,T,Numeric,Conductivity by PC Titrator,EA010P: Conductivity by PC Titrator,26 May 2025,26 May 2025,1,µS/cm,,,,
 XX1234567002,16984-48-8,Fluoride,,2.3,mg/L,T,Numeric,Fluoride by PC Titrator,EK040P: Fluoride by PC Titrator,26 May 2025,26 May 2025,0.1,mg/L,,,,
-XX1234567002,,Electrical Conductivity @ 25Â°C,,965,ÂµS/cm,T,Numeric,Conductivity by PC Titrator,EA010P: Conductivity by PC Titrator,26 May 2025,26 May 2025,1,ÂµS/cm,,J,,
+XX1234567002,,Electrical Conductivity @ 25°C,,965,µS/cm,T,Numeric,Conductivity by PC Titrator,EA010P: Conductivity by PC Titrator,26 May 2025,26 May 2025,1,µS/cm,,J,,
 XX1234567003,,Fluoride,>,2000,mg/L,T,Numeric,Fluoride by PC Titrator,EK040P: Fluoride by PC Titrator,26 May 2025,26 May 2025,0.1,mg/L,,,,
 XX1234567003,,Observation,,"Clear, low flow",,T,Text,,,26 May 2025,26 May 2025,,,Field observation,,,
 QC-000001,16984-48-8,Fluoride,,0.5,mg/L,T,Numeric,Fluoride by PC Titrator,EK040P: Fluoride by PC Titrator,26 May 2025,26 May 2025,0.1,mg/L,Duplicate check,,,
