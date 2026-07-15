@@ -4,9 +4,15 @@ Research report on hardening `.claude/skills/tdd-plan/SKILL.md` so the test suit
 produces are more correct, robust, and trustworthy. Grounded in the seven abstracted
 failure classes supplied, **and** cross-checked against this project's own build
 history — `dev/plans/CONTRACT.md` adjudications A38–A44 turn out to be the *literal,
-unabstracted instances* of six of the seven classes. That log is cited throughout as
+unabstracted instances* of six of the seven classes, **plus an eighth class**
+(fixture-contradicts-its-own-assertion, #8 below) surfaced from the A-log that the
+supplied seven did not contain. That log is cited throughout as
 primary evidence; it is stronger evidence than any external source because it is this
 skill, on this codebase, failing this way.
+
+_Extended 2026-07-16 with failure class #8, edits P9–P10, and the harness-routing item
+in §4, drawn from the plan-07→09 build-orchestration transcript — the same build that
+produced A38–A44._
 
 ---
 
@@ -23,13 +29,20 @@ skill, on this codebase, failing this way.
 | 5 | NA/edge-unsafe test assertions (phantom all-NA row) | **A43**: `test-ingest.R` filtered with bare `states$filename == "x"` against a seeded `filename = NA` row; base-R `df[<logical with NA>, ]` splices in a phantom all-NA row, inflating row counts and silently selecting the wrong row (`legacy-hash-XX`) in one test. | The *test code itself* was written with the same NA-unsafety bug it should have been designed to catch in production code — no discipline requiring test-side filters to be NA-safe by default. |
 | 6 | Cross-file global-state leakage, order-dependent pass/fail | Not yet manifested as a *found* bug in this repo, but the mechanism (A38/A41 cleanup timing) is exactly the shape of bug that produces it, and the skill has no standing gate that would catch it if it recurs elsewhere (e.g. the adapter registry noted in CONTRACT.md: `register_builtin_adapters()` is deliberately idempotent specifically *because* a prior test's `clear_adapters()` could otherwise leave the registry empty for a later file). | No mechanical check that the suite passes in more than one execution order. Per-file gates ("Per-plan: `testthat::test_file()` green") say nothing about whether the full-suite order matters. |
 | 7 | Weak/vacuous assertions | Not directly instanced with a filed A#, but structurally invited by Phase 4's current instructions, which specify only "real assertions" with no positive list of what counts as weak, and by Phase 5's audit question ("does every criterion have a test that asserts what the plan actually says") which is judged prose-by-prose rather than against a checklist of banned patterns. | No blocklist of known-weak assertion idioms; audit relies entirely on the Opus-class reader's judgement with no mechanical backstop. |
+| 8 | *(not in the supplied set — surfaced from the A-log)* Test fixture's setup silently contradicts its own asserted disposition | **A39**: eleven `test-reconcile.R` fixtures set `lab_sample_id = "XX…002"` (intending a *fresh* T.S02 sample) but left `feature_raw = "T.S01"`, so each row collided with the seeded already-present analysis under R-8.7's `(feature, date, analyte)` match and was correctly routed to `already_present`, not the asserted `clean`. A **correct** reconciler failed 11 tests; the orchestrator had to prove the *tests* wrong — via the passing R-8.7 `already_present` test on the byte-identical default row + FIXTURES.md's own worked examples. | The reconcile tests build events **by design** decoupled from the real upstream adapter (PLAN-08), so P1's seam-test prescription cannot reach them; nothing cross-checked each fixture's setup against the plan's matching rule + the shared seed DB, so a fixture whose expected outcome was *unreachable from its own inputs* passed both writing and audit. |
 
 **Pattern across the whole log:** every defect that survived to Phase 9/e2e (A44.1–3) is a
 **seam** defect — it lives in the handoff between two modules' real implementations, not
 inside either module considered alone. Every defect that was *merely annoying* (A38–43) is
 a **test-code** defect — bugs in the harness/assertions, not in production code. The skill
 currently has strong protocol for judging production code (Phases 5–8) but only prose
-guidance, not mechanical checks, for either category above.
+guidance, not mechanical checks, for either category above. Within the test-code category,
+distinguish **mechanical** defects (fixture lifetime #4, NA-unsafe filter #5, unquoted
+reserved word #2, comment-blind meta-test — all catchable by execution or grep) from
+**semantic** defects (#8: a fixture that is valid code but encodes an expectation the
+plan's rules make *unreachable*): the latter is invisible to any mechanical scan and is
+caught only by tracing the fixture through the plan's rules — the same judgement that
+separates "test wrong" from "code wrong."
 
 ---
 
@@ -174,7 +187,13 @@ Add immediately after:
 > day/instant survives — do not assert only on the pre-write in-memory value.
 
 This directly targets the three real defects found here (A44.1–3), which every
-per-module unit test passed.
+per-module unit test passed. Audit implication worth stating explicitly: A44.2
+additionally **survived a Phase-7 read-time compliance audit** — the reviewer enumerated
+the join's copied fields (`sample_datetime_raw`, `sampler`, `matrix_raw`, `parent_sample`)
+without noticing `feature_raw` was absent, precisely because the hand-built fixtures
+carried `feature_raw` on both sides. A seam test is therefore not *additional* coverage
+for this class, it is the *only* discriminating one: reading code against hand-built
+fixtures reproduces the very blind spot that admits the bug.
 
 ### P2 — Phase 5: audit must confirm every red is red *for the expected reason* (prevents #2)
 
@@ -311,6 +330,55 @@ The current "atomicity" framing would not have prompted an auditor to look for A
 specifically (nothing throws, nothing partially writes — the value is simply wrong after
 a silent timezone conversion); it needs its own named category.
 
+### P9 — Phase 5: fixture-vs-rule self-consistency audit (prevents #8 — the gap P1 cannot reach)
+
+*(By severity × enforceability this ranks alongside P2; listed here to preserve the
+P1–P8 anchors.)*
+
+Anchor (Phase 5, current audit question):
+> "does every criterion have a test that asserts what the plan actually says (not
+> something weaker)?"
+
+Add a second, distinct audit question:
+> **Reachability.** For every test, trace its *fixture* through the plan's own rules and
+> the shared seed/fixture state, and confirm the asserted disposition is actually
+> *reachable from that setup*. A test whose expected outcome its own inputs make
+> impossible — e.g. asserting a row lands in `clean` while the reconciliation rule routes
+> that exact `(feature, date, analyte)` to `already_present` — is a defect even though it
+> is syntactically valid and its assertion is strong. This is the semantic complement to
+> P1: P1 removes hand-built stand-ins wherever a real upstream module *can* be run; P9
+> covers the seams a plan *deliberately* decouples for unit isolation (events built
+> directly), where no real-component test applies and only tracing the fixture against the
+> rules surfaces the contradiction.
+
+Make it partly mechanical: **group tests by fixture signature and flag any group whose
+asserted outcomes are mutually exclusive under the plan's rules.** Evidence: A39 — a
+correct reconciler failed 11 tests; the tell that it was a *test* bug, not a code bug, was
+that two tests asserted opposite dispositions (`clean` vs `already_present`) for the
+byte-identical default row, and the dedicated three-way test passed. That contradiction is
+detectable without running anything.
+
+### P10 — Phase 4 + Phase 5: source-scanning meta-tests must be comment/string-aware (prevents a lint false-positive class)
+
+Anchor: any plan that specifies a "grep the source for forbidden patterns" test (the
+R-9.1 direct-write guard is the instance here), plus Phase 4's instructions.
+
+Add:
+> A meta-test that scans source files for a forbidden pattern (raw SQL writes, banned
+> imports, bare `stop()`) must operate on **comment- and string-stripped** code — parse
+> the file, or at minimum strip line/block comments and string literals before matching —
+> never a raw line grep. Real source *discusses* the very tokens it forbids: a comment
+> saying "this file makes no `dbAppendTable` call" must not trip a `dbAppendTable` lint.
+> Where full parsing is impractical, the plan must justify the raw grep, and the fixture
+> must include a decoy comment mentioning the forbidden token so the meta-test's own
+> robustness is asserted.
+
+Evidence: A40 — the R-9.1 lint (`dbAppendTable|dbExecute\(...`) false-positived on a
+`reconcile.R` comment that named the forbidden functions to state it used none; the fix
+was to *reword production code's comment* to satisfy a brittle test. Low-severity but
+near-zero-cost to prevent, and it erodes trust in the exact guard (A32 write-door
+enforcement) that most needs to be trustworthy.
+
 ---
 
 ## 4. Other skill weaknesses (non-testing)
@@ -344,6 +412,23 @@ a silent timezone conversion); it needs its own named category.
   eventually happened manually here (A41's note "same mechanical fix applied to the
   commit/ingest helpers") but only after three separate discoveries; making it a named
   rule would trigger the grep on the *first* recurrence instead of the third.
+
+- **Harness-defect fix routing is unspecified, which forces expensive workarounds.** When
+  a worker finds a *shared-harness* defect (A38's `seed_db()`), the file-ownership
+  partition gives it no path to fix it: the reconcile worker built a throwaway scratch
+  harness to run its own tests *around* the broken helper, then escalated, and the
+  orchestrator re-diagnosed from scratch — the fix was cheap but was paid for twice.
+  [NO SILENT DEVIATION] rightly forbids a cheap model editing *assertions* (it must not
+  tune a test to match buggy code), but it over-applies to *pure infrastructure*. Split
+  the rule by defect kind: a **pure-infrastructure** defect (a helper that crashes for
+  every caller regardless of any expected value — a tempdir-lifetime bug, an
+  unquoted-identifier syntax error) may be fixed in place by the discovering worker *with
+  a documented note*, since there is no expected-value judgement to make; a **semantic**
+  defect (a disputed expected value, a fixture whose asserted outcome is wrong — #8) must
+  still escalate, because "test wrong vs code wrong" is exactly the orchestrator judgement
+  that resolved A39. Composed with the signature-keyed circuit breaker and [GENERALIZE]
+  above, the *first* worker to hit a pure-infra signature fixes it centrally and greps the
+  tree, instead of each worker rediscovering and working around it.
 
 - **No environment-reproducibility pinning for the gates.** A44.3 (the timezone bug) is
   the textbook case of a defect that's invisible unless the test *environment's*
