@@ -102,7 +102,11 @@ test_that("R-8.2: direct feature name resolves", {
   con <- seed_con(path)
   on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
 
-  event <- mk_event(mk_row(source_ref = "r1", feature_raw = "T.S01"))
+  # Fresh date (no seeded analysis at f-0001/20 May) so the row lands in `clean`
+  # to expose its resolved uuid_feature; the default 24-May row is the seeded
+  # already_present row (FIXTURES.md), which R-8.7 covers separately.
+  event <- mk_event(mk_row(source_ref = "r1", feature_raw = "T.S01",
+                           sample_datetime_raw = "20 May 2025 09:00"))
   out <- reconcile_event(event, con)
   expect_identical(out$clean$uuid_feature[out$clean$source_ref == "r1"], "f-0001")
 })
@@ -112,7 +116,10 @@ test_that("R-8.2: mask alias resolves to the masked feature's uuid", {
   con <- seed_con(path)
   on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
 
-  event <- mk_event(mk_row(source_ref = "r1", feature_raw = "Test Surface 01"))
+  # Fresh date (no seeded analysis at f-0001/20 May) so the mask-resolved row
+  # lands in `clean`; the default 24-May row is seeded already_present.
+  event <- mk_event(mk_row(source_ref = "r1", feature_raw = "Test Surface 01",
+                           sample_datetime_raw = "20 May 2025 09:00"))
   out <- reconcile_event(event, con)
   expect_identical(out$clean$uuid_feature[out$clean$source_ref == "r1"], "f-0001")
 })
@@ -164,7 +171,10 @@ test_that("R-8.3: org-scoped analyte name hit resolves", {
   con <- seed_con(path)
   on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
 
+  # Fresh sample (T.S02, no seeded analysis) so the resolved uuid_lab/uuid_analyte
+  # are inspectable in `clean` (FIXTURES.md: XX1234567002 = T.S02).
   event <- mk_event(mk_row(source_ref = "r1", analyte_raw = "Fluoride", org = "ALS",
+                           feature_raw = "T.S02", lab_sample_id = "XX1234567002",
                            method_raw = "EK040P: Fluoride by PC Titrator"))
   out <- reconcile_event(event, con)
   expect_identical(out$clean$uuid_lab[out$clean$source_ref == "r1"], "lm-0002")
@@ -221,7 +231,10 @@ test_that("R-8.4: mg/L to ug/L multiplies value and rl by 1000", {
   con <- seed_con(path)
   on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
 
+  # T.S02 = a fresh sample (no seeded analysis) so the row lands in `clean`,
+  # isolating the unit conversion from R-8.7 (FIXTURES.md: XX1234567002 = T.S02).
   event <- mk_event(mk_row(source_ref = "r1", lab_sample_id = "XX1234567002",
+                           feature_raw = "T.S02",
                            value_raw = "2.3", value_num = 2.3, below_detection = FALSE,
                            rl = 0.1, units_raw = "mg/L"))
   out <- reconcile_event(event, con)
@@ -276,9 +289,11 @@ test_that("R-8.4: a BDL row keeps quantified FALSE with a converted rl", {
   con <- seed_con(path)
   on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
 
-  # <0.2 mg/L Fluoride - novel value, doesn't match the seeded an-0001 row,
+  # <0.2 mg/L Fluoride at T.S02 - a fresh sample (no seeded an-0001 collision),
   # so it's inspectable directly in `clean` (isolated from R-8.7 logic).
+  # FIXTURES.md: XX1234567002 = T.S02.
   event <- mk_event(mk_row(source_ref = "r1", lab_sample_id = "XX1234567002",
+                           feature_raw = "T.S02",
                            value_raw = "<0.2", value_num = 0.2, below_detection = TRUE,
                            rl = 0.2, units_raw = "mg/L"))
   out <- reconcile_event(event, con)
@@ -312,7 +327,10 @@ test_that("R-8.5: an ESdat-format datetime yields both sample_date and sample_da
   con <- seed_con(path)
   on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
 
-  event <- mk_event(mk_row(source_ref = "r1", sample_datetime_raw = "24 May 2025 11:45"))
+  # T.S02 = a fresh sample so the row lands in `clean` (FIXTURES.md:
+  # XX1234567002 = T.S02); keeps the ESdat datetime under test.
+  event <- mk_event(mk_row(source_ref = "r1", feature_raw = "T.S02", lab_sample_id = "XX1234567002",
+                           sample_datetime_raw = "24 May 2025 11:45"))
   out <- reconcile_event(event, con)
   row <- out$clean[out$clean$source_ref == "r1", ]
   expect_equal(nrow(row), 1)
@@ -325,7 +343,10 @@ test_that("R-8.5: a crosstab-format (date-only) datetime yields date only", {
   con <- seed_con(path)
   on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
 
+  # T.S02 = a fresh sample so the row lands in `clean` (FIXTURES.md:
+  # XX1234567002 = T.S02); keeps the crosstab date-only value under test.
   event <- mk_event(mk_row(source_ref = "r1", lab_sample_id = "XX1234567002",
+                           feature_raw = "T.S02",
                            value_raw = "2.3", value_num = 2.3, below_detection = FALSE,
                            sample_datetime_raw = "24/05/2025"))
   out <- reconcile_event(event, con)
@@ -354,10 +375,12 @@ test_that("R-8.6: the duplicate-method pair keeps the lower-RL row", {
   con <- seed_con(path)
   on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
 
+  # Both rows at T.S02 = a fresh sample, so the method-preference winner lands
+  # in `clean` (FIXTURES.md: XX1234567002 = T.S02), isolating R-8.6 from R-8.7.
   event <- mk_event(mk_rows(
-    mk_row(source_ref = "r1", lab_sample_id = "XX1234567002", method_raw = "EK040P: Fluoride by PC Titrator",
+    mk_row(source_ref = "r1", lab_sample_id = "XX1234567002", feature_raw = "T.S02", method_raw = "EK040P: Fluoride by PC Titrator",
            value_raw = "2.3", value_num = 2.3, below_detection = FALSE, rl = 0.1),
-    mk_row(source_ref = "r2", lab_sample_id = "XX1234567002", method_raw = "EK040T: Fluoride by alt method",
+    mk_row(source_ref = "r2", lab_sample_id = "XX1234567002", feature_raw = "T.S02", method_raw = "EK040T: Fluoride by alt method",
            value_raw = "2.5", value_num = 2.5, below_detection = FALSE, rl = 0.5)
   ))
   out <- reconcile_event(event, con)
@@ -379,10 +402,12 @@ test_that("R-8.6: a tied rl_low keeps the higher value", {
   DBI::dbExecute(con, "INSERT INTO lab_method (uuid, uuid_analyte, name, method, organisation, rl_low) VALUES
     ('lm-0002b', 'a-0002', 'Fluoride', 'EK040P: Fluoride by PC Titrator (tie)', 'ALS', 0.1)")
 
+  # Both rows at T.S02 = a fresh sample (FIXTURES.md: XX1234567002 = T.S02),
+  # so the tie-break winner lands in `clean`, isolating R-8.6 from R-8.7.
   event <- mk_event(mk_rows(
-    mk_row(source_ref = "r1", lab_sample_id = "XX1234567002", method_raw = "EK040P: Fluoride by PC Titrator",
+    mk_row(source_ref = "r1", lab_sample_id = "XX1234567002", feature_raw = "T.S02", method_raw = "EK040P: Fluoride by PC Titrator",
            value_raw = "2.3", value_num = 2.3, below_detection = FALSE, rl = 0.1),
-    mk_row(source_ref = "r2", lab_sample_id = "XX1234567002", method_raw = "EK040P: Fluoride by PC Titrator (tie)",
+    mk_row(source_ref = "r2", lab_sample_id = "XX1234567002", feature_raw = "T.S02", method_raw = "EK040P: Fluoride by PC Titrator (tie)",
            value_raw = "2.9", value_num = 2.9, below_detection = FALSE, rl = 0.1)
   ))
   out <- reconcile_event(event, con)
@@ -397,7 +422,10 @@ test_that("R-8.7: a fresh row is new/clean", {
   con <- seed_con(path)
   on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
 
+  # T.S02 = a fresh sample with no seeded analysis (FIXTURES.md:
+  # XX1234567002 = T.S02) -> genuinely new, supersedes NA.
   event <- mk_event(mk_row(source_ref = "r1", lab_sample_id = "XX1234567002",
+                           feature_raw = "T.S02",
                            value_raw = "2.3", value_num = 2.3, below_detection = FALSE, rl = 0.1))
   out <- reconcile_event(event, con)
   row <- out$clean[out$clean$source_ref == "r1", ]
@@ -518,8 +546,8 @@ test_that("R-8.8: clean/review/skipped are disjoint and complete over a mixed ev
     mk_row(source_ref = "bad_unit", units_raw = "banana/L"),                            # review: unknown_unit
     mk_row(source_ref = "ns_row", value_raw = "NS", value_num = NA_real_,
            value_chr = NA_character_, below_detection = NA, rl = NA_real_),             # skipped: no_sample
-    mk_row(source_ref = "fresh", lab_sample_id = "XX1234567002", value_raw = "2.3",
-           value_num = 2.3, below_detection = FALSE, rl = 0.1),                          # clean: new
+    mk_row(source_ref = "fresh", lab_sample_id = "XX1234567002", feature_raw = "T.S02", value_raw = "2.3",
+           value_num = 2.3, below_detection = FALSE, rl = 0.1),                          # clean: new (T.S02, no seed)
     mk_row(source_ref = "present")                                                       # skipped: already_present
   ))
   out <- reconcile_event(event, con)

@@ -256,6 +256,29 @@ for lab reports; `sample.organisation ∈ {ACIRL, Internal, ALS}`;
   `D0CF11E0`) is still required for **ACIRL** — its workbook IS BIFF and
   `readxl` reads it; that real ACIRL fixture is anonymized via
   `readxl`→`openxlsx`→`.xlsx`.
+- **A38** (plan-08 build) `helper-db.R`'s `seed_db()` had a latent harness bug:
+  a bare `withr::local_tempdir()` used as a **default argument** binds its
+  deferred cleanup to `seed_db()`'s own frame (default-arg promises evaluate in
+  the function's frame), so the tempdir was deleted the instant `seed_db()`
+  returned — every caller got a **dead path**. Latent because all
+  `seed_db()`-using tests (plans 08/09) were already TDD-red, so the
+  `seed_con()` crash looked like just another red failure. **Fixed:**
+  `seed_db(dir = NULL)` + `if (is.null(dir)) dir <- withr::local_tempdir(.local_envir = parent.frame())`,
+  binding cleanup to the calling test. Reproduced and verified directly
+  (`file.exists()` FALSE→TRUE). This unblocks plans 08 **and** 09.
+- **A39** (plan-08 build) Ten `test-reconcile.R` fixtures signalled "a fresh
+  sample" via `lab_sample_id = "XX1234567002"` (or used the default row) but
+  left `feature_raw` at the default `"T.S01"`, so R-8.7's three-way match
+  (feature+date+analyte — `lab_sample_id` is **not** a DB column, so it can
+  **never** be part of the match) correctly routed them to
+  `already_present`/`value_conflict` instead of `clean`. Confirmed a
+  **fixture** bug, not a reconciler bug: FIXTURES.md L118/L140/L168 map
+  `XX1234567002 = T.S02` and "`2.3 mg/L (no seed) → new`", and the dedicated
+  R-8.7 `already_present` test (using the identical default collision row)
+  **passes** — two tests can't both be right about the same row. **Fixed** by
+  adding the intended `feature_raw = "T.S02"` (or, for the two feature/datetime-
+  under-test cases, a non-colliding date) so each row is genuinely fresh; **no
+  assertion was weakened**. Reconciler R-8.7 verified correct.
 
 ## Gates
 

@@ -126,7 +126,13 @@
 #' @param dir directory to hold the DB file (defaults to a fresh withr temp
 #'   dir scoped to the calling test)
 #' @return path to the seeded DuckDB file
-seed_db <- function(dir = withr::local_tempdir()) {
+seed_db <- function(dir = NULL) {
+  # NB: a bare `withr::local_tempdir()` used as a *default argument* would bind
+  # its deferred cleanup to seed_db()'s own frame (default-arg promises evaluate
+  # in the function's frame), deleting the tempdir the instant seed_db() returns
+  # and handing the caller a dead path. Register the cleanup on the *caller's*
+  # frame instead so the DB lives for the whole calling test.
+  if (is.null(dir)) dir <- withr::local_tempdir(.local_envir = parent.frame())
   path <- file.path(dir, "seed.duckdb")
   con <- DBI::dbConnect(duckdb::duckdb(), path, read_only = FALSE)
   on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
