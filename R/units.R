@@ -28,7 +28,8 @@
 #'
 #' @param unit character vector of unit strings to check.
 #' @return logical vector, same length as `unit`. `NA` input yields `NA`.
-#' @export
+#' @keywords internal
+#' @noRd
 is_valid_unit <- function(unit) {
   checkmate::assert_character(unit, min.len = 0)
   vapply(
@@ -62,7 +63,8 @@ is_valid_unit <- function(unit) {
 #' @param units_a,units_b character vectors of unit strings, recycled to a
 #'   common length.
 #' @return logical vector. `NA` if either input unit is `NA`.
-#' @export
+#' @keywords internal
+#' @noRd
 are_compatible_units <- function(units_a, units_b) {
   checkmate::assert_character(units_a, min.len = 1)
   checkmate::assert_character(units_b, min.len = 1)
@@ -132,7 +134,8 @@ are_compatible_units <- function(units_a, units_b) {
 #' @param units_from,units_to character vectors of unit strings, each
 #'   recycled to `length(value)`.
 #' @return numeric vector, same length as `value`, in the original order.
-#' @export
+#' @keywords internal
+#' @noRd
 unify_value <- function(value, units_from, units_to) {
   checkmate::assert_numeric(value, min.len = 0)
   n <- length(value)

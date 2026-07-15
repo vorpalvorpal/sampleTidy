@@ -9,7 +9,8 @@
 #' @param db path to the DuckDB file.
 #' @param read_only if `TRUE` (default), open read-only.
 #' @return an open DBI connection; caller is responsible for disconnecting.
-#' @export
+#' @keywords internal
+#' @noRd
 st_connect <- function(db, read_only = TRUE) {
   checkmate::assert_string(db)
   checkmate::assert_flag(read_only)

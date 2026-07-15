@@ -24,7 +24,8 @@
 #'   - `rl_high` (dbl): the reporting limit for `>`-notation rows.
 #'   - `skip_reason` (chr): `NA` unless the row was skipped
 #'     (`"empty"`, `"no_sample"`, `"not_computable"`).
-#' @export
+#' @keywords internal
+#' @noRd
 parse_value <- function(value_raw) {
   checkmate::assert_character(value_raw, min.len = 0)
   n <- length(value_raw)
