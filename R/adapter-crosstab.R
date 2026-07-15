@@ -3,15 +3,36 @@
 # structural shape (metadata rows, an analyte header row, then method-group
 # rows and analyte rows with one column per sample) but differ in label
 # text/column position, first-row marker, and text encoding (PLAN-05's
-# dialect table). Per CONTRACT A29, every label is located by regex against
-# cell *content* on each row - never a fixed column index - because real
-# files are observed to vary in exact column position.
+# dialect table).
+#
+# CONTRACT A34 (real-corpus correction, 2026-07-15): the true layout, verified
+# against real XTAB/ENMRG exports, differs from what an earlier WIP parser
+# (silently) assumed:
+#  - `Analyte grouping/Analyte` is ONE column (col 0) in BOTH dialects,
+#    holding both method-group rows (e.g. "EA005P: pH by PC Titrator" with no
+#    sample-column values) and analyte rows (with values) - never a
+#    two-column split, and never a bare `^Analyte$` header.
+#  - Per-sample metadata labels (`Sample Type:`, `ALS Sample Number:`/
+#    `ALS Sample number:`, `Sample [Dd]ate:`, `Client sample ID (...)`,
+#    `Site:`/`Sample Site:`, `Purchase Order:`) sit at column 3 (XTAB) / 4
+#    (ENMRG), 0-based, with their per-sample values several columns further
+#    right (col 5+) - NOT adjacent, and NOT at column 0. Every physical row
+#    can carry BOTH a section-scalar label (col 0/1) AND a per-sample label
+#    (col 3/4..) at once (e.g. the `Matrix:` row also carries `Sample Type:`;
+#    the `Workgroup:` row also carries `ALS Sample Number:`). Every label is
+#    therefore located by regex against the WHOLE row, every row is checked
+#    against every known label pattern (not just the first match), and only
+#    the leftover, doubly-unrecognised rows fall through to method-group/
+#    analyte-row handling.
+#  - Header spellings differ: XTAB writes `Unit` / `Limit of reporting`;
+#    ENMRG writes `Units` / `LOR`. Both are matched by one shared pattern.
 
 # Dialect definitions (PLAN-05 table). `first_row_regex` is the section
-# start marker (also the match() discriminator between the two adapters);
-# `label_regex` locates the "ALS Sample Number(:)" row, whose column
-# position differs between XTAB and ENMRG; `encoding` is the CSV read
-# locale (XTAB ships as legacy latin-1/MacRoman bytes, ENMRG as UTF-8).
+# start marker (also the match() discriminator between the two adapters and
+# the trigger for a full per-section state reset inside the parser);
+# `label_regex` locates the "ALS Sample Number(:)"/"ALS Sample number:" row,
+# whose column position differs between XTAB and ENMRG; `encoding` is the CSV
+# read locale (XTAB ships as legacy latin-1 bytes, ENMRG as UTF-8).
 .st_crosstab_dialects <- list(
   als_xtab = list(
     id = "als_xtab",
@@ -73,7 +94,11 @@ als_enmrg_adapter <- function() {
 # very first row/line AND the file contains a `Workgroup:` cell somewhere in
 # its lead rows; `no` otherwise. XTAB and ENMRG must never both claim the
 # same file: XTAB requires `^Matrix:`, ENMRG requires `^Client - Matrix:`,
-# which are mutually exclusive as first-row markers.
+# which are mutually exclusive as first-row markers. A34/A37: real XTAB
+# `.XLS` is SpreadsheetML XML, which `readxl` cannot read - the peek below
+# returns NULL for it, so `match()` gracefully returns `"no"` (no crash);
+# the `.csv` twin carries the data. SpreadsheetML parsing is parked
+# post-MVP.
 .st_crosstab_match <- function(fm, dialect) {
   if (!fm$ext %in% c("csv", "xls", "xlsx")) {
     return("no")
@@ -145,15 +170,22 @@ als_enmrg_adapter <- function() {
 # Read the whole file as an untyped character grid (matrix): csv via
 # readr with the dialect's declared locale encoding, xls/xlsx via readxl
 # with every column forced to text. No column names, no type guessing.
+# `suppressWarnings()`: real ENMRG exports carry a trailing "QC - Matrix:"
+# reconciliation block (a section marker this parser deliberately does not
+# recognise/parse - see `.st_crosstab_walk_grid`'s "unsupported section"
+# handling) whose rows are far wider than the primary section, which makes
+# readr emit benign "N columns expected / M columns actual" parsing-problem
+# warnings for those (skipped) rows; the primary section itself always
+# parses cleanly.
 .st_crosstab_read_grid <- function(path, fm, dialect) {
   if (identical(fm$ext, "csv")) {
-    df <- readr::read_csv(
+    df <- suppressWarnings(readr::read_csv(
       path,
       col_types = readr::cols(.default = readr::col_character()),
       col_names = FALSE,
       locale = readr::locale(encoding = dialect$encoding),
       show_col_types = FALSE
-    )
+    ))
   } else if (fm$ext %in% c("xls", "xlsx")) {
     df <- suppressMessages(readxl::read_excel(
       path, sheet = 1, col_names = FALSE, col_types = "text"
@@ -193,7 +225,9 @@ als_enmrg_adapter <- function() {
 
 # First column index in `row` whose (already-trimmed) value matches
 # `pattern`, or NA_integer_ if none does. `row` is a character vector that
-# may contain NA (blank cells).
+# may contain NA (blank cells). Searches every column - CONTRACT A34/A29:
+# real per-sample labels sit at column 3/4, not column 0, so callers must
+# never assume a fixed position.
 .st_crosstab_find_col <- function(row, pattern, ignore_case = TRUE) {
   hits <- which(!is.na(row) & nzchar(row) & grepl(pattern, row, ignore.case = ignore_case))
   if (length(hits) == 0) NA_integer_ else hits[[1]]
@@ -207,16 +241,64 @@ als_enmrg_adapter <- function() {
   row[[i]]
 }
 
+# Capture every non-empty cell strictly to the right of `label_col` into
+# `dict`, keyed by absolute (1-based) column index as a string. This is the
+# per-sample capture rule (CONTRACT A34): per-sample values sit at the
+# sample columns to the right of their row's label cell - sometimes
+# immediately adjacent (ENMRG), sometimes with an empty gap column in
+# between (XTAB) - either way, "non-empty cells right of the label" is the
+# correct, position-independent rule. Must NOT be used for section-scalar
+# labels (`Matrix:`, `Workgroup:`), whose value is the single next cell -
+# using this rule for those would vacuum up the next label's text too.
+.st_ct_capture_right <- function(row, label_col, dict) {
+  n_cols <- length(row)
+  if (is.na(label_col) || label_col >= n_cols) {
+    return(dict)
+  }
+  for (c in (label_col + 1):n_cols) {
+    v <- row[[c]]
+    if (!is.na(v) && nzchar(v)) {
+      dict[[as.character(c)]] <- v
+    }
+  }
+  dict
+}
+
+# Any cell whose (trimmed) text ends in "Matrix:" - i.e. a section marker of
+# *some* kind, recognised or not. Real ENMRG exports carry a trailing
+# "QC - Matrix:" reconciliation block after the primary "Client - Matrix:"
+# section: it is NOT one of this file's recognised dialects (its own
+# `ALS Sample number:` row reuses primary-section sample IDs for other work
+# orders' QC batches, its column count balloons far past the primary
+# section, and PLAN-05/CONTRACT A34 both describe "recent files carry a
+# single Matrix: section" as the norm), so this parser deliberately does
+# NOT parse it - it must not crash on it or, worse, silently corrupt the
+# primary section's already-captured per-column state by re-using the same
+# column indices for different samples. `.st_crosstab_walk_grid()` uses this
+# to detect *any* Matrix:-style marker, decide whether it is the dialect's
+# own (-> reset and parse the new section) or a foreign one (-> skip every
+# row until a recognised marker reappears, if ever).
+.ST_CROSSTAB_ANY_MARKER_RE <- "Matrix:$"
+
 #' Shared crosstab parser core
 #'
 #' Walks the untyped character grid one row at a time, tracking the current
 #' section's metadata (matrix, workgroup/work order, per-column sample
-#' type/date/feature/lab-sample-id, and the running method-group text) and
-#' emitting one `samples` row per sample column (as soon as the "ALS Sample
-#' Number" row is seen) and one `results` row per non-skipped analyte x
-#' sample-column cell. A file may contain multiple stacked `Matrix:`
-#' sections; encountering the dialect's `first_row_regex` resets all
-#' section-scoped state.
+#' type/date/feature/lab-sample-id, and the running method-group text).
+#' Every row is checked against every known label pattern (a single row may
+#' carry a section-scalar label AND a per-sample label at once - CONTRACT
+#' A34); once a section's analyte header row is located, all per-sample
+#' state for that section is final and one `samples` row per sample column
+#' is emitted (deferred to the header row, not the "ALS Sample Number" row,
+#' because per-sample labels are observed to arrive both before AND after it
+#' in real files). Subsequent rows are either method-group rows (analyte
+#' column text, no sample-column values - sets `method_raw` for following
+#' rows) or analyte rows (emit one `results` row per non-skipped analyte x
+#' sample-column cell). A file may contain multiple stacked sections whose
+#' marker matches the dialect's `first_row_regex`; a marker that looks like
+#' a section start but does NOT match the dialect (e.g. a trailing
+#' "QC - Matrix:" reconciliation block in real ENMRG exports) is skipped in
+#' full, rather than parsed or allowed to corrupt state.
 #'
 #' @param mat an untyped character matrix (one row per file row, `NA` for
 #'   blank cells), as produced by [.st_crosstab_read_grid()].
@@ -229,7 +311,6 @@ als_enmrg_adapter <- function() {
 #' @noRd
 .st_crosstab_walk_grid <- function(mat, fm, dialect, version) {
   n_rows <- nrow(mat)
-  n_cols <- ncol(mat)
   adapter_tag <- paste0(dialect$id, "/", version)
 
   warnings_vec <- character(0)
@@ -244,14 +325,15 @@ als_enmrg_adapter <- function() {
     revision <- as.integer(revision)
   }
 
-  # Section-scoped state (reset whenever a new Matrix:/Client - Matrix: row
-  # is encountered).
+  # Section-scoped state (reset whenever a new, dialect-recognised
+  # Matrix:/Client - Matrix: row is encountered).
   section_matrix <- NA_character_
   section_workgroup <- NA_character_
   sample_type_by_col <- list()
   sample_date_by_col <- list()
   feature_by_col <- list()
   lab_sample_id_by_col <- list()
+  sample_number_row <- NA_integer_
   method_raw <- NA_character_
   cas_col <- NA_integer_
   unit_col <- NA_integer_
@@ -259,6 +341,22 @@ als_enmrg_adapter <- function() {
   analyte_col <- NA_integer_
   header_seen <- FALSE
   sample_cols <- integer(0)
+  in_unsupported_section <- FALSE
+
+  reset_section_state <- function() {
+    sample_type_by_col <<- list()
+    sample_date_by_col <<- list()
+    feature_by_col <<- list()
+    lab_sample_id_by_col <<- list()
+    sample_number_row <<- NA_integer_
+    method_raw <<- NA_character_
+    cas_col <<- NA_integer_
+    unit_col <<- NA_integer_
+    rl_col <<- NA_integer_
+    analyte_col <<- NA_integer_
+    header_seen <<- FALSE
+    sample_cols <<- integer(0)
+  }
 
   results_rows <- list()
   samples_rows <- list()
@@ -267,28 +365,37 @@ als_enmrg_adapter <- function() {
   for (r in seq_len(n_rows)) {
     row_raw <- mat[r, ]
     row_trimmed <- ifelse(is.na(row_raw), NA_character_, trimws(row_raw))
-    col1 <- .st_ct_at(row_trimmed, 1L)
+    handled <- FALSE
 
-    # New section marker: "Matrix:" (XTAB) / "Client - Matrix:" (ENMRG).
-    if (!is.na(col1) && grepl(dialect$first_row_regex, col1)) {
-      section_matrix <- .st_ct_at(row_trimmed, 2L)
-      section_workgroup <- NA_character_
-      sample_type_by_col <- list()
-      sample_date_by_col <- list()
-      feature_by_col <- list()
-      lab_sample_id_by_col <- list()
-      method_raw <- NA_character_
-      cas_col <- NA_integer_
-      unit_col <- NA_integer_
-      rl_col <- NA_integer_
-      analyte_col <- NA_integer_
-      header_seen <- FALSE
-      sample_cols <- integer(0)
+    # -- Section marker: any "...Matrix:" cell, recognised or not ---------
+    marker_col <- .st_crosstab_find_col(row_trimmed, .ST_CROSSTAB_ANY_MARKER_RE)
+    if (!is.na(marker_col)) {
+      if (grepl(dialect$first_row_regex, row_trimmed[[marker_col]])) {
+        section_matrix <- .st_ct_at(row_trimmed, marker_col + 1L)
+        section_workgroup <- NA_character_
+        reset_section_state()
+        in_unsupported_section <- FALSE
+        handled <- TRUE
+        # Do NOT `next` here (A34): this same physical row also carries
+        # this section's "Sample Type:" label, which must still be read
+        # below.
+      } else {
+        # A foreign section marker (e.g. real ENMRG's trailing
+        # "QC - Matrix:" block): skip it and everything after it until a
+        # recognised marker reappears (if ever).
+        in_unsupported_section <- TRUE
+        next
+      }
+    }
+
+    if (in_unsupported_section) {
       next
     }
 
-    if (!is.na(col1) && grepl("^Workgroup:$", col1, ignore.case = TRUE)) {
-      section_workgroup <- .st_ct_at(row_trimmed, 2L)
+    # -- Workgroup: (section-scalar; value = the single next cell) --------
+    wg_col <- .st_crosstab_find_col(row_trimmed, "^Workgroup:$")
+    if (!is.na(wg_col)) {
+      section_workgroup <- .st_ct_at(row_trimmed, wg_col + 1L)
       if (!is.na(fm$work_order_guess) && !is.na(section_workgroup) &&
         !identical(section_workgroup, fm$work_order_guess)) {
         warnings_vec <- c(warnings_vec, sprintf(
@@ -296,57 +403,72 @@ als_enmrg_adapter <- function() {
           section_workgroup, fm$work_order_guess, fm$filename
         ))
       }
-      next
+      handled <- TRUE
     }
 
-    if (!is.na(col1) && grepl("^Sample Type:$", col1, ignore.case = TRUE)) {
-      for (c in seq_len(n_cols)) {
-        v <- .st_ct_at(row_trimmed, c)
-        if (!is.na(v) && nzchar(v)) sample_type_by_col[[as.character(c)]] <- v
+    # -- Sample Type: (per-sample) -----------------------------------------
+    st_col <- .st_crosstab_find_col(row_trimmed, "^Sample Type:$")
+    if (!is.na(st_col)) {
+      sample_type_by_col <- .st_ct_capture_right(row_trimmed, st_col, sample_type_by_col)
+      handled <- TRUE
+    }
+
+    # -- ALS Sample Number:/ALS Sample number: (per-sample; defines the
+    # section's sample columns) --------------------------------------------
+    sn_col <- .st_crosstab_find_col(row_trimmed, dialect$label_regex)
+    if (!is.na(sn_col)) {
+      lab_sample_id_by_col <- .st_ct_capture_right(row_trimmed, sn_col, lab_sample_id_by_col)
+      sample_number_row <- r
+      handled <- TRUE
+    }
+
+    # -- Sample Date:/Sample date: ------------------------------------------
+    sd_col <- .st_crosstab_find_col(row_trimmed, "^Sample Date:$")
+    if (!is.na(sd_col)) {
+      sample_date_by_col <- .st_ct_capture_right(row_trimmed, sd_col, sample_date_by_col)
+      handled <- TRUE
+    }
+
+    # -- Client sample ID (1st)/(Primary): -> feature_raw --------------------
+    ci_col <- .st_crosstab_find_col(row_trimmed, "Client sample ID.*\\((1st|Primary)\\)")
+    if (!is.na(ci_col)) {
+      feature_by_col <- .st_ct_capture_right(row_trimmed, ci_col, feature_by_col)
+      handled <- TRUE
+    }
+
+    # -- Other recognised-but-IR-irrelevant labels: consumed so they never
+    # fall through and get misread as method-group/analyte rows. ----------
+    for (skip_pat in c(
+      "Client sample ID.*\\((2nd|Secondary)\\)", "(Sample )?Site:$",
+      "^Purchase Order:$", "^Depth", "^Project name"
+    )) {
+      if (!is.na(.st_crosstab_find_col(row_trimmed, skip_pat))) {
+        handled <- TRUE
       }
-      next
     }
 
-    if (!is.na(col1) && grepl("^Sample Date:$", col1, ignore.case = TRUE)) {
-      for (c in seq_len(n_cols)) {
-        v <- .st_ct_at(row_trimmed, c)
-        if (!is.na(v) && nzchar(v)) sample_date_by_col[[as.character(c)]] <- v
-      }
-      next
-    }
+    # -- Analyte header row: "Analyte grouping/Analyte, CAS Number,
+    # Unit(s), Limit of reporting/LOR" - located via its "CAS Number" cell;
+    # every other column is then found by its own regex on the SAME row,
+    # never assumed from a fixed offset (CONTRACT A29/A34). Finalises this
+    # section's sample columns and emits its `samples` rows: every
+    # per-sample label row (Sample Type/ALS Sample Number/Sample Date/
+    # Client sample ID) is always seen before the header in every observed
+    # real file, so all per-column state is complete by this point.
+    header_cas_col <- .st_crosstab_find_col(row_trimmed, "^CAS Number$")
+    if (!is.na(header_cas_col)) {
+      cas_col <- header_cas_col
+      unit_col <- .st_crosstab_find_col(row_trimmed, "^Units?$")
+      rl_col <- .st_crosstab_find_col(row_trimmed, "^(Limit of reporting|LOR)$")
+      analyte_col <- .st_crosstab_find_col(row_trimmed, "Analyte grouping")
+      header_seen <- TRUE
+      sample_cols <- sort(as.integer(names(lab_sample_id_by_col)))
 
-    if (!is.na(col1) && grepl("^Client sample ID", col1, ignore.case = TRUE)) {
-      for (c in seq_len(n_cols)) {
-        v <- .st_ct_at(row_trimmed, c)
-        if (!is.na(v) && nzchar(v)) feature_by_col[[as.character(c)]] <- v
-      }
-      next
-    }
-
-    if (!is.na(col1) && (grepl("^Project name", col1, ignore.case = TRUE) ||
-      grepl("^Depth", col1, ignore.case = TRUE))) {
-      next
-    }
-
-    # The "ALS Sample Number(:)"/"ALS Sample number:" row: locates the
-    # sample columns for this section and, since every other per-column
-    # vector (type/date/feature) has already been captured by this point in
-    # every observed file layout, emits the section's `samples` rows now.
-    label_col <- .st_crosstab_find_col(row_trimmed, dialect$label_regex)
-    if (!is.na(label_col)) {
-      for (c in seq_len(n_cols)) {
-        if (c == label_col) next
-        v <- .st_ct_at(row_trimmed, c)
-        if (!is.na(v) && nzchar(v)) {
-          lab_sample_id_by_col[[as.character(c)]] <- v
-          sample_cols <- union(sample_cols, c)
-        }
-      }
       for (c in sample_cols) {
         key <- as.character(c)
         samples_rows[[length(samples_rows) + 1]] <- tibble::tibble(
           source_hash = fm$hash,
-          source_ref = sprintf("r%dc%d", r, c),
+          source_ref = sprintf("r%dc%d", sample_number_row, c),
           work_order = section_workgroup,
           org = "ALS",
           adapter = adapter_tag,
@@ -361,28 +483,18 @@ als_enmrg_adapter <- function() {
           confidence = 1
         )
       }
+      handled <- TRUE
+    }
+
+    if (handled) {
       next
     }
 
-    # The analyte header row: "Analyte, CAS Number, Unit, Limit of
-    # reporting" (XTAB) or "Analyte grouping, Analyte, CAS Number, Unit,
-    # Limit of reporting" (ENMRG). Located via its "CAS Number" cell; the
-    # other column positions are then found by regex within the same row -
-    # never assumed from a fixed offset (CONTRACT A29).
-    header_cas_col <- .st_crosstab_find_col(row_trimmed, "^CAS Number$")
-    if (!is.na(header_cas_col)) {
-      cas_col <- header_cas_col
-      unit_col <- .st_crosstab_find_col(row_trimmed, "^Unit$")
-      rl_col <- .st_crosstab_find_col(row_trimmed, "^Limit of reporting$")
-      analyte_col <- .st_crosstab_find_col(row_trimmed, "^Analyte$")
-      header_seen <- TRUE
+    if (!header_seen || is.na(analyte_col)) {
       next
     }
-
-    if (!header_seen) {
-      next
-    }
-    if (is.na(col1) || !nzchar(col1)) {
+    cell_at_analyte <- .st_ct_at(row_trimmed, analyte_col)
+    if (is.na(cell_at_analyte) || !nzchar(cell_at_analyte)) {
       next
     }
 
@@ -393,12 +505,12 @@ als_enmrg_adapter <- function() {
       # Method-group row (e.g. "EA005P: pH by PC Titrator"): zero result
       # rows, but sets method_raw for the analyte rows that follow, until
       # the next method-group row.
-      method_raw <- normalise_lab_text(col1)
+      method_raw <- normalise_lab_text(cell_at_analyte)
       next
     }
 
     # Analyte row.
-    analyte_raw <- normalise_lab_text(.st_ct_at(row_trimmed, analyte_col))
+    analyte_raw <- normalise_lab_text(cell_at_analyte)
     cas_val <- .st_ct_at(row_trimmed, cas_col)
     cas_number <- if (is.na(cas_val) || !nzchar(cas_val)) NA_character_ else cas_val
     unit_val <- .st_ct_at(row_trimmed, unit_col)
