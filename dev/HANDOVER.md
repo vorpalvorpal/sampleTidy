@@ -1,7 +1,18 @@
 # sampleTidy — build handover
 
-_Last updated: 2026-07-16. Branch: `tdd-mvp-implementation` (pushed to `origin`).
-**MVP complete — all plans 01–10 green.**_
+_Last updated: 2026-07-16. Branch: `tdd-mvp-implementation`.
+**MVP complete — plans 01–10 green, including plan 10's final checks: the
+real-corpus gates and `devtools::check()` have now actually run (`33273a1`).**
+Next: **PLAN-11 `feature_alias`** (specced, not implemented)._
+
+## Read this first if you are picking up plan 11
+
+`dev/plans/PLAN-11-feature-alias.md` is fully specced with the user's
+decisions and the measured evidence behind them — read it, not this summary.
+In one line: `feature.cypher` (a comma-separated bag of every way a sampling
+point has ever been mis-transcribed) is replaced by a real `feature_alias`
+table and wired into the reconciler, because mis-transcribed sampling points
+are *the* reason this pipeline needs a human in the loop.
 
 ## What we're building
 
@@ -134,19 +145,53 @@ key includes method — field vs lab coexist). See `CONTRACT.md`.
 
 ## Loose ends / next steps
 
-**The MVP build is complete (plans 01–10 green).** Remaining follow-ups are
-polish / post-MVP, not blockers:
+**The MVP build is complete (plans 01–10 green), and plan 10's two deferred
+checks have now run** (`33273a1`) — both found real defects (A46, A47; see
+`CONTRACT.md`). The headline: **the first real ingest of the real corpus would
+have aborted outright** (A46 — 11 duplicate-download twins in one directory),
+and **`devtools::check()`'s first run broke R-10.6's own drift-guard test**,
+which had only ever passed under `devtools::test()`.
 
-- **Validate against the real corpus** — the whole point-of-truth: set
-  `SAMPLETIDY_CORPUS` (and `SAMPLETIDY_CORPUS_DB` for R-10.5's dry-run gate) and
-  run `test-e2e-corpus.R`. Plan 10 proved *again* that green-on-synthetic ≠
-  correct-on-real; the real-corpus gates are the last unproven surface.
-- **`devtools::check()`** — run the full R CMD check (R-10.6's prose mentions a
-  no-ERROR/WARNING gate; the NAMESPACE/DESCRIPTION drift-guard tests pass, but a
-  full `check()` hasn't been run this session).
+Current gate state:
+- **`devtools::check()`: 0 errors, 0 warnings, 2 notes.** The notes are benign:
+  "unable to verify current time" (environmental) and NEWS.md "no news entries
+  found" (R's parser wants `# pkg 0.0.0.9000`, not `# pkg (development
+  version)`).
+- **Suite: 1142 pass / 0 fail**, 4 skips (the corpus gates, correctly skipped
+  with no `SAMPLETIDY_CORPUS`).
+- **Real corpus (266 files): all four R-10.5 gates green.** No adapter tie;
+  every claimed file parses and `ir_validate()`s; cross-format equivalence
+  holds *exactly* where the ESdat pair is complete (ES2515446 29/29,
+  ES2515460 342/342 Normal rows); the dry run against a copy of the real
+  `monitoring.duckdb` finds 27 `already_present` rows and writes nothing.
+
+**Running the corpus gates:**
+```sh
+SAMPLETIDY_CORPUS="…/waste_data - Environmental monitoring/assets/input" \
+SAMPLETIDY_CORPUS_DB="…/waste_data - Environmental monitoring/data/monitoring.duckdb" \
+  Rscript -e 'devtools::load_all(); testthat::test_dir("tests/testthat")'
+```
+⚠️ **OneDrive hydration:** the corpus lives in OneDrive Files-On-Demand. A
+placeholder file reports a real `size` but **reads as 0 bytes**, and the first
+read only *starts* an async download — so an adapter sees empty content and
+returns `match()=="no"`, and the file lands in the "unclaimed (informational
+only)" bucket **silently**. This moved the sweep numbers between runs
+(126→145 unclaimed) until the files hydrated. At last check **44 of 266 files
+would not hydrate at all** (user reports known OneDrive problems, 2026-07-16).
+Hydrate (`cat * > /dev/null`, repeatedly) before trusting a corpus run. Worth
+considering: a hydration guard in `corpus_files()` that fails loudly on a
+`size > 0` file that reads empty, since "unclaimed" currently absorbs it.
+
+Remaining follow-ups (not blockers):
 - **Act on `dev/tdd-skill-improvements.md`** — the research report on hardening
   the tdd-plan skill so its generated suites catch seam bugs, non-determinism,
   and harness-lifetime bugs earlier (its top 5 edits are summarised at the end).
+  Plan 10's final checks are fresh evidence for it: **all four corpus gates were
+  written in a way that could not verify anything** (wrong `route_files()`
+  signature swallowed into `failed` rows; a lone-Chemistry2e comparison that
+  could never have `Normal` rows; a test with zero expectations reported as
+  "skipped"), and R-10.6's drift guard only worked under the runner it was
+  developed with. A gate that cannot fail is worse than no gate.
 
 **Plan-09 follow-ups worth a look:**
 - **`dry_run` persists `ingest_file` state transitions** (ops-table only — the
