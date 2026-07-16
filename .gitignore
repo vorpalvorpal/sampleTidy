@@ -6,3 +6,5 @@
 *.duckdb
 *.duckdb.wal
 *.duckdb.lock
+_problems
+testthat-problems.rds

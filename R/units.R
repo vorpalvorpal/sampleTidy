@@ -186,7 +186,7 @@ unify_value <- function(value, units_from, units_to) {
     converted <- tryCatch(
       {
         out <- numeric(length(idx))
-        pair_key <- paste(canon_from[idx], canon_to[idx], sep = "→")
+        pair_key <- paste(canon_from[idx], canon_to[idx], sep = "\u2192")
         groups <- split(idx, pair_key)
         for (g in groups) {
           v <- units::set_units(value[g], canon_from[g][[1]], mode = "standard")

@@ -17,5 +17,5 @@ a validated tibble with the \code{results} IR columns.
 With no arguments, returns the zero-row prototype (DESIGN §4.1): exactly
 the pinned columns, in order, with the pinned types and no rows. With
 named arguments (one per column, tibble-constructor style), builds a
-single (or vectorised) row and validates it via \code{\link[=ir_validate]{ir_validate()}}.
+single (or vectorised) row and validates it via \code{ir_validate()} (internal).
 }

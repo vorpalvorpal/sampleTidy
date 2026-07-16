@@ -34,7 +34,6 @@ Imports:
     rlang,
     stringr,
     tibble,
-    tidyr,
     units,
     uuid,
     xml2

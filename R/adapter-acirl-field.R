@@ -492,9 +492,9 @@ acirl_field_xlsx_adapter <- function() {
   u <- if (is.na(u)) NA_character_ else trimws(u)
 
   dplyr::case_when(
-    analyte_raw == "Temperature" ~ "°C",
+    analyte_raw == "Temperature" ~ "\u00b0C",
     !is.na(u) & u == "pH Units" ~ "pH",
-    !is.na(u) & grepl("µ", u, fixed = TRUE) ~ sub("^.+µ", "µ", u),
+    !is.na(u) & grepl("\u00b5", u, fixed = TRUE) ~ sub("^.+\u00b5", "\u00b5", u),
     TRUE ~ u
   )
 }

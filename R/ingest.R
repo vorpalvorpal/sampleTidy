@@ -46,6 +46,17 @@
   parsed <- list()
 
   claimed_idx <- which(routed$state == "claimed")
+
+  # Content-hash dedup (A20/A46): two paths in ONE run can carry identical
+  # bytes - `ignore_rule()` deliberately passes `[N]` duplicate-download
+  # markers through so that hash dedup, not filename guesswork, handles
+  # them. `route_files()` re-decides nothing for a hash it has already
+  # routed: it records a sighting and returns the *stored* `claimed` state,
+  # so both rows arrive here. Parsing per-row would parse the same content
+  # twice and drive an illegal `parsed -> parsed` transition, aborting the
+  # whole run. Parse once per distinct hash.
+  claimed_idx <- claimed_idx[!duplicated(routed$hash[claimed_idx])]
+
   for (i in claimed_idx) {
     hash <- routed$hash[[i]]
     path <- routed$path[[i]]

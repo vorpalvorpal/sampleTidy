@@ -291,10 +291,14 @@ test_that("R-10.6: NAMESPACE exports equal the CONTRACT-pinned public API exactl
 test_that("R-10.6: DESCRIPTION Imports equal the CONTRACT-pinned set", {
   pinned <- c("checkmate", "cli", "DBI", "digest", "dplyr", "duckdb", "fs",
               "purrr", "readr", "readxl", "rlang", "stringr", "tibble",
-              "tidyr", "units", "uuid", "xml2")
-  desc_path <- normalizePath(file.path(testthat::test_path(), "..", "..", "DESCRIPTION"))
-  desc <- read.dcf(desc_path)
-  imports_raw <- desc[1, "Imports"]
+              "units", "uuid", "xml2")
+  # Read the package's OWN metadata rather than walking up to the source
+  # tree: under `R CMD check` the tests run from `sampleTidy.Rcheck/tests/
+  # testthat`, where `../../DESCRIPTION` does not exist, so a path-walk makes
+  # this drift guard pass under `devtools::test()` and error under
+  # `check()` - which is precisely the gate it is meant to satisfy.
+  imports_raw <- utils::packageDescription("sampleTidy")$Imports
+  expect_false(is.null(imports_raw))
   imports <- strsplit(imports_raw, ",")[[1]]
   imports <- trimws(gsub("\\s*\\(.*\\)\\s*", "", imports))
   imports <- trimws(gsub("\\n", " ", imports))

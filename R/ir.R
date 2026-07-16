@@ -60,7 +60,7 @@
 #' With no arguments, returns the zero-row prototype (DESIGN §4.1): exactly
 #' the pinned columns, in order, with the pinned types and no rows. With
 #' named arguments (one per column, tibble-constructor style), builds a
-#' single (or vectorised) row and validates it via [ir_validate()].
+#' single (or vectorised) row and validates it via `ir_validate()` (internal).
 #'
 #' @param ... named column values, one name per `results` column. Omit
 #'   entirely for the zero-row prototype.
@@ -83,7 +83,7 @@ ir_results <- function(...) {
 #' With no arguments, returns the zero-row prototype (DESIGN §4.2): exactly
 #' the pinned columns, in order, with the pinned types and no rows. With
 #' named arguments (one per column, tibble-constructor style), builds a
-#' single (or vectorised) row and validates it via [ir_validate()].
+#' single (or vectorised) row and validates it via `ir_validate()` (internal).
 #'
 #' @param ... named column values, one name per `samples` column. Omit
 #'   entirely for the zero-row prototype.

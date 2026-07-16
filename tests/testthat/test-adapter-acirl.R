@@ -12,7 +12,7 @@
 
 acirl_adapter <- function() sampleTidy:::adapter_registry()[["acirl_field_xlsx"]]
 
-main_path       <- test_path("fixtures", "acirl", "2400-9999-01 Test Month WMF.xlsx")
+main_path       <- test_path("fixtures", "acirl", "2400-9999-01_Test_WMF.xlsx")
 edge_path       <- test_path("fixtures", "acirl", "EDGECASES.xlsx")
 no_report_path  <- test_path("fixtures", "acirl", "NO_REPORT_NO.xlsx")
 random_xlsx_path <- test_path("fixtures", "acirl", "random.xlsx")

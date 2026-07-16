@@ -125,7 +125,7 @@ build_front_sheet <- function(wb, sheet, report_no = "2400-9999-01",
 }
 
 # =============================================================================
-# 2400-9999-01 Test Month WMF.xlsx  -- THE pinned fixture (FIXTURES.md).
+# 2400-9999-01_Test_WMF.xlsx  -- THE pinned fixture (FIXTURES.md).
 # Front / Methods / Dust / two water sheets, exactly as pinned.
 # =============================================================================
 wb <- createWorkbook()
@@ -167,7 +167,7 @@ build_water_sheet(
   comment_vals = c(NA, "Odour noted", NA, "Duplicate sample")
 )
 
-saveWorkbook(wb, file.path(here, "2400-9999-01 Test Month WMF.xlsx"), overwrite = TRUE)
+saveWorkbook(wb, file.path(here, "2400-9999-01_Test_WMF.xlsx"), overwrite = TRUE)
 
 # =============================================================================
 # EDGECASES.xlsx -- auxiliary fixture covering R-6.3 branches not present in
