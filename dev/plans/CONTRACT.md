@@ -19,7 +19,7 @@ test disagree, tests win pending orchestrator adjudication. Design authority:
 | 08 | `R/reconcile.R` |
 | 09 | `R/mutate.R`, `R/commit.R`, `R/archive.R`, `R/snapshot.R`, `R/ingest.R` |
 | 10 | `tests/testthat/test-e2e-*.R`, `tests/testthat/helper-corpus.R` |
-| 11 | `R/feature-alias.R`, `R/pending.R`, `dev/migrations/001-alias-indirection.R`, `tests/testthat/test-feature-alias.R`, `tests/testthat/test-pending.R`, `tests/testthat/helper-db.R` (A52) |
+| 11 | `R/feature-alias.R`, `R/pending.R`, `dev/migrations/001-alias-indirection.R`, `tests/testthat/test-feature-alias.R`, `tests/testthat/test-pending.R`, `tests/testthat/helper-db.R` + `dev/plans/FIXTURES.md` (A52) |
 
 **Cross-plan edits (A52).** Plan 11 amends `R/reconcile.R` (owned by 08) and
 `R/commit.R` / `R/mutate.R` (owned by 09). These are **adjudicated cross-plan

@@ -6,22 +6,76 @@ fixtures are synthetic but structurally exact. When a plan criterion needs a
 number, it is pinned here; tests assert the pinned number.
 
 Prefix all synthetic UUIDs with a fixed literal (they are just VARCHARs):
-features `f-000N`, analytes `a-000N`, lab_methods `lm-000N`, projects
-`p-000N`, samples `s-000N`, analyses `an-000N`.
+features `f-000N`, feature_aliases `fa-000N`, analytes `a-000N`, lab_methods
+`lm-000N`, projects `p-000N`, samples `s-000N`, analyses `an-000N`.
 
-## Seed DB (`tests/testthat/helper-db.R`, owned by the core-tests agent)
+## Seed DB (`tests/testthat/helper-db.R`, owned by plan 11 — A52)
 
 `seed_db(dir = withr::local_tempdir())` creates a DuckDB file, runs
 `ensure_schema()`, creates the **core** tables with the CONTRACT columns, and
 inserts exactly the rows below. Returns the db path. `seed_con(path)` opens RW.
 Helpers must not depend on the live monitoring.duckdb.
 
+**Plan 11 (A48–A51) reshapes this seed.** `sample` no longer points at
+`feature` directly — every sample carries `uuid_feature_alias` (NOT NULL),
+which nullably resolves to a `feature`. `feature` gains `date_start DATE,
+date_end DATE` (the test DDL's `virtual BOOLEAN` column is TEST-ONLY drift —
+the live table has no such column; see CONTRACT.md's corrected schema block).
+`lab_method.uuid_analyte` is nullable (dangling = unresolved analyte).
+`analysis` gains `units_raw VARCHAR` (provenance, populated always; canonical
+`value` iff the row's `lab_method.uuid_analyte` is non-NULL).
+
 ### feature
-| uuid | name | site | flow | matrix |
-|---|---|---|---|---|
-| f-0001 | T.S01 | TestSite | surface | water |
-| f-0002 | T.S02 | TestSite | surface | water |
-| f-0003 | T.MW01 | TestSite | (NA) | groundwater |
+| uuid | name | site | flow | matrix | date_end |
+|---|---|---|---|---|---|
+| f-0001 | T.S01 | TestSite | surface | water | (NA) |
+| f-0002 | T.S02 | TestSite | surface | water | (NA) |
+| f-0003 | T.MW01 | TestSite | (NA) | groundwater | (NA) |
+| f-0004 | T.S04 | TestSite | surface | water | (NA) |
+| f-0005 | T.S05 | TestSite | surface | water | (NA) |
+| f-0006 | T.S06 | TestSite | surface | water | 2020-06-30 (defunct) |
+| f-0007 | T.S07 | TestSite | surface | water | (NA) |
+
+f-0004..f-0007 exist only to host the plan-11 alias-narrowing fixtures below
+(f-0001..f-0003 are unchanged and keep serving every pre-plan-11 fixture use).
+
+### feature_alias (R-11.1)
+| uuid | uuid_feature | name | alias_key | kind | auto_assign |
+|---|---|---|---|---|---|
+| fa-0001 | f-0001 | T.S01 | ts01 | self | TRUE |
+| fa-0002 | f-0002 | T.S02 | ts02 | self | TRUE |
+| fa-0003 | f-0003 | T.MW01 | tmw01 | self | TRUE |
+| fa-0004 | f-0003 | bs03alt | bs03alt | transcription_error | TRUE |
+| fa-0005 | f-0004 | T.AMBIG2 | tambig2 | descriptive | TRUE |
+| fa-0006 | f-0005 | T.AMBIG2 | tambig2 | descriptive | TRUE |
+| fa-0007 | f-0006 | T.REUSED | treused | historical_code | TRUE |
+| fa-0008 | f-0007 | T.REUSED | treused | historical_code | TRUE |
+| fa-0009 | f-0003 | T.BORE | tbore | descriptive | **FALSE** |
+| fa-0010 | (NULL, dangling) | T.S09 | ts09 | pending | FALSE |
+| fa-0011 | f-0004 | T.S04 | ts04 | self | TRUE |
+| fa-0012 | f-0005 | T.S05 | ts05 | self | TRUE |
+| fa-0013 | f-0006 | T.S06 | ts06 | self | TRUE |
+| fa-0014 | f-0007 | T.S07 | ts07 | self | TRUE |
+
+Every feature (f-0001..f-0007) has a self-alias (`kind = "self"`), per the
+model's "no special case for arrived correctly labelled" invariant. Plus:
+- `fa-0004` (`bs03alt` → f-0003): a resolved alt-label alongside f-0003's
+  self-alias `fa-0003` — a **hit** (both resolve the same feature), not an
+  ambiguity. Exercises "two different incoming labels for one feature share
+  one sample" (R-11.7).
+- `fa-0005`/`fa-0006` (`T.AMBIG2` → f-0004 **and** f-0005): the **ambiguous**
+  fixture. Both features are live (`date_end` NULL) at every fixture date, so
+  this key never narrows to one candidate (R-11.4/R-11.10).
+- `fa-0007`/`fa-0008` (`T.REUSED` → f-0006 **and** f-0007): the
+  reused-key/one-defunct fixture. f-0006's `date_end` (2020-06-30) is long
+  before any fixture sample date, so at any such date narrowing drops f-0006
+  and auto-resolves to f-0007 — the `date_end`-narrowing criterion (R-11.4).
+- `fa-0009` (`T.BORE` → f-0003, `auto_assign = FALSE`): a non-identifying
+  descriptive alias that must never enter the candidate set — suggestion-only.
+- `fa-0010` (`T.S09`, `uuid_feature` NULL, `kind = "pending"`): an **already
+  existing** dangling alias, paired with sample `s-0003`/analysis `an-0003`
+  below, that a *second* reconcile event re-encounters via natural-key lookup
+  (R-11.5a, feature-pending path).
 
 ### feature_mask
 | uuid_feature | variant | name |
@@ -29,6 +83,10 @@ Helpers must not depend on the live monitoring.duckdb.
 | f-0001 | long | Test Surface 01 |   (alias → resolves to f-0001)
 | f-0002 | epa | AMBIG |            (ambiguity fixture …)
 | f-0003 | long | AMBIG |           (… "AMBIG" matches f-0002 AND f-0003)
+
+Untouched by plan 11 — R-11.4 stops joining `feature_mask` for candidate
+matching, but the table and these rows remain for other plans' pre-existing
+tests (and for the migration's `long`-name import, R-11.13 step 5).
 
 ### analyte  (canonical units deliberately differ from reported units to force conversion)
 | uuid | name | units | type | CAS |
@@ -48,9 +106,19 @@ Helpers must not depend on the live monitoring.duckdb.
 | lm-0005 | a-0001 | pH | (NA) | ACIRL | (NA) |
 | lm-0006 | a-0003 | EC | (NA) | ACIRL | (NA) |
 | lm-0007 | a-0004 | Temperature | (NA) | ACIRL | (NA) |
+| lm-0008 | **(NULL, dangling)** | EC New Method | EA010Z: Conductivity by new method | ALS | 1 |
+| lm-0009 | **(NULL, dangling)** | Sulphate | EA045: Sulphate by IC | ALS | 0.5 |
 
 `lm-0002`/`lm-0004` are the duplicate-method pair (R-8.6): same analyte, ALS;
 lm-0002 has the lower rl_low (0.1) so it wins.
+
+`lm-0008`/`lm-0009` are plan-11 dangling (`uuid_analyte IS NULL`) fixtures:
+- `lm-0008` is paired with sample `s-0002`/analysis `an-0002` (`units_raw`
+  `'µS/cm'`, unconverted value `965`) for the R-11.11 confirm-and-convert
+  test — reuses the pinned `965 → 0.965 mS/cm` conversion already below.
+- `lm-0009` is an **already existing** dangling method a *second* reconcile
+  event re-encounters via natural-key lookup (R-11.5a, analyte-pending path),
+  paired with sample `s-0004`/analysis `an-0004` below.
 
 ### project
 | uuid | name | type |
@@ -58,11 +126,33 @@ lm-0002 has the lower rl_low (0.1) so it wins.
 | p-0001 | XX1234567 | Work order |
 
 ### Pre-existing sample + analysis (the "old pipeline already committed this" rows for three-way tests)
-sample `s-0001`: uuid_feature f-0001, uuid_project p-0001,
+sample `s-0001`: uuid_feature_alias **fa-0001** (f-0001's self-alias;
+plan-11 repoints this from the old `uuid_feature`), uuid_project p-0001,
 date `2025-05-24`, datetime `2025-05-24 11:45:00` (Australia/Sydney), organisation ALS.
 analysis `an-0001`: uuid_sample s-0001, uuid_lab lm-0002, value `100`,
-quantified FALSE, rl_low `100`, comments NA.
+quantified FALSE, rl_low `100`, units_raw NULL (pre-plan-11 history — the
+migration backfills NULL for existing rows), comments NA.
 (That is the converted form of "Fluoride <0.1 mg/L" — see conversions below.)
+
+### Plan-11 additional sample + analysis rows
+| sample | uuid_feature_alias | date | datetime | organisation |
+|---|---|---|---|---|
+| s-0002 | fa-0003 | 2025-05-25 | 2025-05-25 09:30:00 | ALS |
+| s-0003 | fa-0010 (pending) | 2025-05-10 | 2025-05-10 08:00:00 | ALS |
+| s-0004 | fa-0001 | 2025-05-12 | 2025-05-12 08:15:00 | ALS |
+
+| analysis | uuid_sample | uuid_lab | value | quantified | rl_low | units_raw |
+|---|---|---|---|---|---|---|
+| an-0002 | s-0002 | lm-0008 (dangling) | 965 | TRUE | 1 | µS/cm |
+| an-0003 | s-0003 | lm-0001 (resolved) | 7.10 | TRUE | 0.01 | pH |
+| an-0004 | s-0004 | lm-0009 (dangling) | 12 | TRUE | 0.5 | mg/L |
+
+`s-0002`/`an-0002` is the R-11.11 conversion fixture (see `lm-0008` above).
+`s-0003`/`an-0003` and `s-0004`/`an-0004` are the R-11.5a "already committed,
+a second event re-encounters it" fixtures — the feature side is dangling for
+the first pair (`fa-0010`), the analyte side is dangling for the second
+(`lm-0009`); each has its counterpart side already resolved, so the two cases
+are isolated.
 
 `ingest_file` seed for the supersede test: a row hash `legacy-hash-XX`,
 work_order `XX1234567`, revision `0`, state `archived`.
@@ -161,8 +251,12 @@ cell (empty branch).
   Normal; QC rows carry LCS/MB; YY0000001 carries NCP.
 - Assembly event `XX1234567`: NCP row counted (`n_ncp_foreign` = 1), absent
   from results; source-preference keeps ESdat over XTAB/ENMRG.
-- Reconcile: T.S01/T.S02/T.MW01 resolve to f-0001/f-0002/f-0003; "AMBIG"
-  would be ambiguous; a typo `T.S0l` (lowercase L) → unknown_feature.
+- Reconcile: T.S01/T.S02/T.MW01 resolve to f-0001/f-0002/f-0003 (via their
+  self-aliases fa-0001/fa-0002/fa-0003); "AMBIG" would be ambiguous; a typo
+  `T.S0l` (lowercase L) → `unknown_feature`, and **under plan 11's
+  commit-everything model it no longer strands**: the row commits dangling
+  (a new pending `feature_alias`, `feature_pending = TRUE`) and archives —
+  only pre-plan-11 the row was dropped to review and held (R-11.5).
   Fluoride `<0.1 mg/L` → value_num 0.1, below_detection TRUE, converted 100
   µg/L, rl 0.1 mg/L → 100 µg/L, quantified FALSE. That row vs seeded an-0001
   (value 100, quantified FALSE) → **already_present**. Fluoride `2.3 mg/L` (no

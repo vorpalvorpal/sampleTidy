@@ -10,12 +10,23 @@ backlog readers), `tests/testthat/test-feature-alias.R` (new),
 `.rc_find_existing`, `.rc_proto_review`, `reconcile_event`),
 `R/commit.R` (`.ct_find_or_create_sample`, `.ct_resolve_samples`,
 `.ct_commit_analyses`, `commit_event`), `R/mutate.R` (allowlist),
-`tests/testthat/helper-db.R` (core DDL + seed), plus regression tests in
+`tests/testthat/helper-db.R` (core DDL + seed), `dev/plans/FIXTURES.md` (the
+seed-DB contract that `helper-db.R` implements), plus regression tests in
 `test-reconcile.R` / `test-commit.R`.
 **Depends on:** plans 01–10 landed and green.
 
 **Test-file ownership note.** `helper-db.R` has no owner in the CONTRACT's
 partition. Plan 11 takes ownership; it is the only plan amending it (see A52).
+
+**`FIXTURES.md` moves with `helper-db.R` (orchestrator, 2026-07-17).** Not caught
+by the cold review — it is a doc coupling, not code. `helper-db.R`'s header
+states it implements `dev/plans/FIXTURES.md`'s "Seed DB" section *exactly*, and
+FIXTURES.md calls itself "the synthetic universe (**shared contract for all test
+agents**)". This plan rewrites that seed, so FIXTURES.md is amended in the **same
+change** — otherwise every future test agent reads a universe that no longer
+exists, and the drift is silent because nothing tests a doc. Its §"Cross-plan
+expectations" needs the new dispositions too (a `T.S0l` typo no longer strands —
+it commits dangling).
 
 ## Why
 
