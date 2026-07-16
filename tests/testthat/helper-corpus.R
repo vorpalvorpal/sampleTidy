@@ -30,6 +30,62 @@ skip_if_no_corpus <- function() {
   invisible(path)
 }
 
+#' Every real *file* directly inside the corpus directory (non-recursive)
+#'
+#' Mirrors `ingest_dir()`'s own listing (`fs::dir_ls(type = "file",
+#' recurse = FALSE)`, A8) rather than using `list.files()`, which also
+#' returns subdirectories: the real corpus holds several subdirectories
+#' (e.g. the operator's curated `sampleTidy example/` folder) that
+#' `ingest_dir()` never recurses into and that `file_meta()`/`hash_file()`
+#' cannot hash - passing one to `router_matrix()` aborts the sweep.
+#'
+#' @param path corpus directory (defaults to `corpus_path()`)
+#' @return character vector of absolute file paths
+corpus_files <- function(path = corpus_path()) {
+  as.character(fs::dir_ls(path, type = "file", all = TRUE, recurse = FALSE))
+}
+
+#' Restore the canonical built-in adapter registry
+#'
+#' The adapter registry is global mutable state and other test files leave it
+#' dirty: test-adapter-registry.R clears it, and several register throwaway
+#' test adapters that claim everything. A corpus sweep run after them sees a
+#' registry that is neither empty nor canonical - which is how a sweep can
+#' report "0 unclaimed" out of 266 real files and pass in isolation while
+#' failing in the full suite. Same guard as test-e2e-pipeline.R's R-10.1.
+#' (`ingest_dir()` self-registers per A33; `router_matrix()` does not.)
+#'
+#' @return invisibly, the restored registry's adapter ids
+use_builtin_adapters <- function() {
+  clear_adapters()
+  register_builtin_adapters()
+  invisible(names(adapter_registry()))
+}
+
+#' Route a set of paths against a throwaway, schema-only DuckDB
+#'
+#' `route_files()` takes `(paths, con)` and persists `ingest_file` state, so
+#' a read-only sweep still needs a writable DB. This gives it a fresh temp
+#' one (never the real corpus DB), so a route sweep records its state
+#' bookkeeping somewhere disposable. NB `route_files()` catches per-file
+#' errors and reports them as `state = "failed"` rows, so calling it with a
+#' wrong signature fails *silently* as an all-failed sweep - always assert
+#' on the returned states, never just on "it didn't error".
+#'
+#' @param paths character vector of file paths
+#' @param env frame to scope the temp dir's cleanup to (the calling test)
+#' @return the `route_files()` tibble
+corpus_route <- function(paths, env = parent.frame()) {
+  db <- file.path(withr::local_tempdir(.local_envir = env), "corpus-route.duckdb")
+  with_db_write(
+    function(con) {
+      ensure_schema(con)
+      route_files(paths, con)
+    },
+    db = db
+  )
+}
+
 #' Path to a local copy of the real monitoring.duckdb, if configured
 #'
 #' Used only by the plan-10 R-10.5 dry-run-against-a-real-DB-copy gate.

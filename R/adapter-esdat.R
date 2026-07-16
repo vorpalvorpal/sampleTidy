@@ -25,7 +25,7 @@
 
 #' Construct the `esdat` adapter
 #'
-#' ESdat (EScIS) lab EDD adapter (DESIGN §5, PLAN-04). Registered under id
+#' ESdat (EScIS) lab EDD adapter (DESIGN section 5, PLAN-04). Registered under id
 #' `"esdat"` by [register_builtin_adapters()] in `R/zzz.R`.
 #'
 #' @return a list with elements `id`, `version`, `match`, `parse` (the
@@ -91,11 +91,11 @@ esdat_adapter <- function() {
 # Defensive BOM strip (A35): guards against a UTF-8 BOM (bytes EF BB BF)
 # surviving onto the first header cell, whether as the single Unicode
 # codepoint U+FEFF (if ever decoded as UTF-8) or as its latin-1 mis-decode
-# "ï»¿" (if a latin-1 locale ever reads the raw BOM bytes
+# "\u00ef\u00bb\u00bf" (if a latin-1 locale ever reads the raw BOM bytes
 # without stripping them).
 .st_strip_bom <- function(x) {
-  x <- sub("^﻿", "", x)
-  sub("^ï»¿", "", x)
+  x <- sub("^\ufeff", "", x)
+  sub("^\u00ef\u00bb\u00bf", "", x)
 }
 
 # Structural sanity check shared by both ESdat CSV parsers (A27 refined / A35).

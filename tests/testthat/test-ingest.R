@@ -149,6 +149,31 @@ test_that("R-9.5: a second run over the same directory is a no-op (idempotent at
   expect_equal(n_review_second, n_review_first)
 })
 
+test_that("R-9.5: two same-byte files in ONE run (a [N] duplicate-download pair) ingest once, without aborting (A46)", {
+  setup <- ingest_test_setup()
+  input_dir <- build_e2e_input_dir()
+
+  # Reproduces the real-corpus case that exposed A46: a browser
+  # duplicate-download twin (`foo[65].CSV`) sitting beside its original in
+  # the same directory. `ignore_rule()` passes `[N]` names through on
+  # purpose, so both paths reach the parse stage carrying identical bytes.
+  original <- list.files(input_dir, pattern = "Chemistry2e\\.CSV$", full.names = TRUE)[[1]]
+  twin <- file.path(input_dir, sub("\\.CSV$", "[65].CSV", basename(original)))
+  file.copy(original, twin)
+
+  expect_no_error(report <- ingest_dir(input_dir, db = setup$db_path))
+
+  states <- ingest_file_states(setup$db_path)
+  twin_hash <- sampleTidy:::hash_file(twin)
+
+  # One ingest_file row per distinct content hash, not per path...
+  expect_equal(sum(states$hash == twin_hash), 1L)
+  # ...and the duplicate is recorded as a sighting of the same content (A20).
+  sightings <- count_rows(setup$db_path, "ingest_sighting")
+  expect_true(sightings > 0)
+  expect_false(states$state[states$hash == twin_hash] %in% c("failed", "quarantined"))
+})
+
 # ---- R-9.6: the remove switch (A13) ----------------------------------------
 
 test_that("R-9.6: default (remove_ingested = FALSE) leaves all sources present", {

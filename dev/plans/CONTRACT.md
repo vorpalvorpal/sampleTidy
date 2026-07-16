@@ -57,9 +57,10 @@ Internal seams (not exported, stable for tests via `:::`):
   never call `dbExecute`/`dbAppendTable` directly.
 - Every function that skips/drops a row must return counts of what it skipped
   and why. Silent drops are defects.
-- New Imports allowed: `readxl`, `readr`, `xml2`, `stringr`, `tidyr`,
+- New Imports allowed: `readxl`, `readr`, `xml2`, `stringr`,
   `rlang`, `digest`, `uuid`, `fs` (Suggests: `withr`, `ellmer`, `processx`,
-  `sf`). Do not add others without a plan-change request.
+  `sf`). Do not add others without a plan-change request. (`tidyr` was
+  pinned here but never used by any module - dropped in A47.)
 
 ## Existing DB schema (authoritative, from live monitoring.duckdb)
 
@@ -388,6 +389,47 @@ for lab reports; `sample.organisation ∈ {ACIRL, Internal, ALS}`;
   *within one report* before the DB match). After the fix all 11 e2e tests pass,
   including R-10.2 EC as originally pinned (0.185 mS/cm at f-0001/lm-0003).
   Regression test in test-reconcile.R (field EC vs lab EC → two rows).
+
+- **A46** (plan-10 R-10.5 real-corpus gate — a real production defect) Two
+  files in **one** `ingest_dir()` run can carry **identical bytes**. The real
+  corpus holds 11 such pairs: browser duplicate-download twins
+  (`…Chemistry2e[96].CSV` beside `…Chemistry2e.CSV`). `ignore_rule()`
+  deliberately passes `[N]` markers through, because content-hash dedup
+  (A20), not filename guesswork, is meant to handle them — and
+  `route_files()` re-decides nothing for an already-routed hash, so it
+  records a sighting and returns the *stored* `claimed` state for **both**
+  rows. `.ig_parse_claimed()` then looped over claimed **rows**, parsed the
+  same content twice and drove an illegal `parsed -> parsed` transition,
+  which **aborted the entire run** — the first real ingest of the real corpus
+  would have died. **Fixed:** dedup `claimed_idx` by hash, parsing once per
+  distinct content (`R/ingest.R`, plan 09's file — plan 10 is tests-only).
+  `.ig_remove_verified()` stays per-path and is correct: both copies are
+  deleted, each verified against the same `asset` row. Regression test in
+  test-ingest.R (a `[65]` twin ingests once, without aborting).
+
+- **A47** (plan-10 R-10.6 `devtools::check()` — the gate's first real run)
+  Running the full check for the first time surfaced four things the
+  `devtools::test()`-only workflow structurally could not:
+  1. **The R-10.6 DESCRIPTION drift-guard test was itself broken under
+     `check()`.** It located DESCRIPTION by walking `test_path()/../..`,
+     which exists under `load_all()` but not under `R CMD check` (tests run
+     from `<pkg>.Rcheck/tests/testthat`), so the gate erroring *was* the
+     first check run. Fixed to read `packageDescription("sampleTidy")`.
+  2. **`tidyr`** was a CONTRACT-pinned Import that no module ever used.
+     Dropped from DESCRIPTION, the pinned set above, and the drift-guard
+     test (user-approved).
+  3. **Non-ASCII literals in R code** (`°`/`µ`/`→`/U+FEFF BOM/U+FFFD in
+     `adapter-esdat.R`, `adapter-acirl-field.R`, `text-normalise.R`,
+     `units.R`) → rewritten as `\uxxxx` escapes, value-identical and pinned
+     by test-text-normalise.R. Non-ASCII in *comments* is tolerated by the
+     check and left alone.
+  4. **`ir_results.Rd`/`ir_samples.Rd` linked to `ir_validate()`**, which is
+     `@noRd` and so has no help page → dead link; now plain `\code{}`.
+  Remaining WARNING: **non-portable fixture file names**. The over-100-byte
+  tarball paths were fixed by shortening the ESdat fixture prefix, but
+  `R CMD check` flags **any space** in a file name, and the anonymized real
+  fixtures keep one deliberately (every real ESdat file has spaces). See the
+  gate note below.
 
 ## Gates
 

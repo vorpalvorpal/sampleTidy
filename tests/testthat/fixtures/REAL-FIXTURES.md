@@ -13,9 +13,20 @@ done at the **byte level** on ASCII substrings only, so the raw `0xB0` (`°`) /
 
 ## Files
 
+**File *names* are not faithful; file *contents* are.** The real ESdat files
+are named like `BWMF Apirl 2024 - Rain Event.ESDAT_ES2617126_0.Chemistry2e.CSV`
+— a descriptive prefix with **spaces**, then the machine suffix. Two things
+force a rename here (A47): `R CMD check`'s "portable file names" gate rejects
+**any** space in a packaged file name, and it caps tarball paths at 100 bytes,
+which the full real prefix exceeded. So fixtures use a short underscored
+prefix. The machine part — `.ESDAT_<work order>_<revision>.<part>.CSV`, which
+is what `match()` actually keys on — is untouched. The space-in-name shape is
+still covered: `test-adapter-esdat.R` copies this fixture to a spaced,
+real-shaped name in a temp dir at run time and asserts it matches and parses.
+
 | fixture (in repo) | real source work order | format / notes |
 |---|---|---|
-| `esdat/SITEA Apirl 2024 - Rain Event.ESDAT_ES2617126_0.Chemistry2e.CSV` | ES2617126 | ESdat results, **latin-1** (72 non-ASCII bytes: `°`/`µ`/`±`), ~160 rows spanning many lab codes incl. `QC-MRG2/3/4` variants |
+| `esdat/SITEA_Rain.ESDAT_ES2617126_0.Chemistry2e.CSV` | ES2617126 | ESdat results, **latin-1** (72 non-ASCII bytes: `°`/`µ`/`±`), ~160 rows spanning many lab codes incl. `QC-MRG2/3/4` variants |
 | `esdat/….ES2617126_0.Sample2e.CSV` | ES2617126 | ESdat samples; **all five QC types present** (LAB_D 20, LCS 18, NCP 18, MB 9, MS 6, Normal 1) |
 | `esdat/….ES2617126_0.Header.XML` | ES2617126 | ESdat header (`Lab_Report_Number`, `Project_ID`, `Lab_Name`, …) |
 | `crosstab/ES2600185_0_XTAB.csv` | ES2600185 | ALS XTAB crosstab, latin-1, single `Matrix:` section, `Unit`/`Limit of reporting` header spellings, a `----` not-computable cell |

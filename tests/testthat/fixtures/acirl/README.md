@@ -39,7 +39,7 @@ that must be pivoted to long/tidy form:
 
 ## Files pinned by `dev/plans/FIXTURES.md`
 
-`2400-9999-01 Test Month WMF.xlsx` - the one pinned workbook, exactly 5
+`2400-9999-01_Test_WMF.xlsx` - the one pinned workbook, exactly 5
 sheets:
 
 | sheet | role | structural property |

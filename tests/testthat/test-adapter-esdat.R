@@ -47,15 +47,15 @@ enmrg_csv_path   <- test_path("fixtures", "crosstab", "XX1234567_0_ENMRG.CSV")
 # (latin-1) are byte-for-byte the original.
 real_chem_path   <- test_path(
   "fixtures", "esdat",
-  "SITEA Apirl 2024 - Rain Event.ESDAT_ES2617126_0.Chemistry2e.CSV"
+  "SITEA_Rain.ESDAT_ES2617126_0.Chemistry2e.CSV"
 )
 real_sample_path <- test_path(
   "fixtures", "esdat",
-  "SITEA Apirl 2024 - Rain Event.ESDAT_ES2617126_0.Sample2e.CSV"
+  "SITEA_Rain.ESDAT_ES2617126_0.Sample2e.CSV"
 )
 real_header_path <- test_path(
   "fixtures", "esdat",
-  "SITEA Apirl 2024 - Rain Event.ESDAT_ES2617126_0.Header.XML"
+  "SITEA_Rain.ESDAT_ES2617126_0.Header.XML"
 )
 
 # ---- R-4.1 match() ----------------------------------------------------------
@@ -68,6 +68,30 @@ test_that("R-4.1: Chemistry2e fixture (with BOM) matches exact", {
 test_that("R-4.1: Sample2e fixture matches exact", {
   meta <- sampleTidy:::file_meta(sample_path)
   expect_identical(esdat_adapter()$match(meta), "exact")
+})
+
+test_that("R-4.1: a real-shaped filename containing SPACES matches exact and parses (A47)", {
+  # EVERY real ESdat file has spaces in its name ("BWMF Apirl 2024 - Rain
+  # Event.ESDAT_ES2617126_0.Chemistry2e.CSV"), but no fixture can carry one:
+  # `R CMD check`'s "portable file names" gate rejects any space, so the
+  # committed fixtures use underscores (A47). The space is therefore
+  # reintroduced HERE, at run time, in a temp dir - the bytes are the pinned
+  # real fixture's, only the name differs. Without this, the space-in-name
+  # shape is only ever exercised by the SAMPLETIDY_CORPUS-gated corpus tests,
+  # which never run in CI or a fresh checkout.
+  dir <- withr::local_tempdir()
+  spaced <- file.path(dir, "SITEA Apirl 2024 - Rain Event.ESDAT_ES2617126_0.Chemistry2e.CSV")
+  file.copy(real_chem_path, spaced)
+
+  meta <- sampleTidy:::file_meta(spaced)
+  expect_identical(esdat_adapter()$match(meta), "exact")
+
+  out <- esdat_adapter()$parse(spaced, meta)
+  expect_true(nrow(out$results) > 0)
+  # (this real file spans several work orders - assemble.R partitions them;
+  # here we only care that the spaced name parsed to the same content)
+  expect_true("ES2617126" %in% out$results$work_order)
+  expect_identical(nrow(out$results), nrow(esdat_adapter()$parse(real_chem_path, sampleTidy:::file_meta(real_chem_path))$results))
 })
 
 test_that("R-4.1: Header.XML fixture matches exact", {
