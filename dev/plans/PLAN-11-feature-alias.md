@@ -1,58 +1,87 @@
-# PLAN 11 — `feature_alias`: commit-everything, resolve feature names later
+# PLAN 11 — commit-everything, resolve unknown feature & analyte names later
 
 **Owns:** `R/feature-alias.R` (new), `tests/testthat/test-feature-alias.R`
-(new), `dev/migrations/001-cypher-to-feature-alias.R` (new). **Amends:**
-`R/db-schema.R` (`ensure_schema`, `sample` DDL), `R/reconcile.R`
-(`.rc_key`, `.rc_load_registry`, `.rc_feature_candidates`,
-`.rc_resolve_features`), `R/commit.R` (feature-unknown rows now commit),
-`R/mutate.R` (write API). **Depends on:** plans 01–10 landed and green.
+(new), `tests/testthat/test-resolve.R` (new),
+`dev/migrations/001-cypher-to-feature-alias.R` (new). **Amends:**
+`R/db-schema.R` (`ensure_schema`, `sample` + `lab_method` DDL),
+`R/reconcile.R` (`.rc_key`, `.rc_load_registry`, `.rc_feature_candidates`,
+`.rc_resolve_features`, `.rc_lab_method_candidates`, `.rc_resolve_analytes`),
+`R/commit.R` (feature-unknown *and* analyte-unknown rows now commit),
+`R/mutate.R` (write/resolve API). **Depends on:** plans 01–10 landed and green.
 
 ## Why
 
-Sampling-point codes are almost always transcribed incorrectly somewhere
-between the bottle, the COC and the lab's report. That is *the* reason this
-pipeline needs a human in the loop. Today an unresolved feature name **strands
+Sampling-point codes **and** analyte names are almost always transcribed or
+labelled inconsistently somewhere between the bottle, the COC and the lab's
+report. Unknown feature and unknown analyte are the two *common* review causes
+(the other three — `value_conflict`, `sample_datetime_mismatch`,
+`unknown_unit` — are, or should be, rare). Today an unresolved name **strands
 the data** — the rows are held out of the DB (or, worse, the file is archived
 terminally with the good rows committed and the bad one lost; see PLAN-10
 handover). Resolving then requires *replaying the file through the pipeline*,
 which the pipeline cannot do: `route_files()` never re-decides a routed hash.
 
 This plan inverts that (user direction, 2026-07-16): **commit the data always,
-resolve the feature name afterwards as a pure database operation.** A
-measurement is real and its numbers are good even when we are unsure which
-feature it belongs to; "which feature exactly" is a separately-resolvable
-pointer, not a commit gate. This decouples resolution from ingestion — review
-stops being "re-run the pipeline" and becomes an `UPDATE` — which sidesteps
-the replay gap entirely and keeps idempotency clean.
+resolve the name afterwards as a pure database operation.** A measurement is
+real and its numbers are good even when we are unsure which feature or analyte
+it belongs to; those identities are separately-resolvable pointers, not a
+commit gate. This decouples resolution from ingestion — review stops being
+"re-run the pipeline" and becomes an `UPDATE` — which sidesteps the replay gap
+entirely and keeps idempotency clean.
 
-The old memory of mis-transcriptions, `feature.cypher` (a comma-separated
-`VARCHAR`), is replaced by a real table and wired into both the matcher and
-this resolution layer.
+**Feature and analyte are the same archetype but need different amounts of new
+machinery**, because feature has no indirection layer today (a sample points
+straight at a feature) while analyte already has one:
+- **Feature:** `sample.uuid_feature → feature`. Needs a NEW alias table
+  (`feature_alias`) to remember the wild 1:many mis-transcriptions a single
+  sampling point accretes (max 149 junk names for one feature). The old
+  `feature.cypher` VARCHAR is migrated into it.
+- **Analyte:** `analysis.uuid_lab → lab_method → analyte`. **`lab_method` is
+  already the 1:many alias layer** (360 lab_methods → 245 analytes); "the same
+  substance under several lab names/methods" is what it already models. So an
+  unknown analyte needs **no new table** — just the ability for a `lab_method`
+  to exist before it is linked to an analyte. Analyte naming does not have the
+  wild variation feature codes do, so there is **no `n_seen`/frequency
+  machinery** on this side.
 
 ## Model (the one decision to review first)
 
-**Recommended — denormalised indirection (D).** `sample.uuid_feature` stays
-the resolved pointer (made **nullable**); a new `sample.uuid_feature_alias`
-records the raw label **only when it was not a direct name match**. An
-unresolved sample commits with `uuid_feature = NULL` and `uuid_feature_alias`
-set. Every consumer view `INNER JOIN`s `feature` (verified: `v_measurement`
-and the `v_measurement_*`/`v_feature_*` family), so a `NULL`-feature sample
-**auto-excludes itself from every measurement view and EPA report until
-resolved** — which is exactly correct, and needs no view rewrite. Resolution
-sets `feature_alias.uuid_feature` and propagates with one
+Both sides share one shape: **the dangling pointer sits on the row that owns
+the identity, nullable; a consumer view's `INNER JOIN` hides dangling rows
+until resolved; resolution is one propagating `UPDATE`.**
+
+**Feature — denormalised indirection (D, recommended).**
+`sample.uuid_feature` stays the resolved pointer (made **nullable**); a new
+`sample.uuid_feature_alias` records the raw label **only when it was not a
+direct name match**. An unresolved sample commits with `uuid_feature = NULL`
+and `uuid_feature_alias` set. Every consumer view `INNER JOIN`s `feature`
+(verified: `v_measurement` and the `v_measurement_*`/`v_feature_*` family), so
+a `NULL`-feature sample **auto-excludes itself from every measurement view and
+EPA report until resolved** — needs no view rewrite. Resolution sets
+`feature_alias.uuid_feature` and propagates with one
 `UPDATE sample SET uuid_feature = ? WHERE uuid_feature_alias = ?`.
 
-**The full-indirection variant (P)** — every sample routed through the alias
-layer, all 15,113 samples migrated, ~12 views made dangling-aware — was the
-user's initial pick. Recommend against: it delivers the *same* two wins
-(keep-both-names, resolve-all-at-once) as (D), because the provenance lives in
-`uuid_feature_alias` either way and the `INNER JOIN` already excludes dangling
-rows. What (P) adds is ~15k **self-alias** rows (`B.S03` is an alias for
-`B.S03`) that identify nothing, plus a rewrite of every view and every
-`sample.uuid_feature = feature.uuid` join in the codebase. (D) is not the "lite"
-model; it is the properly-normalised one — you no more store a self-referential
-alias than you store "B.S03 is an alias for B.S03". **This plan is written for
-(D); overrule in review if you want (P).**
+**Analyte — the same shape, on `lab_method` (no new table).**
+`lab_method.uuid_analyte` is currently NOT NULL (verified: 0 dangling rows
+today, like features). Make it **nullable**. An unknown analyte commits its
+analysis pointing at a `lab_method` (created/reused from the file's
+`name, org, method, rl_low, rl_high`) whose `uuid_analyte = NULL`. Because
+`v_measurement` **`INNER JOIN`s analyte through lab_method** (verified), that
+analysis auto-excludes until resolved. Resolution sets
+`lab_method.uuid_analyte`; every analysis using that method lands at once. The
+`lab_method` row IS the provenance ("what the lab called it") — no separate
+alias column needed on `analysis`.
+
+**The full-indirection variant (P) for features** — every sample routed
+through the alias layer, all 15,113 samples migrated, ~12 views made
+dangling-aware — was the user's initial pick. Recommend against: it delivers
+the *same* two wins (keep-both-names, resolve-all-at-once) as (D), because the
+provenance lives in `uuid_feature_alias` either way and the `INNER JOIN`
+already excludes dangling rows. What (P) adds is ~15k **self-alias** rows
+(`B.S03` is an alias for `B.S03`) that identify nothing, plus a rewrite of
+every view and every `sample.uuid_feature = feature.uuid` join. (D) is the
+properly-normalised model, not the "lite" one. **This plan is written for (D);
+overrule in review if you want (P).**
 
 ## Evidence (measured against the live `monitoring.duckdb`, 2026-07-16)
 
@@ -72,6 +101,10 @@ Schema facts that shape the design:
   `virtual = FALSE` (no "not-a-real-place" precedent). This is why we do **not**
   mint placeholder features; unresolved data hangs off a dangling alias instead.
 - All consumer views `INNER JOIN feature` — the property that makes (D) cheap.
+  `v_measurement` also `INNER JOIN`s analyte *through* `lab_method`, so the
+  same dangling-hides-itself trick works for unknown analytes.
+- `lab_method.uuid_analyte` is **NOT NULL** with 0 dangling rows today; it is
+  already the analyte alias layer (360 methods → 245 analytes).
 - `sample` = 15,113 rows, `analysis` = 95,737; 14 views, 12 touching
   feature/sample.
 - 31 aliases map to >1 feature. Date (`date_end`) + site disambiguation
@@ -106,6 +139,35 @@ Schema facts that shape the design:
   `confirmed_by` alias.
 - **Review UX is bulk confirmation** — "here are N we guessed, say yes-to-all or
   all-except-this"; no per-feature clicking.
+
+## The API is the authority; the UI is a thin, deferred, swappable layer
+
+The deliverable of this plan is the **resolve API** — a small set of R
+functions that are the *only* thing that writes a resolution: validating,
+idempotent, bulk-capable, and recording provenance (`confirmed_by`,
+`change_log`). Get that right and the review UI becomes a cheap layer over it —
+swappable, and several can coexist. So **no UI is specified or built here**;
+the choice is explicitly deferred and does not gate the API.
+
+The discipline that keeps any UI honest: **the UI presents and executes; the
+human decides; the API records the human as `confirmed_by`.** A UI (including
+an LLM-driven one) may *propose* and may *call* the resolve functions, but it
+never confirms on its own — so no guess launders into ground truth regardless
+of which front-end is used.
+
+Front-ends of interest, in likely order (all post-API, none blocking):
+1. **Claude Code as review assistant** — zero-build (the resolve functions are
+   R); best fit for the judgment/shortlist task; the fastest way to *prove* the
+   flow on real items. (Review is human judgment, unlike ingestion, which stays
+   deterministic R — the reasons Claude was removed from ingestion do not apply
+   to review.)
+2. **A dedicated Claude skill** wrapping (1) into a repeatable "run the review"
+   workflow.
+3. **A Quarto review report** generated after each ingest: renders the queue
+   with context, each item embedding the exact resolve call — read-optimised,
+   resolve interactively.
+4. **A small Shiny app** if review becomes routine enough to want a standing,
+   click-driven, unattended-capable front-end.
 
 ## R-11.1 Schema: `feature_alias`
 
@@ -190,10 +252,11 @@ for its `alias_key`, `kind = "pending"`, `auto_assign = FALSE`), its file
 archived normally. A review item is still emitted — but as a **worklist entry
 over committed-but-dangling data**, not a commit gate.
 
-Scope: **only the feature-unknown case changes.** Other review kinds
-(`value_conflict`, `sample_datetime_mismatch`) keep their current
-held/needs-review behaviour — those are genuine contradictions, not "we don't
-know where this goes".
+Scope: **the feature-unknown and analyte-unknown cases flip to
+commit-everything** (analyte via R-11.9). The other three kinds —
+`value_conflict`, `sample_datetime_mismatch`, `unknown_unit` — keep their
+current held/needs-review behaviour: those are genuine contradictions or
+missing conversions, not "we know the number, just not where it goes".
 
 Criteria: a file with 19 clean rows + 1 unknown-feature row commits **all 20**
 (19 to features, 1 dangling) and archives — nothing is stranded; the dangling
@@ -264,7 +327,51 @@ table has proven itself); a dry-run mode prints the counts it would insert;
 runs against a **copy** with the operator reviewing counts before it ever
 touches the real DB.
 
+## R-11.9 Analyte track: the same inversion, on `lab_method`
+
+The unknown-analyte case is the feature case with **no new table** — the
+`lab_method` layer already exists (see Model). Three changes:
+
+**Schema.** `ensure_schema()` makes `lab_method.uuid_analyte` **nullable**
+(additive migration; A2/A7). No new table, no `analysis` column change.
+
+**Matching.** `.rc_lab_method_candidates()` already resolves
+`(analyte_raw, org, method_raw)` against `lab_method`; it is unchanged. What
+changes is what happens on a miss.
+
+**Commit-everything.** In the commit path, an analysis whose analyte did not
+resolve is committed pointing at a `lab_method` row **created or reused** from
+the file's `(name, org, method, rl_low, rl_high)` with `uuid_analyte = NULL`
+(reuse deduped by `(org, .rc_key(name), method)` so two files with the same
+unknown method share one dangling `lab_method`, not two). A review item
+(`kind = "unknown_analyte"`) is emitted as a worklist entry, not a commit gate.
+
+**Confirmation.** A public `confirm_analyte_methods(items, corrections,
+confirmed_by)` sets `lab_method.uuid_analyte` via the plan-09 mutation layer
+(`change_log` provenance). No propagation UPDATE is needed — analyses already
+point at the `lab_method`, so linking the method lands every analysis using it
+at once.
+
+Criteria: a file with an unknown analyte commits its analysis (dangling
+`lab_method`, `uuid_analyte = NULL`) and archives — nothing stranded; the
+analysis is absent from `v_measurement` until resolved; two files with the same
+unknown method reuse one `lab_method` row; re-ingesting the same bytes →
+`already_present` (idempotency); `confirm_analyte_methods()` resurfaces the
+analyses in `v_measurement` and is idempotent; after confirmation, the same
+incoming analyte auto-resolves and opens no review item; the review item names
+the lab method and any suggested analyte (analyte-name fuzzy match is
+suggestion-only, never auto-link). An audit for code assuming
+`lab_method.uuid_analyte` is non-null is part of this task.
+
 ## Open / deferred
+
+- **`sample_datetime_mismatch` may over-flag the legitimate multi-day case.**
+  Results tie to samples by `lab_sample_id` first (exact — multi-day sampling
+  is fine), falling back to feature-key only when a result has no
+  `lab_sample_id`. In that fallback, a feature sampled on several days matches
+  several sample rows with different dates and would false-flag. Verify whether
+  any adapter (crosstab?) emits result rows without a `lab_sample_id`; not in
+  this plan's scope (datetime stays a "must hold" kind), logged here.
 
 - **Replay of pre-plan-11 stranded rows.** This plan stops *new* stranding, but
   any rows already held by the old behaviour need a one-off re-ingest (the
