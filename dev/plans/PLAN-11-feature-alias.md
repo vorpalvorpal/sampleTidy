@@ -6,7 +6,8 @@ backlog readers), `tests/testthat/test-feature-alias.R` (new),
 `dev/migrations/001-alias-indirection.R` (new).
 **Amends:** `R/reconcile.R` (`.rc_key`, `.rc_load_registry`,
 `.rc_feature_candidates`, `.rc_resolve_features`, `.rc_resolve_analytes`,
-`.rc_resolve_units_values`, `.rc_find_existing`, `reconcile_event`),
+`.rc_resolve_units_values`, `.rc_method_preference`, `.rc_three_way`,
+`.rc_find_existing`, `.rc_proto_review`, `reconcile_event`),
 `R/commit.R` (`.ct_find_or_create_sample`, `.ct_resolve_samples`,
 `.ct_commit_analyses`, `commit_event`), `R/mutate.R` (allowlist),
 `tests/testthat/helper-db.R` (core DDL + seed), plus regression tests in
@@ -91,10 +92,19 @@ denormalisation.
 - **D5 — confirmation collisions abort unless `override = TRUE`** (user). A
   collision is *evidence the operator picked the wrong feature*, so the default
   is to refuse and report, not to merge silently. See R-11.10.
-- **D6 — a row that is feature/analyte-dangling AND hits a "must hold" kind**
+- **D6 — a row that is feature-dangling AND hits a "must hold" kind**
   (`unknown_unit`, `value_conflict`, `sample_datetime_mismatch`) **is held**, as
   today (user). Commit-everything covers "we know the number, just not where it
   goes" — not "we don't trust the number".
+  **Restated after cold review (C9):** the rule binds on **feature**-pending
+  rows only. A feature-pending row still has a known analyte, so
+  `.rc_resolve_units_values()` evaluates its units and drops it on failure →
+  held, for free, with no new code. An **analyte**-pending row never evaluates
+  units at all (R-11.6), so `unknown_unit` *cannot fire* for it — the D6 ×
+  analyte-pending cell is empty, not a contradiction. The earlier wording
+  ("feature/analyte-dangling") implied a conflict with R-11.6's "a pending row
+  is not skipped for an unconvertible unit". There is none; they address
+  different rows.
 - **D7 — `analysis.units_raw` is added** (orchestrator; flagged for override).
   Forced: see R-11.2. Units live *only* on `analyte.units`; a dangling analysis
   has no analyte, so its value cannot be converted and its reported units have
@@ -103,18 +113,69 @@ denormalisation.
 - **D8 — reconcile stays read-only** (orchestrator, from A32). Reconcile decides
   *status*; **commit** creates the pending alias / dangling `lab_method` rows
   through the mutation layer. The draft blurred this.
+  **Upheld against cold review (orchestrator, 2026-07-17).** The review found
+  three consumers needing the alias's identity at reconcile time (review payload,
+  `.rc_find_existing`, `.rc_method_preference`) and read that as evidence D8 is
+  wrong. It is not. The actual defect was keying those consumers on a
+  **surrogate uuid that does not exist yet** instead of on the **natural key that
+  does** (`alias_key`; `(organisation, .rc_key(name), .rc_key(method))`). D8
+  stands; R-11.5a, R-11.7 and R-11.9 below are re-specified around the natural
+  key. Every fix is a `SELECT`, so A32 holds.
+- **D9 — site-narrowing is deferred out of this plan** (orchestrator, from cold
+  review C1/PCR-1; **flagged for user override** — it edits a binding domain
+  rule). Narrowing step (3) "if the file's site is known, drop features not at
+  that site" has **no input**: `R/ir.R` has no site field, `reconcile_event()`
+  calls `.rc_resolve_features(active, registry, event$work_order)` — three args
+  (`R/reconcile.R:637`) — and only 2 of the 3 adapter families could even supply
+  one (ESdat has no site source). Plumbing it through means amending `R/ir.R`
+  plus plans 03–06's files: an undeclared cross-plan ownership conflict.
+  Measured cost of deferring: site resolves **3 of 31** ambiguous aliases; those
+  3 now go to review instead of auto-assigning. That is the **safe** direction —
+  it produces no wrong assignment, only more review — and re-adding site later
+  is purely additive. **Narrowing in this plan is `date_end` only.**
+- **D10 — the CAS-hit (`known_analyte_no_method`) path stays held; explicit
+  carve-out** (orchestrator, from cold review C10; **flagged for user
+  override**). `R/reconcile.R:196-201` sets `uuid_analyte` from a CAS match with
+  `status = "cas"`, which is not in `hit_idx` (`:204`), so the row is dropped to
+  review — it strands today and continues to. This sits awkwardly beside the
+  plan's headline that unknown analyte now commits, so it is pinned rather than
+  left implicit. Rationale for holding: a CAS hit knows the *analyte* but not the
+  *method*, so materialising it would auto-create a **resolved** `lab_method`
+  (`uuid_analyte` set) — exactly what A6 forbids, and not what A54 licenses
+  (which is *dangling* rows only). Committing it dangling instead would discard
+  the CAS evidence. Either direction is a real design choice; the status quo is
+  the conservative one. **A test pins that a CAS-hit row is held**, so the
+  carve-out cannot rot silently. Revisit alongside the prefix-map/suggestion
+  work.
 
-## Evidence (measured against the live `monitoring.duckdb`, duckdb 1.4.1)
+## Evidence (measured against `monitoring.duckdb`, duckdb 1.4.1)
 
-Verified directly this session (re-check before relying on any of it):
+**Which DB.** `st_config("live_db")`
+(`~/Library/Application Support/org.R-project.R/R/sampleTidy/monitoring.duckdb`)
+**does not exist on this machine.** The numbers below were measured against
+`/Users/rjs/Documents/dashboard/data/monitoring.duckdb`, re-verified in cold
+review (2026-07-17); `/Users/rjs/Documents/leachatetools/test data/monitoring.duckdb`
+is a third copy. Row counts agree across feature/sample/analysis/lab_method, so
+it is the same lineage. **Name the absolute path when quoting any of this** — the
+ambiguity cost the reviewer real time.
+
+Verified directly (re-check before relying on any of it):
 
 - `v_measurement` is `analysis INNER JOIN sample INNER JOIN feature INNER JOIN
   lab_method INNER JOIN analyte`. The `v_measurement_*` family is identical
   through `v_feature_*`/`v_analyte_*`. **Dangling rows auto-hide.**
-- `feature` = 894, `sample` = 15,113, `analysis` = 95,737, `lab_method` = 360 →
-  245 analytes, 14 views.
+- `feature` = 894, `sample` = 15,113, `analysis` = 95,737, **`lab_method` = 365**
+  → **247** analytes, **60** views. (Corrected in cold review: the draft said
+  `lab_method` = 360 here and 365 below, and 245/14 for analytes/views. **Do not
+  encode any of these as test constants** except the 894 of R-11.3, which is
+  pinned deliberately.)
 - `sample.uuid_feature` is **NOT NULL** with a **FK → feature(uuid)**.
   `lab_method.uuid_analyte` is **NOT NULL** with 0 dangling rows.
+- **`feature` has no `virtual` column at all** (the draft's "all 894 rows are
+  `virtual = FALSE`" was false; CONTRACT's schema block lists it wrongly too, and
+  `helper-db.R`'s test DDL *does* have one). The "no provisional features"
+  argument is unaffected — it rests on `name`/`site`/`lon`/`lat` being NOT NULL,
+  which is verified.
 - **DuckDB 1.4.1 cannot drop a constraint at all** (`ALTER TABLE … DROP
   CONSTRAINT` → "No support for that ALTER TABLE option yet!"). Therefore
   neither `DROP COLUMN uuid_feature` nor `ALTER COLUMN … DROP NOT NULL` is
@@ -264,9 +325,24 @@ Criteria: `B.S01`, `B S01`, `BS01`, `b.s01`, `B..S01` share one key; **all 894
 real feature names still yield 894 distinct keys** — a pinned regression against
 a committed fixture of the real name list. This collision-free property is what
 makes the fold safe to auto-assign on, so it must **fail loudly** if a future
-name breaks it. NA/blank → NA (the A44 guard). Existing analyte/method matching
-that shares `.rc_key` is re-verified (its tests must stay green — the fold is
-now more aggressive on that side too, which is the risk).
+name breaks it. NA/blank → NA (the A44 guard).
+
+**The analyte/method side must be pinned identically (cold review C16).** The
+draft named this "the risk" and then pinned nothing for it. `.rc_key` is shared
+by `.rc_lab_method_candidates()` (`R/reconcile.R:159-166`) for **analyte name and
+method** matching, and stripping all punctuation could merge two genuinely
+different analytes or methods. Add the same regression, against the same kind of
+committed names-only fixture: the **247** real `analyte.name` values yield 247
+distinct keys, and the **365** real `(organisation, name, method)` triples stay
+distinct under the new key. "The existing tests stay green" is not sufficient —
+they were written against the old, weaker fold.
+
+**A44 guard, both halves (cold review C17).** `.rc_key` newly returns NA for
+`""`. Today `.rc_feature_candidates()` (`R/reconcile.R:71-79`) survives a blank
+*registry* name only via its trailing `cand[!is.na(cand)]` guard: indexing with
+an NA on the LHS yields an NA element — the exact A44 phantom-candidate defect.
+The new tibble-returning `.rc_feature_candidates()` must retain an equivalent
+guard (R-11.4).
 
 ## R-11.4 Alias matching + narrowing (`.rc_feature_candidates`, amended)
 
@@ -277,24 +353,41 @@ self-alias, a direct name match **is** an alias hit: the two-source lookup
 imported by R-11.13; `EPA`/`old` must never match).
 
 ```r
-.rc_feature_candidates(feature_raw, sample_date, site, registry)
+.rc_feature_candidates(feature_raw, sample_date, registry)
 # -> tibble(uuid_alias, uuid_feature) of surviving candidates
+# NOTE: no `site` argument — D9. The event carries no site.
 ```
 
 Procedure: key ← `.rc_key(feature_raw)`; NA → zero rows (A44 guard). Collect
-`feature_alias` rows with `alias_key == key` **and `auto_assign`**; resolve to
-distinct `uuid_feature`; if >1 distinct feature, narrow by `date_end` then site;
-assign iff exactly one distinct feature survives.
+`feature_alias` rows with `alias_key == key` **and `auto_assign`**; **drop rows
+with `is.na(uuid_alias)`** (the A44 registry-row guard, C17); resolve to distinct
+`uuid_feature`; if >1 distinct feature, narrow by **`date_end` only** (D9 —
+site-narrowing is deferred); assign iff exactly one distinct feature survives.
 
 Note: several aliases may survive pointing at the **same** feature — that is a
 hit, not an ambiguity. Ambiguity is >1 distinct *feature*.
 
+**Ordering constraint (cold review C19).** This section removes the
+`feature_mask` lookup (`R/reconcile.R:76`) on the grounds that its `long` names
+are imported by the migration's step 5. That makes R-11.13 step 5 a **hard
+prerequisite** for running R-11.4 against the live DB: land this without the
+import and every live `mask_long` match regresses to `unknown`. The test suite is
+unaffected (`helper-db.R` seeds aliases directly). See R-11.13's restated
+separability.
+
 Criteria: one surviving feature → assign (via self-alias or a resolved alias);
-zero → `unknown`; >1 distinct feature after narrowing → `ambiguous`; the A44 NA
-guard holds; a re-drilled well's old name (`B.G005`) resolves to the live
-`B.G005`; a reused code with two live same-site features stays `ambiguous`; a
-reused code where one candidate is defunct at `sample_date` auto-resolves to the
-live one; `auto_assign = FALSE` aliases never enter the candidate set.
+zero → `unknown`; >1 distinct feature after `date_end` narrowing → `ambiguous`;
+**both** A44 guards hold (NA key → zero rows; NA registry row → not a candidate);
+a re-drilled well's old name resolves to the live feature; a reused code with two
+live features stays `ambiguous`; a reused code where one candidate is defunct at
+`sample_date` auto-resolves to the live one; `auto_assign = FALSE` aliases never
+enter the candidate set.
+
+**Fixture-naming note (test authors, C21).** Real names in this plan's criteria
+(`B.G005`, `B.S03`, `B.S04`, `B..So3`) are **illustrative**, not load-bearing —
+encode them with the synthetic fixture equivalents from the Fixtures section
+(`f-0003`, `bs03alt`, …). A3 forbids real data in fixtures; R-11.3's names-only
+list is the single sanctioned exception.
 
 ## R-11.5 Reconciler: the funnel becomes a conveyor (features)
 
@@ -325,6 +418,76 @@ still holds (every input row lands in exactly one of clean/review-held/skipped);
 **D6:** a row that is feature-pending *and* fails units/value/datetime is
 **held**, not committed — pinned by a test that combines the two.
 
+## R-11.5a Reconcile-side lookup of *existing* pending rows (new; cold review C3)
+
+**This section closes the plan's one genuine design hole.** Without it a dangling
+row can never dedup, so every re-ingest of the same measurement duplicates it —
+and the plan-10 idempotency gate would fail.
+
+The hole: `.rc_find_existing()` runs *inside* reconcile (`R/reconcile.R:527`),
+but the draft created the alias and the dangling `lab_method` at **commit**
+(D8/R-11.8). So at match time a pending row has `uuid_feature_alias = NA` **and**
+`uuid_lab = NA`, and `= NULL` never matches — R-11.7's "match on
+`s.uuid_feature_alias` directly" matches nothing. Dropping the `lm.uuid_analyte`
+clause (A53) does not rescue the analyte side either, because `a.uuid_lab = ?` is
+*itself* NA for an analyte-pending row.
+
+**The fix is a natural-key lookup, not a relocation of D8.** Reconcile does not
+need to *create* the alias; it only needs to know whether one already exists.
+That is a `SELECT`, so A32/D8 hold unchanged.
+
+`.rc_load_registry()` already loads `feature_alias` (R-11.4) and `lab_method`.
+For each pending row, resolve the surrogate from the natural key **against the
+registry already in memory**:
+- feature-pending → the `feature_alias` row with `alias_key == .rc_key(feature_raw)`
+  **and `uuid_feature IS NULL`**. Among *pending* aliases that pair is unique
+  (R-11.1's upsert guarantees it), so this is a well-defined lookup even though
+  `alias_key` is not globally unique.
+- analyte-pending → the `lab_method` row with `uuid_analyte IS NULL` and matching
+  `(organisation, .rc_key(name), .rc_key(method))`.
+
+Found → set `uuid_feature_alias` / `uuid_lab` from it and **keep `*_pending =
+TRUE`** (the row is still unresolved; only its *identity* is now known). R-11.8's
+find-or-create then finds the same row and is a **no-op** — the two use the same
+key by construction.
+Not found → the surrogate stays NA, which is **correct**: on a first sighting
+there is nothing in the DB to match against, so `.rc_find_existing()` returning
+"no match" is the right answer, not a bug. R-11.8 creates it.
+
+**The key must be identical on both sides or this silently breaks.** If reconcile
+looks up by `.rc_key(method)` and commit creates by raw `method`, every run
+creates a fresh dangling row and nothing ever dedups. Pinned in R-11.8(e).
+
+Criteria: a dangling measurement re-ingested **from a different file** (so hash
+dedup cannot mask it) resolves to the same alias and same `lab_method`, matches
+itself, and is `already_present` — **not** duplicated; a two-run idempotency test
+over an unknown-feature *and* an unknown-analyte file leaves row counts unchanged
+on the second run; a *first* sighting correctly finds nothing and commits one new
+alias; the lookup issues **no writes** (pinned by the R-9.1 direct-write lint plus
+a `db_transaction` spy asserting reconcile writes nothing).
+
+## R-11.5b `.rc_method_preference` re-keying (cold review C4)
+
+**Not in the draft's Amends list, and it breaks silently — the worst failure mode
+in this plan.** `R/reconcile.R:386` keys on
+`paste(rows$uuid_feature, as.character(rows$sample_date), rows$uuid_analyte, sep = "||")`.
+Once R-11.2 drops `uuid_feature`, `rows$uuid_feature` is `NULL`, and `paste()`
+recycles a zero-length argument to `""` **rather than erroring** — so the key
+silently loses its feature component and R-8.6 deduplicates rows from
+**different features** against each other as `method_duplicate`. That is
+undetectable data loss, not a crash.
+
+Re-key on the **resolved feature** where known, and the **alias uuid** where
+pending — the same resolved/pending split as R-11.7, deliberately, so there is
+one rule to remember. Analyte-pending rows (`uuid_analyte = NA`) must be
+**excluded from the dedup entirely**: they would otherwise all collapse into one
+bogus group keyed on NA.
+
+Criteria: two rows for *different* features on the same date with the same
+analyte are **never** method-duplicates (a pinned regression — this is the bug
+that would otherwise ship silently); two analyte-pending rows never dedup against
+each other; the existing R-8.6 tests stay green.
+
 ## R-11.6 Reconciler: dangling analytes
 
 `.rc_resolve_analytes()` likewise keeps misses: `uuid_lab = NA`,
@@ -333,14 +496,26 @@ unchanged; only the miss path changes.
 
 `.rc_resolve_units_values()` **must not attempt conversion** for
 `analyte_pending` rows — there is no analyte, so no canonical units exist. It
-passes `value` through unconverted and leaves `units_raw` set (R-11.2). The
-`known_analyte_no_method` (CAS-hit) path is unchanged.
+passes `value` through unconverted and leaves `units_raw` set (R-11.2).
+
+**The CAS-hit path stays held — explicit carve-out, D10 (cold review C10).** The
+draft said "the `known_analyte_no_method` (CAS-hit) path is unchanged", which a
+test author cannot act on: `status = "cas"` (`R/reconcile.R:196-201`) is *not* in
+`hit_idx` (`:204`), so the row is dropped to review and **stranded** — the very
+thing this plan exists to stop. That is deliberate, not an oversight: a CAS hit
+identifies the *analyte* but not the *method*, so committing it would auto-create
+a **resolved** `lab_method`, which A6 forbids and A54 does not license (A54
+covers *dangling* rows only). Committing it dangling would throw away the CAS
+evidence. Held is the conservative choice; D10 records it as a real fork.
 
 Criteria: an unknown-analyte row reaches `clean` with `analyte_pending = TRUE`,
-`uuid_lab = NA`, unconverted `value`, and `units_raw` set; a resolved row is
-still converted exactly as today (all existing R-8.4 tests stay green); a
-pending row is **not** skipped for an unconvertible unit (that check belongs to
-resolved rows only).
+`uuid_lab = NA` (or the existing dangling `lab_method`'s uuid, per R-11.5a),
+unconverted `value`, and `units_raw` set; a resolved row is still converted
+exactly as today (all existing R-8.4 tests stay green); a pending row is **not**
+skipped for an unconvertible unit (that check belongs to resolved rows only —
+see D6's restatement, which shows this is not the contradiction it looks like);
+**a CAS-hit row is still held and does not reach `clean` — pinned, so the D10
+carve-out cannot rot silently.**
 
 ## R-11.7 Three-way match with dangling rows (`.rc_find_existing`)
 
