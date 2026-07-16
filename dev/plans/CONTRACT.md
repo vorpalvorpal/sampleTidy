@@ -19,6 +19,11 @@ test disagree, tests win pending orchestrator adjudication. Design authority:
 | 08 | `R/reconcile.R` |
 | 09 | `R/mutate.R`, `R/commit.R`, `R/archive.R`, `R/snapshot.R`, `R/ingest.R` |
 | 10 | `tests/testthat/test-e2e-*.R`, `tests/testthat/helper-corpus.R` |
+| 11 | `R/feature-alias.R`, `R/pending.R`, `dev/migrations/001-alias-indirection.R`, `tests/testthat/test-feature-alias.R`, `tests/testthat/test-pending.R`, `tests/testthat/helper-db.R` (A52) |
+
+**Cross-plan edits (A52).** Plan 11 amends `R/reconcile.R` (owned by 08) and
+`R/commit.R` / `R/mutate.R` (owned by 09). These are **adjudicated cross-plan
+edits, not ownership transfers** — 08 and 09 keep their files.
 
 Tests: `tests/testthat/test-<module>.R`, one per R file, named
 `"R-x.y: <criterion>"`. Fixtures: `tests/testthat/fixtures/<adapter>/…`.
@@ -35,8 +40,18 @@ ensure_schema(con)                        # idempotent migrations
 correct_value(uuid_analysis, new_value, reason, actor)
 add_feature(...); add_analyte(...); add_project(...)
 db_append(con, table, df, actor, reason); db_update(...); db_delete(...)
-review_queue(con, status = "open")        # read; resolution API post-MVP
+review_queue(con, status = "open")        # read
 snapshot_db(db, dest_dir); prune_snapshots(dest_dir, keep_days)
+
+# plan 11 — the resolve API (A55). This IS the resolution API; the earlier
+# "post-MVP" note on review_queue() is struck. No UI is specified or built:
+# the UI presents and executes, the human decides, the API records the human
+# as confirmed_by. An LLM-driven UI may propose, never confirm.
+confirm_feature_aliases(uuid_alias, uuid_feature, confirmed_by,
+                        override = FALSE, db = st_config("live_db"))
+confirm_analyte_methods(uuid_lab, uuid_analyte, confirmed_by,
+                        db = st_config("live_db"))
+pending_features(con); pending_analytes(con)   # dangling backlog readers
 ```
 
 Internal seams (not exported, stable for tests via `:::`):
@@ -69,10 +84,20 @@ analysis(uuid, uuid_sample, uuid_lab, value DOUBLE, value_chr, quantified BOOL,
          rl_low, rl_high, purpose, comments)            # 95,737 rows
 sample(uuid, uuid_feature, uuid_project, date TS, date_start TS, datetime TS,
        datetime_start TS, organisation, person, purpose, comments)  # 15,113
-feature(uuid, name, site, flow, matrix, …, geom_wkt, virtual)        # 894
+       # A48: uuid_feature is DROPPED and replaced by uuid_feature_alias.
+feature(uuid, name, site, flow, matrix, …, geom_wkt,
+        date_start DATE, date_end DATE)                              # 894
+       # CORRECTED 2026-07-17 (plan-11 cold review): this line previously listed
+       # a `virtual` column. The live table HAS NO `virtual` COLUMN — verified
+       # against information_schema. (helper-db.R's *test* DDL does declare one;
+       # that is test-only drift, not the live shape.) `date_start`/`date_end`
+       # DO exist live and were missing from this line; plan 11's date_end
+       # narrowing depends on them.
 analyte(uuid, name, units, conversion_constant, type, …, CAS)        # 247
 lab_method(uuid, uuid_analyte, name, method, organisation, rl_low, rl_high,
-           reported_as, api, uuid_project, uuid_feature, comments)   # 360
+           reported_as, api, uuid_project, uuid_feature, comments)   # 365
+       # CORRECTED 2026-07-17: 365, not 360. `reported_as` is NULL in all 365
+       # rows (dead). A48: uuid_analyte becomes NULLABLE.
 project(uuid, uuid_parent, uuid_root, uuid_project, name, type, purpose,
         date_start, date_end, regulated_by, cypher, site, value)     # 551
 asset(uuid, name, date, file_format, type, purpose, organisation, person,
@@ -104,7 +129,7 @@ for lab reports; `sample.organisation ∈ {ACIRL, Internal, ALS}`;
 - **A4** `NS` ("no sample") values are recorded skips with reason, never
   silent drops (deviation from old `cleanBDLvalues`).
 - **A5** File hash = SHA-256 (`digest::digest(file = TRUE, algo = "sha256")`).
-- **A6** Unknown feature/analyte/unit never auto-adds registry rows (old code
+- **A6** *(amended by A54 — read A54 with this.)* Unknown feature/analyte/unit never auto-adds registry rows (old code
   auto-added); always a `review_queue` item.
 - **A7** Migrations: additive-only, idempotent, recorded in `schema_version`.
 - **A8** MVP is synchronous, single-process `ingest_dir()`; no watcher.
@@ -430,6 +455,55 @@ for lab reports; `sample.organisation ∈ {ACIRL, Internal, ALS}`;
   `R CMD check` flags **any space** in a file name, and the anonymized real
   fixtures keep one deliberately (every real ESdat file has spaces). See the
   gate note below.
+
+- **A48..A55** (plan 11 — commit-everything / feature_alias indirection).
+  Landed 2026-07-17 after a cold fresh-eyes review of PLAN-11
+  (`dev/tdd-run/plan11-cold-review.md`). **Plan 11 is the detail; these are the
+  pinned points.**
+  - **A48** Model (P), full indirection. `sample.uuid_feature` is **dropped**;
+    `sample.uuid_feature_alias` → `feature_alias.uuid` (NOT NULL).
+    `feature_alias.uuid_feature` → `feature.uuid` is **NULLABLE** (NULL =
+    dangling). Every feature gets a **self-alias** (894, `kind = "self"`), so
+    there is no special case for "arrived correctly labelled". Resolution is one
+    single-row `UPDATE`. An alias name is **not unique** — identity is the
+    alias's own `uuid`; no DB uniqueness on `name`/`alias_key`.
+  - **A49** DuckDB 1.4.1 **cannot drop a constraint at all**
+    (`ALTER TABLE … DROP CONSTRAINT` → "No support for that ALTER TABLE option
+    yet!"), and dropping dependent views does not help. Core-schema changes to
+    `sample`/`lab_method` therefore need a **table rebuild**, cascading through
+    `analysis` via its FK graph.
+  - **A50** **A7 amended.** Plan 11's core-schema migration is **not**
+    additive-only and is **not** run by `ensure_schema()`, which stays
+    ops-tables-only. It is an **operator-run one-off** against a verified backup
+    (never invoked by package code).
+  - **A51** `analysis.units_raw` added. `analysis.value` is in canonical units
+    **iff** the row's `lab_method.uuid_analyte` is non-NULL; when dangling,
+    `value` is in `units_raw`. Safe **because** a dangling analysis is invisible
+    to every view (all INNER JOIN through `analyte`) — the invariant and the
+    visibility rule are the same rule.
+  - **A52** File-ownership: plan 11's row is in the partition table above;
+    `helper-db.R` is owned by plan 11; its edits to plans 08/09's files are
+    adjudicated cross-plan edits.
+  - **A53** `.rc_find_existing` drops its `lm.uuid_analyte = ?` clause as
+    redundant — `a.uuid_lab = ?` pins the `lab_method`, which determines its
+    analyte (verified, `R/reconcile.R:428-440`). A45's (feature, date, analyte,
+    method) key is **unchanged**.
+  - **A54** **A6 amended.** An unknown name **may** auto-create a **dangling**
+    `feature_alias` (`uuid_feature IS NULL`) or **dangling** `lab_method`
+    (`uuid_analyte IS NULL`), both `auto_assign = FALSE`; it may **never**
+    auto-create a `feature`, an `analyte`, or a **resolved** `lab_method`; the
+    `review_queue` item stays **mandatory**. A6's intent is preserved: a dangling
+    row is invisible to every view, cannot auto-assign, and asserts no identity —
+    it records the *question*, where the old code invented an *answer*. The
+    CAS-hit path is barred precisely because it would create a **resolved** row
+    (plan-11 D10).
+  - **A55** The pinned public-API block gains `confirm_feature_aliases()`,
+    `confirm_analyte_methods()`, `pending_features()`, `pending_analytes()`.
+    `review_queue()`'s "resolution API post-MVP" note is **struck** — this is
+    that API. The API is the authority; **no UI is specified or built**. A UI
+    (including an LLM-driven one) may propose and may call these functions, but
+    **never confirms on its own**: the human decides, the API records them as
+    `confirmed_by`. Guesses never launder into ground truth.
 
 ## Gates
 
