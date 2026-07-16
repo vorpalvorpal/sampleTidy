@@ -209,6 +209,12 @@ Verified directly (re-check before relying on any of it):
   candidates from `auto_assign` aliases; (2) drop features defunct at the
   sample's date (`date_end < sample_date`); (3) if the file's site is known,
   drop features not at that site; (4) exactly one survivor → assign, else review.
+  > **Step (3) is deferred out of plan 11 — see D9** (orchestrator, 2026-07-17;
+  > flagged for user override). The rule is recorded here as written and is not
+  > retracted; it is unimplementable *today* because no adapter puts a site on
+  > the event and `R/ir.R` has no field to carry one. Deferring costs 3 of 31
+  > ambiguous keys, which go to review instead — never a wrong assignment.
+  > Steps (1), (2) and (4) are implemented in full.
 - **Frequency ranks, never decides.** Worst real tie: `KBORE` → `K.MW08` 15× vs
   `K.MW10A` 14×.
 - **No fuzzy auto-assign** — real codes differ by one character (`B.S01` vs
@@ -231,11 +237,14 @@ call the resolve functions, but never confirms on its own.
 
 | producer | consumer | fields |
 |---|---|---|
-| `.rc_resolve_features` | `.rc_resolve_analytes` → `.rc_three_way` | `uuid_feature_alias` (chr, NA ⇒ pending), `feature_pending` (lgl), `feature_raw`, `alias_key` |
-| `.rc_resolve_analytes` | `.rc_resolve_units_values` | `uuid_lab` (chr, NA ⇒ pending), `analyte_pending` (lgl), `uuid_analyte` (chr, NA when pending), `analyte_raw`, `org`, `method_raw` |
+| `.rc_resolve_features` | `.rc_resolve_analytes` → `.rc_three_way` | `uuid_feature_alias` (chr; NA ⇒ pending **and no existing alias found** — R-11.5a may fill it while `feature_pending` stays TRUE), `feature_pending` (lgl), `feature_raw`, `alias_key` |
+| `.rc_resolve_analytes` | `.rc_resolve_units_values` | `uuid_lab` (chr; NA ⇒ pending **and none found** — R-11.5a as above), `analyte_pending` (lgl), `uuid_analyte` (chr, NA when pending), `analyte_raw`, `org`, `method_raw` |
+| `.rc_resolve_features` / `.rc_resolve_analytes` | `.rc_method_preference` | resolved `uuid_feature` **or** `uuid_feature_alias`, `sample_date`, `uuid_analyte`; analyte-pending rows excluded (R-11.5b) |
+| `reconcile_event` | `.ct_commit_review` | `source_hash` (chr) — a **new `.rc_proto_review()` column**, first of the group (R-11.9/C18) |
 | `.rc_resolve_units_values` | `.rc_three_way` | `value` (canonical **iff** `!analyte_pending`), `units_raw` (always), `rl_low` |
 | `reconcile_event` | `commit_event` | `clean` carries **all** of the above; dropping any one silently strands a dangling row |
 | `commit_event` R-11.8 | `.ct_resolve_samples` | `uuid_feature_alias` now **always non-NA** (pending materialised) |
+| `.ct_materialise_*` R-11.8 | `.ct_commit_review` | per-row alias / lab_method **uuid**, used to rewrite the review payload (`alias_uuid=<uuid>`) before it is written — the only point where row, review item and uuid coexist (C2) |
 | `confirm_feature_aliases` | `sample` | alias `uuid` → the samples pointing at it |
 | `confirm_analyte_methods` | `analysis` | `lab_method.uuid` → its analyses; `units_raw` → conversion |
 
@@ -524,20 +533,43 @@ lm.uuid_analyte = ? AND a.uuid_lab = ?`. Both key columns break on dangling rows
 (`= NULL` never matches), so every run would re-commit the same dangling
 measurement.
 
-Two changes:
+**`.rc_three_way()` is amended too (cold review C5).** It is the caller that
+passes `rows$uuid_feature[[i]]` / `rows$uuid_analyte[[i]]` into
+`.rc_find_existing()` (`R/reconcile.R:527-530`); the draft listed neither. Its
+new argument list is pinned here: it passes `uuid_feature_alias`,
+`feature_pending`, `sample_date`, `sample_datetime`, `uuid_lab` — and **no
+`uuid_analyte`** (dropped per change 2 below). Amending `.rc_find_existing`
+alone would leave the call site broken.
+
+Three changes:
 1. **Feature side** — join through the alias. Resolved: match any sample whose
    alias resolves to the same `uuid_feature` (so two *different* labels for one
-   feature share one sample). Pending: match on `s.uuid_feature_alias` directly.
+   feature share one sample). Pending: match on `s.uuid_feature_alias` directly —
+   which is now meaningful, because R-11.5a has already resolved it from the
+   natural key when a pending alias exists. When it is still NA (a genuine first
+   sighting) the match correctly finds nothing.
 2. **Analyte side** — **drop the `lm.uuid_analyte = ?` clause.** It is redundant:
    `a.uuid_lab = ?` pins the `lab_method` row, which determines its analyte. It
    is also the clause that breaks for a dangling method. Dropping it preserves
    A45's (feature, date, analyte, method) key exactly, because method ⇒ analyte.
+   *Verified independently in cold review* (`R/reconcile.R:428-440` — the query
+   joins `lab_method lm ON lm.uuid = a.uuid_lab`, so `a.uuid_lab = ?`
+   functionally determines `lm.uuid_analyte`). A53 is sound.
+3. **Both sides use `IS NULL`, never `= NULL`.** For a still-unmatched pending
+   row the predicate must be `s.uuid_feature_alias IS NULL` / `a.uuid_lab IS
+   NULL` semantics, not an equality against NA. This is the same silent
+   never-matches footgun as R-11.8(a); it is called out in both places on
+   purpose.
 
 Criteria: A45's pinned regression (ACIRL field EC lm-0006 vs ALS lab EC lm-0003
 → two rows, not a conflict) stays green — this is the test that proves the
 dropped clause was redundant; a dangling measurement re-ingested from a
-**different file** matches itself and is `already_present`, not duplicated; a
-resolved sample is reused across two different incoming labels for one feature.
+**different file** matches itself and is `already_present`, not duplicated
+(this requires R-11.5a — without it the criterion is unreachable, and the
+"same bytes → already_present" test is a **false green** because hash dedup
+catches it upstream before reconcile ever runs; the test must therefore use
+*different bytes* carrying the *same* measurement); a resolved sample is reused
+across two different incoming labels for one feature.
 
 ## R-11.8 Commit: materialise pending aliases and dangling methods
 
@@ -546,17 +578,65 @@ writes are here, through the mutation layer, never raw `dbExecute`):
 
 ```r
 .ct_materialise_feature_aliases(con, clean, event, actor, reason)
-# for rows with feature_pending: find-or-create a feature_alias by alias_key with
-# uuid_feature = NULL, kind = "pending", auto_assign = FALSE, n_seen incremented,
-# first_seen/last_seen/source_hash set. Returns clean with uuid_feature_alias filled.
+# for rows with feature_pending: find-or-create a feature_alias, keyed
+# `alias_key = ? AND uuid_feature IS NULL` (see (a)), with uuid_feature = NULL,
+# kind = "pending", auto_assign = FALSE. Returns clean with uuid_feature_alias
+# filled AND an alias uuid per row (for the R-11.9 payload rewrite).
 
 .ct_materialise_lab_methods(con, clean, event, actor, reason)
 # for rows with analyte_pending: find-or-create a lab_method from
 # (name = analyte_raw, organisation = org, method = method_raw, rl_low, rl_high)
-# with uuid_analyte = NULL. Dedup by (organisation, .rc_key(name), method) so two
-# files with the same unknown method share ONE dangling lab_method.
-# Returns clean with uuid_lab filled.
+# with uuid_analyte = NULL. Dedup by (organisation, .rc_key(name), .rc_key(method))
+# AND uuid_analyte IS NULL — see (e). Returns clean with uuid_lab filled.
 ```
+
+**Contract pins (cold review C13) — a literal writer would otherwise guess all
+five, and (a) and (e) are silent-corruption bugs, not style choices:**
+
+- **(a) The find key is `uuid_feature IS NULL AND alias_key = ?`.** Never
+  `uuid_feature = NULL` — in SQL that matches *nothing*, always, so every file
+  would create a fresh pending alias and the "two files reuse ONE pending alias"
+  criterion would fail while every individual test still looked green. This is
+  the same footgun as R-11.7(3).
+- **(b) `name` is the raw `feature_raw` string of the group's first row.** A
+  group shares one `alias_key` but may carry several raw spellings (`B..So3`,
+  `B. So3`); `alias_key` is the identity, `name` is provenance, so first-wins is
+  arbitrary-but-deterministic and that is sufficient. Say so rather than leaving
+  the writer to invent a rule.
+- **(c) `n_seen` has exactly one unit: +1 per `sample` row that newly points at
+  the alias.** The draft used four different units in four places (R-11.1 "a
+  re-seen alias increments"; R-11.8 "per referencing sample"; migration step 4
+  "per label sighting"; step 3 seeding self-aliases at 0 while the Why describes
+  a self-alias's `n_seen` as the 131× correct-label count). **Reconciled:** at
+  *ingest*, +1 per newly-pointing sample. At *migration*, +1 per historical
+  sighting (step 4) — which is the same quantity counted retrospectively, and is
+  why step 3's self-aliases seed at 0 and are then incremented by the step-4
+  fold of self-name entries. The Why's 131× is the post-step-4 value, not a
+  seeded one.
+- **(d) `first_seen` / `last_seen` are `Sys.time()`** at materialisation, not the
+  event's file date. They record when *we* saw the label, which is what
+  `pending_features()` sorts on; the file date is already on the sample.
+- **(e) `lab_method` dedup uses `.rc_key(method)`, not raw `method`.**
+  `.rc_lab_method_candidates()` (`R/reconcile.R:161`) already keys on
+  `.rc_key(cand$method)`; if commit creates by a raw key while reconcile looks up
+  by a folded one, **the row created by one run is invisible to the next**, so
+  every run makes a new dangling method and nothing ever dedups. R-11.5a's lookup
+  and this create **must use the identical expression** — that is the whole
+  contract between them.
+
+**Payload enrichment happens here, not at reconcile (cold review C2).** R-11.9
+needs the alias uuid in the review payload, but reconcile builds its review
+tibble before the alias exists (D8). Resolution: both `.ct_materialise_*`
+functions return a per-row surrogate uuid, and `commit_event()` **rewrites
+`resolved$review`'s payloads with it before calling `.ct_commit_review()`**. This
+is the only place where the row, its review item, and its alias uuid all exist at
+once.
+
+**Concurrency (cold review C22).** The find-or-create is a code-side upsert with
+no DB uniqueness (R-11.1 — the domain forbids a unique constraint on
+`name`/`alias_key`). It runs inside `commit_event()`'s existing
+`db_transaction()` (A40), and **A8 (MVP is single-process) is what makes that
+sufficient.** If A8 is ever relaxed, this is the first thing that breaks.
 
 `.ct_find_or_create_sample()` / `.ct_resolve_samples()` re-key from
 `uuid_feature` to `uuid_feature_alias` per R-11.7's rule (resolved → match by
@@ -567,10 +647,23 @@ Criteria: a file with 19 clean rows + 1 unknown-feature row commits **all 20**
 (19 resolved, 1 dangling) and archives — nothing stranded; the dangling row is
 absent from the `v_measurement`-equivalent join until resolved; the
 `ingest_file` state is terminal (`archived`) legitimately, because the data
-*did* land; re-ingesting the same bytes → `already_present` (a pinned two-run
-idempotency test); two files with the same unknown method reuse **one**
-`lab_method` row; two files with the same unknown feature reuse **one** pending
-alias; `n_seen` increments per referencing sample.
+*did* land; re-ingesting the same measurement **from different bytes** →
+`already_present` (a pinned two-run idempotency test — see R-11.7's false-green
+note: same-bytes is caught by hash dedup upstream and proves nothing); two files
+with the same unknown method reuse **one** `lab_method` row; two files with the
+same unknown feature reuse **one** pending alias; `n_seen` increments per
+referencing sample (unit (c)).
+
+**No change needed to `.ct_set_file_states()` — but an existing assertion flips
+(cold review C20).** `R/commit.R:331` already computes `needs_review_only <-
+n_review > 0 && n_clean == 0`, and commit-everything makes `n_clean > 0`, so the
+"archives legitimately" criterion falls out for free. The unflagged corollary: an
+event whose rows are **all** feature-unknown now flips `needs_review` →
+`archived`. Existing `needs_review` assertions in `test-commit.R` and the plan-10
+e2e tests **will go red, and that is this plan being right.** Update those
+assertions to the new expectation; do **not** weaken them, and do not let a
+worker "fix" the code to keep them green — that is exactly the [NO SILENT
+DEVIATION] trap this note exists to pre-empt.
 
 ## R-11.9 Review items: guesses and shortlists
 
@@ -587,10 +680,18 @@ Two tiers, for bulk confirmation:
 - **no confident guess**: optional shortlist ranked by `n_seen` (a ranking,
   never a decision).
 
-The payload gains the **alias `uuid`** (so confirmation can target it) and
-`source_hash`. Note the reconcile review tibble has **no `source_hash` column**,
-so `.ct_commit_review()` currently writes `source_hash = NA`; this plan adds
-both fields to the payload.
+**The alias uuid and `source_hash` are not the same kind of thing (cold review
+C18) — the draft conflated them.** They travel by different routes:
+- **`source_hash` is a review *column*.** `.ct_commit_review()`
+  (`R/commit.R:298`) **already reads** `review$source_hash` if the column is
+  present, so **no commit.R change is needed** — the missing piece is purely
+  reconcile-side: add `source_hash` to `.rc_proto_review()`
+  (`R/reconcile.R:38-40`), populated with the **first `source_hash` of the
+  group**. (Grouping means one review row can span several source hashes; first
+  is deterministic and sufficient for provenance.)
+- **The alias uuid goes in the payload *string***, as `alias_uuid=<uuid>`, and is
+  written **at commit** by the R-11.8 payload rewrite — it does not exist at
+  reconcile time (D8).
 
 Criteria: a genuinely novel string yields an item with **no** suggestions and
 says so (never a fabricated guess); grouping unchanged (one item per normalised
@@ -617,14 +718,36 @@ mutation layer (A32/A40) with `change_log` provenance:
      uuids, and writing **nothing** — a collision usually means the operator
      picked the wrong feature;
    - `override = TRUE` → proceed to (3) and (4);
-3. `db_update` the alias: `uuid_feature`, `kind = "transcription_error"`,
-   `confirmed_by`, `auto_assign = TRUE`;
+3. `db_update` the alias: `uuid_feature`, `confirmed_by`, `auto_assign = TRUE`,
+   and `kind` **only if the alias's current kind is `"pending"`** → then
+   `"transcription_error"`; **otherwise leave `kind` untouched** (cold review
+   C15). The draft set `transcription_error` unconditionally, which would relabel
+   a confirmed `descriptive` (`B.BORE`), `mask_long`, or `historical_code` alias
+   as a transcription error — destroying the classification the migration works
+   to assign, and collapsing the `old ≠ misspelling` distinction the domain
+   treats as load-bearing.
 4. **merge** each collision: re-point the newly-resolved sample's analyses onto
-   the pre-existing sample and delete the emptied sample. Per analysis, if
-   (feature, date, analyte, method) is already occupied — A45's key — compare by
-   **A14**: equal → drop the duplicate analysis and log a `provenance`
-   `change_log` row (`already_present` semantics); different → **leave the
-   existing row untouched** and open a `value_conflict` review item.
+   the pre-existing sample, then delete the emptied sample. Pins (cold review
+   C14 — the draft under-specified all three, and the last was a real bug):
+   - **Winner = the sample NOT reached through the confirmed alias.** The
+     pre-existing sample is the one whose identity was never in doubt; the
+     newly-resolved one is the arrival. Deterministic even when both were created
+     by plan-11 commits.
+   - **The loser's differing `organisation`/`person`/`datetime` are discarded,
+     and that is recorded** — log a `provenance` `change_log` row naming the
+     loser's uuid and the discarded values, so the merge is reconstructible. Do
+     not silently drop them.
+   - Per analysis, if (feature, date, analyte, method) is already occupied —
+     A45's key — compare by **A14**: equal → drop the duplicate analysis and log
+     a `provenance` `change_log` row (`already_present` semantics); different →
+     **leave the existing row's value untouched**, but **still re-point the
+     duplicate analysis onto the winner sample** and open a `value_conflict`
+     review item naming **both** analysis uuids. *The draft said "leave the
+     existing row untouched" and deleted the emptied sample in the same step —
+     which would **orphan** the conflicting analysis on a deleted sample.* Two
+     analyses on one sample with the same key is a state the DB permits and the
+     conflict item exists to resolve; an orphan is not.
+   - **Delete the emptied sample only after every analysis has moved.**
 
 Criteria: confirming resurfaces the previously-dangling samples in the
 `v_measurement`-equivalent join (a pinned before/after test); confirming the
@@ -761,22 +884,60 @@ in steps 3–10 leaves the DB unchanged.
    interrupted migration. Required even after a clean rehearsal, because the real
    DB is not the copy — it holds rows the rehearsal never saw.
 
-**This section is separable.** Its only coupling to R-11.1–R-11.12 is the target
-schema. It can be built and reviewed as its own plan if that is preferable — the
-package's own tests never run it (they build the new shape directly via
-`helper-db.R`).
+**This section is separable from the *test suite*, but is a hard prerequisite for
+the *live DB* — the draft's "only coupling is the target schema" was wrong (cold
+review C19).**
+
+True and verified: the package's own tests never run the migration
+(`helper-db.R` builds the DDL directly), so R-11.1–R-11.12 can be built, tested
+and gated green without it. It can be built and reviewed as its own plan.
+
+But two real couplings the draft glossed:
+- **(a) R-11.4 removes the `feature_mask` lookup** (`R/reconcile.R:76`) on the
+  explicit grounds that "its `long` names are imported by R-11.13". Land
+  R-11.1–11.12 without **step 5** and every live `mask_long` match **regresses to
+  `unknown`**. That is a hard ordering dependency, not a shared schema.
+- **(b) Without the migration the live DB has no `feature_alias` and no
+  self-aliases**, so `.rc_feature_candidates()` returns zero rows for
+  *everything* — **100% of live data would commit dangling.**
+
+**Therefore, pinned: R-11.1–R-11.12 must not be run against `monitoring.duckdb`
+until this migration has landed.** Green tests are not evidence that it is safe
+to point the new code at the live DB. If the migration ships as its own plan,
+this constraint ships with it.
 
 ## Fixtures
 
 Extend `seed_db()` (`helper-db.R`) to the new shape. Seeded features keep their
-existing uuids; each gains a self-alias. Add:
+existing uuids; each gains a self-alias.
+
+**First, the test `feature` DDL must gain `date_start DATE, date_end DATE` (cold
+review C11).** `helper-db.R:15-24` declares `feature(uuid, name, site, flow,
+matrix, geom_wkt, virtual)` — **no `date_end`**. The live table *does* have
+`date_start`/`date_end` (verified); the test DDL is a subset. Without this column
+the "defunct feature" fixture below and R-11.4's entire `date_end`-narrowing
+criterion are **unreachable** — and since D9 makes `date_end` the *only*
+narrowing rule left, that would silently reduce R-11.4's narrowing coverage to
+zero. The draft never said to add it.
+
+Add:
 - a resolved alias (`bs03alt` → `f-0003`) for the two-labels-one-sample test;
 - an **ambiguous** key: two aliases with one `alias_key` → two live same-site
   features (for R-11.4 and the R-11.10 ambiguity nuance);
 - a same-key pair where one feature is **defunct** at the fixture date
   (`date_end` set) → the narrowing auto-resolve case;
 - an `auto_assign = FALSE` alias (never a candidate; a suggestion source);
-- a dangling `lab_method` + analysis with `units_raw` (for R-11.11 conversion).
+- a dangling `lab_method` + analysis with `units_raw` (for R-11.11 conversion);
+- an **existing pending alias** and an **existing dangling `lab_method`** that a
+  second event re-encounters — the R-11.5a natural-key-lookup fixtures. Without
+  these, R-11.5a's dedup path is never exercised and the idempotency hole
+  reopens untested.
+
+**Constructed inline, not seeded (cold review C12):** the D6 pin needs a row that
+is feature-unknown **and** carries an unconvertible unit. `test-reconcile.R`
+builds its result rows in-test, so this is reachable — build it there rather than
+seeding it. Stated because the draft's criterion had no fixture and a writer
+would have assumed one was missing.
 
 **A real-name regression fixture** for R-11.3: a committed newline-delimited list
 of the 894 real `feature.name` values (names only — no data; permitted, they are
@@ -808,9 +969,39 @@ pinned against it.
 - **A51** — `analysis.units_raw` added (D7); `analysis.value` is canonical iff
   the row's `lab_method.uuid_analyte` is non-NULL.
 - **A52** — `helper-db.R` is owned by plan 11 (the CONTRACT partition had no
-  owner for it).
+  owner for it). **Extended (cold review C8):** the partition table has **no
+  plan-11 row at all**. A52 adds one, covering `R/feature-alias.R`, `R/pending.R`,
+  `dev/migrations/001-alias-indirection.R`, `test-feature-alias.R`,
+  `test-pending.R`, `helper-db.R` — and records that plan 11's amendments to
+  `R/reconcile.R` (owned by plan 08) and `R/commit.R` / `R/mutate.R` (owned by
+  plan 09) are **adjudicated cross-plan edits**, not ownership transfers.
 - **A53** — `.rc_find_existing` drops its redundant `lm.uuid_analyte` clause
-  (method ⇒ analyte); A45's key is unchanged.
+  (method ⇒ analyte); A45's key is unchanged. *Independently verified in cold
+  review against `R/reconcile.R:428-440`.*
+- **A54** — **A6 amended** (cold review C6 — the conflict the draft never
+  declared). A6 pins: *"Unknown feature/analyte/unit never auto-adds registry
+  rows (old code auto-added); always a `review_queue` item."*
+  `.ct_materialise_lab_methods()` auto-inserts into `lab_method`, which **is** a
+  registry table (`.rc_load_registry()`, `R/reconcile.R:16-24`), for exactly the
+  unknown-analyte case A6 names. A48–A53 do not cover it.
+  **A54:** an unknown name may auto-create a **dangling** `feature_alias`
+  (`uuid_feature IS NULL`) or a **dangling** `lab_method` (`uuid_analyte IS
+  NULL`), both with `auto_assign = FALSE`; it may **never** auto-create a
+  `feature`, an `analyte`, or a **resolved** `lab_method`; and the `review_queue`
+  item remains **mandatory**, unchanged.
+  **Why this preserves A6's intent rather than gutting it:** A6 exists to stop an
+  unknown name laundering itself into ground truth. A dangling row is the
+  opposite of ground truth — it asserts *no* identity, it is invisible to
+  `v_measurement` and every EPA report (the INNER JOIN auto-hide), it cannot
+  auto-assign, and it still raises its review item. What A6 forbade was the old
+  code *inventing an answer*; A54 permits only recording the *question*. D10's
+  CAS carve-out is the boundary case that shows the line is real: CAS is barred
+  precisely because it would create a **resolved** row.
+- **A55** — the CONTRACT's **pinned public-API block** gains
+  `confirm_feature_aliases()`, `confirm_analyte_methods()`, `pending_features()`,
+  `pending_analytes()` (cold review C7). The block does not list them today, and
+  its `review_queue()` line explicitly reads *"resolution API post-MVP"* — which
+  this plan supersedes. That note is struck.
 
 ## Open / deferred
 
@@ -830,9 +1021,20 @@ pinned against it.
   land on a real different feature — the `B.G005` trap).
 - **LLM suggestions from `long` names/descriptions** (`ellmer` is in Suggests):
   suggestion side only, never the commit path.
+- **Site on the event, and site-narrowing (D9).** Deferred out of this plan: the
+  IR has no site field and only 2 of 3 adapter families could supply one (ALS
+  crosstab has `Sample Site:` per A34; ESdat and ACIRL have no obvious source).
+  Re-adding it is **purely additive** — `.rc_feature_candidates()` gains a
+  `site` argument and narrowing step (3) returns. Buys 3 of 31 ambiguous keys.
+  Needs a plan-03/04/05/06 change request for `.st_ir_results_types` /
+  `.st_ir_samples_types` plus each adapter's header parse.
 - **Site-completion (`S01` → `B.S01`)**: sound (all names are `<site>.<code>`)
-  but applies to incoming `feature_raw`, needs the event's site, and does not
-  disambiguate. Own plan.
+  but applies to incoming `feature_raw`, needs the event's site (D9), and does
+  not disambiguate. Own plan; naturally pairs with the D9 work above.
+- **The D10 CAS-hit carve-out.** A CAS-hit row still strands. Revisit with the
+  suggestion/prefix-map work: the plausible resolution is a dangling
+  `lab_method` carrying the CAS match as a *suggestion* on its review item, which
+  `confirm_analyte_methods()` then confirms — keeping A6/A54's line intact.
 - **Retiring `feature.cypher`** and the `project.cypher` twin: after the
   migration is reviewed.
 - **`lab_method.reported_as`** is dead (NULL in all 365 rows). Candidate for
