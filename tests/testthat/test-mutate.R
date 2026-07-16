@@ -44,8 +44,14 @@ test_that("R-9.1: db_append() of 2 rows writes 2 change_log rows with one shared
   expect_true(all(log_rows$action == "insert"))
   expect_setequal(log_rows$uuid_row, c("f-1001", "f-1002"))
 
-  n_features <- DBI::dbGetQuery(con, "SELECT count(*) AS n FROM feature")$n
-  expect_equal(n_features, 5)
+  # Counts the appended rows specifically rather than the seed total: plan 11
+  # grew the seed's feature count (3 -> 7) and a pinned absolute broke. The
+  # WHERE-filtered form matches this file's own idiom (cf. the add_feature test
+  # below) and asserts the stronger thing -- that these two rows landed.
+  n_features <- DBI::dbGetQuery(
+    con, "SELECT count(*) AS n FROM feature WHERE uuid IN ('f-1001', 'f-1002')"
+  )$n
+  expect_equal(n_features, 2)
 })
 
 test_that("R-9.1: db_update() changing 2 fields writes 2 change_log rows with correct old/new", {
