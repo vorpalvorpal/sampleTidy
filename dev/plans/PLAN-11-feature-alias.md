@@ -700,6 +700,18 @@ C18) — the draft conflated them.** They travel by different routes:
   (`R/reconcile.R:38-40`), populated with the **first `source_hash` of the
   group**. (Grouping means one review row can span several source hashes; first
   is deterministic and sufficient for provenance.)
+  - **The same one-column fix applies to the *skipped* proto (F3 / A-3).**
+    `.rc_proto_skip()` (`R/reconcile.R:35-37`) also has no `source_hash` column,
+    so `.ct_record_already_present()` (`R/commit.R:274`) writes every
+    `already_present` provenance row with `source_hash = NA` — breaking A1's
+    row-exact hash linkage. Add `source_hash` to `.rc_proto_skip()` and populate
+    it in the `already_present` branch of `.rc_three_way()`
+    (`R/reconcile.R:542-546`; the row's own `source_hash` is in scope there). No
+    further `commit.R` change is needed — `.ct_record_already_present()` already
+    reads the column if present. **Criterion:** an `already_present` skip commits
+    a `change_log` provenance row whose `source_hash` is the incoming row's hash,
+    not NA (pinned at the DB level, not against a hand-built skipped tibble — the
+    unit-green/seam-broken class).
 - **The alias uuid goes in the payload *string***, as `alias_uuid=<uuid>`, and is
   written **at commit** by the R-11.8 payload rewrite — it does not exist at
   reconcile time (D8).
@@ -955,6 +967,198 @@ of the 894 real `feature.name` values (names only — no data; permitted, they a
 EPA-public per the real-corpus decision). The 894-distinct-keys property is
 pinned against it.
 
+## Whole-package code-review fold-ins (2026-07-19)
+
+The 2026-07-19 whole-package review (`dev/CODE-REVIEW-2026-07-19.md`, triaged in
+`dev/CODE-REVIEW-2026-07-19-TRIAGE.md`) surfaced five defects that live in the
+exact functions this plan is already rewriting. They fold in here — **not** as a
+separate plan — so the Phase-6 implementer writes `reconcile_event()` /
+`.rc_resolve_units_values()` / `.ct_commit_analyses()` / `.ct_find_or_create_sample()`
+correctly *once*. Independent defects PLAN-11 does not touch are in PLAN-12.
+
+**Seam-table deltas** (add to the producer→consumer table above):
+
+| producer | consumer | fields |
+|---|---|---|
+| `assemble_events` (R-7.3) | `reconcile_event` stage-0 (R-11.14) | `needs_review` (lgl), `review_kind` (chr), `review_payload` (list) — **must be read**; today they are dropped |
+| `.rc_resolve_units_values` (R-11.16) | `.rc_three_way` → `.ct_commit_analyses` | `quantified` = `parse_value()`'s value (NOT re-derived from `below_detection`); `rl_high` (dbl, `>`-rows) |
+| acirl adapter (R-11.15) | `.st_join_samples_onto_results` | synthetic `lab_sample_id` on **both** results and samples → exact-match join, no feature-only fallback |
+
+### R-11.14 Fold assembly's inline review flags into the reconcile conveyor (F1 / A22 consumer seam)
+
+CONTRACT A22 pins that assembly *marks* review-worthy rows inline
+(`needs_review`/`review_kind`/`review_payload` on `event$results`, set at
+`assemble.R:164-172` for `sample_datetime_mismatch` and `:330-338` for
+`foreign_work_order`) and **"reconcile folds them into its own review output."**
+Nothing does today: `reconcile_event()` has no stage that reads those columns, so
+a flagged row whose feature/analyte/units all resolve lands in `clean` and
+commits with **no review item** — the flag is silently discarded (verified;
+root cause is the plan-level gap A-1, not a worker slip).
+
+This is the natural extension of R-11.5's funnel→conveyor rework. Add a
+**stage-0** to `reconcile_event()`, run **before** the R-8.1 QC filter: partition
+rows with `needs_review == TRUE` out of `active` into `review`, building a review
+tibble from `review_kind` (→ `kind`) and `review_payload` (→ `payload`, serialised
+deterministically), grouped and counted exactly like `add_review()` so the R-8.8
+completeness count still reconciles. The row does **not** also flow to `clean`
+(these are "we don't trust this row" flags, distinct from the commit-everything
+feature-pending rows, which *do* commit).
+
+Interaction with D6 (restated for A-2): once this exists,
+`sample_datetime_mismatch` genuinely *holds* — which is what D6 and the
+`cypher-and-feature-alias` memory already assume. **D6 is only implementable for
+the datetime kind once R-11.14 lands**; before it, the flag was discarded and the
+row committed with a first-match date.
+
+Criteria: an event with one `needs_review` row → `reconcile_event()`'s `review`
+output contains it and `clean` does **not**; the item's `kind` is the row's
+`review_kind`; `counts` still reconciles (every input row in exactly one of
+clean / review / skipped, R-8.8); a `foreign_work_order`-flagged non-NCP row
+(A22 / plan-07 R-7.4) lands in review, not committed; a
+`sample_datetime_mismatch`-flagged row is held, not committed with an arbitrary
+date. **Seam test (mandatory, real upstream):** feed real `assemble_events()`
+output (not a hand-built stand-in) carrying a flagged row into the real
+`reconcile_event()` — this is the discriminator the read-only audits structurally
+miss (A-1).
+
+### R-11.15 ACIRL synthetic per-column `lab_sample_id` (F2 / A-5) — cross-plan edit to `adapter-acirl-field.R` (06) + `assemble.R` (07)
+
+ACIRL water-sheet columns each carry their own visit date, but `ir_results` has
+no column to link a result to *which* sample-column it came from, and ACIRL
+results have `lab_sample_id = NA`. `.st_join_samples_onto_results()`
+(`assemble.R:148`) then falls back to a **feature-name-only** join, so a feature
+sampled at two visits matches both sample rows and takes the *first* non-NA
+datetime (`:174-179`) — visit-2 measurements are re-dated to visit-1 and flagged
+`value_conflict`, which R-11.14/F1 then correctly holds (but the *data* is still
+mis-dated at the point it is flagged, and the second sampling event never exists).
+
+**Fix:** the ACIRL adapter emits a **synthetic per-column `lab_sample_id`**
+(`"<sheet>!c<col>"`) on **both** the results rows and the samples rows it derives
+from that column. This flows through the *existing* exact-match branch of the
+join (`assemble.R:146`), needs no IR schema change, gives every result its own
+visit's date, and eliminates the spurious mismatch flags. `lab_sample_id` is
+IR-internal for ACIRL (not a DB key — A45 pins the analysis key is
+feature/date/analyte/method, `lab_sample_id` can never be part of it), so nothing
+downstream changes.
+
+This is an **adjudicated cross-plan edit** (extends A52's scope to plans 06/07),
+not an ownership transfer — plans 06/07 keep their files.
+
+Pitfall note (test authors): the synthetic id must be **stable across a re-parse
+of the same file** (idempotency) and **distinct per column**; key it on the
+sheet name + column index, both of which are stable.
+
+Criteria: after `assemble_events()` on the two-visit ACIRL fixture
+(`2400-9999-01_Test_WMF.xlsx`, T.S01/T.S02 sampled 24 **and** 25 May), a 25-May
+result carries `sample_datetime_raw = "25/05/2025"` (**not** re-dated to 24 May);
+**no** ACIRL result is flagged `value_conflict`/`sample_datetime_mismatch` for a
+spurious multi-date match; both sampling dates exist as distinct samples in the
+committed DB. Pinned by an e2e assertion on **both** visit dates (today's e2e
+asserts only "date non-NA" — T-1). Coupled to R-11.14: they are the two halves of
+one silent-commit hole and must be green together (review priority #1).
+
+### R-11.16 `quantified` from `parse_value()`; write `rl_high` (F4)
+
+`parse_value()` (`values.R:62,69`) correctly returns `quantified = FALSE` for a
+`>`-prefixed or `BDL` reading and a non-NA `rl_high` for `>`-rows. But
+`.rc_resolve_units_values()` (`reconcile.R:285`) and `.ct_commit_analyses()`
+(`commit.R:187`) both **re-derive** `quantified` from `below_detection` alone, so
+a `>2000` row (`below_detection = FALSE`) commits `quantified = TRUE`,
+contradicting `parse_value()` and DESIGN's semantics; and `rl_high` is parsed and
+then dropped (`commit.R:195` writes only `rl_low`; `analysis.rl_high` — which
+exists live — is never populated).
+
+Since R-11.6 already rewrites `.rc_resolve_units_values()` and R-11.8 rewrites
+`.ct_commit_analyses()` (adding `units_raw`), fold the fix into those rewrites:
+- `.rc_resolve_units_values()` puts `parsed$quantified` onto `kept$quantified`
+  (the column already exists) and carries `parsed$rl_high` through as
+  `kept$rl_high`;
+- `.ct_commit_analyses()` uses `clean$quantified` (no re-derivation) and writes
+  `analysis.rl_high` from `clean$rl_high`.
+
+Pending-analyte rows (R-11.6) still skip conversion; `quantified`/`rl_high` are
+provenance and pass through unconverted like `value`.
+
+Criteria: a `>2000` DB row has `quantified = FALSE` and `rl_high = 2000`; a
+literal `BDL` DB row has `quantified = FALSE`; a `<0.01` row keeps `rl_low = 0.01`
+(existing pin) and `quantified = FALSE`; a plain-numeric row stays
+`quantified = TRUE`. (Today only `<`-rows are pinned at the DB level.)
+
+### R-11.17 `add_feature()` aligned to the live `feature` schema (F5 / A-4)
+
+Probed directly against the corpus DB: the live `feature` table has **18
+columns**; `name`, `site`, **`lon`, `lat`** are **NOT NULL**; `geom_wkt` is
+nullable; there is **no `virtual` column**. `add_feature()` (`mutate.R:324-338`)
+builds a row with a `virtual` column (fails column validation) and no
+`lon`/`lat` (fails NOT NULL) — it is a **broken exported API** (A16), green only
+because `helper-db.R`'s test DDL still carries `virtual` and omits `lon`/`lat`.
+
+Fix (cross-plan edit to `mutate.R`, owned by 09; and `helper-db.R`, owned here):
+- signature → `add_feature(name, site, lon, lat, flow = NA_character_,
+  matrix = NA_character_, geom_wkt = NA_character_, actor, reason)`; **drop
+  `virtual`**; `checkmate` require `name`/`site` (string) and `lon`/`lat`
+  (number).
+- **Reconcile `.st_test_core_ddl`'s `feature` to the live 18-column shape**
+  (drop `virtual`; add `lon`/`lat` NOT NULL + the other live columns) — this is
+  A-4's DDL reconciliation, and it is what let F5 stay green. This composes with
+  the plan-11 `feature` seeding (each feature still gains a self-alias).
+- add a `skip_if`-gated meta-test that diffs `.st_test_core_ddl`'s `feature`
+  columns against `information_schema.columns` when `SAMPLETIDY_CORPUS_DB` is set,
+  so future drift fails loudly.
+
+Criteria: `add_feature("X","SiteA", lon=150.0, lat=-33.0, ...)` inserts against a
+seed DB with the live-shaped DDL and the `feature` row round-trips with those
+coordinates; omitting `lon`/`lat` is a `sampletidy_error` at the argument check,
+not a DB error; no test DDL declares `virtual`.
+
+### R-11.18 Distinct datetimes are distinct samplings (F9 — DECIDED: two samples, user 2026-07-19)
+
+Today a 09:00 reading and a 15:00 reading at the **same feature+date** collapse
+onto one sample: `.ct_find_or_create_sample()` (`commit.R:95-104`) narrows by
+datetime only `if (nrow(cand) > 1)` and, on no datetime match, returns
+`cand$uuid[[1]]` regardless. **User decision: two readings at one feature+date
+with different non-NA clock times are distinct samplings → distinct `sample`
+rows.** This refines A11 (see A62).
+
+The fix must land in **both** rewrites, consistently, or reconcile and commit
+disagree (reconcile would flag the second reading `already_present` and it would
+never reach commit to become a new sample):
+
+- **`.rc_find_existing()` (R-11.7 rewrite):** when the incoming `sample_datetime`
+  is non-NA **and every** candidate's `s_datetime` is non-NA **and** none equals
+  the incoming one → return `NULL` (no existing match → the row is new/clean).
+- **`.ct_find_or_create_sample()` (R-11.8 rewrite):** same predicate → **create**
+  a new sample rather than reuse.
+
+**The predicate is deliberately narrow (conservative):** create-new fires only
+when the distinctness is *provable* — incoming datetime non-NA and **all**
+candidates carry a non-NA, differing datetime. If the incoming datetime is NA, or
+**any** candidate has a NA datetime (a date-only sample whose time is unknown, so
+it might be this very sampling with the time now supplied), fall back to today's
+reuse — we never fabricate a duplicate when identity is uncertain. A candidate
+whose datetime **equals** the incoming one is still reused (the matching sampling).
+
+`.ct_resolve_samples()`'s in-batch key already includes datetime
+(`commit.R:143-147`), so two distinct-time rows in one batch already resolve to
+two find-or-create calls; only the DB-candidate reuse needed fixing.
+
+Criteria: a 09:00 and a 15:00 reading of the same analyte at one feature+date →
+**two** `sample` rows and two analyses (not one sample, not an `already_present`
+skip); a re-ingest of the 15:00 reading matches its own 15:00 sample and is
+`already_present` (idempotent — no third sample); a reading with datetime NA at a
+feature+date that already has a date-only sample **reuses** it (no new sample); a
+reading whose datetime equals an existing sample's datetime reuses that sample.
+Pinned in both `test-reconcile.R` (`.rc_find_existing`) and `test-commit.R`
+(`.ct_find_or_create_sample`).
+
+### A-2 correction (Open/deferred wording)
+
+The Open/deferred note "`sample_datetime_mismatch` may over-flag the legitimate
+multi-day case" **understates the state**: it is not over-flagging, it is
+*mis-dating plus zero flags surviving* (F1+F2). R-11.14 makes the flag survive
+(hold), and R-11.15 removes the mis-dating at the source for ACIRL. Update that
+note when these land.
+
 ## Gates
 
 - Per-plan: `testthat::test_file()` green for `test-feature-alias.R`,
@@ -966,6 +1170,14 @@ pinned against it.
 - The R-9.1 direct-write lint stays clean (`feature-alias.R`/`pending.R` must
   not raw-write; note the A40 comment false-positive).
 - Order-shuffled run agrees with default order.
+- **T-1 (review-gate strengthening).** The R-10.2 e2e "review_queue holds the
+  engineered unknowns" test (`test-e2e-pipeline.R:185-197`) currently asserts only
+  `nrow(reviews) >= 0` + `expect_type(report,"list")` — a tautology (the fifth
+  "gate that cannot fail", cf. A46/A47). Replace it with the pinned contract:
+  `review_queue` contains **exactly** the engineered unknowns and nothing else,
+  and QC skip counts equal the fixture's known QC row count. This is the gate that
+  would have caught F1/F2, so it must be strengthened **with** R-11.14/R-11.15,
+  green together. (The suite-wide sweep for other vacuous assertions is PLAN-12.)
 
 ## CONTRACT amendments this plan requires (to be adjudicated on landing)
 
@@ -1013,15 +1225,40 @@ pinned against it.
   `pending_analytes()` (cold review C7). The block does not list them today, and
   its `review_queue()` line explicitly reads *"resolution API post-MVP"* — which
   this plan supersedes. That note is struck.
+- **A56** — the A22 consumer seam (assembly *marks* → reconcile *folds*) is now
+  implemented (R-11.14). A22's "reconcile folds them into its own review output"
+  was never assigned to a plan, so nothing tested the seam (A-1). Workflow lesson:
+  a CONTRACT adjudication spanning a producer and a consumer must be named in
+  **both** plans' criteria.
+- **A57** — value semantics: `analysis.quantified` is `parse_value()`'s
+  `quantified` (NOT re-derived from `below_detection`), and `analysis.rl_high` is
+  populated for `>`-notation rows (R-11.16). Corrects the old re-derivation that
+  committed `>`/`BDL` rows as `quantified = TRUE`.
+- **A58** — `add_feature()`'s signature is aligned to the **live** `feature`
+  schema (R-11.17): required `name`/`site`/`lon`/`lat` (all NOT NULL live), no
+  `virtual` column (absent live). The CONTRACT "Existing DB schema" `feature`
+  line is corrected to list `lon`/`lat` (NOT NULL) explicitly and drop the
+  implied `virtual`; `.st_test_core_ddl`'s `feature` is reconciled to the live
+  18-column shape (A-4), removing the test-only drift that masked the bug.
+- **A62** — **A11 refined** (user, 2026-07-19; R-11.18/F9): two readings at one
+  feature+date with **different non-NA datetimes are distinct samplings**
+  (distinct `sample` rows), not one sample. Governs both `.rc_find_existing`
+  (R-11.7) and `.ct_find_or_create_sample` (R-11.8). The split fires only when
+  distinctness is provable (incoming non-NA and every candidate non-NA and
+  differing); a NA datetime on either side falls back to date-granularity reuse,
+  so A11's "date first, then datetime when both sides have it" is preserved for
+  the uncertain cases.
 
 ## Open / deferred
 
-- **`sample_datetime_mismatch` may over-flag the legitimate multi-day case.**
-  Results tie to samples by `lab_sample_id` first (exact), falling back to
-  feature-key only when a result has no `lab_sample_id`. In that fallback, a
-  feature sampled on several days matches several sample rows with different
-  dates and would false-flag. Verify whether any adapter emits result rows
-  without a `lab_sample_id`; out of scope (datetime stays a "must hold" kind).
+- **~~`sample_datetime_mismatch` may over-flag the legitimate multi-day
+  case.~~** **Superseded by R-11.14 + R-11.15 (A-2 correction).** The real state
+  was worse than "over-flag": the fallback (feature-key) join *mis-dated* visit-2
+  rows to visit-1 and then the flag was *discarded* (F1), so nothing held. ACIRL
+  is the adapter that emits result rows without a `lab_sample_id`; R-11.15 gives
+  it a synthetic one so the exact-match join fires and no spurious flag is raised,
+  and R-11.14 makes any genuine mismatch flag actually hold. Datetime stays a
+  "must hold" kind.
 - **Replay of pre-plan-11 stranded rows.** This plan stops *new* stranding; rows
   already held need a one-off re-ingest (`reset = TRUE` on
   `ingest_file_set_state`). Small, separate.

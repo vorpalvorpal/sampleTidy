@@ -23,7 +23,17 @@ test disagree, tests win pending orchestrator adjudication. Design authority:
 
 **Cross-plan edits (A52).** Plan 11 amends `R/reconcile.R` (owned by 08) and
 `R/commit.R` / `R/mutate.R` (owned by 09). These are **adjudicated cross-plan
-edits, not ownership transfers** — 08 and 09 keep their files.
+edits, not ownership transfers** — 08 and 09 keep their files. Plan 11 also takes
+adjudicated cross-plan edits to `R/adapter-acirl-field.R` (06) and `R/assemble.R`
+(07) for the ACIRL synthetic `lab_sample_id` (R-11.15/F2).
+
+**Plan 12 (`PLAN-12-review-remediation.md`, 2026-07-19).** Owns no new files —
+it is the whole-package code-review remediation set (F6–F19, A-6/A-7,
+test-strength), landing as **adjudicated cross-plan edits** to files owned by
+plans 01/03/05/09 plus their `test-<module>.R` files. Triage of record:
+`dev/CODE-REVIEW-2026-07-19-TRIAGE.md`. The reconcile/commit-entangled findings
+(F1–F5, F9, T-1) went into plan 11's fold-in section instead, to keep the
+Phase-6 rewrite single-pass.
 
 Tests: `tests/testthat/test-<module>.R`, one per R file, named
 `"R-x.y: <criterion>"`. Fixtures: `tests/testthat/fixtures/<adapter>/…`.
@@ -85,14 +95,22 @@ analysis(uuid, uuid_sample, uuid_lab, value DOUBLE, value_chr, quantified BOOL,
 sample(uuid, uuid_feature, uuid_project, date TS, date_start TS, datetime TS,
        datetime_start TS, organisation, person, purpose, comments)  # 15,113
        # A48: uuid_feature is DROPPED and replaced by uuid_feature_alias.
-feature(uuid, name, site, flow, matrix, …, geom_wkt,
-        date_start DATE, date_end DATE)                              # 894
+feature(uuid, name NOT NULL, site NOT NULL, flow, matrix, depth, installed_by,
+        permanent, reference, date_start DATE, date_end DATE, cypher, elevation,
+        uuid_project, lon DOUBLE NOT NULL, lat DOUBLE NOT NULL, geom_wkt,
+        comments)                                                    # 894, 18 cols
        # CORRECTED 2026-07-17 (plan-11 cold review): this line previously listed
        # a `virtual` column. The live table HAS NO `virtual` COLUMN — verified
        # against information_schema. (helper-db.R's *test* DDL does declare one;
        # that is test-only drift, not the live shape.) `date_start`/`date_end`
        # DO exist live and were missing from this line; plan 11's date_end
        # narrowing depends on them.
+       # CORRECTED 2026-07-19 (whole-package review, F5/A-4): the full live
+       # 18-column shape is now listed. `lon`/`lat` are DOUBLE NOT NULL and were
+       # hidden behind `…`; add_feature() omitted them (and carried a phantom
+       # `virtual`), so it could never run against the live DB — plan 11 R-11.17
+       # fixes the signature and reconciles the test DDL. Probed directly against
+       # /Users/rjs/Documents/dashboard/data/monitoring.duckdb.
 analyte(uuid, name, units, conversion_constant, type, …, CAS)        # 247
 lab_method(uuid, uuid_analyte, name, method, organisation, rl_low, rl_high,
            reported_as, api, uuid_project, uuid_feature, comments)   # 365

@@ -485,3 +485,79 @@ plan's own quoted strings; anywhere a plan doesn't quote an exact string
 (e.g. the crosstab mismatch-precedence warning's exact wording), tests assert
 on substring content (`grepl()`) rather than an exact message, to avoid
 over-fitting an unpinned detail.
+
+## [review-triage] PLAN-11 R-11.8 / F9 — are distinct non-NA sample datetimes distinct samplings? ✅ RESOLVED (user 2026-07-19: TWO distinct samplings)
+
+**RESOLVED — two distinct samplings.** Promoted to PLAN-11 **R-11.18** + CONTRACT
+**A62** (A11 refined). The fix lands in both `.rc_find_existing` (R-11.7) and
+`.ct_find_or_create_sample` (R-11.8), splitting only when distinctness is provable
+(incoming datetime non-NA and every candidate non-NA and differing); a NA datetime
+on either side falls back to date-granularity reuse. Original question retained
+below for context.
+
+
+`.ct_find_or_create_sample()` (`commit.R:95-104`) reuses the first date-level
+sample when the incoming `sample_datetime` differs from the candidate's (the
+datetime narrowing only runs `if (nrow(cand) > 1)`, and on no datetime match it
+returns `cand$uuid[[1]]` regardless). Consequence: a 09:00 reading and a 15:00
+reading at the **same feature+date** collapse onto **one** sample row — the
+second sampling's identity is lost (real for multi-visit-per-day monitoring).
+A11 says matching is "date first, then datetime when both sides have it"; it
+never says a *non-matching* datetime should reuse rather than create.
+
+**Decision needed (domain):** should two readings at the same feature+date with
+**different non-NA clock times** be (a) two distinct samples (distinct
+samplings), or (b) one sample (today's behaviour)? PLAN-11 R-11.8 rewrites this
+exact function, so the fix — if (a) — lands there for free: create a new sample
+when every candidate has a non-NA datetime differing from a non-NA incoming
+datetime. Until decided, R-11.8 preserves today's reuse behaviour and does not
+regress it. Not resolved silently, per [NO SILENT DEVIATION].
+
+## [review-triage] PLAN-12 R-12.2 / F7 — extend ingest containment to reconcile+commit? ✅ RESOLVED (user 2026-07-19: contain, loudly)
+
+**RESOLVED — contain, loudly.** Per-event tryCatch (kept files → `failed`,
+`cli_warn`, `events_failed` counted, continue); a run where **every** event fails
+aborts `sampletidy_error` (systemic-failure signal). Pinned in PLAN-12 R-12.2 +
+CONTRACT A60. Original context below.
+
+
+`ingest_dir()` contains adapter *parse* crashes per file (R-9.5), but
+`reconcile_event()`/`commit_event()` run bare in the loop (`ingest.R:121-152`),
+so one poison event (archive-copy failure, zero-row registry lookup, payload
+glitch) aborts the run for every event routed after it. R-9.5 specced
+containment for parse **only** — extending it to reconcile+commit is a policy the
+plans never made explicit.
+
+**Decision needed:** adopt per-event containment (wrap reconcile+commit in
+`tryCatch`, mark that event's files `failed`, count `events_failed`, continue)?
+Recommended yes — committed events already have their own transactions, so
+containment only changes *how far a single bad event propagates*, and a re-run
+still completes the good events. If adopted it lands as PLAN-12 R-12.2 + CONTRACT
+A60.
+
+## [review-triage] PLAN-12 R-12.11 / F16 — env-var typing for list-valued config keys ✅ RESOLVED (user 2026-07-19: string-only + guard)
+
+**RESOLVED — string-only + guard.** Env vars are string-only; list-valued keys
+(today `field_analytes`) must be set via `st_config(key, value)` in code, and
+`st_config()` aborts `sampletidy_error` if such a key is sourced from env (no
+silent one-entry allowlist). Pinned in PLAN-12 R-12.11. Original context below.
+
+
+`st_config()` env-var values are always strings, so `SAMPLETIDY_FIELD_ANALYTES`
+would silently shrink the ACIRL field-analyte allowlist to a single entry. No
+live deployment sets that env var today. **Decision:** document env-var-settable
+keys as string-only (list-valued keys must be set via `st_config(key, value)` in
+code), or define a split-on-separator convention for list-valued env vars. Low
+impact; pin the chosen behaviour in `test-config.R` once decided.
+
+## [review-triage] F5 / A-4 — live `feature` schema probed directly (informational)
+
+For the record: the live `feature` table shape (F5's fix depends on it) was
+probed read-only against `/Users/rjs/Documents/dashboard/data/monitoring.duckdb`
+on 2026-07-19. Result (18 cols): `uuid, name*, site*, flow, matrix, depth,
+installed_by, permanent, reference, date_start, date_end, cypher, elevation,
+uuid_project, lon*, lat*, geom_wkt, comments` (`*` = NOT NULL). **No `virtual`
+column.** This settled the CONTRACT-vs-review disagreement (CONTRACT hid
+`lon`/`lat` behind `…`; the review said they were NOT NULL — the review was
+right). Folded into PLAN-11 R-11.17 + CONTRACT schema correction + A58. No open
+question remains here.
