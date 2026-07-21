@@ -15,7 +15,18 @@
 # (`uuid_feature_alias`, NOT NULL), which nullably resolves to a `feature`.
 # Every feature has a self-alias. `lab_method.uuid_analyte` and
 # `feature_alias.uuid_feature` are both nullable (dangling = unresolved).
-# `analysis.units_raw` records the lab-reported units as provenance (A51).
+#
+# REVISED 2026-07-22 (A63/A65/A67 - A51 is SUPERSEDED, read A63 instead):
+# `analysis` gains NO units column of any kind. Units live on `lab_method`,
+# which gains `units VARCHAR` (a FALLBACK for interpreting a value, never an
+# assertion about a particular report, and never part of the method's
+# identity) and `conversion_constant DOUBLE` (multiplied into a matched row's
+# value when non-NA; NA means no conversion). `feature` gains
+# `lon DOUBLE NOT NULL, lat DOUBLE NOT NULL` (live schema; the previous
+# "virtual is TEST-ONLY drift" comment was wrong - the live table has it,
+# A67). The seed also carries the R-11.19/A65 fixture: two `lab_method` rows
+# differing only in name capitalisation, same organisation/method, one
+# analyte.
 
 # DDL for the CONTRACT core tables, named list keyed by table name.
 .st_test_core_ddl <- list(
@@ -27,17 +38,23 @@
       flow VARCHAR,
       matrix VARCHAR,
       geom_wkt VARCHAR,
-      -- `virtual` is TEST-ONLY drift: the live table has NO `virtual` column
-      -- (CONTRACT.md's 'Existing DB schema' block, corrected 2026-07-17).
-      -- Left in place - out of scope here, other plans' fixtures may rely on
-      -- it - but it is not part of the live shape.
+      -- `virtual` IS part of the live shape (19 cols, 894 rows all FALSE;
+      -- A67) - the earlier 'TEST-ONLY drift' claim was measured against the
+      -- dashboard's DERIVED copy, not the authoritative DB. Marks a
+      -- non-physical feature (e.g. WEM.data SILO-grid weather stations),
+      -- which still carry real (grid-centre) lon/lat - not a placeholder
+      -- mechanism.
       virtual BOOLEAN,
       -- date_start/date_end DO exist live (CONTRACT.md, corrected block) and
       -- were missing from the test DDL (plan-11 cold review C11). With
       -- site-narrowing deferred (D9), date_end is the ONLY narrowing rule
       -- left in R-11.4 - without this column that criterion is unreachable.
       date_start DATE,
-      date_end DATE
+      date_end DATE,
+      -- lon/lat ARE DOUBLE NOT NULL live (R-11.17); the earlier omission is
+      -- what let a broken add_feature() (missing lon/lat args) stay green.
+      lon DOUBLE NOT NULL,
+      lat DOUBLE NOT NULL
     )",
   feature_alias = "
     CREATE TABLE feature_alias (
@@ -91,7 +108,16 @@
       api VARCHAR,
       uuid_project VARCHAR,
       uuid_feature VARCHAR,
-      comments VARCHAR
+      comments VARCHAR,
+      -- R-11.2/A63 (D7 reversed): units restored here, NOT on `analysis`.
+      -- units is a FALLBACK for interpreting a value under this method - it
+      -- does NOT assert any particular report used that unit - and is NEVER
+      -- part of the method's identity (organisation, name, method); a units
+      -- change must never spawn a second lab_method row.
+      units VARCHAR,
+      -- Multiplied into a matched row's reported value when non-NA; NA means
+      -- no conversion. That product is what analysis.value stores.
+      conversion_constant DOUBLE
     )",
   project = "
     CREATE TABLE project (
@@ -137,12 +163,11 @@
       quantified BOOLEAN,
       rl_low DOUBLE,
       rl_high DOUBLE,
-      -- R-11.2/A51 (D7): the lab-reported units string, populated always as
-      -- provenance. `value` is canonical iff the row's lab_method.uuid_analyte
-      -- is non-NULL; when dangling, value is in units_raw and canonical units
-      -- are undefined (safe because a dangling analysis is invisible to every
-      -- view - INNER JOIN through analyte).
-      units_raw VARCHAR,
+      -- R-11.2/A63 (A51 SUPERSEDED - `analysis` gets NO units column of any
+      -- kind; units live on lab_method.units instead). `value` is canonical
+      -- iff the row's lab_method.uuid_analyte is non-NULL; when dangling,
+      -- value is in the METHOD's units (safe because a dangling analysis is
+      -- invisible to every view - INNER JOIN through analyte).
       purpose VARCHAR,
       comments VARCHAR
     )",
@@ -204,14 +229,14 @@ seed_db <- function(dir = NULL) {
   #  - f-0006/f-0007: the reused-key pair where f-0006 is defunct
   #    (date_end 2020-06-30, long before any fixture sample date) and
   #    f-0007 is still live - the date_end narrowing auto-resolve case.
-  DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix, date_end) VALUES
-    ('f-0001', 'T.S01', 'TestSite', 'surface', 'water', NULL),
-    ('f-0002', 'T.S02', 'TestSite', 'surface', 'water', NULL),
-    ('f-0003', 'T.MW01', 'TestSite', NULL, 'groundwater', NULL),
-    ('f-0004', 'T.S04', 'TestSite', 'surface', 'water', NULL),
-    ('f-0005', 'T.S05', 'TestSite', 'surface', 'water', NULL),
-    ('f-0006', 'T.S06', 'TestSite', 'surface', 'water', DATE '2020-06-30'),
-    ('f-0007', 'T.S07', 'TestSite', 'surface', 'water', NULL)")
+  DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix, date_end, lon, lat) VALUES
+    ('f-0001', 'T.S01', 'TestSite', 'surface', 'water', NULL, 150.0001, -33.0001),
+    ('f-0002', 'T.S02', 'TestSite', 'surface', 'water', NULL, 150.0002, -33.0002),
+    ('f-0003', 'T.MW01', 'TestSite', NULL, 'groundwater', NULL, 150.0003, -33.0003),
+    ('f-0004', 'T.S04', 'TestSite', 'surface', 'water', NULL, 150.0004, -33.0004),
+    ('f-0005', 'T.S05', 'TestSite', 'surface', 'water', NULL, 150.0005, -33.0005),
+    ('f-0006', 'T.S06', 'TestSite', 'surface', 'water', DATE '2020-06-30', 150.0006, -33.0006),
+    ('f-0007', 'T.S07', 'TestSite', 'surface', 'water', NULL, 150.0007, -33.0007)")
 
   # feature_alias. Every feature gets a self-alias (fa-0001..fa-0003,
   # fa-0011..fa-0014; kind = 'self'), uniform with no special case for
@@ -285,24 +310,38 @@ seed_db <- function(dir = NULL) {
   # lm-0002/lm-0004 are the duplicate-method pair (R-8.6): same analyte, ALS;
   # lm-0002 has the lower rl_low (0.1) so it wins.
   # lm-0008/lm-0009 are new, dangling (uuid_analyte NULL), plan-11 fixtures:
-  #  - lm-0008: paired with sample s-0002/analysis an-0002 (units_raw
-  #    'µS/cm', value 965 unconverted) for the R-11.11 confirm-and-convert
+  #  - lm-0008: paired with sample s-0002/analysis an-0002 (units 'µS/cm' on
+  #    THIS row, value 965 unconverted) for the R-11.11 confirm-and-convert
   #    test - reuses the pinned 965 -> 0.965 mS/cm conversion already in
   #    FIXTURES.md's "Unit conversions" section.
   #  - lm-0009: an EXISTING dangling method a second event re-encounters
   #    (R-11.5a natural-key lookup) - paired with sample s-0004/analysis
   #    an-0004 below.
+  # lm-0010/lm-0011 are the R-11.19/A65 fixture: two genuinely distinct
+  # methods differing ONLY in name capitalisation, same organisation (ACIRL),
+  # same method (field), both resolving to the SAME analyte (a-0004) -
+  # mirroring the live 'Standing Water Level' / 'Standing water level' pair
+  # that currently strands every such ACIRL reading as unknown_analyte. An
+  # incoming 'Standing Water Level' must resolve to lm-0010 (exact raw-name
+  # match) and 'Standing water level' to lm-0011.
+  # lm-0012 is the conversion-constant fixture (A63): conversion_constant
+  # 2.0, so an incoming value of 3 commits as analysis.value = 6. Every other
+  # seeded method has NA conversion_constant (no conversion - today's
+  # baseline behaviour).
   DBI::dbExecute(con, "INSERT INTO lab_method
-    (uuid, uuid_analyte, name, method, organisation, rl_low) VALUES
-    ('lm-0001', 'a-0001', 'pH Value', 'EA005P: pH by PC Titrator', 'ALS', 0.01),
-    ('lm-0002', 'a-0002', 'Fluoride', 'EK040P: Fluoride by PC Titrator', 'ALS', 0.1),
-    ('lm-0003', 'a-0003', 'Electrical Conductivity @ 25°C', 'EA010P: Conductivity by PC Titrator', 'ALS', 1),
-    ('lm-0004', 'a-0002', 'Fluoride', 'EK040T: Fluoride by alt method', 'ALS', 0.5),
-    ('lm-0005', 'a-0001', 'pH', NULL, 'ACIRL', NULL),
-    ('lm-0006', 'a-0003', 'EC', NULL, 'ACIRL', NULL),
-    ('lm-0007', 'a-0004', 'Temperature', NULL, 'ACIRL', NULL),
-    ('lm-0008', NULL, 'EC New Method', 'EA010Z: Conductivity by new method', 'ALS', 1),
-    ('lm-0009', NULL, 'Sulphate', 'EA045: Sulphate by IC', 'ALS', 0.5)")
+    (uuid, uuid_analyte, name, method, organisation, rl_low, units, conversion_constant) VALUES
+    ('lm-0001', 'a-0001', 'pH Value', 'EA005P: pH by PC Titrator', 'ALS', 0.01, 'pH', NULL),
+    ('lm-0002', 'a-0002', 'Fluoride', 'EK040P: Fluoride by PC Titrator', 'ALS', 0.1, 'mg/L', NULL),
+    ('lm-0003', 'a-0003', 'Electrical Conductivity @ 25°C', 'EA010P: Conductivity by PC Titrator', 'ALS', 1, 'µS/cm', NULL),
+    ('lm-0004', 'a-0002', 'Fluoride', 'EK040T: Fluoride by alt method', 'ALS', 0.5, 'mg/L', NULL),
+    ('lm-0005', 'a-0001', 'pH', NULL, 'ACIRL', NULL, 'pH', NULL),
+    ('lm-0006', 'a-0003', 'EC', NULL, 'ACIRL', NULL, 'mS/cm', NULL),
+    ('lm-0007', 'a-0004', 'Temperature', NULL, 'ACIRL', NULL, 'deg C', NULL),
+    ('lm-0008', NULL, 'EC New Method', 'EA010Z: Conductivity by new method', 'ALS', 1, 'µS/cm', NULL),
+    ('lm-0009', NULL, 'Sulphate', 'EA045: Sulphate by IC', 'ALS', 0.5, 'mg/L', NULL),
+    ('lm-0010', 'a-0004', 'Standing Water Level', 'field', 'ACIRL', NULL, 'm', NULL),
+    ('lm-0011', 'a-0004', 'Standing water level', 'field', 'ACIRL', NULL, 'm', NULL),
+    ('lm-0012', 'a-0002', 'Fluoride as F', 'EK040P: Fluoride by PC Titrator', 'ALS', 0.1, 'mg/L', 2.0)")
 
   # project
   DBI::dbExecute(con, "INSERT INTO project (uuid, name, type) VALUES
@@ -314,8 +353,11 @@ seed_db <- function(dir = NULL) {
   # points at fa-0001 (f-0001's self-alias) rather than at f-0001 directly
   # (R-11.2 drops sample.uuid_feature).
   #
-  # s-0002/an-0002: dangling-analyte fixture for R-11.11 (lm-0008, units_raw
-  # 'µS/cm', unconverted value 965).
+  # s-0002/an-0002: dangling-analyte fixture for R-11.11 (lm-0008, whose
+  # `lab_method.units` is 'µS/cm', unconverted value 965). NB the units are on
+  # the METHOD, not on `analysis` - A63 reversed A51 and `analysis.units_raw`
+  # no longer exists. `units_raw` survives only as an IR-internal field (seam
+  # S-5), which is a different thing with the same name.
   # s-0003/an-0003: the sample a second event re-encounters via fa-0010's
   # natural key (R-11.5a, feature-pending path) - an-0003 uses an already-
   # resolved lab_method (pH) since only the feature side is dangling here.
@@ -333,12 +375,15 @@ seed_db <- function(dir = NULL) {
     ('s-0004', 'fa-0001', 'p-0001', TIMESTAMP '2025-05-12 00:00:00',
      TIMESTAMP '2025-05-12 08:15:00', 'ALS')")
 
+  # No units column on `analysis` (D7 reversed / A63) - each row's units are
+  # those of its uuid_lab (an-0002 -> lm-0008 'µS/cm', an-0003 -> lm-0001
+  # 'pH', an-0004 -> lm-0009 'mg/L'; not stored here).
   DBI::dbExecute(con, "INSERT INTO analysis
-    (uuid, uuid_sample, uuid_lab, value, quantified, rl_low, units_raw) VALUES
-    ('an-0001', 's-0001', 'lm-0002', 100, FALSE, 100, NULL),
-    ('an-0002', 's-0002', 'lm-0008', 965, TRUE, 1, 'µS/cm'),
-    ('an-0003', 's-0003', 'lm-0001', 7.10, TRUE, 0.01, 'pH'),
-    ('an-0004', 's-0004', 'lm-0009', 12, TRUE, 0.5, 'mg/L')")
+    (uuid, uuid_sample, uuid_lab, value, quantified, rl_low) VALUES
+    ('an-0001', 's-0001', 'lm-0002', 100, FALSE, 100),
+    ('an-0002', 's-0002', 'lm-0008', 965, TRUE, 1),
+    ('an-0003', 's-0003', 'lm-0001', 7.10, TRUE, 0.01),
+    ('an-0004', 's-0004', 'lm-0009', 12, TRUE, 0.5)")
 
   # ingest_file seed row for the supersede test.
   DBI::dbExecute(con, "INSERT INTO ingest_file (hash, work_order, revision, state) VALUES
