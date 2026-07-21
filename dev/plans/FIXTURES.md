@@ -19,11 +19,29 @@ Helpers must not depend on the live monitoring.duckdb.
 **Plan 11 (A48–A51) reshapes this seed.** `sample` no longer points at
 `feature` directly — every sample carries `uuid_feature_alias` (NOT NULL),
 which nullably resolves to a `feature`. `feature` gains `date_start DATE,
-date_end DATE` (the test DDL's `virtual BOOLEAN` column is TEST-ONLY drift —
-the live table has no such column; see CONTRACT.md's corrected schema block).
-`lab_method.uuid_analyte` is nullable (dangling = unresolved analyte).
-`analysis` gains `units_raw VARCHAR` (provenance, populated always; canonical
-`value` iff the row's `lab_method.uuid_analyte` is non-NULL).
+date_end DATE`. `lab_method.uuid_analyte` is nullable (dangling = unresolved
+analyte).
+
+> ### ⚠️ THREE CORRECTIONS PENDING (2026-07-22) — this section is NOT yet current
+>
+> `helper-db.R` and this document landed together on 2026-07-17 (`40f9fba`),
+> **before** the 2026-07-19 fold-ins and the 2026-07-22 review. Three things
+> below are now wrong. A resumed Phase 4 must **revise** them, not build on
+> them. Authority: `PLAN-11-feature-alias.md` §Fixtures + CONTRACT A63/A67.
+>
+> 1. **`analysis.units_raw` must be REMOVED** (D7 reversed / A63). Measured over
+>    3,624 committable rows: units are a function of the method, so they live on
+>    `lab_method`, which gains **`units`** and **`conversion_constant`**.
+>    `analysis` gets no units column at all.
+> 2. **`feature` must gain `lon DOUBLE NOT NULL, lat DOUBLE NOT NULL`**
+>    (R-11.17). And `virtual BOOLEAN` is **NOT** "test-only drift" — the live
+>    table *does* have it (19 columns, all 894 rows FALSE). That claim came from
+>    probing the dashboard's *derived* copy, not the live DB (A67). Keep the
+>    column; delete the comment calling it drift.
+> 3. **The seed needs the R-11.19 fixture**: two `lab_method` rows differing
+>    only in name capitalisation, same organisation, same method, one analyte —
+>    mirroring the live `Standing Water Level` / `Standing water level` pair
+>    that currently strands every ACIRL reading of it (A65).
 
 ### feature
 | uuid | name | site | flow | matrix | date_end |
@@ -97,25 +115,47 @@ tests (and for the migration's `long`-name import, R-11.13 step 5).
 | a-0004 | Temperature | °C | field | (NA) |
 
 ### lab_method  (analyte_raw + organisation → uuid_lab → uuid_analyte)
-| uuid | uuid_analyte | name | method | organisation | rl_low |
-|---|---|---|---|---|---|
-| lm-0001 | a-0001 | pH Value | EA005P: pH by PC Titrator | ALS | 0.01 |
-| lm-0002 | a-0002 | Fluoride | EK040P: Fluoride by PC Titrator | ALS | 0.1 |
-| lm-0003 | a-0003 | Electrical Conductivity @ 25°C | EA010P: Conductivity by PC Titrator | ALS | 1 |
-| lm-0004 | a-0002 | Fluoride | EK040T: Fluoride by alt method | ALS | 0.5 |
-| lm-0005 | a-0001 | pH | (NA) | ACIRL | (NA) |
-| lm-0006 | a-0003 | EC | (NA) | ACIRL | (NA) |
-| lm-0007 | a-0004 | Temperature | (NA) | ACIRL | (NA) |
-| lm-0008 | **(NULL, dangling)** | EC New Method | EA010Z: Conductivity by new method | ALS | 1 |
-| lm-0009 | **(NULL, dangling)** | Sulphate | EA045: Sulphate by IC | ALS | 0.5 |
+`units` and `conversion_constant` are plan-11 columns (A63 — restoring two
+columns lost from WEM.data's `labDF`). `units` is a **fallback** for
+interpreting a value, never an assertion about a particular report, and is
+**never** part of the method's identity.
+
+| uuid | uuid_analyte | name | method | organisation | rl_low | units | conv_const |
+|---|---|---|---|---|---|---|---|
+| lm-0001 | a-0001 | pH Value | EA005P: pH by PC Titrator | ALS | 0.01 | pH | (NA) |
+| lm-0002 | a-0002 | Fluoride | EK040P: Fluoride by PC Titrator | ALS | 0.1 | mg/L | (NA) |
+| lm-0003 | a-0003 | Electrical Conductivity @ 25°C | EA010P: Conductivity by PC Titrator | ALS | 1 | µS/cm | (NA) |
+| lm-0004 | a-0002 | Fluoride | EK040T: Fluoride by alt method | ALS | 0.5 | mg/L | (NA) |
+| lm-0005 | a-0001 | pH | (NA) | ACIRL | (NA) | pH | (NA) |
+| lm-0006 | a-0003 | EC | (NA) | ACIRL | (NA) | mS/cm | (NA) |
+| lm-0007 | a-0004 | Temperature | (NA) | ACIRL | (NA) | deg C | (NA) |
+| lm-0008 | **(NULL, dangling)** | EC New Method | EA010Z: Conductivity by new method | ALS | 1 | µS/cm | (NA) |
+| lm-0009 | **(NULL, dangling)** | Sulphate | EA045: Sulphate by IC | ALS | 0.5 | mg/L | (NA) |
+| lm-0010 | a-0004 | Standing Water Level | field | ACIRL | (NA) | m | (NA) |
+| lm-0011 | a-0004 | Standing water level | field | ACIRL | (NA) | m | (NA) |
+| lm-0012 | a-0002 | Fluoride as F | EK040P: Fluoride by PC Titrator | ALS | 0.1 | mg/L | **2.0** |
 
 `lm-0002`/`lm-0004` are the duplicate-method pair (R-8.6): same analyte, ALS;
 lm-0002 has the lower rl_low (0.1) so it wins.
 
+`lm-0010`/`lm-0011` are the **R-11.19/A65 fixture** — two genuinely distinct
+methods differing *only* in name capitalisation, same organisation, same method,
+both resolving to one analyte. They mirror the live ACIRL
+`Standing Water Level` / `Standing water level` pair, which currently makes
+every such reading strand as `unknown_analyte`. An incoming
+`Standing Water Level` must resolve to **lm-0010** and `Standing water level` to
+**lm-0011** (exact raw name wins); an unseen third spelling must resolve to one
+analyte as a *hit* and pick the **same** uuid on a re-run.
+
+`lm-0012` is the **conversion-constant fixture** (A63): its `conversion_constant`
+is 2.0, so an incoming value of `3` commits as `analysis.value = 6`. Every other
+seeded method has NA, i.e. no conversion — the today-behaviour baseline.
+
 `lm-0008`/`lm-0009` are plan-11 dangling (`uuid_analyte IS NULL`) fixtures:
-- `lm-0008` is paired with sample `s-0002`/analysis `an-0002` (`units_raw`
+- `lm-0008` is paired with sample `s-0002`/analysis `an-0002` (method `units`
   `'µS/cm'`, unconverted value `965`) for the R-11.11 confirm-and-convert
   test — reuses the pinned `965 → 0.965 mS/cm` conversion already below.
+  Note the units live on **lm-0008**, not on `an-0002`.
 - `lm-0009` is an **already existing** dangling method a *second* reconcile
   event re-encounters via natural-key lookup (R-11.5a, analyte-pending path),
   paired with sample `s-0004`/analysis `an-0004` below.
@@ -130,8 +170,8 @@ sample `s-0001`: uuid_feature_alias **fa-0001** (f-0001's self-alias;
 plan-11 repoints this from the old `uuid_feature`), uuid_project p-0001,
 date `2025-05-24`, datetime `2025-05-24 11:45:00` (Australia/Sydney), organisation ALS.
 analysis `an-0001`: uuid_sample s-0001, uuid_lab lm-0002, value `100`,
-quantified FALSE, rl_low `100`, units_raw NULL (pre-plan-11 history — the
-migration backfills NULL for existing rows), comments NA.
+quantified FALSE, rl_low `100`, comments NA. (No units column — D7 reversed;
+the units are on `lm-0002`.)
 (That is the converted form of "Fluoride <0.1 mg/L" — see conversions below.)
 
 ### Plan-11 additional sample + analysis rows
@@ -141,11 +181,15 @@ migration backfills NULL for existing rows), comments NA.
 | s-0003 | fa-0010 (pending) | 2025-05-10 | 2025-05-10 08:00:00 | ALS |
 | s-0004 | fa-0001 | 2025-05-12 | 2025-05-12 08:15:00 | ALS |
 
-| analysis | uuid_sample | uuid_lab | value | quantified | rl_low | units_raw |
+**`analysis` has NO units column** (D7 reversed / A63). Each row's units are
+those of its `uuid_lab`, shown here in brackets for readability only — they are
+**not** stored on these rows.
+
+| analysis | uuid_sample | uuid_lab | value | quantified | rl_low | *(method units)* |
 |---|---|---|---|---|---|---|
-| an-0002 | s-0002 | lm-0008 (dangling) | 965 | TRUE | 1 | µS/cm |
-| an-0003 | s-0003 | lm-0001 (resolved) | 7.10 | TRUE | 0.01 | pH |
-| an-0004 | s-0004 | lm-0009 (dangling) | 12 | TRUE | 0.5 | mg/L |
+| an-0002 | s-0002 | lm-0008 (dangling) | 965 | TRUE | 1 | *(µS/cm, on lm-0008)* |
+| an-0003 | s-0003 | lm-0001 (resolved) | 7.10 | TRUE | 0.01 | *(pH, on lm-0001)* |
+| an-0004 | s-0004 | lm-0009 (dangling) | 12 | TRUE | 0.5 | *(mg/L, on lm-0009)* |
 
 `s-0002`/`an-0002` is the R-11.11 conversion fixture (see `lm-0008` above).
 `s-0003`/`an-0003` and `s-0004`/`an-0004` are the R-11.5a "already committed,

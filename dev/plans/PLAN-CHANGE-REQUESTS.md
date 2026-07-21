@@ -552,6 +552,13 @@ impact; pin the chosen behaviour in `test-config.R` once decided.
 
 ## [review-triage] F5 / A-4 — live `feature` schema probed directly (informational)
 
+> ⚠️ **SUPERSEDED 2026-07-22 — this entry probed the WRONG DATABASE.** The path
+> below is the dashboard's *derived* copy, not the live DB (A67). The live
+> `feature` table has **19 columns and DOES have `virtual`**. The `lon`/`lat`
+> NOT NULL half of this entry is correct and still stands. See the
+> "[plan-11 second review] 2026-07-22" entry at the end of this file.
+> *(Append-only log: the original text is left intact below.)*
+
 For the record: the live `feature` table shape (F5's fix depends on it) was
 probed read-only against `/Users/rjs/Documents/dashboard/data/monitoring.duckdb`
 on 2026-07-19. Result (18 cols): `uuid, name*, site*, flow, matrix, depth,
@@ -561,3 +568,55 @@ column.** This settled the CONTRACT-vs-review disagreement (CONTRACT hid
 `lon`/`lat` behind `…`; the review said they were NOT NULL — the review was
 right). Folded into PLAN-11 R-11.17 + CONTRACT schema correction + A58. No open
 question remains here.
+
+## [plan-11 second review] 2026-07-22 — six user decisions + one wrong-database finding
+
+All resolved in-session; recorded here because each edits a previously-pinned
+position. Authority: CONTRACT A63–A69.
+
+1. **D7 REVERSED — no `analysis` units column.** `lab_method` regains `units`
+   and `conversion_constant` (both existed in WEM.data's `labDF` and were lost
+   in a schema edit). Decided on measurement, not argument: over 3,624
+   committable `Normal` rows, **221 of 222 (method, analyte) pairs report
+   exactly one units string**; the exception is `sodium adsorption ratio`, whose
+   two values both mean *dimensionless*. ⚠️ An unfiltered first cut said 95 of
+   354 varied — that was QC rows (`%` recoveries), which never commit. Anyone
+   re-deriving this **must** filter to `Normal`.
+   `units` is a **fallback, not a guarantee** (user), pinned as a
+   `COMMENT ON COLUMN`, and is **not** part of a method's identity: a second row
+   per units variant would break revision supersede, because
+   `.rc_find_existing()` keys on `a.uuid_lab`.
+2. **D10 REVERSED — CAS-hits commit dangling** with the CAS as a review
+   suggestion. Consistent with A54 (dangling ≠ resolved), preserves the CAS
+   evidence, and removes a carve-out that needed a test to stop it rotting.
+3. **D9 CONFIRMED — site-narrowing deferred** (costs 3 of 31 ambiguous keys, all
+   to review; re-adding is purely additive).
+4. **`add_feature(virtual = )` KEPT.** The 2026-07-19 "drop it" instruction was
+   wrong — see 6.
+5. **Registry collisions triaged by table** (user rule): duplicates in `analyte`
+   are merged; differing capitalisations in `lab_method` are **kept**, because
+   they record what reports actually said. So `Carbophenothion` (analyte) →
+   merge (PLAN-14 R-14.1); `Standing Water Level`/`Standing water level`
+   (lab_method, ACIRL) → keep, and fix the **matcher** instead (A65/R-11.19) —
+   it currently returns 2 candidates, requires 1, and strands every such reading.
+6. **⚠️ The wrong database was measured.** PLAN-11's Evidence block, the cold
+   review, and the 2026-07-19 whole-package review all probed
+   `/Users/rjs/Documents/dashboard/data/monitoring.duckdb` — the dashboard's
+   **derived** copy (rebuilt from `.qs` files, D2). Row counts agree across
+   copies (894/15,113/95,737/247), which is exactly why it passed as
+   interchangeable. Three CONTRACT "corrections" made from it are **reverted**
+   (A67): `feature` is **19 cols including `virtual`** (not 18/absent);
+   `lab_method` is **360** (the copy's 5 extras are mojibake twins); and the
+   "60 views" was `duckdb_views()` counting DuckDB's *internal* catalog views —
+   both copies have **14**, and on both exactly **6** reference
+   `sample.uuid_feature`, so D4 stands.
+   **Rule going forward: quote the absolute path with every measurement.**
+
+**Open, deliberately unresolved:** PLAN-14 R-14.3 — the 12 historical
+`Ammonia as NH3` analyses. The registry fix is clear (`reported_as` = `N`/`NH3`;
+the NH3→N constant is **0.8225**, *not* 1.216, which is the inverse direction).
+But the 12 values carry 7 significant figures, NULL `value_chr`, and a daily
+cadence at two features over six consecutive days beside a
+`Computed: Leachate Mixing Fraction` row — they look **derived**, and if they
+are already N-basis any multiplication corrupts them. **Needs provenance from
+the user before anything is specced or written.**

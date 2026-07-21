@@ -1,9 +1,41 @@
 # sampleTidy — build handover
 
-_Last updated: 2026-07-16. Branch: `tdd-mvp-implementation`.
-**MVP complete — plans 01–10 green, including plan 10's final checks: the
-real-corpus gates and `devtools::check()` have now actually run (`33273a1`).**
-Next: **PLAN-11 `feature_alias`** (specced, not implemented)._
+_Last updated: **2026-07-22**. Branch: `tdd-mvp-implementation`._
+
+## Read this first (2026-07-22 session)
+
+**PLAN 10 IS COMPLETE.** The OneDrive hydration problem is fixed — all 265
+corpus files hydrate (verified: zero dataless files, every file's read length
+equals its stat size). All four R-10.5 real-corpus gates now pass over the
+**full** corpus for the first time: **433 assertions, 0 failures, 0 skips**
+(route sweep 265 files / 125 unclaimed — 92 PDF + 21 `.bak` + SpreadsheetML
+`.XLS`, all expected; parse sweep 422 assertions; cross-format equivalence 3
+comparable work orders, 2 compared, ES2515460 342/342 rows agreeing; dry run
+vs a real-DB copy — 90 events, `already_present` > 0, zero writes). R-10.6
+(`devtools::check()`) was verified at `33273a1` and no production code has
+changed since (`git diff 33273a1..HEAD -- R/ NAMESPACE DESCRIPTION` is empty).
+
+⚠️ **The corpus path in this file's "Running the corpus gates" section below
+omits a `Sharepoint/` component** — that is why the folder has looked missing.
+The correct root is
+`~/OneDrive - Blue Mountains City Council/Sharepoint/waste_data - Environmental monitoring/`.
+
+**The suite is deliberately TDD-red** (1 failure + 43 errors, all `Table "s"
+does not have a column named "uuid_feature"`): Phase-4 dispatch 1 landed the new
+alias schema in `helper-db.R` ahead of the production amendments. 928 pass.
+Not a regression.
+
+**PLAN 11 is mid-Phase-4 and was NOT ready for the skill; it now is.** A second
+review found that its whole Evidence block had been measured against the
+**wrong database** — `/Users/rjs/Documents/dashboard/data/monitoring.duckdb` is
+the dashboard's *derived* copy (rebuilt from `.qs` files, D2), not the live DB.
+Row counts agree across copies, which is why it passed as interchangeable.
+Three CONTRACT "corrections" made from it are reverted (A67). See
+`dev/plans/CONTRACT.md` A63–A69 for everything decided this session.
+
+**Plans 13 and 14 are new:** the migration split out of plan 11 (A68), and a
+live-DB data-remediation plan (A69) whose third item is **open pending
+provenance** — do not implement it.
 
 ## Read this first if you are picking up plan 11
 
@@ -167,20 +199,29 @@ Current gate state:
 
 **Running the corpus gates:**
 ```sh
-SAMPLETIDY_CORPUS="…/waste_data - Environmental monitoring/assets/input" \
-SAMPLETIDY_CORPUS_DB="…/waste_data - Environmental monitoring/data/monitoring.duckdb" \
+ROOT="$HOME/OneDrive - Blue Mountains City Council/Sharepoint/waste_data - Environmental monitoring"
+SAMPLETIDY_CORPUS="$ROOT/assets/input" \
+SAMPLETIDY_CORPUS_DB="$ROOT/data/monitoring.duckdb" \
   Rscript -e 'devtools::load_all(); testthat::test_dir("tests/testthat")'
 ```
-⚠️ **OneDrive hydration:** the corpus lives in OneDrive Files-On-Demand. A
-placeholder file reports a real `size` but **reads as 0 bytes**, and the first
-read only *starts* an async download — so an adapter sees empty content and
-returns `match()=="no"`, and the file lands in the "unclaimed (informational
-only)" bucket **silently**. This moved the sweep numbers between runs
-(126→145 unclaimed) until the files hydrated. At last check **44 of 266 files
-would not hydrate at all** (user reports known OneDrive problems, 2026-07-16).
-Hydrate (`cat * > /dev/null`, repeatedly) before trusting a corpus run. Worth
-considering: a hydration guard in `corpus_files()` that fails loudly on a
-`size > 0` file that reads empty, since "unclaimed" currently absorbs it.
+⚠️ `$ROOT/data/monitoring.duckdb` is the **authoritative** DB (A67). Do **not**
+measure schema facts from `~/Documents/dashboard/data/monitoring.duckdb` — it is
+a derived copy with a genuinely different schema (19 vs 18 `feature` columns,
+360 vs 365 `lab_method` rows), and confusing the two produced three false
+CONTRACT entries.
+✅ **OneDrive hydration — RESOLVED 2026-07-22.** The corpus lives in OneDrive
+Files-On-Demand, and a placeholder used to report a real `size` while **reading
+as 0 bytes** (the first read only *starts* an async download), so an adapter saw
+empty content, returned `match()=="no"`, and the file landed silently in the
+"unclaimed (informational only)" bucket. That moved sweep numbers between runs
+(126→145 unclaimed) and at one point **44 of 266 files would not hydrate at
+all**. All 265 files now hydrate: **0 dataless** (`stat -f %b` = 0 with
+`size > 0`) and **0 read-length mismatches** across the whole corpus. The stable
+figure is **125 unclaimed of 265**.
+
+Still worth doing (cheap insurance, not currently biting): a hydration guard in
+`corpus_files()` that fails loudly on a `size > 0` file that reads empty, since
+"unclaimed" would otherwise absorb a regression silently. Optional PLAN-12 item.
 
 Remaining follow-ups (not blockers):
 - **Act on `dev/tdd-skill-improvements.md`** — the research report on hardening

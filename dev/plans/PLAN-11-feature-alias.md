@@ -2,18 +2,35 @@
 
 **Owns:** `R/feature-alias.R` (new — the resolve API), `R/pending.R` (new —
 backlog readers), `tests/testthat/test-feature-alias.R` (new),
-`tests/testthat/test-pending.R` (new),
-`dev/migrations/001-alias-indirection.R` (new).
-**Amends:** `R/reconcile.R` (`.rc_key`, `.rc_load_registry`,
-`.rc_feature_candidates`, `.rc_resolve_features`, `.rc_resolve_analytes`,
-`.rc_resolve_units_values`, `.rc_method_preference`, `.rc_three_way`,
-`.rc_find_existing`, `.rc_proto_review`, `reconcile_event`),
-`R/commit.R` (`.ct_find_or_create_sample`, `.ct_resolve_samples`,
-`.ct_commit_analyses`, `commit_event`), `R/mutate.R` (allowlist),
-`tests/testthat/helper-db.R` (core DDL + seed), `dev/plans/FIXTURES.md` (the
-seed-DB contract that `helper-db.R` implements), plus regression tests in
-`test-reconcile.R` / `test-commit.R`.
+`tests/testthat/test-pending.R` (new).
+
+**Amends** — *this list is the worker's file allowlist; it was stale from
+2026-07-19 to 2026-07-22 and is now reconciled with the fold-in section below.*
+
+| file | owner | functions |
+|---|---|---|
+| `R/reconcile.R` | 08 | `.rc_key`, `.rc_load_registry`, `.rc_feature_candidates`, `.rc_lab_method_candidates` (A65), `.rc_resolve_features`, `.rc_resolve_analytes`, `.rc_resolve_units_values`, `.rc_method_preference`, `.rc_three_way`, `.rc_find_existing`, `.rc_proto_review`, **`.rc_proto_skip`** (F3), `reconcile_event` (incl. the new stage-0) |
+| `R/commit.R` | 09 | `.ct_find_or_create_sample`, `.ct_resolve_samples`, `.ct_commit_analyses`, `commit_event`, + the new `.ct_materialise_*` |
+| `R/mutate.R` | 09 | `.st_mutate_allowlist`; **`add_feature()`** (R-11.17/A58) |
+| `R/assemble.R` | 07 | synthetic `lab_sample_id` join seam (R-11.15) |
+| `R/adapter-acirl-field.R` | 06 | emits the synthetic `lab_sample_id` (R-11.15) |
+| `tests/testthat/helper-db.R` | **11** | core DDL + seed |
+| `dev/plans/FIXTURES.md` | **11** | the seed-DB contract `helper-db.R` implements |
+| `tests/testthat/test-reconcile.R` | 08 | regressions |
+| `tests/testthat/test-commit.R` | 09 | regressions |
+| `tests/testthat/test-mutate.R` | 09 | `add_feature()` (R-11.17) |
+| `tests/testthat/test-assemble.R` | 07 | R-11.15 seam |
+| `tests/testthat/test-adapter-acirl.R` | 06 | R-11.15 synthetic id |
+| `tests/testthat/test-e2e-pipeline.R` | **10** | R-11.15 two-visit assertion + T-1 review gate |
+
+Every row above whose owner is not 11 is an **adjudicated cross-plan edit**
+(A52), not an ownership transfer.
+
 **Depends on:** plans 01–10 landed and green.
+**Migration split out (A68).** `dev/migrations/001-alias-indirection.R` is no
+longer this plan's — it is **PLAN-13**. Its ordering constraint still binds:
+plan 11's code must not run against the live DB until plan 13 has landed.
+Live-DB **data** fixes are **PLAN-14** (A69).
 
 **Test-file ownership note.** `helper-db.R` has no owner in the CONTRACT's
 partition. Plan 11 takes ownership; it is the only plan amending it (see A52).
@@ -116,11 +133,40 @@ denormalisation.
   ("feature/analyte-dangling") implied a conflict with R-11.6's "a pending row
   is not skipped for an unconvertible unit". There is none; they address
   different rows.
-- **D7 — `analysis.units_raw` is added** (orchestrator; flagged for override).
-  Forced: see R-11.2. Units live *only* on `analyte.units`; a dangling analysis
-  has no analyte, so its value cannot be converted and its reported units have
-  nowhere to live. Without this column, confirming an analyte could never
-  convert the values it just linked.
+- **D7 — REVERSED by the user (2026-07-22). `analysis` gains NO units column;
+  units live on the METHOD.** The original D7 added `analysis.units_raw` on the
+  premise that "a dangling analysis has no analyte, so its reported units have
+  nowhere to live". **That premise was false** — a dangling row still knows its
+  *method*, and `lab_method` is where units belong (it had a `units` column in
+  WEM.data's `labDF`; the column was lost in a schema edit, not designed away).
+  So `lab_method` regains **`units`** and **`conversion_constant`** (A63), and
+  `analysis` is untouched.
+  **Measured before deciding** (3,624 committable `Normal` rows, 90 events, real
+  corpus): **221 of 222 distinct (method, analyte) pairs report exactly one
+  units string.** The sole exception is `sodium adsorption ratio`, whose two
+  values are `-` and NA — both meaning *dimensionless*. Units are a function of
+  the method. ⚠️ A first cut of this measurement said 95 of 354 triples varied;
+  that was **QC rows** (LCS/MB recoveries report in `%`), which the reconciler
+  filters before anything commits. **Do not re-derive this without the `Normal`
+  filter** — the unfiltered number would have wrongly justified the old D7.
+  Also: the naming was wrong on its own terms. This schema reads `<col>_<table>`
+  (`uuid_feature` = the uuid from `feature`), so `units_raw` parses as "units
+  from the raw table". `lab_method.units` matches `analyte.units`.
+  **`units` is a FALLBACK, not a guarantee** (user, binding): it says how to
+  interpret a value when nothing better is known; it does **not** assert that
+  any given report used that unit. Pinned as a `COMMENT ON COLUMN` so the rule
+  travels with the schema instead of living only here.
+  **Units are NOT part of a method's identity** — identity stays
+  `(organisation, name, method)`. A units change must never spawn a second
+  `lab_method` row: `.rc_find_existing()` keys on `a.uuid_lab`, so a new row
+  would mean a lab reissuing a report with corrected units does **not**
+  supersede — it commits a **second analysis**, and both appear in
+  `v_measurement`, wrong and corrected side by side, nothing flagged. (Verified:
+  `.rc_three_way()` reaches the supersede branch only through
+  `.rc_find_existing()`.) The drift is surfaced at **confirmation** instead —
+  R-11.11.
+  On ingest, a matched row's value is multiplied by the method's
+  `conversion_constant` when non-NA, and *that* is what `analysis.value` stores.
 - **D8 — reconcile stays read-only** (orchestrator, from A32). Reconcile decides
   *status*; **commit** creates the pending alias / dangling `lab_method` rows
   through the mutation layer. The draft blurred this.
@@ -144,49 +190,82 @@ denormalisation.
   3 now go to review instead of auto-assigning. That is the **safe** direction —
   it produces no wrong assignment, only more review — and re-adding site later
   is purely additive. **Narrowing in this plan is `date_end` only.**
-- **D10 — the CAS-hit (`known_analyte_no_method`) path stays held; explicit
-  carve-out** (orchestrator, from cold review C10; **flagged for user
-  override**). `R/reconcile.R:196-201` sets `uuid_analyte` from a CAS match with
-  `status = "cas"`, which is not in `hit_idx` (`:204`), so the row is dropped to
-  review — it strands today and continues to. This sits awkwardly beside the
-  plan's headline that unknown analyte now commits, so it is pinned rather than
-  left implicit. Rationale for holding: a CAS hit knows the *analyte* but not the
-  *method*, so materialising it would auto-create a **resolved** `lab_method`
-  (`uuid_analyte` set) — exactly what A6 forbids, and not what A54 licenses
-  (which is *dangling* rows only). Committing it dangling instead would discard
-  the CAS evidence. Either direction is a real design choice; the status quo is
-  the conservative one. **A test pins that a CAS-hit row is held**, so the
-  carve-out cannot rot silently. Revisit alongside the prefix-map/suggestion
-  work.
+- **D10 — REVERSED by the user (2026-07-22). A CAS-hit commits dangling, like
+  any other unknown analyte, with the CAS as a review *suggestion*** (A66). The
+  earlier carve-out held the row on the grounds that committing it would
+  auto-create a **resolved** `lab_method` (A6/A54 forbid that) and that
+  committing it dangling would discard the CAS evidence. **Both objections
+  dissolve together:** commit a **dangling** `lab_method` (`uuid_analyte IS
+  NULL`) — exactly what A54 licenses — and put the CAS-matched analyte in the
+  review payload as a suggestion. No resolved row is created, the CAS evidence
+  is preserved where a human will act on it, and there is now **one rule for
+  every unknown analyte** instead of a carve-out that had to be test-pinned to
+  stop it rotting. `R/reconcile.R:196-201`'s `status = "cas"` therefore joins
+  `hit_idx`'s disposition as a *pending* row rather than being dropped to
+  review-only.
 
 ## Evidence (measured against `monitoring.duckdb`, duckdb 1.4.1)
 
-**Which DB.** `st_config("live_db")`
-(`~/Library/Application Support/org.R-project.R/R/sampleTidy/monitoring.duckdb`)
-**does not exist on this machine.** The numbers below were measured against
-`/Users/rjs/Documents/dashboard/data/monitoring.duckdb`, re-verified in cold
-review (2026-07-17); `/Users/rjs/Documents/leachatetools/test data/monitoring.duckdb`
-is a third copy. Row counts agree across feature/sample/analysis/lab_method, so
-it is the same lineage. **Name the absolute path when quoting any of this** — the
-ambiguity cost the reviewer real time.
+**Which DB — RE-MEASURED 2026-07-22 against the authoritative copy (A67).**
+The numbers in this section were originally taken from
+`/Users/rjs/Documents/dashboard/data/monitoring.duckdb`. **That is the wrong
+database.** It is the dashboard's *derived* copy, which that repo rebuilds
+independently from `.qs` files (D2), so its schema legitimately drifts. Row
+counts agree across all copies (894/15,113/95,737/247), which is exactly why it
+passed as interchangeable and produced three false "corrections".
+
+**The authoritative DB is:**
+```
+/Users/rjs/OneDrive - Blue Mountains City Council/Sharepoint/
+  waste_data - Environmental monitoring/data/monitoring.duckdb
+```
+(`~/OneDrive - Blue Mountains City Council` symlinks to
+`~/Library/CloudStorage/OneDrive-BlueMountainsCityCouncil`; note the
+`Sharepoint/` component — omitting it is why this folder has looked missing.)
+`st_config("live_db")` does not exist on this machine.
+`…/leachatetools/test data/monitoring.duckdb` is a third, stale copy.
+**Name the absolute path when quoting any measurement.**
+
+Three claims previously recorded here as "corrections" are **reverted**:
+
+| claim | was recorded | truth (live) |
+|---|---|---|
+| `feature` shape | 18 cols, no `virtual` | **19 cols, `virtual BOOLEAN` present**, all 894 FALSE |
+| `lab_method` rows | 365 | **360** (the dashboard's 5 extras are mojibake twins — `EC @25<c2><a1>C`, `@25<ef><bf><bd>C`, SS, TDS — the corruption class A25/A35 repair) |
+| views | 60 | **14** (the 60 was `duckdb_views()` counting DuckDB's *internal* catalog views — a methodology artefact on **both** copies, not DB drift) |
+
+The plan's original draft was right on all three. **D4 stands unchanged:** on the
+live DB exactly **6** of the 14 views reference `sample.uuid_feature`
+(`v_feature_dates`, `v_measurement`, `v_measurement_{epa,gas_report,long,old}`),
+and `v_measurement` is `analysis INNER JOIN sample INNER JOIN feature INNER JOIN
+lab_method INNER JOIN analyte` — so the auto-hide argument holds on the real DB.
+
+**What `virtual` is** (it exists, so the plan must stop claiming it does not):
+WEM.data's flag for a **non-physical** feature — SILO-grid weather stations
+(`L.WS01`/`BH.WS01`, created at the nearest 0.05° grid centre with *real*
+coordinates; `feature_sfc(virtual = )` filters on it). It is **not** a
+placeholder mechanism for unknown identity, so the "no provisional features"
+argument below is unaffected — if anything it is strengthened: the one existing
+escape hatch is for features whose location is known but derived, which is the
+opposite of a dangling row.
 
 Verified directly (re-check before relying on any of it):
 
 - `v_measurement` is `analysis INNER JOIN sample INNER JOIN feature INNER JOIN
   lab_method INNER JOIN analyte`. The `v_measurement_*` family is identical
   through `v_feature_*`/`v_analyte_*`. **Dangling rows auto-hide.**
-- `feature` = 894, `sample` = 15,113, `analysis` = 95,737, **`lab_method` = 365**
-  → **247** analytes, **60** views. (Corrected in cold review: the draft said
-  `lab_method` = 360 here and 365 below, and 245/14 for analytes/views. **Do not
-  encode any of these as test constants** except the 894 of R-11.3, which is
-  pinned deliberately.)
+- `feature` = 894, `sample` = 15,113, `analysis` = 95,737, **`lab_method` = 360**
+  → **247** analytes, **14** views. **Do not encode any of these as test
+  constants** — see R-11.3 for the frozen-fixture / live-property split that
+  replaces count-pinning.
 - `sample.uuid_feature` is **NOT NULL** with a **FK → feature(uuid)**.
   `lab_method.uuid_analyte` is **NOT NULL** with 0 dangling rows.
-- **`feature` has no `virtual` column at all** (the draft's "all 894 rows are
-  `virtual = FALSE`" was false; CONTRACT's schema block lists it wrongly too, and
-  `helper-db.R`'s test DDL *does* have one). The "no provisional features"
-  argument is unaffected — it rests on `name`/`site`/`lon`/`lat` being NOT NULL,
-  which is verified.
+- **`feature` DOES have a `virtual` column** and all 894 rows are
+  `virtual = FALSE` — the draft was right and the cold review's retraction was
+  the dashboard-copy error (A67). `helper-db.R`'s test DDL correctly declares
+  it; what the test DDL is actually missing is `lon`/`lat` (R-11.17). The "no
+  provisional features" argument rests on `name`/`site`/`lon`/`lat` being NOT
+  NULL, which is verified on the live DB.
 - **DuckDB 1.4.1 cannot drop a constraint at all** (`ALTER TABLE … DROP
   CONSTRAINT` → "No support for that ALTER TABLE option yet!"). Therefore
   neither `DROP COLUMN uuid_feature` nor `ALTER COLUMN … DROP NOT NULL` is
@@ -196,9 +275,19 @@ Verified directly (re-check before relying on any of it):
   needs `sample.uuid_feature` nullable, which is blocked by the same wall. The
   rebuild is therefore *unavoidable for this plan in any model*, which makes
   (P)'s marginal migration cost ≈ 894 inserts + one backfill expression.
-- `analysis` has **no units column**; `lab_method.reported_as` is **NULL in all
-  365 rows** (dead). `units_raw` already exists in the IR (`R/ir.R:14`) and
-  flows through reconcile — it is simply dropped at commit. (D7.)
+- `analysis` has **no units column** and (per D7, reversed) gains none.
+  `lab_method` has **no `units` and no `conversion_constant`** — both were in
+  WEM.data's `labDF` (`make new dfs.R:63`) and were lost when this duckdb was
+  built. A schema **regression**, restored by plan 13 (A63).
+- `lab_method.reported_as` is NULL in all 360 rows but is **NOT dead** (A64).
+  It records the *basis* a result is reported on — ammonium as `N` vs as `NH3`,
+  hardness as `CaCO3`. The earlier "candidate for removal" note is **struck**;
+  dropping it would destroy the column the basis belongs in. The basis currently
+  lives in the `lab_method.name` string instead (ALS's own naming: `Ammonia as
+  N`, `Ammonia as NH3`, `Total Alkalinity as CaCO3`). Backfilling it is plan 14.
+- `units_raw` already exists in the IR (`R/ir.R:14`) and flows through reconcile;
+  it is dropped at commit and, under the reversed D7, that stays correct — the
+  units land on the **method**, not the analysis.
 - `feature.cypher`: 117/894 features, 2062 raw entries → 370 unique
   `(feature, alias)` pairs (case/punct-folded); 72 are the feature's own name,
   **298 are genuine wrong labels** (222 seen once, 38 seen 2–4×, 38 seen 5+).
@@ -252,12 +341,12 @@ call the resolve functions, but never confirms on its own.
 | `.rc_resolve_analytes` | `.rc_resolve_units_values` | `uuid_lab` (chr; NA ⇒ pending **and none found** — R-11.5a as above), `analyte_pending` (lgl), `uuid_analyte` (chr, NA when pending), `analyte_raw`, `org`, `method_raw` |
 | `.rc_resolve_features` / `.rc_resolve_analytes` | `.rc_method_preference` | resolved `uuid_feature` **or** `uuid_feature_alias`, `sample_date`, `uuid_analyte`; analyte-pending rows excluded (R-11.5b) |
 | `reconcile_event` | `.ct_commit_review` | `source_hash` (chr) — a **new `.rc_proto_review()` column**, first of the group (R-11.9/C18) |
-| `.rc_resolve_units_values` | `.rc_three_way` | `value` (canonical **iff** `!analyte_pending`), `units_raw` (always), `rl_low` |
+| `.rc_resolve_units_values` | `.rc_three_way` | `value` (canonical **iff** `!analyte_pending`, and after the method's `conversion_constant`), `units_raw` (always — IR-internal; it lands on `lab_method.units` at commit, never on `analysis`), `rl_low` |
 | `reconcile_event` | `commit_event` | `clean` carries **all** of the above; dropping any one silently strands a dangling row |
 | `commit_event` R-11.8 | `.ct_resolve_samples` | `uuid_feature_alias` now **always non-NA** (pending materialised) |
 | `.ct_materialise_*` R-11.8 | `.ct_commit_review` | per-row alias / lab_method **uuid**, used to rewrite the review payload (`alias_uuid=<uuid>`) before it is written — the only point where row, review item and uuid coexist (C2) |
 | `confirm_feature_aliases` | `sample` | alias `uuid` → the samples pointing at it |
-| `confirm_analyte_methods` | `analysis` | `lab_method.uuid` → its analyses; `units_raw` → conversion |
+| `confirm_analyte_methods` | `analysis` | `lab_method.uuid` → its analyses; **`lab_method.units`** → conversion to `analyte.units` (D7 reversed — the source units come from the method, not a per-analysis column) |
 
 **Pitfall note (test authors).** The analysis match key is
 **(feature, date, analyte, method)** — A45. `lab_sample_id` is *not* a DB column
@@ -308,24 +397,37 @@ dangling row is reused rather than duplicated.
 
 - `sample`: **drop** `uuid_feature`; **add** `uuid_feature_alias VARCHAR NOT
   NULL` → `feature_alias.uuid`.
-- `lab_method`: `uuid_analyte` becomes **nullable**.
-- `analysis`: **add** `units_raw VARCHAR` (D7).
+- `lab_method`: `uuid_analyte` becomes **nullable**; **add** `units VARCHAR` and
+  `conversion_constant DOUBLE` (D7 reversed / A63 — restoring two columns lost
+  from WEM.data's `labDF`, not new design).
+- `analysis`: **unchanged.** No `units_raw`, no units column of any kind.
 
-`analysis.units_raw` semantics — pin these, they are the plan's subtlest
+`lab_method.units` semantics — pin these, they are the plan's subtlest
 invariant:
-- It records the units string the lab reported for this analysis. Populated
-  **always**, as provenance, resolved or not.
-- `analysis.value` is in the analyte's canonical units **iff** the row's
-  `lab_method.uuid_analyte` is non-NULL. When dangling, `value` is in
-  `units_raw` and canonical units are undefined.
+- It records how to interpret a value reported under this method. It is a
+  **FALLBACK, not a guarantee**: it does *not* assert that any particular report
+  used that unit (user, binding). Pin it as a `COMMENT ON COLUMN`, so the rule
+  ships with the schema rather than living only in this document.
+- `analysis.value` is in the **analyte's** canonical units **iff** the row's
+  `lab_method.uuid_analyte` is non-NULL. When dangling, `value` is in the
+  **method's** units.
 - This is safe precisely because a dangling analysis is invisible to every view
   (INNER JOIN analyte), so **no consumer can ever read a value in the wrong
   units**. The invariant and the visibility rule are the same rule.
+- **Units are not part of the method's identity** (`(organisation, name,
+  method)`). Never create a second `lab_method` row because the units differ —
+  see D7 for why that silently breaks revision supersede.
+- On ingest, a matched row's value is multiplied by the method's
+  `conversion_constant` when it is non-NA; *that* product is what
+  `analysis.value` stores. NA means no conversion.
 
 Criteria: `seed_db()` produces the new shape; a codebase audit for anything
 reading `sample.uuid_feature` is part of this task (grep `R/`, `tests/`);
 `v_measurement`'s equivalent join (A24 — the test schema has no views) returns
-exactly the resolved rows and a dangling sample does not appear.
+exactly the resolved rows and a dangling sample does not appear; a method with
+`conversion_constant = 1.5` stores `1.5 ×` the reported value and one with NA
+stores it unchanged; **no `analysis` table in any DDL declares a units column**
+(a pinned grep, because the reversed D7 already shipped once in `helper-db.R`).
 
 ## R-11.3 Normalisation (`.rc_key`, amended)
 
@@ -341,21 +443,50 @@ non-alphanumerics:
 }
 ```
 
-Criteria: `B.S01`, `B S01`, `BS01`, `b.s01`, `B..S01` share one key; **all 894
-real feature names still yield 894 distinct keys** — a pinned regression against
-a committed fixture of the real name list. This collision-free property is what
-makes the fold safe to auto-assign on, so it must **fail loudly** if a future
-name breaks it. NA/blank → NA (the A44 guard).
+**MEASURED against the live registry, 2026-07-22** (A67's DB). The draft called
+the analyte/method side "the risk" and pinned nothing for it; here is the actual
+number, and the risk turns out to be zero:
 
-**The analyte/method side must be pinned identically (cold review C16).** The
-draft named this "the risk" and then pinned nothing for it. `.rc_key` is shared
-by `.rc_lab_method_candidates()` (`R/reconcile.R:159-166`) for **analyte name and
-method** matching, and stripping all punctuation could merge two genuinely
-different analytes or methods. Add the same regression, against the same kind of
-committed names-only fixture: the **247** real `analyte.name` values yield 247
-distinct keys, and the **365** real `(organisation, name, method)` triples stay
-distinct under the new key. "The existing tests stay green" is not sufficient —
-they were written against the old, weaker fold.
+| set | rows | distinct keys, OLD `.rc_key` | distinct keys, NEW `.rc_key` |
+|---|---|---|---|
+| `feature.name` | 894 | 894 | **894** |
+| `analyte.name` | 247 | 246 | **246** |
+| `lab_method` `(organisation, name, method)` | 360 | 359 | **359** |
+
+**The new fold introduces zero new collisions.** That — not the absolute counts
+— is the property that makes it safe to auto-assign on. The two collisions are
+pre-existing and are *not* normalisation artefacts:
+- **`Carbophenothion` (`analyte`)** — two rows with **byte-identical** names,
+  same units, same CAS, same constant. They collide under *any* key function
+  including the identity function. A duplicate registry row; merged by plan 14.
+- **`Standing Water Level` (`lab_method`)** — the two **ACIRL** rows
+  `Standing Water Level` / `Standing water level`, same org, same method
+  `field`, both → one analyte. They differ only in capitalisation, and `.rc_key`
+  has always lowercased, so they collide today. **These rows are correct and are
+  kept** (user, binding: methods retain the capitalisations reports actually
+  use). The defect is in the *matcher* — see A65 / R-11.19.
+
+**Test design — do NOT pin a live count anywhere.** The registry grows; a test
+asserting "247 analytes" rots the next time an analyte is added. Two distinct
+tests are needed and the draft conflated them:
+- **(a) frozen-snapshot regression** (always runs, CI-safe): committed
+  names-only fixtures — the 894 `feature.name` values, the 247 `analyte.name`
+  values, the 360 `(organisation, name, method)` triples. Asserts the *fold*
+  didn't change: `length(unique(key(x)))` equals the number recorded **in the
+  fixture's own header**, not a literal in the test. This catches a `.rc_key`
+  regression. (Names only, no data — the A3 exception, as for the feature list.)
+- **(b) live property check** (corpus-gated like R-10.5, skipped without
+  `SAMPLETIDY_CORPUS_DB`): asserts `length(unique(key(names))) == length(names)`
+  over the *live* registry **with no numeric literal in it at all**, and reports
+  the colliding pairs on failure. This is the one that catches a newly-added
+  name breaking the property — which (a) structurally cannot do.
+  Seed it with the two known-and-accepted collisions above as an explicit
+  allowlist, so it fails on the 3rd, not on the 1st.
+
+Criteria: `B.S01`, `B S01`, `BS01`, `b.s01`, `B..S01` share one key; NA/blank →
+NA (the A44 guard); (a) and (b) both exist and (b) contains no count literal;
+the OLD-vs-NEW equivalence above is itself pinned in (a) — i.e. the fold is
+proven to add no collisions, rather than the counts being asserted blind.
 
 **A44 guard, both halves (cold review C17).** `.rc_key` newly returns NA for
 `""`. Today `.rc_feature_candidates()` (`R/reconcile.R:71-79`) survives a blank
@@ -418,8 +549,10 @@ and **never reaches** `.rc_three_way`, never lands in `clean`, and
 `commit_event()` commits only `clean`. Commit-everything is therefore a
 **reconciler** change, not a commit change.
 
-`.rc_resolve_features(rows, registry, work_order, site)` now **keeps every row**
-and annotates rather than dropping:
+`.rc_resolve_features(rows, registry, work_order)` — **three arguments, no
+`site`** (D9; the signature here previously carried a stale `site` argument that
+contradicted D9 and R-11.4's explicit "no `site` argument" note) — now **keeps
+every row** and annotates rather than dropping:
 - hit → `uuid_feature_alias = <alias uuid>`, `feature_pending = FALSE`;
 - `unknown` or `ambiguous` → `uuid_feature_alias = NA`, `feature_pending = TRUE`,
   `alias_key` set. The row **stays in `active`** and flows through R-8.3…R-8.7.
@@ -518,24 +651,28 @@ unchanged; only the miss path changes.
 `analyte_pending` rows — there is no analyte, so no canonical units exist. It
 passes `value` through unconverted and leaves `units_raw` set (R-11.2).
 
-**The CAS-hit path stays held — explicit carve-out, D10 (cold review C10).** The
-draft said "the `known_analyte_no_method` (CAS-hit) path is unchanged", which a
-test author cannot act on: `status = "cas"` (`R/reconcile.R:196-201`) is *not* in
-`hit_idx` (`:204`), so the row is dropped to review and **stranded** — the very
-thing this plan exists to stop. That is deliberate, not an oversight: a CAS hit
-identifies the *analyte* but not the *method*, so committing it would auto-create
-a **resolved** `lab_method`, which A6 forbids and A54 does not license (A54
-covers *dangling* rows only). Committing it dangling would throw away the CAS
-evidence. Held is the conservative choice; D10 records it as a real fork.
+**The CAS-hit path now commits dangling too — D10 reversed, A66.** `status =
+"cas"` (`R/reconcile.R:196-201`) is not in `hit_idx` (`:204`) today, so the row is
+dropped to review and **stranded** — the very thing this plan exists to stop.
+It now takes the same disposition as any other unknown analyte:
+`analyte_pending = TRUE`, a **dangling** `lab_method` materialised at commit
+(`uuid_analyte IS NULL` — exactly what A54 licenses, so no **resolved** row is
+created and A6's intent is intact), and **the CAS-matched analyte carried on the
+review item as a suggestion**, never as a link. That answers both of the old
+carve-out's objections at once: nothing auto-resolves, and the CAS evidence is
+preserved where a human will act on it rather than discarded. One rule for every
+unknown analyte.
 
 Criteria: an unknown-analyte row reaches `clean` with `analyte_pending = TRUE`,
-`uuid_lab = NA` (or the existing dangling `lab_method`'s uuid, per R-11.5a),
-unconverted `value`, and `units_raw` set; a resolved row is still converted
-exactly as today (all existing R-8.4 tests stay green); a pending row is **not**
-skipped for an unconvertible unit (that check belongs to resolved rows only —
-see D6's restatement, which shows this is not the contradiction it looks like);
-**a CAS-hit row is still held and does not reach `clean` — pinned, so the D10
-carve-out cannot rot silently.**
+`uuid_lab = NA` (or the existing dangling `lab_method`'s uuid, per R-11.5a) and
+an unconverted `value`, and its **method** carries the reported units (D7
+reversed — there is no per-analysis units column to set); a resolved row is
+still converted exactly as today (all existing R-8.4 tests stay green); a
+pending row is **not** skipped for an unconvertible unit (that check belongs to
+resolved rows only — see D6's restatement, which shows this is not the
+contradiction it looks like); **a CAS-hit row reaches `clean` dangling and its
+review item names the CAS-matched analyte as a suggestion — pinned both ways
+(it commits, AND it does not link)** (A66).
 
 ## R-11.7 Three-way match with dangling rows (`.rc_find_existing`)
 
@@ -596,7 +733,10 @@ writes are here, through the mutation layer, never raw `dbExecute`):
 
 .ct_materialise_lab_methods(con, clean, event, actor, reason)
 # for rows with analyte_pending: find-or-create a lab_method from
-# (name = analyte_raw, organisation = org, method = method_raw, rl_low, rl_high)
+# (name = analyte_raw, organisation = org, method = method_raw, rl_low, rl_high,
+#  units = units_raw)  <- D7 reversed: the reported units land HERE, on the
+#                         method, and nowhere else. conversion_constant stays
+#                         NA (nothing has established a basis yet).
 # with uuid_analyte = NULL. Dedup by (organisation, .rc_key(name), .rc_key(method))
 # AND uuid_analyte IS NULL — see (e). Returns clean with uuid_lab filled.
 ```
@@ -651,8 +791,18 @@ sufficient.** If A8 is ever relaxed, this is the first thing that breaks.
 
 `.ct_find_or_create_sample()` / `.ct_resolve_samples()` re-key from
 `uuid_feature` to `uuid_feature_alias` per R-11.7's rule (resolved → match by
-resolved feature; pending → match by alias uuid). `.ct_commit_analyses()` writes
-`units_raw`.
+resolved feature; pending → match by alias uuid). `.ct_commit_analyses()`
+applies the matched method's `conversion_constant` (when non-NA) to `value` and
+`rl_low`/`rl_high` before writing, and writes **no** units column (D7 reversed).
+
+**(f) A units mismatch never creates a second `lab_method`.** If a row's
+`units_raw` differs from the matched method's recorded `units`, the row still
+commits against that **same** method and the mismatch is recorded for
+confirmation-time review (R-11.11). Creating a second row would give the same
+determination a second `uuid_lab`, and since `.rc_find_existing()` keys on
+`a.uuid_lab`, a lab reissuing a report with corrected units would then commit a
+**duplicate analysis instead of superseding** — both visible in `v_measurement`,
+neither flagged. Units are a property, not an identity (D7/A63).
 
 Criteria: a file with 19 clean rows + 1 unknown-feature row commits **all 20**
 (19 resolved, 1 dangling) and archives — nothing stranded; the dangling row is
@@ -800,19 +950,32 @@ confirm_analyte_methods(uuid_lab, uuid_analyte, confirmed_by,
 
 Sets `lab_method.uuid_analyte` via the mutation layer. **No propagation UPDATE
 is needed** — analyses already point at the `lab_method`, so linking it lands
-every analysis at once. But the values must now be made canonical (D7): for each
-affected analysis, convert `value`/`rl_low` from `units_raw` to the analyte's
-units via `unify_value()`.
+every analysis at once. But the values must now be made canonical: for each
+affected analysis, convert `value`/`rl_low`/`rl_high` from the **method's**
+`units` to the analyte's units via `unify_value()` (D7 reversed — the source
+units come from `lab_method.units`, not from a per-analysis column).
 
-An analysis whose `units_raw` cannot be converted to the analyte's units is
+An analysis whose method units cannot be converted to the analyte's units is
 **not** linked blindly: leave its value alone and open an `unknown_unit` review
 item. No collision/merge step is needed here (analyses already share their
 sample).
 
+**Units-drift check at confirmation (D7/A63).** Because `lab_method.units` is a
+**fallback, not a guarantee**, a bulk conversion of every analysis on the method
+can be wrong for some of them. So before converting, check whether this method
+has ever been *seen* with units other than its recorded ones (recorded per
+R-11.8(f)). If so, **do not convert blind**: surface it — the operator is told
+"this method has been seen with units X and Y; check before confirming" and
+must resolve it. This is the only moment a human is looking at the method, and
+it is the moment the ambiguity matters. It does **not** split the method (D7:
+identity excludes units).
+
 Criteria: confirming resurfaces the analyses in the `v_measurement`-equivalent
-join and is idempotent; values are converted (a pinned µS/cm → mS/cm case, per
-A44's EC conversion); an unconvertible unit opens `unknown_unit` and does not
-corrupt the value; after confirmation the same incoming analyte auto-resolves and
+join and is idempotent; values are converted from `lab_method.units` (a pinned
+µS/cm → mS/cm case, per A44's EC conversion); an unconvertible unit opens
+`unknown_unit` and does not corrupt the value; **a method seen with two
+different units surfaces the drift at confirmation and does not silently
+bulk-convert**; after confirmation the same incoming analyte auto-resolves and
 opens no review item.
 
 ## R-11.12 Pending backlog readers (`R/pending.R`)
@@ -831,103 +994,66 @@ pending_analytes(con)  # -> tibble(uuid_lab, name, organisation, method, units_r
 Criteria: zero-row results have stable columns; counts match the dangling rows
 exactly; the numbers reconcile with `review_queue()`.
 
-## R-11.13 Migration (one-off, `dev/migrations/001-alias-indirection.R`)
+## R-11.13 Migration — MOVED to PLAN-13 (A68)
 
-**Operator-run**, with a dry-run mode, never invoked by the package: it is not
-called from `ensure_schema()`, `ingest_dir()`, or any package code path (A50).
-It **takes a verified backup before it writes anything** (step 1), and is
-rehearsed on a copy before the real run — see the two protections below.
+The one-off `dev/migrations/001-alias-indirection.R` is **no longer part of this
+plan**. It is `dev/plans/PLAN-13-alias-migration.md`, which owns the script and
+`tests/testthat/test-migration-001.R`. Split because it is a separable
+deliverable with its own 11-step procedure and criteria, it is the only piece
+that touches the live DB, and it named no test file here.
 
-Forced into a **table rebuild** by duckdb 1.4.1's inability to drop a constraint
-(Evidence), and the `analysis` FK graph means `analysis` must be rebuilt too.
-Order matters:
+**The ordering constraint travels with the split and still binds:**
 
-1. **Back up the DB, and verify the backup, before any write** — the first
-   action of the script, and a hard precondition for every later step.
-   - Copy the live DB to
-     `<snapshot_dir>/monitoring_pre-001-alias-indirection_<UTC timestamp>.duckdb`.
-     **Do not use `snapshot_db()`**: it is date-keyed
-     (`monitoring_YYYY-MM-DD.duckdb`) and R-9.4 pins that a same-day re-snapshot
-     **overwrites**, so a second run on the same day would replace the
-     pre-migration backup with post-migration state — destroying the only thing
-     a restore could use. The timestamped, migration-specific name cannot
-     collide with a daily snapshot or with an earlier run of this script.
-   - `CHECKPOINT` first so the copy is consistent, and take it while holding the
-     `with_db_write()` lock so nothing writes mid-copy.
-   - **Verify** the copy: open it read-only and check it reports the same
-     `feature`/`sample`/`analysis`/`lab_method` row counts as the live DB.
-   - **Abort** — writing nothing — if the copy or the verification fails. No
-     backup, no migration.
-   - Print the backup's absolute path, and the exact command to restore from it,
-     before proceeding.
-2. Record `feature`/`sample`/`analysis`/`lab_method` row counts plus a value
-   checksum, for the step-11 verify.
-3. Create `feature_alias`; insert **894 self-aliases** (`kind = "self"`,
-   `auto_assign = TRUE`, `n_seen = 0`).
-4. Import **`cypher`**: split on `,`, trim, drop empties, **count** duplicates
-   into `n_seen`. ~370 rows: `kind = "historical_code"` (code-shaped) or
-   `"descriptive"` (phrases); self-name entries fold into the self-alias via the
-   upsert. The **31 ambiguous aliases** get `auto_assign = FALSE` and are
-   reported — they must never auto-resolve.
-5. Import **`long` mask names**: `kind = "mask_long"`; overlaps with `cypher`
-   collapse via the same upsert (increment `n_seen`), never error.
-   **Not imported:** `old`, `gas_report`, `EPA`.
-6. `DROP VIEW` the 6 views referencing `sample.uuid_feature`.
-7. Dump `analysis` to a temp table; `DROP TABLE analysis` (this frees both
-   `sample` and `lab_method` from their inbound FK).
-8. Rebuild `sample` with the new shape, backfilling
-   `uuid_feature_alias` from each row's old `uuid_feature` → that feature's
-   self-alias; rebuild `lab_method` with `uuid_analyte` nullable.
-9. Rebuild `analysis` (+ `units_raw`, NULL for history) and re-declare its FKs.
-10. Recreate the 6 views, joining `sample → feature_alias → feature`.
-11. **Verify**: row counts and checksum identical to (2); `sample.uuid_feature`
-    gone; **zero** NULL `uuid_feature_alias`; every self-alias reachable; the
-    `v_measurement` row count is **unchanged** (the migration must not hide or
-    reveal a single measurement).
+> **R-11.1–R-11.12 must not be run against `monitoring.duckdb` until PLAN-13 has
+> landed.** Green tests are not evidence that it is safe to point the new code at
+> the live DB.
 
-Steps 3–10 run inside **one** transaction, so a mid-migration failure rolls back
-rather than leaving a half-rebuilt DB — the backup is the second line of
-defence, not the first.
+Two hard couplings, not just a shared schema:
+- **(a)** R-11.4 removes the `feature_mask` lookup (`R/reconcile.R:76`) on the
+  explicit grounds that its `long` names are imported by the migration's step 5.
+  Land plan 11 without that step and every live `mask_long` match **regresses to
+  `unknown`**.
+- **(b)** Without the migration the live DB has no `feature_alias` and no
+  self-aliases, so `.rc_feature_candidates()` returns zero rows for *everything*
+  — **100% of live data would commit dangling.**
 
-Criteria: **the script writes nothing until a verified backup exists (step 1) —
-pinned by a test that makes the backup copy fail and asserts zero writes**; a
-same-day second run does not overwrite the first run's backup (the `snapshot_db()`
-trap — pinned); idempotent (re-run inserts nothing, double-counts nothing);
-`feature.cypher` left untouched (retiring it is a later step, once the alias
-table has proven itself); dry-run prints the counts it would insert and writes
-nothing; the step-11 verify is a hard gate that aborts on any mismatch; a failure
-in steps 3–10 leaves the DB unchanged.
+The test suite is unaffected either way: `helper-db.R` builds the DDL directly
+and seeds aliases itself, so R-11.1–R-11.12 can be built and gated green with no
+migration in existence. That is what makes the split safe.
 
-**Two distinct protections — the operator needs both, they are not substitutes:**
-1. **Rehearse on a copy.** Run the whole script against a copy of the live DB
-   first and review the printed counts. This is what catches a *wrong* migration
-   (bad `n_seen`, a mis-imported alias) — a backup cannot, because a successful
-   restore of a wrong migration still leaves you where you started.
-2. **Back up before the real run** (step 1). This is what catches a *failed* or
-   interrupted migration. Required even after a clean rehearsal, because the real
-   DB is not the copy — it holds rows the rehearsal never saw.
+## R-11.19 Lab-method candidate resolution: exact name first (A65 — live defect)
 
-**This section is separable from the *test suite*, but is a hard prerequisite for
-the *live DB* — the draft's "only coupling is the target schema" was wrong (cold
-review C19).**
+Two `lab_method` rows may legitimately differ only in how the lab spelled the
+name. The live registry has exactly this: `Standing Water Level` and
+`Standing water level`, both `organisation = ACIRL`, both `method = field`, both
+pointing at the **same** analyte. **These are genuinely different methods and
+both rows are kept** (user, binding — methods retain the capitalisations reports
+actually use). The bug is in the matcher, not the data.
 
-True and verified: the package's own tests never run the migration
-(`helper-db.R` builds the DDL directly), so R-11.1–R-11.12 can be built, tested
-and gated green without it. It can be built and reviewed as its own plan.
+Today `.rc_key()` folds them together, `.rc_lab_method_candidates()`
+(`R/reconcile.R:159-166`) returns **2**, and `.rc_resolve_analytes()` requires
+exactly 1 — so it falls through to the CAS branch, finds no CAS, and lands
+`unknown_analyte`. **Every ACIRL standing-water-level reading currently strands
+in review.** Verified directly against the live registry.
 
-But two real couplings the draft glossed:
-- **(a) R-11.4 removes the `feature_mask` lookup** (`R/reconcile.R:76`) on the
-  explicit grounds that "its `long` names are imported by R-11.13". Land
-  R-11.1–11.12 without **step 5** and every live `mask_long` match **regresses to
-  `unknown`**. That is a hard ordering dependency, not a shared schema.
-- **(b) Without the migration the live DB has no `feature_alias` and no
-  self-aliases**, so `.rc_feature_candidates()` returns zero rows for
-  *everything* — **100% of live data would commit dangling.**
+New resolution order:
+1. **Exact raw-name match**, case-sensitive, on `(name, organisation, method)` →
+   that row wins. The report said `Standing Water Level`, so it matches the
+   `Standing Water Level` row. **This is not attempted at all today** — the code
+   folds first and then cannot disambiguate. This step is the actual repair.
+2. Else the folded match (today's behaviour). If every survivor resolves to
+   **one** analyte, it is a **hit**, not an ambiguity — the exact parallel of
+   R-11.4's "several aliases pointing at the same feature is a hit". The pick
+   must be **deterministic** (A45 keys the analysis on `uuid_lab`, so an
+   unstable pick would create a duplicate analysis on the next run).
+3. Else (survivors span >1 distinct analyte) → ambiguous → review.
 
-**Therefore, pinned: R-11.1–R-11.12 must not be run against `monitoring.duckdb`
-until this migration has landed.** Green tests are not evidence that it is safe
-to point the new code at the live DB. If the migration ships as its own plan,
-this constraint ships with it.
+Criteria: an incoming `Standing Water Level` resolves to the row spelled that
+way, and `Standing water level` to the other — pinned separately, so a matcher
+that always returns the same row fails; a third, unseen spelling
+(`STANDING WATER LEVEL`) resolves to one analyte as a hit and picks the same
+`uuid_lab` on a re-run (idempotency); two candidates spanning **different**
+analytes still go to review; the existing R-8.3 tests stay green.
 
 ## Fixtures
 
@@ -962,10 +1088,38 @@ builds its result rows in-test, so this is reachable — build it there rather t
 seeding it. Stated because the draft's criterion had no fixture and a writer
 would have assumed one was missing.
 
-**A real-name regression fixture** for R-11.3: a committed newline-delimited list
-of the 894 real `feature.name` values (names only — no data; permitted, they are
-EPA-public per the real-corpus decision). The 894-distinct-keys property is
-pinned against it.
+**Real-name regression fixtures** for R-11.3 — **three** committed
+newline-delimited lists, names only, no data (permitted; EPA-public per the
+real-corpus decision, and the single sanctioned A3 exception):
+- the 894 `feature.name` values;
+- the 247 `analyte.name` values;
+- the 360 `(organisation, name, method)` triples.
+
+Each fixture's **header line records its own row count and its distinct-key
+count** (894/894, 247/246, 360/359). The test reads those from the file — **no
+count literal appears in the test source**, so adding an analyte cannot rot it.
+The two known collisions (`Carbophenothion`; the two ACIRL
+`Standing Water Level` spellings) are listed in an explicit allowlist in the
+fixture header, so the live property check (R-11.3(b)) fails on the *third*
+collision, not the first.
+
+**`analysis` must NOT declare a units column** (D7 reversed). `helper-db.R`
+already shipped one — see the revision note below.
+
+**⚠️ helper-db.R + FIXTURES.md already landed and must be REVISED, not extended
+(2026-07-22).** Phase-4 dispatch 1 (`40f9fba`) landed the fixture foundation on
+2026-07-17, *before* the 2026-07-19 fold-ins and this 2026-07-22 review. Three
+things in it are now wrong and a resumed Phase 4 must not simply carry on from
+dispatch 2:
+1. `analysis.units_raw` was added — **remove it** (D7 reversed / A63); the units
+   belong on `lab_method`, which needs new `units` and `conversion_constant`
+   columns instead.
+2. The `feature` DDL is missing `lon`/`lat` (NOT NULL live) — **add them**
+   (R-11.17). It correctly keeps `virtual`; the comment calling that column
+   "TEST-ONLY drift" is wrong and must be deleted (A67 — the column exists live).
+3. The seed needs the R-11.19 fixture: two `lab_method` rows differing only in
+   name capitalisation, same org, same method, one analyte.
+FIXTURES.md carries the same three corrections in its §"Seed DB".
 
 ## Whole-package code-review fold-ins (2026-07-19)
 
@@ -1086,22 +1240,30 @@ literal `BDL` DB row has `quantified = FALSE`; a `<0.01` row keeps `rl_low = 0.0
 
 ### R-11.17 `add_feature()` aligned to the live `feature` schema (F5 / A-4)
 
-Probed directly against the corpus DB: the live `feature` table has **18
-columns**; `name`, `site`, **`lon`, `lat`** are **NOT NULL**; `geom_wkt` is
-nullable; there is **no `virtual` column**. `add_feature()` (`mutate.R:324-338`)
-builds a row with a `virtual` column (fails column validation) and no
-`lon`/`lat` (fails NOT NULL) — it is a **broken exported API** (A16), green only
-because `helper-db.R`'s test DDL still carries `virtual` and omits `lon`/`lat`.
+**Re-probed 2026-07-22 against the authoritative DB (A67); the 2026-07-19
+probe hit the dashboard's derived copy and got this half wrong.** The live
+`feature` table has **19 columns**; `name`, `site`, **`lon`, `lat`** are **NOT
+NULL**; `geom_wkt` is nullable; and **`virtual BOOLEAN` DOES exist** (all 894
+rows FALSE). `add_feature()` (`mutate.R:324-338`) omits `lon`/`lat` and so
+violates NOT NULL — it is a **broken exported API** (A16), green only because
+`helper-db.R`'s test DDL omits those two columns. Its `virtual` argument is
+**fine and stays**; the earlier "drop `virtual`" instruction was the artefact of
+the wrong DB.
 
 Fix (cross-plan edit to `mutate.R`, owned by 09; and `helper-db.R`, owned here):
 - signature → `add_feature(name, site, lon, lat, flow = NA_character_,
-  matrix = NA_character_, geom_wkt = NA_character_, actor, reason)`; **drop
-  `virtual`**; `checkmate` require `name`/`site` (string) and `lon`/`lat`
-  (number).
-- **Reconcile `.st_test_core_ddl`'s `feature` to the live 18-column shape**
-  (drop `virtual`; add `lon`/`lat` NOT NULL + the other live columns) — this is
-  A-4's DDL reconciliation, and it is what let F5 stay green. This composes with
-  the plan-11 `feature` seeding (each feature still gains a self-alias).
+  matrix = NA_character_, geom_wkt = NA_character_, virtual = FALSE, actor,
+  reason)`; `checkmate` require `name`/`site` (string) and `lon`/`lat` (number).
+  **`virtual` is KEPT** (A58, corrected 2026-07-22): the "drop it" instruction
+  rested on the dashboard-copy misreading (A67) — the column **exists live**,
+  and `add_feature()` may be called by code that uses it. It stays optional,
+  defaulting FALSE. **The real defect is the missing `lon`/`lat`**, which are
+  NOT NULL live, so `add_feature()` genuinely cannot insert against the live DB.
+- **Reconcile `.st_test_core_ddl`'s `feature` to the live 19-column shape**
+  (**keep** `virtual`; **add** `lon`/`lat` NOT NULL + the other live columns) —
+  this is A-4's DDL reconciliation, and the missing `lon`/`lat` is what let F5
+  stay green. This composes with the plan-11 `feature` seeding (each feature
+  still gains a self-alias).
 - add a `skip_if`-gated meta-test that diffs `.st_test_core_ddl`'s `feature`
   columns against `information_schema.columns` when `SAMPLETIDY_CORPUS_DB` is set,
   so future drift fails loudly.
@@ -1162,7 +1324,19 @@ note when these land.
 ## Gates
 
 - Per-plan: `testthat::test_file()` green for `test-feature-alias.R`,
-  `test-pending.R`, and the amended `test-reconcile.R` / `test-commit.R`.
+  `test-pending.R`, and every amended test file in the `Amends` table above —
+  `test-reconcile.R`, `test-commit.R`, `test-mutate.R`, `test-assemble.R`,
+  `test-adapter-acirl.R`, `test-e2e-pipeline.R`.
+- **Baseline note (2026-07-22).** The suite is currently and legitimately
+  TDD-red: 1 failure + 43 errors, all `Table "s" does not have a column named
+  "uuid_feature"`, in `test-reconcile.R` (22), `test-e2e-pipeline.R` (8),
+  `test-ingest.R` (9), `test-commit.R` (5). That is Phase-4 dispatch 1's schema
+  change landing ahead of the production amendments — the expected state, not a
+  regression. 928 tests pass. Plan 10's four real-corpus gates are **green over
+  the full 265-file corpus** (433 assertions, 0 failures) and were run at this
+  same commit; they do not use `seed_db()`.
+- **No `analysis` table in any DDL declares a units column** (D7 reversed) —
+  a grep, because the reversed decision already shipped once in `helper-db.R`.
 - Full `devtools::test()` green; `devtools::check()` no new errors/warnings
   (A47's non-portable-fixture WARNING is pre-existing).
 - Plan-10 e2e green, **including its idempotency run twice in a row** — the
@@ -1189,15 +1363,20 @@ note when these land.
 - **A50** — A7 amended: this plan's core-schema migration is **not**
   additive-only and is **not** run by `ensure_schema()` (which stays
   ops-tables-only). It is an operator-run one-off against a backup.
-- **A51** — `analysis.units_raw` added (D7); `analysis.value` is canonical iff
-  the row's `lab_method.uuid_analyte` is non-NULL.
+- **A51** — ~~`analysis.units_raw` added (D7)~~ **SUPERSEDED by A63**: no
+  `analysis` units column; the units live on `lab_method`. The invariant
+  survives — `analysis.value` is canonical iff the row's
+  `lab_method.uuid_analyte` is non-NULL; when dangling it is in the *method's*
+  units.
 - **A52** — `helper-db.R` is owned by plan 11 (the CONTRACT partition had no
   owner for it). **Extended (cold review C8):** the partition table has **no
   plan-11 row at all**. A52 adds one, covering `R/feature-alias.R`, `R/pending.R`,
-  `dev/migrations/001-alias-indirection.R`, `test-feature-alias.R`,
-  `test-pending.R`, `helper-db.R` — and records that plan 11's amendments to
-  `R/reconcile.R` (owned by plan 08) and `R/commit.R` / `R/mutate.R` (owned by
-  plan 09) are **adjudicated cross-plan edits**, not ownership transfers.
+  `test-feature-alias.R`, `test-pending.R`, `helper-db.R` (the migration moved to
+  plan 13 — A68) — and records that plan 11's amendments to `R/reconcile.R`
+  (owned by 08), `R/commit.R` / `R/mutate.R` (09), `R/assemble.R` (07) and
+  `R/adapter-acirl-field.R` (06), plus the matching `test-<module>.R` files and
+  plan 10's `test-e2e-pipeline.R`, are **adjudicated cross-plan edits**, not
+  ownership transfers. The authoritative list is this plan's `Amends` table.
 - **A53** — `.rc_find_existing` drops its redundant `lm.uuid_analyte` clause
   (method ⇒ analyte); A45's key is unchanged. *Independently verified in cold
   review against `R/reconcile.R:428-440`.*
@@ -1235,11 +1414,12 @@ note when these land.
   populated for `>`-notation rows (R-11.16). Corrects the old re-derivation that
   committed `>`/`BDL` rows as `quantified = TRUE`.
 - **A58** — `add_feature()`'s signature is aligned to the **live** `feature`
-  schema (R-11.17): required `name`/`site`/`lon`/`lat` (all NOT NULL live), no
-  `virtual` column (absent live). The CONTRACT "Existing DB schema" `feature`
-  line is corrected to list `lon`/`lat` (NOT NULL) explicitly and drop the
-  implied `virtual`; `.st_test_core_ddl`'s `feature` is reconciled to the live
-  18-column shape (A-4), removing the test-only drift that masked the bug.
+  schema (R-11.17): required `name`/`site`/`lon`/`lat` (all NOT NULL live).
+  **`virtual` is KEPT** — corrected 2026-07-22 (A67): the column *does* exist
+  live (19 cols, all 894 rows FALSE), and the earlier "drop it" instruction came
+  from probing the dashboard's derived copy. `.st_test_core_ddl`'s `feature` is
+  reconciled to the live **19**-column shape (A-4); the drift that masked the
+  bug was the **missing `lon`/`lat`**, not the present `virtual`.
 - **A62** — **A11 refined** (user, 2026-07-19; R-11.18/F9): two readings at one
   feature+date with **different non-NA datetimes are distinct samplings**
   (distinct `sample` rows), not one sample. Governs both `.rc_find_existing`
@@ -1248,6 +1428,22 @@ note when these land.
   differing); a NA datetime on either side falls back to date-granularity reuse,
   so A11's "date first, then datetime when both sides have it" is preserved for
   the uncertain cases.
+- **A63** — **A51 reversed.** No `analysis` units column; `lab_method` regains
+  `units` + `conversion_constant` (D7). `units` is a **fallback**, pinned as a
+  `COMMENT ON COLUMN`, and is **not** part of the method's identity.
+- **A64** — `lab_method.reported_as` is **not dead**; it records the reported
+  *basis* (`N`/`NH3`/`CaCO3`). The "candidate for removal" note is struck.
+- **A65** — lab-method candidate resolution: exact raw name first, then folded
+  with "all survivors → one analyte is a hit" (R-11.19).
+- **A66** — **D10 reversed**: CAS-hits commit dangling with the CAS as a review
+  suggestion.
+- **A67** — evidence-DB provenance; three false "corrections" reverted
+  (`feature` 19 cols with `virtual`; `lab_method` 360; 14 views not 60).
+- **A68** — the migration is **PLAN-13**; its ordering constraint still binds.
+- **A69** — live-DB **data** remediation is **PLAN-14**, and item (c) — the 12
+  ammonia analyses — is **OPEN pending provenance**, not scheduled work.
+
+*(A59–A61 are PLAN-12's and are deliberately not used here.)*
 
 ## Open / deferred
 
@@ -1285,5 +1481,10 @@ note when these land.
   `confirm_analyte_methods()` then confirms — keeping A6/A54's line intact.
 - **Retiring `feature.cypher`** and the `project.cypher` twin: after the
   migration is reviewed.
-- **`lab_method.reported_as`** is dead (NULL in all 365 rows). Candidate for
-  removal whenever `lab_method` is next rebuilt.
+- **~~`lab_method.reported_as` is dead. Candidate for removal.~~
+  RETRACTED (A64, user 2026-07-22) — do NOT drop this column.** It records the
+  *basis* a result is reported on: ammonium as `N` vs as `NH3`, hardness as
+  `CaCO3`. NULL in all 360 rows is a **data gap**, not disuse — the basis
+  currently rides in the `lab_method.name` string instead (`Ammonia as N`,
+  `Ammonia as NH3`, `Total Alkalinity as CaCO3`). Backfilling it is PLAN-14
+  R-14.2, together with the `conversion_constant` that makes it actionable.
