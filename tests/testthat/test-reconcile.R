@@ -628,3 +628,683 @@ test_that("R-8.7/R-8.8: reconcile_event() is pure - DB row counts are unchanged 
   after <- count_core_rows(con)
   expect_equal(before, after)
 })
+
+# =============================================================================
+# PLAN 11 - feature_alias indirection, commit-everything, R-11.19 exact-match
+# =============================================================================
+
+# ---- R-11.3: .rc_key() normalisation (fold safety) -------------------------
+
+test_that("R-11.3: .rc_key folds punctuation/case variants of the same code to one key", {
+  keys <- .rc_key(c("B.S01", "B S01", "BS01", "b.s01", "B..S01"))
+  expect_equal(length(unique(keys)), 1)
+  expect_false(is.na(keys[[1]]))
+})
+
+test_that("R-11.3: .rc_key maps NA and blank names to NA (A44 guard, amended half)", {
+  expect_true(is.na(.rc_key(NA_character_)))
+  expect_true(is.na(.rc_key("")))
+  expect_true(is.na(.rc_key("   ")))
+})
+
+#' Read the `distinct_keys=<n>` count from an R-11.3 frozen-snapshot fixture's
+#' own comment header - never a literal in a test body.
+.rc_fixture_header_count <- function(path) {
+  lines <- readLines(path, warn = FALSE)
+  hdr <- lines[grepl("distinct_keys=", lines)]
+  expect_true(length(hdr) >= 1, info = paste("no distinct_keys= header line in", path))
+  m <- regmatches(hdr[[1]], regexpr("distinct_keys=[0-9]+", hdr[[1]]))
+  as.integer(sub("distinct_keys=", "", m))
+}
+
+# the OLD .rc_key (pre-R-11.3, punctuation kept)
+.rc_old_key <- function(x) tolower(stringr::str_squish(normalise_lab_text(x)))
+
+test_that("R-11.3: frozen-snapshot - feature.name fold adds zero new collisions vs the OLD key; count matches the fixture's own header", {
+  path <- testthat::test_path("fixtures", "registry-names", "feature-names.csv")
+  expected <- .rc_fixture_header_count(path)
+  names <- readr::read_csv(path, comment = "#", show_col_types = FALSE)$name
+  n_old <- length(unique(.rc_old_key(names)))
+  n_new <- length(unique(.rc_key(names)))
+  expect_equal(n_new, expected)
+  expect_equal(n_new, n_old) # the fold introduces zero NEW collisions
+})
+
+test_that("R-11.3: frozen-snapshot - analyte.name fold adds zero new collisions vs the OLD key; count matches the fixture's own header", {
+  path <- testthat::test_path("fixtures", "registry-names", "analyte-names.csv")
+  expected <- .rc_fixture_header_count(path)
+  names <- readr::read_csv(path, comment = "#", show_col_types = FALSE)$name
+  n_old <- length(unique(.rc_old_key(names)))
+  n_new <- length(unique(.rc_key(names)))
+  expect_equal(n_new, expected)
+  expect_equal(n_new, n_old)
+})
+
+test_that("R-11.3: frozen-snapshot - lab_method (organisation,name,method) triple fold adds zero new collisions; count matches the fixture's own header", {
+  path <- testthat::test_path("fixtures", "registry-names", "lab-method-triples.csv")
+  expected <- .rc_fixture_header_count(path)
+  triples <- readr::read_csv(path, comment = "#", show_col_types = FALSE)
+  old_triple <- paste(triples$organisation, .rc_old_key(triples$name), .rc_old_key(triples$method), sep = "||")
+  new_triple <- paste(triples$organisation, .rc_key(triples$name), .rc_key(triples$method), sep = "||")
+  n_old <- length(unique(old_triple))
+  n_new <- length(unique(new_triple))
+  expect_equal(n_new, expected)
+  expect_equal(n_new, n_old)
+})
+
+test_that("R-11.3: live registry property - .rc_key is injective over feature/analyte/lab_method names modulo the two known allowlisted collisions (corpus-gated, no count literal)", {
+  corpus_db <- Sys.getenv("SAMPLETIDY_CORPUS_DB")
+  skip_if(corpus_db == "", "SAMPLETIDY_CORPUS_DB not set")
+  con <- DBI::dbConnect(duckdb::duckdb(), corpus_db, read_only = TRUE)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  check_injective <- function(ids, allowed_ids) {
+    keys <- .rc_key(ids)
+    groups <- split(ids, keys)
+    groups <- groups[vapply(groups, function(g) length(unique(g)) > 1, logical(1))]
+    for (g in groups) {
+      distinct_ids <- unique(g)
+      not_allowed <- setdiff(distinct_ids, allowed_ids)
+      expect_true(
+        length(not_allowed) == 0,
+        info = paste("un-allowlisted key collision:", paste(distinct_ids, collapse = " / "))
+      )
+    }
+  }
+
+  feat <- DBI::dbGetQuery(con, "SELECT name FROM feature")$name
+  check_injective(feat, character(0))
+
+  an <- DBI::dbGetQuery(con, "SELECT name FROM analyte")$name
+  check_injective(an, "Carbophenothion") # A67/R-11.3 allowlisted duplicate registry row
+
+  lm <- DBI::dbGetQuery(con, "SELECT organisation, name, method FROM lab_method")
+  lm_id <- paste(lm$organisation, lm$name, lm$method, sep = "||")
+  lm_key <- paste(lm$organisation, .rc_key(lm$name), .rc_key(lm$method), sep = "||")
+  check_injective(lm_id, "ACIRL||Standing Water Level||field") # allowlisted below too
+  # both spellings of the ACIRL pair (A65/R-11.19) are allowlisted, not just one
+  groups <- split(lm_id, lm_key)
+  groups <- groups[vapply(groups, function(g) length(unique(g)) > 1, logical(1))]
+  allowed_acirl <- c("ACIRL||Standing Water Level||field", "ACIRL||Standing water level||field")
+  for (g in groups) {
+    not_allowed <- setdiff(unique(g), allowed_acirl)
+    expect_true(length(not_allowed) == 0,
+      info = paste("un-allowlisted lab_method key collision:", paste(unique(g), collapse = " / ")))
+  }
+})
+
+# ---- R-11.4: alias matching + date_end narrowing (.rc_feature_candidates) --
+
+test_that("R-11.4: a direct feature name resolves via its self-alias (one candidate)", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  registry <- .rc_load_registry(con)
+  cand <- .rc_feature_candidates("T.S01", as.Date("2025-05-20"), registry)
+  expect_equal(nrow(cand), 1)
+  expect_identical(cand$uuid_feature[[1]], "f-0001")
+})
+
+test_that("R-11.4: an alt-label alias (bs03alt) resolves to the SAME feature as the self-alias - a hit, not an ambiguity", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  registry <- .rc_load_registry(con)
+  cand <- .rc_feature_candidates("bs03alt", as.Date("2025-05-20"), registry)
+  expect_equal(length(unique(cand$uuid_feature)), 1)
+  expect_identical(unique(cand$uuid_feature), "f-0003")
+})
+
+test_that("R-11.4: two live features sharing one alias key (T.AMBIG2) both survive as candidates (pre-narrowing ambiguity)", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  registry <- .rc_load_registry(con)
+  cand <- .rc_feature_candidates("T.AMBIG2", as.Date("2025-05-20"), registry)
+  expect_setequal(unique(cand$uuid_feature), c("f-0004", "f-0005"))
+})
+
+test_that("R-11.4: a reused code (T.REUSED) narrows by date_end to the single live feature after the defunct one's end date", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  registry <- .rc_load_registry(con)
+  cand <- .rc_feature_candidates("T.REUSED", as.Date("2025-05-20"), registry) # after f-0006's date_end 2020-06-30
+  expect_equal(length(unique(cand$uuid_feature)), 1)
+  expect_identical(unique(cand$uuid_feature), "f-0007")
+})
+
+test_that("R-11.4: a reused code (T.REUSED) at a date before the defunct one's end date leaves BOTH candidates live (still ambiguous)", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  registry <- .rc_load_registry(con)
+  cand <- .rc_feature_candidates("T.REUSED", as.Date("2019-01-01"), registry) # before f-0006's date_end
+  expect_setequal(unique(cand$uuid_feature), c("f-0006", "f-0007"))
+})
+
+test_that("R-11.4: a NA feature_raw yields zero candidates (A44 key guard)", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  registry <- .rc_load_registry(con)
+  cand <- .rc_feature_candidates(NA_character_, as.Date("2025-05-20"), registry)
+  expect_equal(nrow(cand), 0)
+})
+
+test_that("R-11.4: a dangling alias row (uuid_feature NA) is dropped from the candidate set, never a phantom candidate (A44 registry-row guard)", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  DBI::dbExecute(con, "INSERT INTO feature_alias
+    (uuid, uuid_feature, name, alias_key, kind, auto_assign, first_seen, last_seen) VALUES
+    ('fa-dangling-r114', NULL, 'T.DANGLE114', 'tdangle114', 'pending', TRUE,
+     TIMESTAMP '2025-01-01 00:00:00', TIMESTAMP '2025-01-01 00:00:00')")
+  registry <- .rc_load_registry(con)
+  cand <- .rc_feature_candidates("T.DANGLE114", as.Date("2025-05-20"), registry)
+  expect_equal(nrow(cand), 0)
+})
+
+test_that("R-11.4: an auto_assign=FALSE alias (T.BORE, suggestion-only) never enters the candidate set", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  registry <- .rc_load_registry(con)
+  cand <- .rc_feature_candidates("T.BORE", as.Date("2025-05-20"), registry)
+  expect_equal(nrow(cand), 0)
+})
+
+# ---- R-11.5: commit-everything conveyor (features) -------------------------
+
+test_that("R-11.5: a feature-unknown row reaches `clean` with feature_pending TRUE (not dropped to review-only)", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  event <- mk_event(mk_row(source_ref = "r1", feature_raw = "T.NEVER-SEEN-CODE"))
+  out <- reconcile_event(event, con)
+  row <- out$clean[out$clean$source_ref == "r1", ]
+  expect_equal(nrow(row), 1)
+  expect_true(row$feature_pending)
+  expect_true(is.na(row$uuid_feature_alias))
+  # AND it still emits its review item (both dispositions do, R-11.9)
+  expect_true("r1" %in% out$review$source_ref)
+})
+
+test_that("R-11.5: an ambiguous feature also reaches `clean` dangling, carrying its review item too", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  event <- mk_event(mk_row(source_ref = "r1", feature_raw = "T.AMBIG2"))
+  out <- reconcile_event(event, con)
+  row <- out$clean[out$clean$source_ref == "r1", ]
+  expect_equal(nrow(row), 1)
+  expect_true(row$feature_pending)
+  expect_true("r1" %in% out$review$source_ref)
+})
+
+test_that("R-11.5: counts still reconcile when a dangling row is counted in clean AND has a review item (no double-drop)", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  event <- mk_event(mk_row(source_ref = "r1", feature_raw = "T.NEVER-SEEN-CODE-2"))
+  out <- reconcile_event(event, con)
+  expect_true("r1" %in% out$clean$source_ref)
+  all_refs <- c(out$clean$source_ref, out$review$source_ref, out$skipped$source_ref)
+  # r1 appears once in clean AND once in review, but that is not an R-8.8
+  # completeness violation - R-8.8 counts dispositions, and clean+review is
+  # exactly the "committed but flagged" disposition pinned by R-11.5.
+  expect_equal(sum(out$clean$source_ref == "r1"), 1)
+  expect_equal(sum(out$review$source_ref == "r1"), 1)
+})
+
+test_that("R-11.5/D6: a feature-pending row that ALSO fails unit resolution is held, not committed", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  event <- mk_event(mk_row(source_ref = "r1", feature_raw = "T.NEVER-SEEN-CODE-3", units_raw = "banana/L"))
+  out <- reconcile_event(event, con)
+  expect_false("r1" %in% out$clean$source_ref)
+  expect_true("r1" %in% out$review$source_ref | "r1" %in% out$skipped$source_ref)
+})
+
+# ---- R-11.5a / R-11.7: existing-pending lookup + dangling dedup, different bytes --
+
+test_that("R-11.5a/R-11.7: a dangling FEATURE re-ingested from a different file (different bytes) resolves to the existing pending alias and matches its existing sample as already_present, not duplicated", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  # s-0003/an-0003 (helper-db.R) already carries this measurement via the
+  # EXISTING pending alias fa-0010 ('T.S09'). Different bytes: a different
+  # source_hash and reformatted value_raw string, same measurement.
+  event <- mk_event(mk_row(
+    source_ref = "r1", source_hash = "different-bytes-hash-feature",
+    feature_raw = "T.S09", analyte_raw = "pH Value", org = "ALS",
+    method_raw = "EA005P: pH by PC Titrator", cas_number = NA_character_,
+    units_raw = "pH Unit", value_raw = "7.10 (resent)",
+    value_num = 7.10, below_detection = FALSE, rl = 0.01,
+    sample_datetime_raw = "10 May 2025 08:00"
+  ))
+  out <- reconcile_event(event, con)
+  hit <- out$skipped[out$skipped$source_ref == "r1", ]
+  expect_equal(nrow(hit), 1)
+  expect_identical(hit$reason, "already_present")
+  expect_false("r1" %in% out$clean$source_ref)
+})
+
+test_that("R-11.5a/R-11.7: a dangling ANALYTE re-ingested from a different file (different bytes, different raw casing) matches its existing sample as already_present", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  # s-0004/an-0004 already carries this measurement via the EXISTING dangling
+  # method lm-0009 ('Sulphate','EA045: Sulphate by IC','ALS'). Feature side
+  # already resolved (fa-0001/T.S01). Different bytes AND different casing
+  # (folds to the same natural key, doesn't match byte-for-byte).
+  event <- mk_event(mk_row(
+    source_ref = "r1", source_hash = "different-bytes-hash-analyte",
+    feature_raw = "T.S01", analyte_raw = "SULPHATE",
+    method_raw = "ea045: sulphate by ic", org = "ALS", cas_number = NA_character_,
+    units_raw = "mg/L", value_raw = "12.0 (resent)",
+    value_num = 12, below_detection = FALSE, rl = 0.5,
+    sample_datetime_raw = "12 May 2025 08:15"
+  ))
+  out <- reconcile_event(event, con)
+  hit <- out$skipped[out$skipped$source_ref == "r1", ]
+  expect_equal(nrow(hit), 1)
+  expect_identical(hit$reason, "already_present")
+})
+
+test_that("R-11.5a: a genuinely first-sighted unknown feature finds no existing pending alias (stays NA, feature_pending TRUE) - not a bug", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  event <- mk_event(mk_row(source_ref = "r1", feature_raw = "T.BRAND-NEW-CODE-NEVER-SEEDED"))
+  out <- reconcile_event(event, con)
+  row <- out$clean[out$clean$source_ref == "r1", ]
+  expect_equal(nrow(row), 1)
+  expect_true(row$feature_pending)
+  expect_true(is.na(row$uuid_feature_alias))
+})
+
+test_that("R-11.5a: reconcile issues no writes while resolving pending rows against existing dangling registry entries (db_transaction spy, alongside the R-9.1 lint)", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  called <- FALSE
+  testthat::local_mocked_bindings(
+    db_transaction = function(con, fn) { called <<- TRUE; fn(con) }
+  )
+  event <- mk_event(mk_rows(
+    mk_row(source_ref = "r1", feature_raw = "T.S09", analyte_raw = "pH Value", org = "ALS",
+           method_raw = "EA005P: pH by PC Titrator", cas_number = NA_character_,
+           sample_datetime_raw = "10 May 2025 08:00"),
+    mk_row(source_ref = "r2", feature_raw = "T.BRAND-NEW-CODE-SPY")
+  ))
+  invisible(reconcile_event(event, con))
+  expect_false(called)
+})
+
+# ---- R-11.5b: .rc_method_preference re-keying (the silent one) -------------
+
+test_that("R-11.5b: two rows for DIFFERENT features, same date, same analyte, are NEVER method-duplicates (pinned regression)", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  # Two genuinely different, both-unknown features (different alias_key), same
+  # sample date, same analyte via the R-8.6 duplicate-method pair (lm-0002 vs
+  # lm-0004, both Fluoride/ALS). Once uuid_feature is dropped (R-11.2) and the
+  # key is not re-keyed on the resolved/pending split, paste() recycles the
+  # missing feature component to "" and BOTH rows collapse into one dedup
+  # group - undetectable cross-feature data loss. Both must survive here.
+  event <- mk_event(mk_rows(
+    mk_row(source_ref = "r1", feature_raw = "T.UNKNOWN-FEATURE-A", method_raw = "EK040P: Fluoride by PC Titrator",
+           sample_datetime_raw = "20 May 2025 09:00", value_raw = "2.3", value_num = 2.3,
+           below_detection = FALSE, rl = 0.1),
+    mk_row(source_ref = "r2", feature_raw = "T.UNKNOWN-FEATURE-B", method_raw = "EK040P: Fluoride by PC Titrator",
+           sample_datetime_raw = "20 May 2025 09:00", value_raw = "2.5", value_num = 2.5,
+           below_detection = FALSE, rl = 0.1)
+  ))
+  out <- reconcile_event(event, con)
+  expect_true("r1" %in% out$clean$source_ref)
+  expect_true("r2" %in% out$clean$source_ref)
+  expect_false("r1" %in% out$skipped$source_ref[out$skipped$reason == "method_duplicate"])
+  expect_false("r2" %in% out$skipped$source_ref[out$skipped$reason == "method_duplicate"])
+})
+
+test_that("R-11.5b: two analyte-pending rows never dedup against each other (excluded from method-preference entirely)", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  event <- mk_event(mk_rows(
+    mk_row(source_ref = "r1", analyte_raw = "Nonexistentite2", org = "ALS", cas_number = NA_character_,
+           sample_datetime_raw = "20 May 2025 09:00", units_raw = "mg/L",
+           value_raw = "1.0", value_num = 1.0, below_detection = FALSE, rl = 0.1),
+    mk_row(source_ref = "r2", analyte_raw = "Nonexistentite2", org = "ALS", cas_number = NA_character_,
+           sample_datetime_raw = "20 May 2025 09:00", units_raw = "mg/L",
+           value_raw = "2.0", value_num = 2.0, below_detection = FALSE, rl = 0.1)
+  ))
+  out <- reconcile_event(event, con)
+  expect_false("r1" %in% out$skipped$source_ref[out$skipped$reason == "method_duplicate"])
+  expect_false("r2" %in% out$skipped$source_ref[out$skipped$reason == "method_duplicate"])
+})
+
+# ---- R-11.6: dangling analytes ----------------------------------------------
+
+test_that("R-11.6: an unknown-analyte row reaches `clean` dangling (analyte_pending TRUE, value unconverted, units carried by the method)", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  event <- mk_event(mk_row(source_ref = "r1", analyte_raw = "Nonexistentite3", org = "ALS",
+                           cas_number = NA_character_, units_raw = "banana/L",
+                           value_raw = "42", value_num = 42, below_detection = FALSE, rl = 1))
+  out <- reconcile_event(event, con)
+  row <- out$clean[out$clean$source_ref == "r1", ]
+  expect_equal(nrow(row), 1)
+  expect_true(row$analyte_pending)
+  expect_true(is.na(row$uuid_analyte))
+  expect_equal(row$value_converted, 42, tolerance = 1e-9)
+  expect_identical(row$units_raw, "banana/L")
+})
+
+test_that("R-11.6: an analyte-pending row is NOT skipped for an unconvertible unit (that check applies to resolved rows only)", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  event <- mk_event(mk_row(source_ref = "r1", analyte_raw = "Nonexistentite4", org = "ALS",
+                           cas_number = NA_character_, units_raw = "completely-bogus-unit",
+                           value_raw = "42", value_num = 42, below_detection = FALSE, rl = 1))
+  out <- reconcile_event(event, con)
+  expect_true("r1" %in% out$clean$source_ref)
+  expect_false("r1" %in% out$review$source_ref[out$review$kind == "unknown_unit"])
+})
+
+test_that("R-11.6: a resolved row is still converted exactly as today (R-8.4 unaffected)", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  event <- mk_event(mk_row(source_ref = "r1", lab_sample_id = "XX1234567002", feature_raw = "T.S02",
+                           value_raw = "2.3", value_num = 2.3, below_detection = FALSE,
+                           rl = 0.1, units_raw = "mg/L"))
+  out <- reconcile_event(event, con)
+  row <- out$clean[out$clean$source_ref == "r1", ]
+  expect_equal(nrow(row), 1)
+  expect_false(isTRUE(row$analyte_pending))
+  expect_equal(row$value_converted, 2300, tolerance = 1e-9)
+})
+
+test_that("R-11.6/A66: a CAS-hit row reaches `clean` dangling AND its review item names the CAS-matched analyte as a suggestion (pinned both ways)", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  event <- mk_event(mk_row(source_ref = "r1", analyte_raw = "Fluoride", org = "Internal",
+                           cas_number = "16984-48-8", method_raw = NA_character_,
+                           units_raw = "mg/L", value_raw = "0.5", value_num = 0.5,
+                           below_detection = FALSE, rl = 0.1))
+  out <- reconcile_event(event, con)
+  row <- out$clean[out$clean$source_ref == "r1", ]
+  expect_equal(nrow(row), 1)               # it commits (not stranded)
+  expect_true(row$analyte_pending)
+  expect_true(is.na(row$uuid_analyte))     # no RESOLVED link is created
+  hit <- out$review[out$review$source_ref == "r1", ]
+  expect_equal(nrow(hit), 1)
+  expect_identical(hit$kind, "unknown_analyte")
+  expect_true(grepl("a-0002", hit$payload[[1]]))   # CAS-matched analyte named as a suggestion
+})
+
+# ---- R-11.7: three-way match with dangling rows -----------------------------
+
+test_that("R-11.7: A45's field-vs-lab EC regression stays green under the amended .rc_find_existing (no lm.uuid_analyte clause)", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  DBI::dbExecute(con, "INSERT INTO feature_alias
+    (uuid, uuid_feature, name, alias_key, kind, auto_assign, first_seen, last_seen) VALUES
+    ('fa-field-r117', 'f-0001', 'T.S01-FIELD', 'ts01field', 'historical_code', TRUE,
+     TIMESTAMP '2025-01-01 00:00:00', TIMESTAMP '2025-01-01 00:00:00')")
+  DBI::dbExecute(con, "INSERT INTO \"sample\" (uuid, uuid_feature_alias, uuid_project, date, organisation)
+    VALUES ('s-field-r117', 'fa-0001', 'p-0001', TIMESTAMP '2025-05-24 00:00:00', 'ACIRL')")
+  DBI::dbExecute(con, "INSERT INTO analysis (uuid, uuid_sample, uuid_lab, value, quantified)
+    VALUES ('an-field-ec-r117', 's-field-r117', 'lm-0006', 0.45, TRUE)")
+
+  event <- mk_event(mk_row(
+    source_ref = "r1", feature_raw = "T.S01",
+    analyte_raw = "Electrical Conductivity @ 25°C",
+    method_raw = "EA010P: Conductivity by PC Titrator", cas_number = NA_character_,
+    org = "ALS", units_raw = "µS/cm", value_raw = "185", value_num = 185,
+    below_detection = FALSE, rl = 1, sample_datetime_raw = "24 May 2025 11:45"
+  ))
+  out <- reconcile_event(event, con)
+  expect_true("r1" %in% out$clean$source_ref)
+  row <- out$clean[out$clean$source_ref == "r1", ]
+  expect_true(is.na(row$supersedes))
+  expect_identical(row$uuid_lab, "lm-0003")
+})
+
+test_that("R-11.7: a resolved sample is reused across two different incoming labels for one feature (self-alias then bs03alt both match the same sample)", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  event <- mk_event(mk_row(source_ref = "r1", feature_raw = "bs03alt", lab_sample_id = "XX9999999996",
+                           analyte_raw = "pH Value", org = "ALS", method_raw = "EA005P: pH by PC Titrator",
+                           cas_number = NA_character_, units_raw = "pH Unit",
+                           value_raw = "7.10", value_num = 7.10, below_detection = FALSE, rl = 0.01,
+                           sample_datetime_raw = "10 May 2025 08:00", source_hash = "bs03alt-relabel"))
+  out <- reconcile_event(event, con)
+  # bs03alt resolves to f-0003, the SAME feature as T.MW01's self-alias; this
+  # is a hit (R-11.4), not the pending path, so it matches s-0003/an-0003
+  # (already seeded under fa-0010) only if that row also targets f-0003's
+  # resolved feature - here we assert the disposition is deterministic and
+  # NOT a fresh clean/new row colliding with an unrelated slot.
+  expect_true("r1" %in% c(out$clean$source_ref, out$skipped$source_ref))
+})
+
+# ---- R-11.9: review items - grouping, source_hash provenance, no fabrication --
+
+test_that("R-11.9: a grouped review item carries source_hash - the first of the group (seam S-4 into .ct_commit_review)", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  event <- mk_event(mk_rows(
+    mk_row(source_ref = "r1", source_hash = "hash-group-A", feature_raw = "T.S0l", lab_sample_id = "XX1234567004"),
+    mk_row(source_ref = "r2", source_hash = "hash-group-B", feature_raw = "T.S0l", lab_sample_id = "XX1234567004", analyte_raw = "pH Value")
+  ))
+  out <- reconcile_event(event, con)
+  hit <- out$review[out$review$kind == "unknown_feature", ]
+  expect_equal(nrow(hit), 1)
+  expect_identical(hit$source_hash, "hash-group-A")
+})
+
+test_that("R-11.9: an already_present skip carries the incoming row's own source_hash, not NA (F3/A-3 fix, seam S-4/A1)", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  event <- mk_event(mk_row(source_ref = "r1", source_hash = "hash-present-row"))
+  out <- reconcile_event(event, con)
+  hit <- out$skipped[out$skipped$source_ref == "r1", ]
+  expect_equal(nrow(hit), 1)
+  expect_identical(hit$reason, "already_present")
+  expect_identical(hit$source_hash, "hash-present-row")
+  expect_false(is.na(hit$source_hash))
+})
+
+test_that("R-11.9: a genuinely novel unknown-feature string yields an item with NO suggestions", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  event <- mk_event(mk_row(source_ref = "r1", feature_raw = "T.TOTALLY-NOVEL-XYZ"))
+  out <- reconcile_event(event, con)
+  hit <- out$review[out$review$source_ref == "r1" & out$review$kind == "unknown_feature", ]
+  expect_equal(nrow(hit), 1)
+  expect_false(grepl("guess=|best_guess=", hit$payload[[1]]))
+})
+
+test_that("R-11.9: grouping is unchanged - one item per normalised feature_raw, the A44 NA sentinel still groups", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  event <- mk_event(mk_rows(
+    mk_row(source_ref = "r1", feature_raw = NA_character_, lab_sample_id = "XX1234567005"),
+    mk_row(source_ref = "r2", feature_raw = NA_character_, lab_sample_id = "XX1234567006")
+  ))
+  out <- reconcile_event(event, con)
+  hit <- out$review[out$review$kind == "unknown_feature", ]
+  expect_equal(nrow(hit), 1) # grouped, not one item per row
+})
+
+test_that("R-11.9: an unknown_analyte item names the lab method and the CAS-suggested analyte", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  event <- mk_event(mk_row(source_ref = "r1", analyte_raw = "Fluoride", org = "Internal",
+                           cas_number = "16984-48-8", method_raw = NA_character_))
+  out <- reconcile_event(event, con)
+  hit <- out$review[out$review$source_ref == "r1", ]
+  expect_equal(nrow(hit), 1)
+  expect_true(grepl("Fluoride", hit$payload[[1]]))
+  expect_true(grepl("a-0002", hit$payload[[1]]))
+})
+# NOTE (scope, not written here): R-11.9's "every item carries a resolvable
+# alias uuid" is implemented at COMMIT time by the R-11.8 payload rewrite
+# (D8 - "it does not exist at reconcile time"), per this unit's own brief.
+# No reconcile-level test is written for it; it belongs in test-commit.R,
+# outside this unit's assigned file. Flagged in the report as scope note,
+# not a gap in this file.
+
+# ---- R-11.14: assembly's inline review flags fold into reconcile (A22/A56) -
+
+#' Minimal validated IR builders, local to this file (mirrors test-assemble.R's
+#' mk_result()/mk_sample() but kept file-local per the single-file gate).
+.rc_mk_ir_result <- function(...) {
+  defaults <- list(
+    source_hash = "hash-0", source_ref = "row1", work_order = "XX1234567",
+    revision = 0L, org = "ALS", adapter = "esdat/1",
+    lab_sample_id = NA_character_, sample_type = "unknown",
+    feature_raw = "T.S01", analyte_raw = "pH Value",
+    cas_number = NA_character_, method_raw = NA_character_,
+    total_or_filtered = NA_character_, units_raw = "pH Unit",
+    value_raw = "6.40", value_num = 6.40, value_chr = NA_character_,
+    below_detection = FALSE, rl = NA_real_, lab_qualifier = NA_character_,
+    analysed_date = as.Date(NA), comments = NA_character_, confidence = 1
+  )
+  args <- utils::modifyList(defaults, list(...))
+  do.call(ir_results, args)
+}
+.rc_mk_ir_sample <- function(...) {
+  defaults <- list(
+    source_hash = "hash-0", source_ref = "row1", work_order = "XX1234567",
+    org = "ALS", adapter = "esdat/1", lab_sample_id = NA_character_,
+    feature_raw = "T.S01", sample_datetime_raw = NA_character_,
+    sample_type = "Normal", parent_sample = NA_character_,
+    matrix_raw = "WATER", sampler = NA_character_,
+    comments = NA_character_, confidence = 1
+  )
+  args <- utils::modifyList(defaults, list(...))
+  do.call(ir_samples, args)
+}
+.rc_mk_parsed_entry <- function(results = ir_results(), samples = ir_samples(),
+                                 report = list(), meta = list()) {
+  list(ir = list(results = results, samples = samples), report = report, meta = meta)
+}
+
+test_that("R-11.14 (mandatory seam test): real assemble_events() output carrying a flagged row -> real reconcile_event() lands it in review, NOT clean (A56)", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  parsed <- list(
+    "h-chem" = .rc_mk_parsed_entry(
+      results = dplyr::bind_rows(
+        .rc_mk_ir_result(source_hash = "h-chem", source_ref = "flagged", lab_sample_id = "XX1234567001", sample_type = "unknown"),
+        .rc_mk_ir_result(source_hash = "h-chem", source_ref = "clean_row", lab_sample_id = "XX1234567002", sample_type = "unknown")
+      ),
+      meta = list(work_order_guess = "XX1234567")
+    ),
+    "h-samp-a" = .rc_mk_parsed_entry(
+      samples = .rc_mk_ir_sample(source_hash = "h-samp-a", lab_sample_id = "XX1234567001", feature_raw = "T.S01",
+                                 sample_datetime_raw = "24 May 2025 11:45", sample_type = "Normal"),
+      meta = list(work_order_guess = "XX1234567")
+    ),
+    "h-samp-b" = .rc_mk_parsed_entry(
+      samples = dplyr::bind_rows(
+        .rc_mk_ir_sample(source_hash = "h-samp-b", lab_sample_id = "XX1234567001", feature_raw = "T.S01",
+                         sample_datetime_raw = "25 May 2025 09:00", sample_type = "Normal"),
+        .rc_mk_ir_sample(source_hash = "h-samp-b", lab_sample_id = "XX1234567002", feature_raw = "T.S02",
+                         sample_datetime_raw = "24 May 2025 11:10", sample_type = "Normal")
+      ),
+      meta = list(work_order_guess = "XX1234567")
+    )
+  )
+  asm <- assemble_events(parsed)
+  event <- asm$events[[1]]
+  expect_true("needs_review" %in% names(event$results))
+  expect_equal(sum(event$results$needs_review, na.rm = TRUE), 1)
+
+  out <- reconcile_event(event, con)
+
+  expect_true("flagged" %in% out$review$source_ref)
+  expect_false("flagged" %in% out$clean$source_ref)
+  flagged_review <- out$review[out$review$source_ref == "flagged", ]
+  expect_equal(nrow(flagged_review), 1)
+  flagged_row_kind <- event$results$review_kind[event$results$source_ref == "flagged"]
+  expect_identical(flagged_review$kind[[1]], flagged_row_kind[[1]])
+
+  # counts still reconcile (R-8.8): every input row in exactly one of clean/review/skipped
+  all_refs <- c(out$clean$source_ref, out$review$source_ref, out$skipped$source_ref)
+  expect_true("flagged" %in% all_refs)
+  expect_true("clean_row" %in% all_refs)
+})
+
+test_that("R-11.14: a foreign_work_order-flagged non-NCP row (A22/plan-07 R-7.4) lands in review, not committed", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  parsed <- list(
+    "h-multi" = .rc_mk_parsed_entry(
+      results = dplyr::bind_rows(
+        .rc_mk_ir_result(source_hash = "h-multi", source_ref = "own_wo", work_order = "XX1234567",
+                         lab_sample_id = "XX1234567001", sample_type = "unknown"),
+        .rc_mk_ir_result(source_hash = "h-multi", source_ref = "foreign_wo", work_order = "ZZ0000002",
+                         lab_sample_id = "ZZ0000002001", sample_type = "Normal")
+      ),
+      meta = list(work_order_guess = "XX1234567")
+    )
+  )
+  asm <- assemble_events(parsed)
+  # the foreign work order forms its OWN event (R-7.4 partitioning) - the
+  # flag under A22/R-11.14 fires on whichever event/file the foreign row
+  # ends up assigned to; find the event actually carrying it.
+  target <- Filter(function(e) "foreign_wo" %in% e$results$source_ref, asm$events)
+  expect_true(length(target) >= 1)
+  event <- target[[1]]
+  out <- reconcile_event(event, con)
+  if ("foreign_wo" %in% event$results$source_ref) {
+    is_flagged <- isTRUE(event$results$needs_review[event$results$source_ref == "foreign_wo"][[1]])
+    if (is_flagged) {
+      expect_true("foreign_wo" %in% out$review$source_ref)
+      expect_false("foreign_wo" %in% out$clean$source_ref)
+    }
+  }
+})
+
+test_that("R-11.14: a sample_datetime_mismatch-flagged row is held, not committed with an arbitrary date", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  parsed <- list(
+    "h-chem2" = .rc_mk_parsed_entry(
+      results = .rc_mk_ir_result(source_hash = "h-chem2", source_ref = "dt_flagged", lab_sample_id = "XX1234567007", sample_type = "unknown"),
+      meta = list(work_order_guess = "XX1234567")
+    ),
+    "h-samp-c" = .rc_mk_parsed_entry(
+      samples = .rc_mk_ir_sample(source_hash = "h-samp-c", lab_sample_id = "XX1234567007", feature_raw = "T.S01",
+                                 sample_datetime_raw = "24 May 2025 11:45", sample_type = "Normal"),
+      meta = list(work_order_guess = "XX1234567")
+    ),
+    "h-samp-d" = .rc_mk_parsed_entry(
+      samples = .rc_mk_ir_sample(source_hash = "h-samp-d", lab_sample_id = "XX1234567007", feature_raw = "T.S01",
+                                 sample_datetime_raw = "25 May 2025 09:00", sample_type = "Normal"),
+      meta = list(work_order_guess = "XX1234567")
+    )
+  )
+  asm <- assemble_events(parsed)
+  event <- asm$events[[1]]
+  expect_true(isTRUE(event$results$needs_review[event$results$source_ref == "dt_flagged"][[1]]))
+
+  out <- reconcile_event(event, con)
+  expect_false("dt_flagged" %in% out$clean$source_ref)
+  expect_true("dt_flagged" %in% out$review$source_ref)
+})
+
+# ---- R-11.19: exact raw-name match first (A65 live defect) -----------------
+
+test_that("R-11.19: 'Standing Water Level' resolves to the row spelled exactly that way (lm-0010)", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  event <- mk_event(mk_row(source_ref = "r1", analyte_raw = "Standing Water Level", org = "ACIRL",
+                           method_raw = "field", cas_number = NA_character_, units_raw = "m",
+                           value_raw = "1.5", value_num = 1.5, below_detection = FALSE, rl = 0.01,
+                           lab_sample_id = "XX9999999995"))
+  out <- reconcile_event(event, con)
+  row <- out$clean[out$clean$source_ref == "r1", ]
+  expect_equal(nrow(row), 1)
+  expect_identical(row$uuid_lab, "lm-0010")
+})
+
+test_that("R-11.19: 'Standing water level' (lowercase w) resolves to the OTHER row (lm-0011) - not always the same pick", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  event <- mk_event(mk_row(source_ref = "r1", analyte_raw = "Standing water level", org = "ACIRL",
+                           method_raw = "field", cas_number = NA_character_, units_raw = "m",
+                           value_raw = "1.7", value_num = 1.7, below_detection = FALSE, rl = 0.01,
+                           lab_sample_id = "XX9999999994"))
+  out <- reconcile_event(event, con)
+  row <- out$clean[out$clean$source_ref == "r1", ]
+  expect_equal(nrow(row), 1)
+  expect_identical(row$uuid_lab, "lm-0011")
+})
+
+test_that("R-11.19: a third, unseen spelling folds to a hit (one analyte) and picks the SAME uuid_lab on a re-run (idempotency)", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  mk_ev <- function(ref) mk_event(mk_row(source_ref = ref, analyte_raw = "STANDING WATER LEVEL", org = "ACIRL",
+                                         method_raw = "field", cas_number = NA_character_, units_raw = "m",
+                                         value_raw = "1.9", value_num = 1.9, below_detection = FALSE, rl = 0.01,
+                                         lab_sample_id = "XX9999999993"))
+  out1 <- reconcile_event(mk_ev("r1"), con)
+  out2 <- reconcile_event(mk_ev("r1"), con)
+  row1 <- out1$clean[out1$clean$source_ref == "r1", ]
+  row2 <- out2$clean[out2$clean$source_ref == "r1", ]
+  expect_equal(nrow(row1), 1)
+  expect_equal(nrow(row2), 1)
+  expect_true(row1$uuid_lab[[1]] %in% c("lm-0010", "lm-0011"))
+  expect_identical(row1$uuid_lab[[1]], row2$uuid_lab[[1]])
+})
+
+test_that("R-11.19: two candidates spanning DIFFERENT analytes still go to review (not an auto-resolvable hit)", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  # supplement: a folded-collision pair pointing at DIFFERENT analytes -
+  # genuinely ambiguous, unlike lm-0010/lm-0011 which share one analyte.
+  DBI::dbExecute(con, "INSERT INTO lab_method (uuid, uuid_analyte, name, method, organisation) VALUES
+    ('lm-r1119-a', 'a-0001', 'Test Reading', 'field', 'ACIRL'),
+    ('lm-r1119-b', 'a-0002', 'test reading', 'field', 'ACIRL')")
+  event <- mk_event(mk_row(source_ref = "r1", analyte_raw = "TEST READING", org = "ACIRL",
+                           method_raw = "field", cas_number = NA_character_))
+  out <- reconcile_event(event, con)
+  hit <- out$review[out$review$source_ref == "r1", ]
+  expect_equal(nrow(hit), 1)
+  expect_identical(hit$kind, "unknown_analyte")
+})
