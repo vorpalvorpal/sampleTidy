@@ -182,9 +182,10 @@ for lab reports; `sample.organisation ∈ {ACIRL, Internal, ALS}`;
   verified present, e.g. `ES2107571_1_COA.pdf`; the regex anchors the
   revision immediately after the work order so `ES2131134_COC_1.pdf` yields
   NA, not 1). Equal revision or no recorded revision → review.
-- **A13** Archiving copies **every file of a committed event** (kept,
-  superseded renderings, metadata) to `<archive_dir>/<asset uuid>`
-  (extensionless — matches existing `processed/`). Sources stay in `input/`
+- **A13** *(its layout claim is FALSE — see A70.)* Archiving copies **every file
+  of a committed event** (kept, superseded renderings, metadata) to
+  `<archive_dir>/<asset uuid>`
+  (extensionless — ~~matches existing `processed/`~~ **it does not**). Sources stay in `input/`
   unless `st_config("remove_ingested")` is TRUE (default FALSE — the tested
   switch): then sources whose hash has a verified asset copy are deleted
   after a successful run; quarantined/failed/cruft files are never deleted.
@@ -674,18 +675,37 @@ for lab reports; `sample.organisation ∈ {ACIRL, Internal, ALS}`;
     analyses reach the analyte through `lab_method`;
     (b) backfill `reported_as` (`N` / `NH3` / `CaCO3` …) and the matching
     `conversion_constant` per A63/A64;
-    (c) **OPEN — needs provenance before any write.** The 12 `Ammonia as NH3`
-    analyses are recorded against analyte `NH3-N` (a **nitrogen**-basis
-    analyte) with no basis conversion applied. The correct factor is
-    NH3→N = 14.007/17.031 = **0.8225**, *not* 1.216 (which is the N→NH3
-    direction and would compound the error). But the 12 values do not look
-    lab-reported — 7 significant figures (2.163025, 41.204384), `value_chr`
-    NULL, a daily cadence at exactly two features over six consecutive days
-    (7–12 May 2024, B.E01/B.TS39), sitting on samples that also carry a
-    `Computed: Leachate Mixing Fraction` row, while the genuine ALS values on
-    those same samples are clean 2–3 sig figs. They appear **derived**. If they
-    are already N-basis, any multiplication corrupts good data. **Do not write
-    until the source of that series is identified.**
+    (c) **CLOSED — no action. The 12 `Ammonia as NH3` analyses are already
+    correct.** Resolved 2026-07-22 by reading the archived source: the DB names
+    the asset uuid, and
+    `assets/processed/08f1555c-…/ES2415638_0_XTAB.csv` (work order ES2415638)
+    reports **both** bases in one file — `Ammonia as N` on samples 001–003 and
+    `Ammonia as NH3` on 004–015. Every stored value is the reported as-NH3
+    figure **× 0.8224428** (the NH3→N mass ratio), max deviation 1.4e-06 across
+    all 12. **The old pipeline already applied the conversion; it just never
+    recorded the constant** — and the 7 significant figures that made the values
+    look "derived" are the signature of that multiplication. The dates match the
+    source exactly in `Australia/Sydney` (they look a day early only under
+    `CAST(date AS DATE)`, which shows the UTC calendar day). Both fixes
+    considered would have corrupted good data: ×1.216 ⇒ ~21.6% high, ×0.8225 ⇒
+    double-converted ~18% low. R-14.2 records the constant; it must **not**
+    re-apply it to these rows.
+  - **A70** **A13's archive-layout justification is false.** A13 writes each
+    archived file as an *extensionless file* named `<asset uuid>`, on the stated
+    grounds that this "matches existing `processed/`". Measured 2026-07-22
+    against the real archive: `processed/` holds **1,565 directories** named
+    `<asset uuid>`, each containing the original file under its real name
+    (`08f1555c-…/ES2415638_0_XTAB.csv`), versus **33** extensionless files.
+    The dominant existing convention is **directory-per-asset**, and
+    `archive_file()` (`R/archive.R:50-52`) writes the minority shape.
+    Two consequences: the real archive would become half one shape and half the
+    other, so anything walking it must handle both; and A13's own wording —
+    "copies **every file** of a committed event" — is unsatisfiable with a
+    single extensionless file per asset uuid, whereas a directory holds many.
+    **Not fixed here** (`R/archive.R` is plan 09's file and PLAN-12 R-12.4
+    already amends it). Routed to **PLAN-12 R-12.17**; A13's layout is re-pinned
+    once decided. Nothing is stranded meanwhile — sampleTidy has not written to
+    the real archive yet.
 
 ## Gates
 

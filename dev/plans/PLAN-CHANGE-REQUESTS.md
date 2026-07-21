@@ -620,3 +620,47 @@ cadence at two features over six consecutive days beside a
 `Computed: Leachate Mixing Fraction` row — they look **derived**, and if they
 are already N-basis any multiplication corrupts them. **Needs provenance from
 the user before anything is specced or written.**
+
+## [plan-14] 2026-07-22 — R-14.3 RESOLVED by reading the archived source (no write needed)
+
+The user pointed out that the DB names the asset uuids and the assets are on
+disk at `…/waste_data - Environmental monitoring/assets`. That settled it in one
+look, and the answer was **do nothing**.
+
+Trace: the 12 analyses → samples `ES2415638004`–`015` → project `ES2415638`
+("BWMF Apirl 2024 - Rain Event") → asset
+`processed/08f1555c-18be-4167-a051-ba4f9fedea09/ES2415638_0_XTAB.csv`.
+
+The report carries **both bases in one file** — `Ammonia as N` on samples
+001–003, `Ammonia as NH3` on 004–015 — which also proves the two `lab_method`
+rows are genuinely distinct and both required.
+
+**Every stored value is the reported as-NH3 figure × 0.8224428** (the NH3→N mass
+ratio), max deviation 1.4e-06 over all 12. The old pipeline had already applied
+the conversion and simply never recorded the constant. The seven significant
+figures that made these look "derived" were the *signature of that
+multiplication*. All 12 dates match the source exactly in `Australia/Sydney`
+(they read a day early only under `CAST(date AS DATE)`, which shows the UTC
+calendar day — the known storage convention, not a defect).
+
+**Both candidate fixes would have corrupted good data**: ×1.216 ⇒ ~21.6% high;
+×0.8225 ⇒ double-converted, ~18% low. Recorded because the *process* is the
+lesson: the anomaly was real, the "derived" inference drawn from it was wrong,
+and stopping to ask rather than writing is what prevented the damage.
+
+R-14.2 now pins `conversion_constant = 0.8224428` on `Ammonia as NH3` as
+documentation of what was already done — and, per A63, as what converts *future*
+as-NH3 rows. The two uses being consistent is the gate: a re-ingest of that file
+must reproduce `1.76002759` and report `already_present`.
+
+**Incidental finding, routed to PLAN-12 R-12.17 (A70):** A13 archives each file
+as an extensionless `<asset uuid>`, justified as "matches existing
+`processed/`". The real archive is **1,565 directories** named `<asset uuid>`
+holding the original filename, vs **33** extensionless files — so sampleTidy
+writes the minority shape, and A13's own "copies every file of a committed
+event" is unsatisfiable with one file per uuid.
+
+**Also good fixture material** (`ES2415638_0_XTAB.csv`): one file carrying two
+bases of the same analyte; and `B.TS39`'s cypher holds `B.S39`, `B.E39`, `B.39`,
+`B.TS40` — the plan-11 alias problem in miniature, with `B.E39` appearing in the
+report itself as a live mis-transcription.

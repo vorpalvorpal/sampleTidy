@@ -81,57 +81,78 @@ lives in the `lab_method.name` string instead, following ALS's own naming:
 basis, and is what `.ct_commit_analyses()` multiplies by on ingest (A63).
 
 **The `Ammonia as NH3` case, stated precisely.** Its analyte is `NH3-N` — ammonia
-expressed **as nitrogen**. Converting an as-NH3 reading onto that basis means
-multiplying by the mass ratio N/NH3 = 14.007 / 17.031 = **0.8225**.
-**It is NOT 1.216**, which is the N→NH3 direction and would compound the error
-rather than remove it. The four `… as CaCO3` methods already agree with their
-analytes' bases, so their constant stays 1/NA.
+expressed **as nitrogen** — so an as-NH3 reading is put on that basis by
+multiplying by the mass ratio N/NH3. **The constant is `0.8224428`**, recovered
+empirically from the 12 existing analyses (R-14.3), which the old pipeline had
+already converted with it. (Theoretical 14.007/17.031 = 0.8224414; the two agree
+to 1.4e-06. Use the **recovered** value — it is what reproduces the stored data
+exactly.) It is **NOT 1.216**, which is the N→NH3 direction.
+
+The four `… Alkalinity as CaCO3` methods and `Total Hardness as CaCO3` already
+agree with their analytes' bases, so their constant stays NA.
+
+⚠️ **This requirement writes `lab_method` only. It must NOT re-apply the
+constant to the 12 existing analyses** — they are already converted (R-14.3).
+The constant is recorded for two purposes at once: documentation of what was
+already done, and so that A63's ingest-time multiplication converts *future*
+as-NH3 rows the same way. Those two uses being consistent is the check that the
+value is right: re-ingesting `ES2415638_0_XTAB.csv` after this backfill must
+produce `2.14 × 0.8224428 = 1.76002759`, match the stored row, and report
+`already_present` — not a second analysis, and not a `value_conflict`.
 
 Criteria: every `lab_method` whose `name` matches `(?i) as (\w+)$` has
 `reported_as` set to that captured token; a method whose basis equals its
-analyte's basis has `conversion_constant` NA or 1; `Ammonia as NH3` has
-`reported_as = 'NH3'` and `conversion_constant = 0.8225`; the step is
-idempotent; **no `analysis.value` is altered by this requirement** (the constant
-governs *future* ingests — historical values are R-14.3's problem, and R-14.3 is
-open).
+analyte's basis has `conversion_constant` NA; `Ammonia as NH3` has
+`reported_as = 'NH3'` and `conversion_constant = 0.8224428`; the step is
+idempotent; **no `analysis.value` is altered, pinned by a row-count and
+value-checksum comparison over `analysis` before and after**; and the re-ingest
+idempotency check above passes — that is this requirement's real gate, because
+it proves the constant, its direction, and the existing data all agree.
 
-## R-14.3 ⚠️ OPEN — the 12 historical `Ammonia as NH3` analyses
+## R-14.3 ✅ CLOSED — the 12 `Ammonia as NH3` analyses are already correct
 
-**Do not implement. This requirement is blocked pending provenance from the
-user, and must not be resolved by inference.**
+**No action. Do not touch these values.** Resolved 2026-07-22 by reading the
+archived source, exactly as it should have been: the DB names the asset uuids,
+and the assets are on disk.
 
-Twelve `analysis` rows point at the `Ammonia as NH3` method and are stored
-against the nitrogen-basis analyte `NH3-N` with no basis conversion ever having
-been applied. On its face they are ~22% high and want × 0.8225.
+Provenance, end to end: the 12 analyses belong to samples `ES2415638004`–`015`
+(ALS lab sample ids), project `ES2415638` (`BWMF Apirl 2024 - Rain Event`),
+whose `Chemical analysis` asset is
+`assets/processed/08f1555c-18be-4167-a051-ba4f9fedea09/ES2415638_0_XTAB.csv`.
 
-**But they do not look like transcribed lab readings**, and if they are already
-N-basis then any multiplication corrupts good data:
+The report carries **both** bases, on different samples in one file:
 
-- seven significant figures — `2.163025`, `41.204384` — where the genuine ALS
-  values on the *same samples* are clean 2–3 sig figs (`EC 280`,
-  `Nitrate as N 4.16`, `Nitrite as N 0.08`, `SS 52`);
-- `value_chr` is NULL on all 12, so no raw string was ever preserved;
-- a daily cadence at exactly two features (B.E01, B.TS39) over six consecutive
-  days, 7–12 May 2024 — six lab jobs would not look like that;
-- the same samples also carry a `Computed: Leachate Mixing Fraction` row, and
-  the dashboard repo has an `add_leachate_mixing_fraction.R`.
+```
+EK055G: Ammonia as N by Discrete Analyser
+Ammonia as N   ,7664-41-7,mg/L,0.01,, 0.40, 1.00, 36.6, ----, ----, ...
+Ammonia as NH3 ,         ,mg/L,0.01,, ----, ----, ----, 2.14, 49.2, ...
+```
 
-They appear **derived**. Resolving this needs the source of that 7–12 May
-series, not more querying of the DB.
+Every stored value is the reported as-NH3 figure **× 0.8224428** — the NH3→N
+mass ratio — with a maximum deviation of **1.4e-06** across all 12:
 
-**Unblocking question for the user:** what produced the 7–12 May 2024 series at
-B.E01/B.TS39? If a source report exists, comparing one value settles it in a
-single look.
+| lab id | reported (as NH3) | stored | ratio |
+|---|---|---|---|
+| ES2415638004 | 2.14 | 1.76002759 | 0.8224428 |
+| ES2415638011 | 50.00 | 41.12214000 | 0.8224428 |
+| ES2415638009 | 50.10 | 41.20438428 | 0.8224428 |
+| *(all 12)* | | | **0.8224428** |
 
-Only once answered: either (a) they are raw as-NH3 readings → `correct_value()`
-each by × 0.8225 with a reason naming this plan, or (b) they are already
-N-basis / derived → leave every value untouched and fix only the *labelling*
-(which method they point at), or (c) they are neither and the rows need their
-own decision.
+**The old pipeline already applied the basis conversion; it simply never
+recorded the constant.** The seven significant figures that made these look
+"derived" are the *signature of that multiplication*, not of a computed series.
+All 12 sample dates also match the source exactly when read in
+`Australia/Sydney` (the stored instants are UTC, per the known convention —
+reading them with `CAST(date AS DATE)` shows the UTC calendar day and is what
+made them look a day early).
 
-Criteria: **none pinned** — this requirement is not specified until the question
-above is answered. A test asserting current behaviour would pin a value we do
-not yet know to be right.
+**Both previously-proposed fixes would have corrupted good data:** × 1.216 would
+have put them ~21.6% high; × 0.8225 would have double-converted them ~18% low.
+The value of stopping to ask was the whole of it.
+
+Criteria: **none — this requirement is closed with no write.** R-14.2 records
+the constant that was used; a regression there proves a re-ingest of
+`ES2415638_0_XTAB.csv` reproduces these exact stored values (see below).
 
 ## Gates
 

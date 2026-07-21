@@ -320,6 +320,38 @@ Criteria: the M1 mutation is now KILLED (the new assemble test fails if the guar
 is removed); the M7 mutation is now KILLED; the suite-wide grep returns no
 un-justified vacuous assertion.
 
+## R-12.17 Archive layout: match the real `processed/` convention (A70)
+
+`archive_file()` (`R/archive.R:50-52`) writes
+`file.copy(path, file.path(st_config("archive_dir"), new_uuid))` — an
+**extensionless file** named `<asset uuid>` — on A13's stated grounds that this
+"matches existing `processed/`". **It does not.** Measured against the real
+archive (`…/assets/processed`, 2026-07-22): **1,565 directories** named
+`<asset uuid>`, each holding the original file under its real name
+(`08f1555c-18be-4167-a051-ba4f9fedea09/ES2415638_0_XTAB.csv`), versus **33**
+extensionless files. Directory-per-asset is the convention; sampleTidy writes
+the minority shape.
+
+Why it matters beyond tidiness: A13 says archiving copies **every file of a
+committed event** to `<archive_dir>/<asset uuid>`. One extensionless file per
+uuid can hold exactly one; a directory holds the set. The current shape cannot
+express A13's own requirement. And a mixed archive forces every consumer
+(including `ingest_dir()`'s own "archive copy byte-equals the input" check in
+plan-10 R-10.2) to handle two layouts.
+
+**Fix:** write `<archive_dir>/<asset uuid>/<basename(path)>`, creating the
+directory; keep the original filename. Read paths accordingly. Nothing is
+stranded by the change — sampleTidy has not written to the real archive yet, and
+the 33 legacy extensionless files are read-only history.
+
+Criteria: `archive_file()` creates `<archive_dir>/<uuid>/<original name>` and
+the copy byte-equals the source; two files archived under one asset uuid both
+land, side by side (A13's "every file", currently unsatisfiable); the plan-10
+R-10.2 provenance assertion is updated to the new path shape and still passes;
+a pre-existing legacy extensionless `<uuid>` file is left untouched. Tests in
+`test-archive.R`; coordinate with R-12.4, which touches the same `file.copy`
+call. CONTRACT A13's layout clause is re-pinned on landing.
+
 ## R-12.16 Reconciler hot-path precompute (PERF-1, PERF-2) — optional
 
 Not load-bearing at fixture scale, but the reconciler is the corpus hot path:
