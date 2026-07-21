@@ -707,6 +707,28 @@ for lab reports; `sample.organisation ∈ {ACIRL, Internal, ALS}`;
     once decided. Nothing is stranded meanwhile — sampleTidy has not written to
     the real archive yet.
 
+- **A71** **Tooling latitude (user, 2026-07-22 — binding on every worker).** Where the
+  tdd-plan skill asks for **stellwerk**, it may be skipped: stellwerk is not part of
+  this project (it is the skill's other host project, and `scripts/bindings/stellwerk.toml`
+  is *its* binding, not ours). **Use the project's own tools instead** — the R suite is
+  the gate:
+  `Rscript -e 'devtools::load_all(); testthat::test_dir("tests/testthat")'`.
+  Concretely, Phase 7a mutation testing is run by the **`tdd-mutator` agent** (which the
+  skill already names as the fallback for "stellwerk cannot run the suite"), or inline by
+  the orchestrator. **This generalises:** any skill-named tool that does not work
+  reliably here may be replaced by one that does — say so in the report rather than
+  stalling on it. It is never a reason to skip the *check* itself, only the tool.
+
+- **A72** **`db_delete()` on a nonexistent uuid ABORTS** `cli::cli_abort(class =
+  "sampletidy_error")`, and writes no `change_log` row. (Pinned 2026-07-22, Phase-3 D2 —
+  PLAN-12 R-12.6 explicitly left the choice open and said "pin which".) Rationale: R-12.6
+  exists to stop the mutation layer recording things that did not happen, and a silent
+  no-op delete is that same defect wearing the other hat; it also matches `db_update()`'s
+  existing no-row behaviour and the house fail-loud style (A4). **Consequence, and the
+  reason this needed pinning before PLAN-14 was written:** PLAN-14 R-14.1 deletes an
+  `analyte` row and must stay idempotent, so it carries an explicit existence pre-check
+  rather than relying on a tolerant delete.
+
 ## Gates
 
 - Per-plan: `testthat::test_file()` green for the plan's own test file(s).

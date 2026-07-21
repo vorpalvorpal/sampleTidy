@@ -45,6 +45,7 @@ exists, and the drift is silent because nothing tests a doc. Its §"Cross-plan
 expectations" needs the new dispositions too (a `T.S0l` typo no longer strands —
 it commits dangling).
 
+<!-- block: B-11-why -->
 ## Why
 
 Sampling-point codes **and** analyte names are almost always transcribed or
@@ -64,6 +65,7 @@ gate. Review stops being "re-run the pipeline" and becomes an `UPDATE`.
 Background and domain rules: `dev/DESIGN.md`, and the `cypher-and-feature-alias`
 memory. Those are context, not authority — **this plan and `CONTRACT.md` are.**
 
+<!-- block: B-11-model-full-indirection -->
 ## Model — (P) full indirection (settled; do not re-litigate)
 
 A `sample` **does not point at a feature**. It points at the *alias it arrived
@@ -102,6 +104,7 @@ the grounds that (P) "adds ~15k self-alias rows" and a view rewrite. **Both
 grounds were wrong** (D3, D4 below). (P) is the normalised model; (D) was the
 denormalisation.
 
+<!-- block: B-11-decisions-settled-in-review -->
 ## Decisions settled in review (2026-07-16)
 
 - **D1 — (P), not (D)** (user). Rationale above.
@@ -204,6 +207,7 @@ denormalisation.
   `hit_idx`'s disposition as a *pending* row rather than being dropped to
   review-only.
 
+<!-- block: B-11-evidence -->
 ## Evidence (measured against `monitoring.duckdb`, duckdb 1.4.1)
 
 **Which DB — RE-MEASURED 2026-07-22 against the authoritative copy (A67).**
@@ -297,6 +301,7 @@ Verified directly (re-check before relying on any of it):
   descriptors (`B.BORE` → 8 features) that *should* stay in review. Date/site is
   a **correctness guard**, not a bulk auto-resolver.
 
+<!-- block: B-11-domain-rules -->
 ## Domain rules (user, 2026-07-16 — binding)
 
 - **`old` must NOT be imported** from `feature_mask`: 363 of its 373 names ARE
@@ -324,6 +329,7 @@ Verified directly (re-check before relying on any of it):
   every run until a human confirms it; only confirmation writes `confirmed_by`.
 - **Review UX is bulk confirmation** — no per-feature clicking.
 
+<!-- block: B-11-the-api-is-the -->
 ## The API is the authority; the UI is deferred
 
 The deliverable is the **resolve API**: the only thing that writes a resolution
@@ -333,6 +339,7 @@ preserve: *the UI presents and executes; the human decides; the API records the
 human as `confirmed_by`.* A UI (including an LLM-driven one) may propose and may
 call the resolve functions, but never confirms on its own.
 
+<!-- block: B-11-seam-table -->
 ## Seam table (producer → consumer; fields that must survive)
 
 | producer | consumer | fields |
@@ -359,6 +366,7 @@ at reconcile (D8). A reconcile-only test must assert `feature_pending == TRUE`
 and `is.na(uuid_feature_alias)`; asserting a `feature_alias` row exists after
 `reconcile_event()` alone will fail — correctly.
 
+<!-- block: B-11.1 -->
 ## R-11.1 Schema: `feature_alias`
 
 ```
@@ -393,6 +401,7 @@ Criteria: the table exists after `seed_db()`; `alias_key` is always
 (pinned); a re-seen alias increments `n_seen` and never inserts a duplicate; a
 dangling row is reused rather than duplicated.
 
+<!-- block: B-11.2 -->
 ## R-11.2 Schema: `sample`, `lab_method`, `analysis`
 
 - `sample`: **drop** `uuid_feature`; **add** `uuid_feature_alias VARCHAR NOT
@@ -429,6 +438,7 @@ exactly the resolved rows and a dangling sample does not appear; a method with
 stores it unchanged; **no `analysis` table in any DDL declares a units column**
 (a pinned grep, because the reversed D7 already shipped once in `helper-db.R`).
 
+<!-- block: B-11.3 -->
 ## R-11.3 Normalisation (`.rc_key`, amended)
 
 `.rc_key()` is `tolower(str_squish(normalise_lab_text(x)))`, which keeps
@@ -495,13 +505,15 @@ an NA on the LHS yields an NA element — the exact A44 phantom-candidate defect
 The new tibble-returning `.rc_feature_candidates()` must retain an equivalent
 guard (R-11.4).
 
+<!-- block: B-11.4 -->
 ## R-11.4 Alias matching + narrowing (`.rc_feature_candidates`, amended)
 
 `.rc_load_registry()` gains `feature_alias`. Because every feature has a
 self-alias, a direct name match **is** an alias hit: the two-source lookup
 (`feature.name` then `feature_mask.name`) collapses to **one** lookup against
 `feature_alias`. **No longer joins `feature_mask`** (its `long` names are
-imported by R-11.13; `EPA`/`old` must never match).
+imported by **PLAN-13 R-13.1 step 5** — R-11.13 is now only a pointer stub (A68);
+`EPA`/`old` must never match).
 
 ```r
 .rc_feature_candidates(feature_raw, sample_date, registry)
@@ -540,6 +552,7 @@ encode them with the synthetic fixture equivalents from the Fixtures section
 (`f-0003`, `bs03alt`, …). A3 forbids real data in fixtures; R-11.3's names-only
 list is the single sanctioned exception.
 
+<!-- block: B-11.5 -->
 ## R-11.5 Reconciler: the funnel becomes a conveyor (features)
 
 **This is the structural change the draft missed, and the heart of the plan.**
@@ -571,6 +584,7 @@ still holds (every input row lands in exactly one of clean/review-held/skipped);
 **D6:** a row that is feature-pending *and* fails units/value/datetime is
 **held**, not committed — pinned by a test that combines the two.
 
+<!-- block: B-11.5a -->
 ## R-11.5a Reconcile-side lookup of *existing* pending rows (new; cold review C3)
 
 **This section closes the plan's one genuine design hole.** Without it a dangling
@@ -619,6 +633,7 @@ on the second run; a *first* sighting correctly finds nothing and commits one ne
 alias; the lookup issues **no writes** (pinned by the R-9.1 direct-write lint plus
 a `db_transaction` spy asserting reconcile writes nothing).
 
+<!-- block: B-11.5b -->
 ## R-11.5b `.rc_method_preference` re-keying (cold review C4)
 
 **Not in the draft's Amends list, and it breaks silently — the worst failure mode
@@ -641,6 +656,7 @@ analyte are **never** method-duplicates (a pinned regression — this is the bug
 that would otherwise ship silently); two analyte-pending rows never dedup against
 each other; the existing R-8.6 tests stay green.
 
+<!-- block: B-11.6 -->
 ## R-11.6 Reconciler: dangling analytes
 
 `.rc_resolve_analytes()` likewise keeps misses: `uuid_lab = NA`,
@@ -674,6 +690,7 @@ contradiction it looks like); **a CAS-hit row reaches `clean` dangling and its
 review item names the CAS-matched analyte as a suggestion — pinned both ways
 (it commits, AND it does not link)** (A66).
 
+<!-- block: B-11.7 -->
 ## R-11.7 Three-way match with dangling rows (`.rc_find_existing`)
 
 Today: `WHERE s.uuid_feature = ? AND CAST(s.date AS DATE) = ? AND
@@ -719,6 +736,7 @@ catches it upstream before reconcile ever runs; the test must therefore use
 *different bytes* carrying the *same* measurement); a resolved sample is reused
 across two different incoming labels for one feature.
 
+<!-- block: B-11.8 -->
 ## R-11.8 Commit: materialise pending aliases and dangling methods
 
 New commit step, **before** sample resolution (D8 — reconcile is read-only; all
@@ -826,6 +844,7 @@ assertions to the new expectation; do **not** weaken them, and do not let a
 worker "fix" the code to keep them green — that is exactly the [NO SILENT
 DEVIATION] trap this note exists to pre-empt.
 
+<!-- block: B-11.9 -->
 ## R-11.9 Review items: guesses and shortlists
 
 Review items name **features**, never bare UUIDs (today the ambiguous payload
@@ -872,6 +891,7 @@ says so (never a fabricated guess); grouping unchanged (one item per normalised
 resolvable alias uuid; an `unknown_analyte` item names the lab method and any
 suggested analyte (fuzzy analyte match is suggestion-only, never auto-link).
 
+<!-- block: B-11.10 -->
 ## R-11.10 `confirm_feature_aliases()` (public)
 
 ```r
@@ -940,6 +960,7 @@ future ambiguity: the key still resolves to >1 distinct feature, so narrowing
 the string. A test must pin this — it is the intuitive-but-wrong expectation a
 test author will otherwise encode.
 
+<!-- block: B-11.11 -->
 ## R-11.11 `confirm_analyte_methods()` (public)
 
 ```r
@@ -978,6 +999,7 @@ different units surfaces the drift at confirmation and does not silently
 bulk-convert**; after confirmation the same incoming analyte auto-resolves and
 opens no review item.
 
+<!-- block: B-11.12 -->
 ## R-11.12 Pending backlog readers (`R/pending.R`)
 
 A dangling row is invisible to every view **by design** — so without a surface it
@@ -994,6 +1016,7 @@ pending_analytes(con)  # -> tibble(uuid_lab, name, organisation, method, units_r
 Criteria: zero-row results have stable columns; counts match the dangling rows
 exactly; the numbers reconcile with `review_queue()`.
 
+<!-- block: B-11.13 -->
 ## R-11.13 Migration — MOVED to PLAN-13 (A68)
 
 The one-off `dev/migrations/001-alias-indirection.R` is **no longer part of this
@@ -1021,6 +1044,7 @@ The test suite is unaffected either way: `helper-db.R` builds the DDL directly
 and seeds aliases itself, so R-11.1–R-11.12 can be built and gated green with no
 migration in existence. That is what makes the split safe.
 
+<!-- block: B-11.19 -->
 ## R-11.19 Lab-method candidate resolution: exact name first (A65 — live defect)
 
 Two `lab_method` rows may legitimately differ only in how the lab spelled the
@@ -1055,6 +1079,7 @@ that always returns the same row fails; a third, unseen spelling
 `uuid_lab` on a re-run (idempotency); two candidates spanning **different**
 analytes still go to review; the existing R-8.3 tests stay green.
 
+<!-- block: B-11-fixtures -->
 ## Fixtures
 
 Extend `seed_db()` (`helper-db.R`) to the new shape. Seeded features keep their
@@ -1121,6 +1146,36 @@ dispatch 2:
    name capitalisation, same org, same method, one analyte.
 FIXTURES.md carries the same three corrections in its §"Seed DB".
 
+<!-- block: B-11.20 -->
+## R-11.20 `feature_alias` in `.st_mutate_allowlist` (Phase-3 D1 — blocking)
+
+R-11.1 states in passing that "`feature_alias` is added to `.st_mutate_allowlist`
+in `R/mutate.R`", but **no criterion pinned it and no manifest unit owned it**
+(found by the 2026-07-22 cold review, verified against source). Today
+`R/mutate.R:40-43` reads:
+
+```r
+.st_mutate_allowlist <- c(
+  "feature", "feature_mask", "analyte", "analyte_mask", "lab_method",
+  "project", "sample", "analysis", "asset", "review_queue"
+)
+```
+
+`.st_validate_table()` (`R/mutate.R:47-51`) admits only these plus `^ingest_`.
+So **every `db_append()` in R-11.8 and R-11.10 aborts** — the pending-alias
+materialisation, i.e. the whole commit-everything path. Nothing catches it until
+commit tests run, and it reads as a mysterious mutation-layer refusal rather than
+a missing list entry.
+
+**Fix:** add `"feature_alias"` to `.st_mutate_allowlist`.
+
+Criteria: `db_append(con, "feature_alias", ...)` succeeds and writes a
+`change_log` row; a table still outside the allowlist (e.g. `"guideline"`) is
+still refused with `sampletidy_error`; the existing allowlist entries are
+unchanged (regression — the list is a security boundary, not a convenience).
+Test in `test-mutate.R`.
+
+<!-- block: B-11-whole-package-code-review -->
 ## Whole-package code-review fold-ins (2026-07-19)
 
 The 2026-07-19 whole-package review (`dev/CODE-REVIEW-2026-07-19.md`, triaged in
@@ -1138,6 +1193,7 @@ correctly *once*. Independent defects PLAN-11 does not touch are in PLAN-12.
 | `.rc_resolve_units_values` (R-11.16) | `.rc_three_way` → `.ct_commit_analyses` | `quantified` = `parse_value()`'s value (NOT re-derived from `below_detection`); `rl_high` (dbl, `>`-rows) |
 | acirl adapter (R-11.15) | `.st_join_samples_onto_results` | synthetic `lab_sample_id` on **both** results and samples → exact-match join, no feature-only fallback |
 
+<!-- block: B-11.14 -->
 ### R-11.14 Fold assembly's inline review flags into the reconcile conveyor (F1 / A22 consumer seam)
 
 CONTRACT A22 pins that assembly *marks* review-worthy rows inline
@@ -1175,6 +1231,7 @@ output (not a hand-built stand-in) carrying a flagged row into the real
 `reconcile_event()` — this is the discriminator the read-only audits structurally
 miss (A-1).
 
+<!-- block: B-11.15 -->
 ### R-11.15 ACIRL synthetic per-column `lab_sample_id` (F2 / A-5) — cross-plan edit to `adapter-acirl-field.R` (06) + `assemble.R` (07)
 
 ACIRL water-sheet columns each carry their own visit date, but `ir_results` has
@@ -1211,6 +1268,7 @@ committed DB. Pinned by an e2e assertion on **both** visit dates (today's e2e
 asserts only "date non-NA" — T-1). Coupled to R-11.14: they are the two halves of
 one silent-commit hole and must be green together (review priority #1).
 
+<!-- block: B-11.16 -->
 ### R-11.16 `quantified` from `parse_value()`; write `rl_high` (F4)
 
 `parse_value()` (`values.R:62,69`) correctly returns `quantified = FALSE` for a
@@ -1238,6 +1296,7 @@ literal `BDL` DB row has `quantified = FALSE`; a `<0.01` row keeps `rl_low = 0.0
 (existing pin) and `quantified = FALSE`; a plain-numeric row stays
 `quantified = TRUE`. (Today only `<`-rows are pinned at the DB level.)
 
+<!-- block: B-11.17 -->
 ### R-11.17 `add_feature()` aligned to the live `feature` schema (F5 / A-4)
 
 **Re-probed 2026-07-22 against the authoritative DB (A67); the 2026-07-19
@@ -1270,9 +1329,15 @@ Fix (cross-plan edit to `mutate.R`, owned by 09; and `helper-db.R`, owned here):
 
 Criteria: `add_feature("X","SiteA", lon=150.0, lat=-33.0, ...)` inserts against a
 seed DB with the live-shaped DDL and the `feature` row round-trips with those
-coordinates; omitting `lon`/`lat` is a `sampletidy_error` at the argument check,
-not a DB error; no test DDL declares `virtual`.
+coordinates; the `skip_if`-gated meta-test above diffs `.st_test_core_ddl`'s `feature`
+columns against `information_schema.columns` when `SAMPLETIDY_CORPUS_DB` is set and fails
+on any drift (this is the plan's ONLY drift detector — it is a criterion, not a nicety);
+omitting `lon`/`lat` is a `sampletidy_error` at the argument check,
+not a DB error; **the test DDL DOES declare `virtual`** (A58/A67 — the column
+exists live on all 894 rows; the earlier "drop it" reading came from the dashboard's
+derived copy);
 
+<!-- block: B-11.18 -->
 ### R-11.18 Distinct datetimes are distinct samplings (F9 — DECIDED: two samples, user 2026-07-19)
 
 Today a 09:00 reading and a 15:00 reading at the **same feature+date** collapse
@@ -1321,6 +1386,7 @@ multi-day case" **understates the state**: it is not over-flagging, it is
 (hold), and R-11.15 removes the mis-dating at the source for ACIRL. Update that
 note when these land.
 
+<!-- block: B-11-gates -->
 ## Gates
 
 - Per-plan: `testthat::test_file()` green for `test-feature-alias.R`,
@@ -1353,6 +1419,7 @@ note when these land.
   would have caught F1/F2, so it must be strengthened **with** R-11.14/R-11.15,
   green together. (The suite-wide sweep for other vacuous assertions is PLAN-12.)
 
+<!-- block: B-11-contract-amendments-this-plan -->
 ## CONTRACT amendments this plan requires (to be adjudicated on landing)
 
 - **A48** — Model (P): `sample.uuid_feature` dropped; `sample` points at
@@ -1445,6 +1512,7 @@ note when these land.
 
 *(A59–A61 are PLAN-12's and are deliberately not used here.)*
 
+<!-- block: B-11-open-deferred -->
 ## Open / deferred
 
 - **~~`sample_datetime_mismatch` may over-flag the legitimate multi-day

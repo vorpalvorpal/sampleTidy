@@ -11,6 +11,7 @@ matching `test-<module>.R` files, and one fixture each for T-2 M1 / M7.
 touch functions PLAN-11 does *not* rewrite (the entangled findings F1–F5/F9/T-1
 went into PLAN-11 instead; see its "Whole-package code-review fold-ins" section).
 
+<!-- block: B-12-why -->
 ## Why
 
 The 2026-07-19 whole-package review (`dev/CODE-REVIEW-2026-07-19.md`) found, on
@@ -25,9 +26,15 @@ Two findings carry a genuine **domain/policy decision** that is the user's to ma
 (`⚑`); they are pinned as requirements *and* filed in `PLAN-CHANGE-REQUESTS.md`,
 and must not be resolved silently.
 
+<!-- block: B-12-ordering-vs-plan-11 -->
 ## Ordering vs PLAN-11
 
-Independent — either can land first. R-12.1 (router), R-12.3/R-12.8 (crosstab),
+Mostly independent — but **two requirements are NOT, and the manifest encodes the
+dependency the prose below used to deny**: **R-12.13** must be keyed on
+`uuid_feature_alias`, and **R-12.16** says explicitly "do this after R-11.3/R-11.4
+land". Both therefore land AFTER PLAN-11's reconcile work (`after = ["P11-reconcile"]`
+in `dev/tdd-run/manifest.toml`). Everything else is genuinely independent:
+R-12.1 (router), R-12.3/R-12.8 (crosstab),
 R-12.4/R-12.5/R-12.6 (mutate/ir/archive/snapshot) share no functions with
 PLAN-11. R-12.7/R-12.13 touch `ingest.R`/`commit.R` regions adjacent to PLAN-11's
 edits but not the same functions; land whichever plan is ready and rebase the
@@ -36,6 +43,7 @@ data-availability bug on the very first real ingest.
 
 ---
 
+<!-- block: B-12.1 -->
 ## R-12.1 Router validates every `match()` return; contained registry lookup (F6)
 
 `route_files()` never validates what an adapter `match()` returns. A `match()`
@@ -64,6 +72,7 @@ returning `"weird"` → same; a `match()` that *throws* still → `failed` (unch
 regression); an ingest run containing one such file still commits the good files.
 Tests in `test-router.R` + `test-ingest.R`.
 
+<!-- block: B-12.2 -->
 ## R-12.2 Per-event containment in the ingest loop (F7) ✅ DECIDED: contain, loudly
 
 `ingest_dir()` contains adapter *parse* crashes per file (R-9.5), but
@@ -95,6 +104,7 @@ dir is a clean no-op on the already-committed events and re-attempts the failed
 one; **a run where every event throws aborts `sampletidy_error`** (not a silent
 all-`failed` report). Test in `test-ingest.R`.
 
+<!-- block: B-12.3 -->
 ## R-12.3 Crosstab: no silent drops (F8)
 
 CONTRACT: "Every function that skips/drops a row must return counts of what it
@@ -119,6 +129,7 @@ section whose `ALS Sample Number` label is misspelled → a warning, not a silen
 zero-row section; the existing two-section (WATER+SOIL) fixture still parses
 identically (no new spurious warning). Tests in `test-adapter-crosstab.R`.
 
+<!-- block: B-12.4 -->
 ## R-12.4 Checked file operations in archive/snapshot (F10)
 
 `archive_file()` (`archive.R:52`) ignores `file.copy()`'s return: a failed copy
@@ -139,6 +150,7 @@ Criteria: `archive_file()` into a non-existent `archive_dir` aborts
 non-existent `snapshot_dir` aborts and returns no path; the happy paths are
 unchanged. Tests in `test-archive.R` + `test-snapshot.R`.
 
+<!-- block: B-12.5 -->
 ## R-12.5 IR constructors validate before subsetting (F11)
 
 `ir_results()`/`ir_samples()` subset to the pinned columns **before** calling
@@ -156,6 +168,7 @@ call omitting a required column aborts `sampletidy_ir_error`, not a vctrs
 subscript error; the zero-arg prototype and a valid full-column call are
 unchanged. Tests in `test-ir.R`.
 
+<!-- block: B-12.6 -->
 ## R-12.6 Mutation-layer correctness (F12)
 
 Three defects in `mutate.R`:
@@ -169,18 +182,22 @@ Three defects in `mutate.R`:
 
 **Fix:** in `db_update()`, skip a field whose `as.character(new)` equals
 `as.character(old)` (no UPDATE, no log row); in `db_delete()`, capture
-`dbExecute()`'s affected-row count and skip the log row (or abort
-`sampletidy_error`, matching `db_update`'s "no row" behaviour — **pin which**)
-when zero; move `dbCommit()` inside the `tryCatch` so a commit error rolls back
+`dbExecute()`'s affected-row count and, when zero, **abort `sampletidy_error`**
+(**PINNED 2026-07-22, Phase-3 D2 — CONTRACT A72**; matches `db_update()`'s "no row"
+behaviour). Rationale: the whole point of R-12.6 is to stop the mutation layer writing
+records for things that did not happen, and a silent no-op delete is that same defect
+wearing the other hat. **PLAN-14 R-14.1 depends on this ruling** — it deletes an analyte
+row and must stay idempotent, so it carries an explicit existence pre-check; move `dbCommit()` inside the `tryCatch` so a commit error rolls back
 and re-throws as `sampletidy_error`.
 
 Criteria: `db_update()` with a changes list where one field equals its current
 value writes a `change_log` row only for the *changed* field(s); `db_delete()` on
-a nonexistent uuid writes no delete log row (or aborts — per the pinned choice);
+a nonexistent uuid **aborts `sampletidy_error`** and writes no delete log row (A72);
 a forced commit failure rolls back and aborts `sampletidy_error`, leaving no
 partial write; existing `test-mutate.R` assertions stay green. Tests in
 `test-mutate.R`.
 
+<!-- block: B-12.7 -->
 ## R-12.7 Ingest report uses terminal file states (F13)
 
 `ingest_report$files_by_state` is built from `routed$state` (`ingest.R:222`) —
@@ -192,9 +209,13 @@ hashes and tabulate those.
 
 Criteria: after a run that commits an event, `files_by_state` shows its files as
 `archived` (or `committed`), not `claimed`; a `needs_review`-only event shows
-`needs_review`; a dry run reflects the reconcile-time terminal states. Test in
+`needs_review`. (**The dry-run clause is struck, Phase-3 D12**: it depended on
+`dry_run` state persistence, which this plan's own "Open / deferred" section lists as a
+known-present defect with no action here. A criterion may not rest on a defect the same
+plan declines to fix.) Test in
 `test-ingest.R` (or `test-e2e-pipeline.R`).
 
+<!-- block: B-12.8 -->
 ## R-12.8 Crosstab `match()` robustness (F14)
 
 The crosstab `match()` peeks `file_meta()`'s first 2048 bytes
@@ -209,6 +230,7 @@ Criteria: a crafted crosstab fixture whose dialect marker sits past 2 KiB still
 `match()`es; a BOM-prefixed crosstab still `match()`es; the SpreadsheetML `.XLS`
 still returns `"no"` (A37, regression). Tests in `test-adapter-crosstab.R`.
 
+<!-- block: B-12.9 -->
 ## R-12.9 `ingest_file_upsert()` does not clobber on re-sight (F15)
 
 `ingest_file_upsert()` unconditionally overwrites `filename`/`size` on re-sight
@@ -222,6 +244,7 @@ Criteria: a re-upsert with `filename = NA` leaves the stored filename intact; a
 re-upsert with a real filename updates it; `path_first_seen` is still set once
 (A21, regression). Test in `test-db-schema.R`.
 
+<!-- block: B-12.10 -->
 ## R-12.10 Convention/UX polish (F17, F18)
 
 - **F17 (doc):** the stale comment at `db-schema.R:126-130` ("See final report
@@ -239,6 +262,7 @@ cites A31. Tests: a `testthat::expect_no_message()`-style check around
 `register_builtin_adapters()` in `test-adapter-registry.R`; F17 is doc-only (no
 test).
 
+<!-- block: B-12.11 -->
 ## R-12.11 `st_config()` env-var typing (F16) ✅ DECIDED: string-only + guard (low)
 
 `st_config()` env-var values are always strings — fine for paths and for
@@ -259,6 +283,7 @@ Criteria: reading `field_analytes` with `SAMPLETIDY_FIELD_ANALYTES` set aborts
 its env var unchanged; `field_analytes` set via `st_config("field_analytes", c(...))`
 in code round-trips as a vector. Test in `test-config.R`.
 
+<!-- block: B-12.12 -->
 ## R-12.12 `sample.organisation` provenance (F19) (low)
 
 `.ct_resolve_samples()`/`.ct_find_or_create_sample()` always write the adapter org
@@ -267,6 +292,7 @@ sampler org if known else org". For ESdat the collector arguably is not ALS. Low
 impact; **defer to the datetime-convention revisit** unless trivially fixable
 alongside R-12.7. Recorded here so it is not lost; no criterion pinned yet.
 
+<!-- block: B-12.13 -->
 ## R-12.13 Within-batch duplicate guard before commit (A-7)
 
 R-8.6 dedups across *methods*; two identical-key rows from the **same** method in
@@ -276,8 +302,10 @@ on one sample. PLAN-11 R-11.15 removes the ACIRL trigger, but the general case
 remains.
 
 **Fix:** a `duplicated()` check over `(uuid_feature/alias, sample_date,
-uuid_analyte, uuid_lab)` in `clean` before commit — route exact dupes to review
-(or collapse per A14). Coordinate the key with PLAN-11's alias re-keying if that
+uuid_analyte, uuid_lab)` in `clean` before commit — **route exact dupes to review.
+Do NOT collapse** (pinned 2026-07-22, Phase-3 D13): A54's principle is that the
+pipeline records the question and never invents the answer, and collapsing silently
+picks one of two rows a human has not compared. Coordinate the key with PLAN-11's alias re-keying if that
 lands first (use `uuid_feature_alias`).
 
 Criteria: two identical-key same-method rows in one batch → one committed
@@ -285,6 +313,7 @@ analysis + one review/skip entry, not two analyses on one sample; distinct-key
 rows are unaffected; interacts correctly with R-8.6 (cross-method dedup runs
 first). Test in `test-reconcile.R` or `test-commit.R`.
 
+<!-- block: B-12.14 -->
 ## R-12.14 Matrix-not-in-identity-key — documented limitation (A-6)
 
 A two-section (WATER+SOIL) crosstab measuring the same analyte at one
@@ -297,6 +326,7 @@ in neither the sample find-or-create key nor A45's analysis key). Rare
 sample/analysis identity sites); do **not** silently pick one. Revisit "matrix in
 the identity key" when the datetime convention is revisited. Doc-only; no test.
 
+<!-- block: B-12.15 -->
 ## R-12.15 Test-suite strength (T-2 M1, T-2 M7, T-1 sweep)
 
 - **T-2 M1** — removing assemble's A44.2 `is.na()` feature_raw guard SURVIVES the
@@ -320,6 +350,7 @@ Criteria: the M1 mutation is now KILLED (the new assemble test fails if the guar
 is removed); the M7 mutation is now KILLED; the suite-wide grep returns no
 un-justified vacuous assertion.
 
+<!-- block: B-12.17 -->
 ## R-12.17 Archive layout: match the real `processed/` convention (A70)
 
 `archive_file()` (`R/archive.R:50-52`) writes
@@ -352,6 +383,7 @@ a pre-existing legacy extensionless `<uuid>` file is left untouched. Tests in
 `test-archive.R`; coordinate with R-12.4, which touches the same `file.copy`
 call. CONTRACT A13's layout clause is re-pinned on landing.
 
+<!-- block: B-12.16 -->
 ## R-12.16 Reconciler hot-path precompute (PERF-1, PERF-2) — optional
 
 Not load-bearing at fixture scale, but the reconciler is the corpus hot path:
@@ -369,6 +401,7 @@ normalisation gone. Optional — land only if corpus timing warrants.
 
 ---
 
+<!-- block: B-12-fixtures -->
 ## Fixtures
 
 - **M1:** extend an existing crosstab/ESdat assemble fixture (or add a small one)
@@ -382,6 +415,7 @@ normalisation gone. Optional — land only if corpus timing warrants.
   `fixtures/crosstab/README.md`.
 - All other requirements reuse existing fixtures or build inputs in-test.
 
+<!-- block: B-12-gates -->
 ## Gates
 
 - Per-plan: `testthat::test_file()` green for every amended `test-<module>.R`.
@@ -392,6 +426,7 @@ normalisation gone. Optional — land only if corpus timing warrants.
 - Order-shuffled run agrees with default order.
 - **Mutation re-check:** M1 and M7 now KILLED (Phase-7a spot-check).
 
+<!-- block: B-12-contract-amendments-this-plan -->
 ## CONTRACT amendments this plan requires (to be adjudicated on landing)
 
 - **A59** — adapter `match()` contract: `match(fm)` must return a length-1
@@ -408,6 +443,7 @@ normalisation gone. Optional — land only if corpus timing warrants.
   failure; a record is never written for a file operation that did not happen
   (F10).
 
+<!-- block: B-12-open-deferred -->
 ## Open / deferred (from the review, no action this plan)
 
 - The five "known issues confirmed present" (dry_run state persistence; orphan

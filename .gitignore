@@ -8,3 +8,6 @@
 *.duckdb.lock
 _problems
 testthat-problems.rds
+
+# tdd-plan build scratch
+dev/tdd-run/

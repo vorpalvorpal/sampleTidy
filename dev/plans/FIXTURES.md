@@ -22,37 +22,41 @@ which nullably resolves to a `feature`. `feature` gains `date_start DATE,
 date_end DATE`. `lab_method.uuid_analyte` is nullable (dangling = unresolved
 analyte).
 
-> ### ⚠️ THREE CORRECTIONS PENDING (2026-07-22) — this section is NOT yet current
+> ### Three corrections (2026-07-22) — RESOLVED, `helper-db.R` now matches
 >
 > `helper-db.R` and this document landed together on 2026-07-17 (`40f9fba`),
-> **before** the 2026-07-19 fold-ins and the 2026-07-22 review. Three things
-> below are now wrong. A resumed Phase 4 must **revise** them, not build on
-> them. Authority: `PLAN-11-feature-alias.md` §Fixtures + CONTRACT A63/A67.
+> **before** the 2026-07-19 fold-ins and the 2026-07-22 review, and left three
+> things wrong. All three are now applied to both files. Authority:
+> `PLAN-11-feature-alias.md` §Fixtures + CONTRACT A63/A67.
 >
-> 1. **`analysis.units_raw` must be REMOVED** (D7 reversed / A63). Measured over
+> 1. **`analysis.units_raw` REMOVED** (D7 reversed / A63). Measured over
 >    3,624 committable rows: units are a function of the method, so they live on
 >    `lab_method`, which gains **`units`** and **`conversion_constant`**.
 >    `analysis` gets no units column at all.
-> 2. **`feature` must gain `lon DOUBLE NOT NULL, lat DOUBLE NOT NULL`**
->    (R-11.17). And `virtual BOOLEAN` is **NOT** "test-only drift" — the live
->    table *does* have it (19 columns, all 894 rows FALSE). That claim came from
->    probing the dashboard's *derived* copy, not the live DB (A67). Keep the
->    column; delete the comment calling it drift.
-> 3. **The seed needs the R-11.19 fixture**: two `lab_method` rows differing
->    only in name capitalisation, same organisation, same method, one analyte —
->    mirroring the live `Standing Water Level` / `Standing water level` pair
->    that currently strands every ACIRL reading of it (A65).
+> 2. **`feature` gains `lon DOUBLE NOT NULL, lat DOUBLE NOT NULL`**
+>    (R-11.17), added to the table below. `virtual BOOLEAN` is **NOT**
+>    "test-only drift" — the live table *does* have it (19 columns, all 894
+>    rows FALSE). That claim came from probing the dashboard's *derived*
+>    copy, not the live DB (A67). The column stays; the drift comment is gone.
+> 3. **The seed carries the R-11.19 fixture**: two `lab_method` rows
+>    (`lm-0010`/`lm-0011`) differing only in name capitalisation, same
+>    organisation, same method, one analyte — mirroring the live
+>    `Standing Water Level` / `Standing water level` pair that currently
+>    strands every ACIRL reading of it (A65).
 
 ### feature
-| uuid | name | site | flow | matrix | date_end |
-|---|---|---|---|---|---|
-| f-0001 | T.S01 | TestSite | surface | water | (NA) |
-| f-0002 | T.S02 | TestSite | surface | water | (NA) |
-| f-0003 | T.MW01 | TestSite | (NA) | groundwater | (NA) |
-| f-0004 | T.S04 | TestSite | surface | water | (NA) |
-| f-0005 | T.S05 | TestSite | surface | water | (NA) |
-| f-0006 | T.S06 | TestSite | surface | water | 2020-06-30 (defunct) |
-| f-0007 | T.S07 | TestSite | surface | water | (NA) |
+`lon`/`lat` are DOUBLE NOT NULL live (R-11.17); every seeded row carries a
+placeholder value so the NOT NULL constraint is satisfied.
+
+| uuid | name | site | flow | matrix | date_end | lon | lat |
+|---|---|---|---|---|---|---|---|
+| f-0001 | T.S01 | TestSite | surface | water | (NA) | 150.0001 | -33.0001 |
+| f-0002 | T.S02 | TestSite | surface | water | (NA) | 150.0002 | -33.0002 |
+| f-0003 | T.MW01 | TestSite | (NA) | groundwater | (NA) | 150.0003 | -33.0003 |
+| f-0004 | T.S04 | TestSite | surface | water | (NA) | 150.0004 | -33.0004 |
+| f-0005 | T.S05 | TestSite | surface | water | (NA) | 150.0005 | -33.0005 |
+| f-0006 | T.S06 | TestSite | surface | water | 2020-06-30 (defunct) | 150.0006 | -33.0006 |
+| f-0007 | T.S07 | TestSite | surface | water | (NA) | 150.0007 | -33.0007 |
 
 f-0004..f-0007 exist only to host the plan-11 alias-narrowing fixtures below
 (f-0001..f-0003 are unchanged and keep serving every pre-plan-11 fixture use).

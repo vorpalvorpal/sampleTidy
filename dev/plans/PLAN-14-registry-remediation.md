@@ -11,6 +11,7 @@ This is a **data** plan, distinct from plan 13's **schema** plan (A69). Every
 item below fixes bad or missing data in the live registry that predates
 sampleTidy. Nothing here has been applied.
 
+<!-- block: B-14-which-database-and-the -->
 ## Which database, and the non-negotiable gate
 
 The authoritative copy only (A67 — quote the absolute path in every log line):
@@ -31,6 +32,18 @@ its verification fails.
 row with an actor and a reason. This is real environmental compliance data; the
 audit trail is the point, not a nicety.
 
+**And it is now enforced, not merely asserted (Phase-3 D4).** The R-9.1
+direct-write lint scopes to `R/`, and PLAN-13's gate explicitly exempts
+`dev/migrations/` — so this rule had *no* mechanism behind it. It gets one here:
+a test greps `dev/migrations/002-registry-remediation.R` for `dbExecute`,
+`dbSendStatement`, `dbAppendTable` and `dbWriteTable` and **fails on any hit**.
+The rule binds **002 only** — migration **001** rebuilds tables and is
+necessarily raw DDL, which is exactly why A50 makes it operator-run and
+lint-exempt. 002 only edits rows, so it has no excuse.
+
+Criterion: the grep-based lint over `002-*.R` returns no raw write call.
+
+<!-- block: B-14.1 -->
 ## R-14.1 Merge the duplicate `Carbophenothion` analyte rows
 
 The live `analyte` table holds **two** rows named `Carbophenothion`, identical in
@@ -52,6 +65,15 @@ one of the two collisions R-11.3 records as known-and-accepted until fixed here.
 `d0dc5ac3…`. **No `analysis` row is touched** — analyses reach the analyte
 *through* `lab_method`, so repointing the method carries its 2 analyses with it.
 
+**Idempotency depends on a PLAN-12 ruling (Phase-3 D2 — CONTRACT A72).**
+R-12.6 is now pinned: `db_delete()` on a nonexistent uuid **aborts
+`sampletidy_error`**. So a naive second run of this step would abort rather than
+no-op, and the idempotency criterion below would be unsatisfiable. **This
+requirement therefore carries an explicit existence pre-check**: read the analyte
+row first and skip the whole merge (repoints included) when `d0dc5ac3…` is
+already gone. The pre-check is the mechanism, not an optimisation — say so in the
+script, because a later reader will otherwise "simplify" it away.
+
 Criteria: exactly one `Carbophenothion` row remains, and it is `31b21bfa…`;
 223 analyses (221 + 2) resolve to it; no `analyte_mask` row references the
 deleted uuid; no `lab_method` row references it; a `v_measurement`-equivalent
@@ -61,6 +83,7 @@ and both repoints. After this lands, R-11.3's live property check drops
 `Carbophenothion` from its allowlist and the analyte key count becomes 246 of
 **246**.
 
+<!-- block: B-14.2 -->
 ## R-14.2 Backfill `reported_as` and `conversion_constant` (A64/A63)
 
 `lab_method.reported_as` records the **basis** a result is reported on. It is
@@ -100,8 +123,24 @@ value is right: re-ingesting `ES2415638_0_XTAB.csv` after this backfill must
 produce `2.14 × 0.8224428 = 1.76002759`, match the stored row, and report
 `already_present` — not a second analysis, and not a `value_conflict`.
 
+**Two things the regex does not decide, pinned here (Phase-3 D6 — it is an
+unbounded pattern over 360 live rows with only 7 enumerated, and a worker would
+otherwise have to invent both answers while writing live compliance metadata):**
+1. **The unmatched set is reported, not ignored.** Every `lab_method` whose name
+   does *not* match is listed in the run report with its name and method.
+   `reported_as` stays NULL for them — a name that does not state a basis is not
+   evidence of a basis.
+2. **A matched row whose basis differs from its analyte's, and which is NOT one
+   of the seven enumerated above, is REPORTED AND LEFT ALONE — no
+   `conversion_constant` is invented.** Only `Ammonia as NH3` has a constant
+   established by evidence (R-14.3). Guessing a constant for an eighth row would
+   silently rescale real measurements, which is precisely the failure R-14.3
+   documents having twice avoided.
+
 Criteria: every `lab_method` whose `name` matches `(?i) as (\w+)$` has
-`reported_as` set to that captured token; a method whose basis equals its
+`reported_as` set to that captured token; **a non-matching name leaves
+`reported_as` NULL and appears in the reported unmatched set; a matched row with
+a basis mismatch outside the enumerated seven gets NO constant and is reported**; a method whose basis equals its
 analyte's basis has `conversion_constant` NA; `Ammonia as NH3` has
 `reported_as = 'NH3'` and `conversion_constant = 0.8224428`; the step is
 idempotent; **no `analysis.value` is altered, pinned by a row-count and
@@ -109,6 +148,20 @@ value-checksum comparison over `analysis` before and after**; and the re-ingest
 idempotency check above passes — that is this requirement's real gate, because
 it proves the constant, its direction, and the existing data all agree.
 
+> **PROVISIONAL ORACLE (Phase-3 D5) — re-check in Phase 6 against real output.**
+> That re-ingest gate names `ES2415638_0_XTAB.csv`, a **real corpus file**, and A3
+> forbids committing real lab data as a fixture, so it cannot be an in-repo test.
+> Pin it exactly like the R-10.5 corpus gates: a
+> `skip_if(Sys.getenv("SAMPLETIDY_CORPUS") == "")`-guarded test that reads the file
+> from the corpus and asserts `2.14 x 0.8224428 = 1.76002759`, `already_present`,
+> no second analysis and no `value_conflict`. **A worker must not "solve" this by
+> synthesising a fixture carrying the same numbers** — that asserts the arithmetic
+> against itself and proves nothing about the live data, which is the entire point.
+> The in-repo half of R-14.2 is the `analysis` row-count-and-checksum invariance,
+> which IS testable without the corpus and is what actually guards against
+> double-conversion.
+
+<!-- block: B-14.3 -->
 ## R-14.3 ✅ CLOSED — the 12 `Ammonia as NH3` analyses are already correct
 
 **No action. Do not touch these values.** Resolved 2026-07-22 by reading the
@@ -154,6 +207,23 @@ Criteria: **none — this requirement is closed with no write.** R-14.2 records
 the constant that was used; a regression there proves a re-ingest of
 `ES2415638_0_XTAB.csv` reproduces these exact stored values (see below).
 
+<!-- block: B-14-fixtures -->
+## Fixtures (Phase-3 D3)
+
+Uses **`seed_pre_migration_db()`** from `tests/testthat/helper-migration-db.R`,
+owned by PLAN-13 — plus this plan's own additions to it. R-14.1 is untestable
+without **`analyte_mask`**, which no existing test DDL declares at all; the
+helper adds it for exactly this reason.
+
+The R-14.1 fixture needs, in that helper: two `analyte` rows with a
+**byte-identical** name (the `Carbophenothion` shape), the survivor carrying many
+analyses through its `lab_method` and the doomed row carrying few; one
+`lab_method` per analyte; and **two `analyte_mask` rows on the doomed uuid**, one
+of them with a NULL name (the live shape). Run this plan against the migrated
+output of PLAN-13's script, not against a hand-built post-migration DDL — the
+dependency is real and testing around it would hide a step-9 FK mistake.
+
+<!-- block: B-14-gates -->
 ## Gates
 
 - `testthat::test_file("tests/testthat/test-migration-002.R")` green for
@@ -164,3 +234,7 @@ the constant that was used; a regression there proves a re-ingest of
   script — this plan changes registry *identity* and *metadata*, and (while
   R-14.3 is open) must not change a single measurement value.
 - Every write appears in `change_log` with an actor and a reason.
+- **Every log line the script emits quotes the absolute DB path** (Phase-3 D14).
+  Given A67 — three `monitoring.duckdb` copies with genuinely different schemas —
+  this is what stops a rehearsal against the wrong copy from passing unnoticed.
+- The raw-write lint over `002-*.R` (R-14.2) is clean.
