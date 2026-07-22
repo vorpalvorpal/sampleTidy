@@ -471,6 +471,35 @@ test_that("R-7.4: a non-NCP foreign-work-order row is flagged for review", {
   expect_true(length(event$report$warnings) >= 1)
 })
 
+test_that("R-7.4: a row with NO work order (NA) is unattributed, not foreign, and is NOT flagged for review", {
+  # A lab-QC result (ESdat "QC-...." SampleCode) carries no parseable work
+  # order, so the chemistry parser leaves work_order = NA. NA means
+  # "unattributed", NOT "belongs to a foreign work order": the partition must
+  # treat it as own (kept, to be QC-filtered downstream once the sample join
+  # types it), never as foreign_work_order. A genuine foreign row (a real work
+  # order that differs from home) must still be flagged - see the test above.
+  parsed <- list(
+    "h-multi" = mk_parsed_entry(
+      results = dplyr::bind_rows(
+        mk_result(source_hash = "h-multi", work_order = "XX1234567", lab_sample_id = "XX1234567001", sample_type = "unknown"),
+        mk_result(source_hash = "h-multi", work_order = NA_character_, lab_sample_id = "QC-000001", sample_type = "unknown")
+      ),
+      meta = list(work_order_guess = "XX1234567")
+    )
+  )
+  out <- assemble_events(parsed)
+  event <- out$events[[1]]
+  expect_valid_event(event)
+  # the NA-work-order row is kept (for the downstream QC filter), not dropped
+  qc <- event$results[is.na(event$results$work_order), ]
+  expect_equal(nrow(qc), 1)
+  # ...and it is NOT flagged foreign_work_order
+  expect_false(isTRUE(qc$needs_review[[1]]))
+  # nothing in the event is flagged, and no foreign_work_order warning is raised
+  expect_false(any(event$results$needs_review))
+  expect_equal(length(event$report$warnings), 0L)
+})
+
 test_that("R-7.4 (seam: real ESdat parser -> assemble_events): a compound-SampleCode NCP row is counted in n_ncp_foreign, dropped from results, and NOT flagged, while a plain foreign row IS flagged", {
   # SEAM test (like R-11.15 below): the other R-7.4 tests hand-build results
   # with an explicit sample_type = "NCP", which bypasses the exact bug this
@@ -506,6 +535,17 @@ test_that("R-7.4 (seam: real ESdat parser -> assemble_events): a compound-Sample
   expect_false(any(event$results$sample_type == "NCP", na.rm = TRUE))
   expect_false(any(grepl("ZZ9999999", vapply(event$results$review_payload,
     function(p) paste(unlist(p), collapse = " "), character(1)))))
+
+  # the lab-QC rows (QC-000001/QC-000002 SampleCodes) carry NO parseable work
+  # order, so the parser leaves work_order = NA. NA is "unattributed", NOT
+  # "belongs to a foreign work order": these rows must be kept (the reconciler's
+  # QC filter drops them later, once the sample-metadata join types them LCS/MB)
+  # and must NOT be flagged foreign_work_order here. Flagging them leaks 95+
+  # lab-QC rows per real ESdat bundle into the review queue, because reconcile's
+  # STAGE-0 harvests the assembly flag before the QC filter can skip them.
+  qc <- event$results[is.na(event$results$work_order), ]
+  expect_true(nrow(qc) >= 1)
+  expect_false(any(qc$needs_review))
 
   # the plain foreign row (YY0000001, NO compound suffix) is a genuine foreign
   # result and IS kept + flagged foreign_work_order for review
