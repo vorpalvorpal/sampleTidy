@@ -58,6 +58,40 @@ test_that("R-6.2: missing REPORT NO: continues parsing with a warning, work_orde
   expect_true(all(is.na(out$results$work_order)))
 })
 
+test_that("R-6.2: get_key() single/zero/duplicate-match front-page grids", {
+  make_grid <- function(v1, v2) {
+    as.data.frame(list(V1 = v1, V2 = v2), stringsAsFactors = FALSE)
+  }
+
+  # exactly one match: normal value extraction.
+  single_grid <- make_grid(
+    c("REPORT NO:", "SAMPLED BY:", "SAMPLE DATE:"),
+    c("2400-9999-01", "J. Tester", "24/05/2025")
+  )
+  out_single <- sampleTidy:::.st_acirl_parse_front_page(single_grid)
+  expect_identical(out_single$header$report_no, "2400-9999-01")
+  expect_length(out_single$warnings, 0)
+
+  # zero matches: NA + "not found" warning, no throw.
+  missing_grid <- make_grid(
+    c("SAMPLED BY:", "SAMPLE DATE:"),
+    c("J. Tester", "24/05/2025")
+  )
+  out_missing <- sampleTidy:::.st_acirl_parse_front_page(missing_grid)
+  expect_true(is.na(out_missing$header$report_no))
+  expect_true(any(grepl("REPORT NO.*not found", out_missing$warnings, ignore.case = TRUE)))
+
+  # duplicate matches (two "REPORT NO:" cells): must NOT throw; NA + an
+  # "ambiguous" warning, same tolerance treatment as the missing-key case.
+  dup_grid <- make_grid(
+    c("REPORT NO:", "REPORT NO:", "SAMPLE DATE:"),
+    c("2400-9999-01", "2400-8888-02", "24/05/2025")
+  )
+  expect_no_error(out_dup <- sampleTidy:::.st_acirl_parse_front_page(dup_grid))
+  expect_true(is.na(out_dup$header$report_no))
+  expect_true(any(grepl("REPORT NO.*multiple.*ambiguous", out_dup$warnings, ignore.case = TRUE)))
+})
+
 # ---- R-6.3 water sheets -> ir_results + ir_samples ------------------------------
 
 test_that("R-6.3: every fake ALS row is dropped - zero fake lab values appear in results", {
