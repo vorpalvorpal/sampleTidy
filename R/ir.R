@@ -72,9 +72,11 @@ ir_results <- function(...) {
     out <- .st_ir_prototype("results")
   } else {
     out <- tibble::tibble(!!!args)
-    out <- out[, .st_ir_results_cols, drop = FALSE]
   }
   ir_validate(out, "results")
+  if (length(args) > 0) {
+    out <- out[, .st_ir_results_cols, drop = FALSE]
+  }
   out
 }
 
@@ -95,9 +97,11 @@ ir_samples <- function(...) {
     out <- .st_ir_prototype("samples")
   } else {
     out <- tibble::tibble(!!!args)
-    out <- out[, .st_ir_samples_cols, drop = FALSE]
   }
   ir_validate(out, "samples")
+  if (length(args) > 0) {
+    out <- out[, .st_ir_samples_cols, drop = FALSE]
+  }
   out
 }
 

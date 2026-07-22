@@ -62,10 +62,22 @@
     path <- routed$path[[i]]
     adapter_id <- routed$adapter[[i]]
 
-    ad <- adapter_registry()[[adapter_id]]
     fm <- file_meta(path)
 
-    out <- tryCatch(ad$parse(path, fm), error = function(e) e)
+    # Belt-and-braces (R-12.1/F6): a stray/invalid `adapter_id` here (e.g.
+    # from a routed row that predates the router's match()-validation fix,
+    # or any other unexpected state) must fail only this file, not abort
+    # the whole run - so the registry lookup lives INSIDE the tryCatch.
+    out <- tryCatch(
+      {
+        ad <- adapter_registry()[[adapter_id]]
+        if (is.null(ad)) {
+          stop(sprintf("no registered adapter with id '%s'", adapter_id))
+        }
+        ad$parse(path, fm)
+      },
+      error = function(e) e
+    )
 
     if (inherits(out, "error")) {
       ingest_file_set_state(con, hash, "failed", conditionMessage(out))

@@ -118,6 +118,28 @@ route_files <- function(paths, con) {
         adapter = NA_character_, tier = NA_character_, reason = msg
       ))
     }
+    # R-12.1: a match() that RETURNS (rather than throws) something outside
+    # the tier vocabulary must be treated exactly like a thrown match() -
+    # this file fails, routing of the others continues (S-12/A59).
+    if (!(is.character(tier) && length(tier) == 1 && !is.na(tier) &&
+      tier %in% c("exact", "format", "fallback", "no"))) {
+      bad_display <- if (length(tier) == 1 && is.character(tier) && is.na(tier)) {
+        "NA"
+      } else if (length(tier) == 1 && is.character(tier)) {
+        tier
+      } else {
+        paste(deparse(tier), collapse = " ")
+      }
+      msg <- sprintf(
+        "adapter '%s' match() returned an invalid tier value: %s",
+        ad$id, bad_display
+      )
+      ingest_file_set_state(con, hash, "failed", msg)
+      return(tibble::tibble(
+        path = path, hash = hash, filename = fm$filename, state = "failed",
+        adapter = NA_character_, tier = NA_character_, reason = msg
+      ))
+    }
     claims[[ad$id]] <- tier
   }
 

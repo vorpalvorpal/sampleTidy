@@ -31,6 +31,18 @@
   }
 )
 
+#' Keys whose value is list/vector-valued rather than scalar.
+#'
+#' `st_config()` env-var values are always strings (`Sys.getenv()`), which is
+#' fine for scalar keys but would silently shrink a list-valued key (e.g.
+#' `field_analytes`, an analyte allowlist) to a single-entry vector if read
+#' from an env var. Keys named here abort loudly instead when a get would
+#' otherwise fall through to the env var - see PLAN-12 R-12.11 (F16).
+#'
+#' @keywords internal
+#' @noRd
+.st_config_list_keys <- c("field_analytes")
+
 #' Get or set a sampleTidy configuration value
 #'
 #' `st_config(key)` reads a configuration value; `st_config(key, value)` sets
@@ -38,6 +50,15 @@
 #' A get resolves, in order: the option, then the environment variable
 #' `SAMPLETIDY_<KEY>` (key upper-cased), then a built-in default. Keys with
 #' no built-in default abort if neither the option nor the env var is set.
+#'
+#' Env-var overrides are string-only: `SAMPLETIDY_<KEY>` always yields a
+#' single character value. This is fine for scalar keys (paths,
+#' `remove_ingested`, coerced), but a list-valued key such as
+#' `field_analytes` cannot be safely sourced from an env var - a single
+#' string would silently shrink the allowlist to one entry. For the known
+#' list-valued keys, `st_config()` aborts if it would otherwise fall through
+#' to the env var; set such a key in code via `st_config(key, value)`
+#' instead (see PLAN-12 R-12.11).
 #'
 #' @param key configuration key, e.g. `"live_db"`, `"input_dir"`.
 #' @param value if supplied, the value to set for `key`.
@@ -61,6 +82,15 @@ st_config <- function(key, value) {
   env_var <- paste0("SAMPLETIDY_", toupper(key))
   env_val <- Sys.getenv(env_var, unset = NA_character_)
   if (!is.na(env_val)) {
+    if (key %in% .st_config_list_keys) {
+      cli::cli_abort(
+        "Config key {.val {key}} is list-valued and cannot be sourced from
+         env var {.val {env_var}} (env vars are always a single string,
+         which would silently shrink it to one entry). Set it in code
+         instead: {.code st_config({.val {key}}, c(...))}.",
+        class = "sampletidy_error"
+      )
+    }
     return(env_val)
   }
 
