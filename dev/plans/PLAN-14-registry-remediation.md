@@ -61,9 +61,22 @@ key function — this is a duplicate row, not a normalisation artefact, and it i
 one of the two collisions R-11.3 records as known-and-accepted until fixed here.
 
 **Procedure** (user-confirmed): keep `31b21bfa…`; repoint `d0dc5ac3…`'s
-`lab_method` row and both its `analyte_mask` rows to the survivor; then delete
+`lab_method` row and its `analyte_mask` rows to the survivor; then delete
 `d0dc5ac3…`. **No `analysis` row is touched** — analyses reach the analyte
 *through* `lab_method`, so repointing the method carries its 2 analyses with it.
+
+**Mask-collision dedup (Phase-8a clarification, 2026-07-22).** Because the
+survivor already carries a `long` mask of its own (see the `long`-on-both note
+above), a *blind* repoint of the doomed's `long` mask would leave the survivor
+with **two** `long` rows — a silent duplicate that violates the no-duplication
+criterion below and, post-plan-8, would trip the `db_update`/`db_delete`
+"key must resolve to exactly one row" guard on any later mask mutation. So the
+repoint is per-variant conditional: for a variant the **survivor already has**,
+`db_delete` the doomed's colliding mask (the survivor's own row wins — the two
+analytes are byte-identical duplicates, so the masks are too); for a variant the
+survivor **lacks** (here `EPA`), `db_update`-repoint it as before. Net result:
+the survivor ends with exactly one row per variant, no `analyte_mask` row
+references the deleted uuid, and `change_log` records each delete/repoint.
 
 **Idempotency depends on a PLAN-12 ruling (Phase-3 D2 — CONTRACT A72).**
 R-12.6 is now pinned: `db_delete()` on a nonexistent uuid **aborts

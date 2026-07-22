@@ -308,9 +308,14 @@ seed_carbophenothion_duplicate <- function(con) {
     ('lm-carb-survivor', 'carb-survivor', 'Carbophenothion by GC', 'ORG-CARB', 'ALS', 0.01),
     ('lm-carb-doomed',   'carb-doomed',   'Carbophenothion by GC', 'ORG-CARB', 'ALS', 0.01)")
 
-  # 'long' + an 'EPA' row with a NULL name - the exact live shape quoted in
-  # the plan block (R-14.1: "long on both; EPA with a NULL name on d0dc5ac3").
+  # 'long' + an 'EPA' row with a NULL name on the doomed side - the exact
+  # live shape quoted in the plan block (R-14.1: "long on both; EPA with a
+  # NULL name on d0dc5ac3"). The survivor ALSO carries its own 'long' mask
+  # (the "Mask-collision dedup" clarification, Phase-8a, 2026-07-22) - this
+  # is the collision that makes the doomed's 'long' row a duplicate, not a
+  # repoint target.
   DBI::dbExecute(con, "INSERT INTO analyte_mask (uuid_analyte, variant, name) VALUES
+    ('carb-survivor', 'long', 'Carbophenothion (survivor long)'),
     ('carb-doomed', 'long', 'Carbophenothion (long)'),
     ('carb-doomed', 'EPA', NULL)")
 

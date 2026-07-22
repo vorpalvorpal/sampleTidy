@@ -145,7 +145,7 @@ test_that("R-14.1: the doomed lab_method row is repointed (not dropped), so all 
   expect_equal(n_after, 5L) # 3 + 2, the merge criterion's arithmetic
 })
 
-test_that("R-14.1: both analyte_mask rows on the doomed uuid are repointed to the survivor, none left dangling", {
+test_that("R-14.1: the doomed uuid's colliding 'long' mask is deduped (deleted, not repointed) and its non-colliding 'EPA' mask is repointed, none left dangling and no duplicate on the survivor", {
   mig2 <- .mig002_load()
   path <- .seed_002_db()
 
@@ -154,16 +154,36 @@ test_that("R-14.1: both analyte_mask rows on the doomed uuid are repointed to th
   con <- pre_migration_con(path)
   withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
+  # No analyte_mask row references the deleted uuid, whether its variant was
+  # deduped (deleted) or repointed - R-14.1's "no dangling reference" holds
+  # for either branch of the per-variant conditional.
   dangling <- DBI::dbGetQuery(con, "SELECT * FROM analyte_mask WHERE uuid_analyte = 'carb-doomed'")
   expect_identical(nrow(dangling), 0L)
 
-  repointed <- DBI::dbGetQuery(con, "SELECT variant, name FROM analyte_mask WHERE uuid_analyte = 'carb-survivor' ORDER BY variant")
-  expect_identical(nrow(repointed), 2L)
-  expect_setequal(repointed$variant, c("EPA", "long"))
-  # The NULL-name row (the live shape quoted in the plan block) survives the
+  survivor_rows <- DBI::dbGetQuery(
+    con, "SELECT uuid_analyte, variant, name FROM analyte_mask WHERE uuid_analyte = 'carb-survivor' ORDER BY variant"
+  )
+  expect_identical(nrow(survivor_rows), 2L)
+  expect_setequal(survivor_rows$variant, c("EPA", "long"))
+
+  # Mask-collision dedup (Phase-8a): blind repoint - the bug this
+  # remediation fixes - would leave the survivor with TWO 'long' rows. This
+  # is the non-vacuous duplicate check: no (uuid_analyte, variant) pair
+  # appears twice on the survivor.
+  expect_identical(
+    anyDuplicated(paste(survivor_rows$uuid_analyte, survivor_rows$variant)), 0L
+  )
+
+  # The survivor's OWN 'long' row wins - it is not overwritten by the
+  # doomed's colliding 'long' row (the doomed's is deleted, not repointed).
+  long_row <- survivor_rows[survivor_rows$variant == "long", ]
+  expect_identical(long_row$name, "Carbophenothion (survivor long)")
+
+  # 'EPA' has no collision, so it IS repointed from the doomed row. The
+  # NULL-name row (the live shape quoted in the plan block) survives the
   # repoint as NULL, not coerced into a spurious value - NA-safe assertion,
   # never `== NULL`.
-  epa_row <- repointed[repointed$variant == "EPA", ]
+  epa_row <- survivor_rows[survivor_rows$variant == "EPA", ]
   expect_true(is.na(epa_row$name))
 })
 
@@ -206,7 +226,7 @@ test_that("R-14.1: a v_measurement-equivalent join (analysis -> lab_method -> an
   expect_identical(n_after, n_before) # a merge must not hide or reveal a measurement
 })
 
-test_that("R-14.1: change_log records the analyte delete and the lab_method + both analyte_mask repoints", {
+test_that("R-14.1: change_log records the analyte delete, the lab_method repoint, the 'EPA' mask repoint and the 'long' mask dedup-delete", {
   mig2 <- .mig002_load()
   path <- .seed_002_db()
 
@@ -227,12 +247,28 @@ test_that("R-14.1: change_log records the analyte delete and the lab_method + bo
   expect_identical(lm_update$old, "carb-doomed")
   expect_identical(lm_update$new, "carb-survivor")
 
-  # Both analyte_mask repoints logged - asserted on the SET of provenance
-  # rows referencing the repoint (analyte_mask has no `uuid` column of its
-  # own, so identity is on old/new value rather than a single uuid_row).
-  mask_writes <- DBI::dbGetQuery(con, "
-    SELECT * FROM change_log WHERE tbl = 'analyte_mask' AND new = 'carb-survivor'")
-  expect_identical(nrow(mask_writes), 2L)
+  # 'EPA' has no collision with the survivor, so it is repointed (update) -
+  # asserted on new = 'carb-survivor' (analyte_mask has no `uuid` column of
+  # its own, so identity is on old/new value rather than a single uuid_row).
+  mask_update <- DBI::dbGetQuery(con, "
+    SELECT * FROM change_log
+    WHERE tbl = 'analyte_mask' AND action = 'update' AND new = 'carb-survivor'")
+  expect_identical(nrow(mask_update), 1L)
+
+  # 'long' collides with the survivor's own 'long' row, so the doomed's is
+  # deduped via a DELETE, not an update-repoint (the mask-collision-dedup
+  # fix). `db_delete()` called with a `key=` (no single `uuid`) logs
+  # `uuid_row = NA` - do not over-constrain it to a specific uuid value.
+  mask_delete <- DBI::dbGetQuery(con, "
+    SELECT * FROM change_log WHERE tbl = 'analyte_mask' AND action = 'delete'")
+  expect_identical(nrow(mask_delete), 1L)
+  expect_true(is.na(mask_delete$uuid_row))
+  expect_true(grepl("dedup", mask_delete$reason, ignore.case = TRUE))
+
+  # Exactly one repoint (EPA) and one dedup-delete (long) - never both a
+  # repoint and a delete for the same variant, and never two repoints (the
+  # blind-loop bug this remediation fixes).
+  expect_identical(nrow(mask_update) + nrow(mask_delete), 2L)
 })
 
 test_that("R-14.1: a second run is idempotent via the existence pre-check - no abort, and no further writes", {

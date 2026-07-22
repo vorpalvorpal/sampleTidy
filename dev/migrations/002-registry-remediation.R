@@ -148,14 +148,41 @@ mig002_carbophenothion_merge <- function(con, actor, reason) {
     }
   }
 
+  # ---- Mask-collision dedup (Phase-8a clarification, 2026-07-22) ----
+  # The survivor already carries a `long` mask of its own (verified against
+  # the live DB - PLAN-14's "long-on-both" note). A blind repoint of the
+  # doomed's masks would leave the survivor with TWO rows for that variant -
+  # a silent duplicate `analyte_mask` has no uniqueness constraint to catch,
+  # and one that would trip the db_update()/db_delete() "key must resolve to
+  # exactly one row" guard on any LATER mutation of the survivor's `long`
+  # mask. So this is per-variant conditional, not a blind repoint: for a
+  # variant the survivor ALREADY has, the survivor's own row wins (the two
+  # analytes are byte-identical duplicates, so the masks are too) and the
+  # doomed's colliding row is db_delete()'d as a dedup, never repointed; for
+  # a variant the survivor LACKS, the doomed's row is db_update()-repointed
+  # as before. Either branch still empties the doomed side, so R-14.1's "no
+  # analyte_mask row references the deleted uuid" holds regardless.
   mask_rows <- DBI::dbGetQuery(
     con, "SELECT variant FROM analyte_mask WHERE uuid_analyte = ?", params = list(doomed)
   )
   for (variant in mask_rows$variant) {
-    db_update(
-      con, "analyte_mask", key = list(uuid_analyte = doomed, variant = variant),
-      changes = list(uuid_analyte = survivor), actor = actor, reason = reason
-    )
+    survivor_has <- DBI::dbGetQuery(
+      con,
+      "SELECT COUNT(*) AS n FROM analyte_mask WHERE uuid_analyte = ? AND variant = ?",
+      params = list(survivor, variant)
+    )$n[[1]]
+    if (survivor_has > 0) {
+      db_delete(
+        con, "analyte_mask", key = list(uuid_analyte = doomed, variant = variant),
+        actor = actor,
+        reason = paste(reason, "(mask-collision dedup: survivor already has this variant)")
+      )
+    } else {
+      db_update(
+        con, "analyte_mask", key = list(uuid_analyte = doomed, variant = variant),
+        changes = list(uuid_analyte = survivor), actor = actor, reason = reason
+      )
+    }
   }
 
   db_delete(con, "analyte", uuid = doomed, actor = actor, reason = reason)
