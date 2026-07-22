@@ -186,16 +186,32 @@
 
     cand <- DBI::dbGetQuery(
       con,
-      "SELECT uuid, name, method FROM lab_method WHERE organisation = ? AND uuid_analyte IS NULL",
+      "SELECT uuid, name, method, units FROM lab_method WHERE organisation = ? AND uuid_analyte IS NULL",
       params = list(org)
     )
     lab_uuid <- NA_character_
+    recorded_units <- NA_character_
     if (nrow(cand) > 0) {
       name_match <- !is.na(cand$name) & .rc_key(cand$name) == .rc_key(name_raw)
       method_match <- (is.na(cand$method) & is.na(method_raw)) |
         (!is.na(cand$method) & !is.na(method_raw) & .rc_key(cand$method) == .rc_key(method_raw))
       hit <- cand[name_match & method_match, , drop = FALSE]
-      if (nrow(hit) > 0) lab_uuid <- hit$uuid[[1]]
+      if (nrow(hit) > 0) {
+        lab_uuid <- hit$uuid[[1]]
+        recorded_units <- hit$units[[1]]
+      }
+    }
+
+    if (!is.na(lab_uuid)) {
+      row_units_raw <- if ("units_raw" %in% names(clean)) clean$units_raw[[first_i]] else NA_character_
+      if (!is.na(row_units_raw) && !identical(row_units_raw, recorded_units)) {
+        .st_write_change_log(
+          con, at = Sys.time(), actor = actor, action = "provenance", tbl = "lab_method",
+          uuid_row = lab_uuid, field = "units", old = recorded_units, new = row_units_raw,
+          reason = sprintf("units-drift sighting (%s -> %s)", recorded_units, row_units_raw),
+          source_hash = clean$source_hash[[first_i]]
+        )
+      }
     }
 
     if (is.na(lab_uuid)) {

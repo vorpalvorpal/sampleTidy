@@ -483,6 +483,55 @@ test_that("R-11.8/A63 (D7 reversed): a pending-analyte row's reported units land
   expect_false("units_raw" %in% DBI::dbListFields(con, "analysis"))
 })
 
+test_that("R-11.8(f): a committing row's units_raw drift from an existing dangling lab_method's recorded units is RECORDED as a change_log provenance row, reuses the SAME uuid_lab, and leaves lab_method.units unchanged", {
+  setup <- commit_test_setup()
+  con <- setup$con
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  files1 <- tibble::tibble(hash = setup$hash, filename = basename(setup$path),
+                           adapter = "esdat/1", rank = 3L, kept = TRUE)
+  clean1 <- mk_p11_row(source_ref = "r1", source_hash = setup$hash,
+                        analyte_raw = "T.DRIFT-ANALYTE", method_raw = "T.DRIFT-METHOD",
+                        analyte_pending = TRUE, uuid_lab = NA_character_, uuid_analyte = NA_character_,
+                        units_raw = "mg/L",
+                        sample_date = as.Date("2025-07-11"),
+                        sample_datetime = as.POSIXct("2025-07-11 09:00:00", tz = "UTC"))
+  commit_event(mk_commit_event(files1), mk_resolved(clean = clean1), con)
+
+  dangling <- dangling_lab_method_rows(con, "ALS")
+  matching <- dangling[!is.na(dangling$name) & .rc_key(dangling$name) == .rc_key("T.DRIFT-ANALYTE") &
+                          !is.na(dangling$method) & .rc_key(dangling$method) == .rc_key("T.DRIFT-METHOD"), , drop = FALSE]
+  expect_equal(nrow(matching), 1)
+  lab_uuid <- matching$uuid[[1]]
+  expect_identical(matching$units[[1]], "mg/L")
+
+  second <- add_second_reconciled_file(setup, "drift_file.CSV")
+  files2 <- tibble::tibble(hash = second$hash, filename = basename(second$path),
+                           adapter = "esdat/1", rank = 3L, kept = TRUE)
+  clean2 <- mk_p11_row(source_ref = "r1", source_hash = second$hash,
+                        analyte_raw = "T.DRIFT-ANALYTE", method_raw = "T.DRIFT-METHOD",
+                        analyte_pending = TRUE, uuid_lab = NA_character_, uuid_analyte = NA_character_,
+                        units_raw = "g/L",
+                        sample_date = as.Date("2025-07-12"),
+                        sample_datetime = as.POSIXct("2025-07-12 09:00:00", tz = "UTC"))
+  commit_event(mk_commit_event(files2), mk_resolved(clean = clean2), con)
+
+  dangling_after <- dangling_lab_method_rows(con, "ALS")
+  matching_after <- dangling_after[!is.na(dangling_after$name) & .rc_key(dangling_after$name) == .rc_key("T.DRIFT-ANALYTE") &
+                          !is.na(dangling_after$method) & .rc_key(dangling_after$method) == .rc_key("T.DRIFT-METHOD"), , drop = FALSE]
+  expect_equal(nrow(matching_after), 1)
+  expect_identical(matching_after$units[[1]], "mg/L")
+
+  prov <- DBI::dbGetQuery(con, sprintf(
+    "SELECT * FROM change_log WHERE action = 'provenance' AND tbl = 'lab_method' AND field = 'units' AND uuid_row = '%s'",
+    lab_uuid))
+  expect_equal(nrow(prov), 1)
+  expect_identical(prov$old[[1]], "mg/L")
+  expect_identical(prov$new[[1]], "g/L")
+  expect_identical(prov$source_hash[[1]], second$hash)
+  expect_true(grepl("sighting", prov$reason[[1]]))
+})
+
 test_that("R-11.9 (commit-side, D8): review payload carries a resolvable alias_uuid after commit (rewritten by the R-11.8 materialise step, seam S-8)", {
   setup <- commit_test_setup()
   con <- setup$con
