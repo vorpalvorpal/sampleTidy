@@ -94,15 +94,15 @@ lab_method_row <- function(con, uuid) {
 mk_collision_fixture <- function(con) {
   DBI::dbExecute(con, "INSERT INTO feature_alias
     (uuid, uuid_feature, name, alias_key, kind, n_seen, auto_assign,
-     first_seen, last_seen, source_hash, confirmed_by) VALUES
+     first_seen, last_seen, confirmed_by) VALUES
     (?, NULL, ?, ?, 'pending', 0, FALSE, TIMESTAMP '2025-08-01 08:00:00',
-     TIMESTAMP '2025-08-01 08:00:00', 'seed-hash-9001', NULL)",
+     TIMESTAMP '2025-08-01 08:00:00', NULL)",
     params = list("fa-9001", "T.NEWCODE1", "tnewcode1"))
   DBI::dbExecute(con, "INSERT INTO feature_alias
     (uuid, uuid_feature, name, alias_key, kind, n_seen, auto_assign,
-     first_seen, last_seen, source_hash, confirmed_by) VALUES
+     first_seen, last_seen, confirmed_by) VALUES
     (?, NULL, ?, ?, 'pending', 0, FALSE, TIMESTAMP '2025-08-01 08:00:00',
-     TIMESTAMP '2025-08-01 08:00:00', 'seed-hash-9002', NULL)",
+     TIMESTAMP '2025-08-01 08:00:00', NULL)",
     params = list("fa-9002", "T.NEWCODE2", "tnewcode2"))
   DBI::dbExecute(con, "INSERT INTO \"sample\"
     (uuid, uuid_feature_alias, uuid_project, date, datetime, organisation, person) VALUES
@@ -368,9 +368,9 @@ test_that("R-11.10: vectorised over uuid_alias/uuid_feature - one call confirms 
   # a second, independent dangling alias with its own referencing sample.
   DBI::dbExecute(con, "INSERT INTO feature_alias
     (uuid, uuid_feature, name, alias_key, kind, n_seen, auto_assign,
-     first_seen, last_seen, source_hash, confirmed_by) VALUES
+     first_seen, last_seen, confirmed_by) VALUES
     (?, NULL, ?, ?, 'pending', 0, FALSE, TIMESTAMP '2025-08-02 08:00:00',
-     TIMESTAMP '2025-08-02 08:00:00', 'seed-hash-9102', NULL)",
+     TIMESTAMP '2025-08-02 08:00:00', NULL)",
     params = list("fa-9102", "T.NEWCODE-BULK", "tnewcodebulk"))
   DBI::dbExecute(con, "INSERT INTO \"sample\"
     (uuid, uuid_feature_alias, uuid_project, date, datetime, organisation) VALUES
