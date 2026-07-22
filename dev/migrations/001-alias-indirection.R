@@ -569,7 +569,23 @@ mig001_run <- function(db, snapshot_dir, dry_run = FALSE, .now = NULL) {
             params = list(.mig001_marker_version, recorded_at)
           )
 
-          list(ambiguous_count = ambiguous_count)
+          # ---- Step 11: hard verify gate. Runs BEFORE commit (inside the
+          # still-open transaction) so a verify failure propagates to the
+          # error handler below, which ROLLBACKs the marker + all DDL -
+          # rather than being able to abort only AFTER the marker (and
+          # everything else) is already durably committed. duckdb supports
+          # transactional DDL + read-your-own-writes, so
+          # mig001_counts_checksum(con) here correctly sees the rebuilt
+          # tables.
+          counts_after <- mig001_counts_checksum(con)
+          logf(
+            "Post-migration counts: feature=%d sample=%d analysis=%d lab_method=%d",
+            counts_after$feature, counts_after$sample,
+            counts_after$analysis, counts_after$lab_method
+          )
+          mig001_verify(counts_before, counts_after)
+
+          list(ambiguous_count = ambiguous_count, counts_after = counts_after)
         },
         error = function(e) {
           try(DBI::dbExecute(con, "ROLLBACK"), silent = TRUE)
@@ -578,20 +594,10 @@ mig001_run <- function(db, snapshot_dir, dry_run = FALSE, .now = NULL) {
       )
 
       DBI::dbExecute(con, "COMMIT")
-
-      counts_after <- mig001_counts_checksum(con)
-      logf(
-        "Post-migration counts: feature=%d sample=%d analysis=%d lab_method=%d",
-        counts_after$feature, counts_after$sample,
-        counts_after$analysis, counts_after$lab_method
-      )
-
-      # ---- Step 11: hard verify gate. ----
-      mig001_verify(counts_before, counts_after)
       logf("Step-11 verify passed: row counts and checksum unchanged.")
 
       list(
-        counts_before = counts_before, counts_after = counts_after,
+        counts_before = counts_before, counts_after = body$counts_after,
         ambiguous_count = body$ambiguous_count
       )
     },

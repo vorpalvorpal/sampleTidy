@@ -57,3 +57,33 @@ test_that("R-2.4: has_clock_time() is TRUE iff a time component was present in t
 test_that("R-2.4: excel_date(45802) == as.Date('2025-05-25')", {
   expect_equal(excel_date(45802), as.Date("2025-05-25"))
 })
+
+test_that("R-2.4: a DST spring-forward gap time is NA, never silently reinterpreted (Phase-8b fix)", {
+  withr::local_locale(c(LC_TIME = "C"))
+  # 05 Oct 2025 is the first Sunday of October - Australia/Sydney's
+  # spring-forward date; 02:00-02:59 local does not exist that day.
+  result <- parse_lab_datetime(
+    c("05 Oct 2025 01:30", "05 Oct 2025 02:30", "05 Oct 2025 03:30"),
+    formats = "esdat"
+  )
+  expect_true(is.na(result[2]))
+  expect_false(is.na(result[1]))
+  expect_false(is.na(result[3]))
+  # Valid times either side of the gap are unaffected and sort correctly -
+  # the gap time must NOT have been silently normalised to that day's
+  # midnight (which would sort BEFORE 01:30).
+  expect_true(result[3] > result[1])
+
+  # An ambiguous fall-back time (occurs twice; 06 Apr 2025 is 2025's first
+  # Sunday of April) is a different case entirely and must still be
+  # accepted, non-NA.
+  fallback <- parse_lab_datetime("06 Apr 2025 02:30", formats = "esdat")
+  expect_false(is.na(fallback))
+
+  # A non-zero-padded valid time must still parse (guards against a
+  # string-round-trip detection approach, which would wrongly NA this).
+  non_padded <- parse_lab_datetime("5 Oct 2025 3:30", formats = "esdat")
+  expect_false(is.na(non_padded))
+  expect_equal(format(non_padded, "%Y-%m-%d %H:%M:%S", tz = "Australia/Sydney"),
+               "2025-10-05 03:30:00")
+})

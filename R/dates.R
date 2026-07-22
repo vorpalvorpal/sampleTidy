@@ -24,7 +24,14 @@
 #' element of `x`, keeping the first successful parse; elements that match no
 #' format become `NA` (never silently reinterpreted - e.g. `"13/13/2025"`
 #' under the `"crosstab"` `"%d/%m/%Y"` preset is `NA`, not rolled over into a
-#' different month/year).
+#' different month/year). A wall-clock time that does not exist in `tz` (a
+#' DST spring-forward gap, e.g. `"05 Oct 2025 02:30"` in
+#' `"Australia/Sydney"`) is likewise `NA` rather than silently normalised to
+#' a different instant (e.g. that day's midnight) - detected by comparing
+#' the literal parsed fields against the tz-normalised result, not by string
+#' round-trip. An ambiguous fall-back time (ie one that occurs twice, e.g.
+#' the first Sunday of April in `"Australia/Sydney"`) is unaffected and
+#' still parses non-`NA`.
 #'
 #' @param x character vector of raw datetime strings.
 #' @param formats either one of the pinned preset names `"esdat"`,
@@ -54,10 +61,38 @@ parse_lab_datetime <- function(x, formats, tz = "Australia/Sydney") {
       break
     }
     parsed <- strptime(trimmed[idx], format = fmt, tz = tz)
+    # `matched`: strptime successfully read literal date/time fields out of
+    # the string for this format - true regardless of whether the resulting
+    # local instant actually exists (mktime's handling of a DST gap is
+    # platform-dependent: some libcs return NA outright for a nonexistent
+    # wall-clock time, others silently normalise it to a nearby valid
+    # instant with shifted fields). A total non-match (format simply didn't
+    # fit the string) leaves these fields NA too, so `matched` correctly
+    # excludes it.
+    matched <- !is.na(parsed$year)
     ok <- !is.na(parsed)
     if (any(ok)) {
-      result[idx[ok]] <- as.POSIXct(parsed[ok])
-      remaining[idx[ok]] <- FALSE
+      ct <- as.POSIXct(parsed[ok])
+      lt_lit  <- parsed[ok]              # POSIXlt: the literal fields strptime read
+      lt_norm <- as.POSIXlt(ct, tz = tz) # normalised back to the tz
+      nonexistent <- (lt_lit$hour != lt_norm$hour) | (lt_lit$min != lt_norm$min) |
+        (lt_lit$mday != lt_norm$mday) | (lt_lit$mon  != lt_norm$mon)  |
+        (lt_lit$year != lt_norm$year)
+      nonexistent[is.na(nonexistent)] <- FALSE
+      ct[nonexistent] <- as.POSIXct(NA_real_, origin = "1970-01-01", tz = tz)
+      result[idx[ok]] <- ct
+      remaining[idx[ok]] <- FALSE   # CRITICAL: gap elements stay NA and must NOT
+                                     # fall through to a later date-only format
+                                     # (which would re-drop the clock to
+                                     # midnight - the same bug).
+    }
+    # A DST gap time that mktime rejected outright (`matched` but not `ok`) -
+    # the other platform behaviour for the same underlying defect. Must also
+    # be excluded from `remaining`, for the identical reason as above.
+    gap <- matched & !ok
+    if (any(gap)) {
+      result[idx[gap]] <- as.POSIXct(NA_real_, origin = "1970-01-01", tz = tz)
+      remaining[idx[gap]] <- FALSE
     }
   }
 

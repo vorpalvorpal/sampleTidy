@@ -428,6 +428,57 @@ test_that("R-13.1: a failure inside the steps 3-10 transaction leaves the DB com
   expect_identical(mig$mig001_counts_checksum(con), counts_before)
 })
 
+# ---- Phase-8b: step-11 verify must GATE the commit, not run after it -------
+
+test_that("R-13.1/Phase-8b: a step-11 verify failure rolls back the whole transaction (verify gates the commit)", {
+  mig <- .mig001_load()
+  path <- seed_pre_migration_db()
+  snap_dir <- withr::local_tempdir()
+
+  setup_con <- pre_migration_con(path)
+  fields_before <- DBI::dbListFields(setup_con, "sample")
+  counts_before <- mig$mig001_counts_checksum(setup_con)
+  DBI::dbDisconnect(setup_con, shutdown = TRUE)
+
+  # Inject a verify that always fails, simulating a real integrity mismatch
+  # discovered at step 11.
+  mig$mig001_verify <- function(before, after) stop("injected integrity failure")
+
+  expect_error(
+    mig$mig001_run(db = path, snapshot_dir = snap_dir, dry_run = FALSE),
+    "injected integrity failure"
+  )
+
+  # The marker must be ABSENT - the injected failure must have rolled back
+  # the whole transaction, not landed after an already-committed marker.
+  con <- pre_migration_con(path)
+  marker <- DBI::dbGetQuery(
+    con, "SELECT applied_at FROM schema_version WHERE version = ?",
+    params = list(mig$.mig001_marker_version)
+  )
+  expect_identical(nrow(marker), 0L)
+
+  # The db is still in its exact pre-migration shape: `sample` still lacks
+  # `uuid_feature_alias` (the post-migration column) and still has its
+  # pre-migration NOT NULL `uuid_feature` column; row counts/checksum are
+  # unchanged.
+  expect_identical(DBI::dbListFields(con, "sample"), fields_before)
+  expect_false("uuid_feature_alias" %in% DBI::dbListFields(con, "sample"))
+  expect_identical(mig$mig001_counts_checksum(con), counts_before)
+  DBI::dbDisconnect(con, shutdown = TRUE)
+
+  # Restore a healthy verify and retry: the migration must actually run
+  # (status "migrated"), NOT report "already_migrated" - proving the earlier
+  # failure was not laundered by a marker that got committed anyway.
+  mig$mig001_verify <- function(before, after) invisible(TRUE)
+  r2 <- mig$mig001_run(db = path, snapshot_dir = snap_dir, dry_run = FALSE)
+  expect_identical(r2$status, "migrated")
+
+  con2 <- pre_migration_con(path)
+  withr::defer(DBI::dbDisconnect(con2, shutdown = TRUE))
+  expect_true("uuid_feature_alias" %in% DBI::dbListFields(con2, "sample"))
+})
+
 # ---- R-13.2: restore lab_method.units / conversion_constant ---------------
 
 test_that("R-13.2: lab_method gains nullable units and conversion_constant columns", {
