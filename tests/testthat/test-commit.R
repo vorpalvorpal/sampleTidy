@@ -425,6 +425,82 @@ test_that("R-11.8(a,c): two commits of the same still-unknown feature reuse ONE 
   expect_equal(aliases$n_seen[[1]], 2)
 })
 
+test_that("R-11.8(a,c)/M4: a RESOLVED feature_alias sharing the alias_key is left untouched; committing a pending row creates a NEW distinct pending alias (find-or-create excludes resolved aliases)", {
+  setup <- commit_test_setup()
+  con <- setup$con
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  key <- .rc_key("T.SHARED-KEY-M4")
+
+  # Pre-seed a RESOLVED alias (uuid_feature NOT NULL) sharing alias_key = key.
+  # The find-or-create in .ct_materialise_feature_aliases keys its lookup on
+  # `WHERE alias_key = ? AND uuid_feature IS NULL` - dropping the
+  # `uuid_feature IS NULL` guard would let this resolved row match instead of
+  # creating a new pending one.
+  DBI::dbExecute(con, "INSERT INTO feature_alias
+    (uuid, uuid_feature, name, alias_key, kind, n_seen, auto_assign, first_seen, last_seen, confirmed_by, comments)
+    VALUES ('fa-m4-resolved', 'f-0001', 'T.SHARED-KEY-M4-OLD', ?, 'historical_code', 5, TRUE,
+            TIMESTAMP '2020-01-01 00:00:00', TIMESTAMP '2020-01-01 00:00:00', NULL, NULL)",
+    params = list(key))
+
+  files <- tibble::tibble(hash = setup$hash, filename = basename(setup$path),
+                          adapter = "esdat/1", rank = 3L, kept = TRUE)
+  clean <- mk_p11_row(source_ref = "r1", source_hash = setup$hash,
+                       feature_raw = "T.SHARED-KEY-M4", alias_key = key,
+                       feature_pending = TRUE, uuid_feature_alias = NA_character_,
+                       sample_date = as.Date("2025-07-10"),
+                       sample_datetime = as.POSIXct("2025-07-10 09:00:00", tz = "UTC"))
+  commit_event(mk_commit_event(files), mk_resolved(clean = clean), con)
+
+  resolved_after <- DBI::dbGetQuery(con, "SELECT * FROM feature_alias WHERE uuid = 'fa-m4-resolved'")
+  expect_equal(nrow(resolved_after), 1)
+  expect_equal(resolved_after$n_seen[[1]], 5)
+  expect_false(is.na(resolved_after$uuid_feature[[1]]))
+
+  pending <- dangling_alias_row(con, key)
+  expect_equal(nrow(pending), 1)
+  expect_false(identical(pending$uuid[[1]], "fa-m4-resolved"))
+  expect_identical(pending$kind[[1]], "pending")
+})
+
+test_that("R-11.8(e)/M5: two rows in the SAME commit event, same analyte, differing ONLY in method raw casing, reuse ONE dangling lab_method (intra-event dedup uses .rc_key, not the raw string)", {
+  setup <- commit_test_setup()
+  con <- setup$con
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  # Both rows land in the SAME commit_event() call (a single event), so this
+  # exercises the intra-event dedup key at commit.R:178
+  # (`paste(clean$org, .rc_key(analyte_raw), .rc_key(method_raw))`), never
+  # the cross-file DB-lookup path the R-11.8(e) two-commit test above covers.
+  # Distinct features/sample times keep both rows alive through sample
+  # creation and analysis commit, so both reach lab_method materialisation.
+  files <- tibble::tibble(hash = setup$hash, filename = basename(setup$path),
+                          adapter = "esdat/1", rank = 3L, kept = TRUE)
+  clean <- dplyr::bind_rows(
+    mk_p11_row(source_ref = "r1", source_hash = setup$hash,
+               feature_raw = "T.S01", alias_key = .rc_key("T.S01"),
+               feature_pending = FALSE, uuid_feature_alias = "fa-0001",
+               analyte_raw = "T.DEDUPE-ANALYTE-M5", method_raw = "T.DEDUPE-METHOD-M5",
+               analyte_pending = TRUE, uuid_lab = NA_character_, uuid_analyte = NA_character_,
+               units_raw = "mg/L",
+               sample_date = as.Date("2025-07-09"),
+               sample_datetime = as.POSIXct("2025-07-09 09:00:00", tz = "UTC")),
+    mk_p11_row(source_ref = "r2", source_hash = setup$hash,
+               feature_raw = "T.S02", alias_key = .rc_key("T.S02"),
+               feature_pending = FALSE, uuid_feature_alias = "fa-0002",
+               analyte_raw = "t.dedupe-analyte-m5", method_raw = "t.dedupe-method-m5",
+               analyte_pending = TRUE, uuid_lab = NA_character_, uuid_analyte = NA_character_,
+               units_raw = "mg/L",
+               sample_date = as.Date("2025-07-09"),
+               sample_datetime = as.POSIXct("2025-07-09 10:00:00", tz = "UTC"))
+  )
+  commit_event(mk_commit_event(files), mk_resolved(clean = clean), con)
+
+  dangling <- dangling_lab_method_rows(con, "ALS")
+  matching <- dangling[!is.na(dangling$name) & .rc_key(dangling$name) == .rc_key("T.DEDUPE-ANALYTE-M5") &
+                          !is.na(dangling$method) & .rc_key(dangling$method) == .rc_key("T.DEDUPE-METHOD-M5"), , drop = FALSE]
+  expect_equal(nrow(matching), 1)
+})
+
 test_that("R-11.8(e): two commits of the same unknown analyte, differing ONLY in raw casing, reuse ONE dangling lab_method (dedup uses .rc_key, not raw string)", {
   setup <- commit_test_setup()
   con <- setup$con

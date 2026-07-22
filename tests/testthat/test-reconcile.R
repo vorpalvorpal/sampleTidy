@@ -1004,17 +1004,25 @@ test_that("R-11.5b: two rows for DIFFERENT features, same date, same analyte, ar
   path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
   # Two genuinely different, both-unknown features (different alias_key), same
   # sample date, same analyte via the R-8.6 duplicate-method pair (lm-0002 vs
-  # lm-0004, both Fluoride/ALS). Once uuid_feature is dropped (R-11.2) and the
-  # key is not re-keyed on the resolved/pending split, paste() recycles the
-  # missing feature component to "" and BOTH rows collapse into one dedup
-  # group - undetectable cross-feature data loss. Both must survive here.
+  # lm-0004, both Fluoride/ALS but DIFFERENT uuid_lab). The different labs are
+  # deliberate: .rc_method_preference only drops a row when a key-group has
+  # 2+ eligible rows from DIFFERENT uuid_lab (length(labs) > 1); same-lab
+  # duplicates are left for a later stage, so a same-method (same-lab) pair
+  # would pass even with feat_key collapsed to a constant, masking the bug.
+  # With correct, distinct feat_key the two rows land in separate
+  # preference groups (both kept, neither eligible to dedup against the
+  # other). If uuid_feature is dropped (R-11.2) and the key is not re-keyed
+  # on the resolved/pending split, paste() recycles the missing feature
+  # component to "" and BOTH rows collapse into one group of two
+  # different-lab rows for the same analyte/date - triggering the
+  # cross-lab method_duplicate drop and losing one row's data.
   event <- mk_event(mk_rows(
     mk_row(source_ref = "r1", feature_raw = "T.UNKNOWN-FEATURE-A", method_raw = "EK040P: Fluoride by PC Titrator",
            sample_datetime_raw = "20 May 2025 09:00", value_raw = "2.3", value_num = 2.3,
            below_detection = FALSE, rl = 0.1),
-    mk_row(source_ref = "r2", feature_raw = "T.UNKNOWN-FEATURE-B", method_raw = "EK040P: Fluoride by PC Titrator",
+    mk_row(source_ref = "r2", feature_raw = "T.UNKNOWN-FEATURE-B", method_raw = "EK040T: Fluoride by alt method",
            sample_datetime_raw = "20 May 2025 09:00", value_raw = "2.5", value_num = 2.5,
-           below_detection = FALSE, rl = 0.1)
+           below_detection = FALSE, rl = 0.5)
   ))
   out <- reconcile_event(event, con)
   expect_true("r1" %in% out$clean$source_ref)
