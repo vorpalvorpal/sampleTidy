@@ -71,10 +71,10 @@ test_that("R-11.12: pending backlog counts match the dangling rows exactly, incl
   # INNER JOIN to its referencing table instead of a LEFT JOIN + COUNT).
   DBI::dbExecute(con, "INSERT INTO feature_alias
     (uuid, uuid_feature, name, alias_key, kind, n_seen, auto_assign,
-     first_seen, last_seen, source_hash, confirmed_by) VALUES
+     first_seen, last_seen, confirmed_by) VALUES
     ('fa-0099', NULL, 'T.ZERO', 'tzero', 'pending', 0, FALSE,
      TIMESTAMP '2025-06-01 00:00:00', TIMESTAMP '2025-06-01 00:00:00',
-     'seed-hash-zero-feature', NULL)")
+     NULL)")
   DBI::dbExecute(con, "INSERT INTO lab_method
     (uuid, uuid_analyte, name, method, organisation, rl_low, units, conversion_constant) VALUES
     ('lm-0099', NULL, 'Zero Method', 'EA000: Zero method', 'ALS', 0.1, 'mg/L', NULL)")
