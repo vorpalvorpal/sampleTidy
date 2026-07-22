@@ -119,9 +119,14 @@ test_that("R-10.2: the uS/cm to mS/cm EC row lands converted on a new analysis",
 
   con <- DBI::dbConnect(duckdb::duckdb(), db_path, read_only = TRUE)
   on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  # PLAN-11: sample no longer carries uuid_feature directly - it points at a
+  # feature_alias (sample.uuid_feature_alias -> feature_alias.uuid), which in
+  # turn resolves to the feature (feature_alias.uuid_feature -> feature.uuid).
   ec <- DBI::dbGetQuery(con, "
-    SELECT a.value FROM analysis a JOIN \"sample\" s ON a.uuid_sample = s.uuid
-    WHERE s.uuid_feature = 'f-0001' AND a.uuid_lab = 'lm-0003'")
+    SELECT a.value FROM analysis a
+    JOIN \"sample\" s ON a.uuid_sample = s.uuid
+    JOIN feature_alias fa ON fa.uuid = s.uuid_feature_alias
+    WHERE fa.uuid_feature = 'f-0001' AND a.uuid_lab = 'lm-0003'")
   expect_equal(nrow(ec), 1)
   expect_equal(ec$value, 0.185, tolerance = 1e-9)
 })
@@ -135,11 +140,22 @@ test_that("R-10.2: every new analysis joins cleanly to a sample and a feature (n
 
   con <- DBI::dbConnect(duckdb::duckdb(), db_path, read_only = TRUE)
   on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  # PLAN-11 referential integrity across the alias chain: every analysis must
+  # resolve to a real sample, every sample to a real feature_alias, and every
+  # feature_alias that IS resolved (uuid_feature not null) to a real feature.
+  # An *unresolved* alias (uuid_feature IS NULL) is NOT an orphan - it is the
+  # valid pending state for a newly-seen sampling point awaiting human
+  # feature-assignment (the needs_review queue), which any realistic corpus
+  # produces. So the orphan condition is a genuinely DANGLING reference at any
+  # hop, not a merely-unresolved alias.
   orphans <- DBI::dbGetQuery(con, "
     SELECT a.uuid FROM analysis a
     LEFT JOIN \"sample\" s ON a.uuid_sample = s.uuid
-    LEFT JOIN feature f ON s.uuid_feature = f.uuid
-    WHERE s.uuid IS NULL OR f.uuid IS NULL")
+    LEFT JOIN feature_alias fa ON fa.uuid = s.uuid_feature_alias
+    LEFT JOIN feature f ON fa.uuid_feature = f.uuid
+    WHERE s.uuid IS NULL
+       OR fa.uuid IS NULL
+       OR (fa.uuid_feature IS NOT NULL AND f.uuid IS NULL)")
   expect_equal(nrow(orphans), 0)
 })
 

@@ -122,24 +122,62 @@
 #' happens but nothing is committed).
 #'
 #' @return a list with `committed_any` (logical), `n_events`, `n_committed`,
-#'   and `tally` (named list of row/review counts summed across events).
+#'   `events_failed`, and `tally` (named list of row/review counts summed
+#'   across events).
 #' @keywords internal
 #' @noRd
 .ig_reconcile_and_commit <- function(con, events, dry_run) {
   committed_any <- FALSE
   n_committed <- 0L
+  events_failed <- 0L
   tally <- list(new = 0L, superseded = 0L, already_present = 0L, skipped = 0L, review_opened = 0L)
 
   for (event in events) {
-    resolved <- reconcile_event(event, con)
-
     kept_hashes <- event$files$hash[.ig_kept_rows(event$files)]
-    for (h in kept_hashes) {
-      row <- DBI::dbGetQuery(con, "SELECT state FROM ingest_file WHERE hash = ?", params = list(h))
-      if (nrow(row) > 0 && identical(row$state[[1]], "assembled")) {
-        ingest_file_set_state(con, h, "reconciled")
+
+    # R-12.2/A60: contain a per-event reconcile/commit failure so it never
+    # kills every later event (was: both calls ran bare in this loop). The
+    # event's kept files are marked `failed` with the error message and a
+    # `cli_warn` names it; the loop then continues to the next event. If
+    # EVERY event in the run fails (a systemic wipe-out, e.g. schema/disk/
+    # DB), that is surfaced loudly AFTER the loop finishes (see below) - not
+    # swallowed into a quiet all-`failed` report and not a bare abort on the
+    # first throw (committed events keep their own transactions, so a
+    # re-run cleanly no-ops on them and re-attempts only the failed one).
+    step <- tryCatch(
+      {
+        resolved <- reconcile_event(event, con)
+
+        for (h in kept_hashes) {
+          row <- DBI::dbGetQuery(con, "SELECT state FROM ingest_file WHERE hash = ?", params = list(h))
+          if (nrow(row) > 0 && identical(row$state[[1]], "assembled")) {
+            ingest_file_set_state(con, h, "reconciled")
+          }
+        }
+
+        if (!dry_run) {
+          commit_event(event, resolved, con)
+        }
+
+        list(resolved = resolved)
+      },
+      error = function(e) e
+    )
+
+    if (inherits(step, "error")) {
+      events_failed <- events_failed + 1L
+      msg <- conditionMessage(step)
+      for (h in kept_hashes) {
+        ingest_file_set_state(con, h, "failed", msg)
       }
+      cli::cli_warn(
+        "ingest_dir(): event containing {.val {kept_hashes}} failed during
+         reconcile/commit and was skipped: {msg}"
+      )
+      next
     }
+
+    resolved <- step$resolved
 
     clean <- resolved$clean
     if (nrow(clean) > 0 && "supersedes" %in% names(clean)) {
@@ -157,15 +195,28 @@
     tally$review_opened <- tally$review_opened + nrow(resolved$review)
 
     if (!dry_run) {
-      commit_event(event, resolved, con)
       committed_any <- TRUE
       n_committed <- n_committed + 1L
     }
   }
 
+  # A total wipe-out (every event in the run failed) is systemic, not a
+  # per-event fluke - surface it loudly AFTER the loop has contained every
+  # event (not on the first throw), rather than returning a quiet
+  # all-`failed` report.
+  if (length(events) > 0 && events_failed == length(events)) {
+    cli::cli_abort(
+      "ingest_dir(): every event in this run failed during reconcile/commit
+       ({events_failed} of {length(events)}); aborting - this looks systemic
+       (e.g. schema/disk/DB), not a per-event fluke. Each event's kept files
+       have been marked failed; a re-run will re-attempt them.",
+      class = "sampletidy_error"
+    )
+  }
+
   list(
     committed_any = committed_any, n_events = length(events), n_committed = n_committed,
-    tally = tally
+    events_failed = events_failed, tally = tally
   )
 }
 
@@ -226,12 +277,33 @@
 
 # ---- report assembly -----------------------------------------------------
 
+#' Look up the CURRENT (terminal, post reconcile/commit) `ingest_file.state`
+#' for a set of routed hashes (R-12.7/F13)
+#'
+#' `routed$state` only reflects the state at *route time* (`claimed`,
+#' `ignored`, `quarantined`, ...) - by the time the report is built, a
+#' `claimed` file may since have been parsed/assembled/reconciled/committed
+#' (or failed/needs_review). Re-querying the live table, one row per input
+#' `hashes` entry (preserving duplicates/order so a `table()` over the
+#' result matches the previous `table(routed$state)` shape), gives the
+#' report the run's real terminal states instead.
+#' @keywords internal
+#' @noRd
+.ig_current_states <- function(con, hashes) {
+  if (length(hashes) == 0) {
+    return(character(0))
+  }
+  live <- DBI::dbGetQuery(con, "SELECT hash, state FROM ingest_file")
+  live$state[match(hashes, live$hash)]
+}
+
 #' Build the `ingest_report` returned to the caller (R-9.5 step 6)
 #' @keywords internal
 #' @noRd
 .ig_build_report <- function(pipeline, dry_run, snapshot_path, removed) {
   routed <- pipeline$routed
-  files_by_state <- if (nrow(routed) > 0) as.list(table(routed$state)) else list()
+  states <- pipeline$file_states
+  files_by_state <- if (length(states) > 0) as.list(table(states)) else list()
 
   list(
     dry_run = dry_run,
@@ -239,6 +311,7 @@
     files_by_state = files_by_state,
     n_events = pipeline$outcome$n_events,
     n_events_committed = pipeline$outcome$n_committed,
+    events_failed = as.integer(pipeline$outcome$events_failed),
     rows_new = as.integer(pipeline$outcome$tally$new),
     rows_already_present = as.integer(pipeline$outcome$tally$already_present),
     rows_superseded = as.integer(pipeline$outcome$tally$superseded),
@@ -316,7 +389,12 @@ ingest_dir <- function(path, db = st_config("live_db"), dry_run = FALSE) {
 
       outcome <- .ig_reconcile_and_commit(con, events, dry_run)
 
-      list(routed = routed, events = events, outcome = outcome)
+      # Capture the live terminal states now, while `con` is still open -
+      # `with_db_write()` closes it on return (R-12.7/F13; see
+      # `.ig_current_states()`).
+      file_states <- .ig_current_states(con, routed$hash)
+
+      list(routed = routed, events = events, outcome = outcome, file_states = file_states)
     },
     db = db
   )

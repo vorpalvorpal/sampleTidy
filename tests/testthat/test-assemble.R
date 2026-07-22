@@ -487,6 +487,14 @@ test_that("R-7.4: a non-NCP foreign-work-order row is flagged for review", {
 # adapter's output.
 
 test_that("R-11.15 (mandatory seam test): real ACIRL adapter output -> real assemble_events() keeps the 25-May visit dated 25/05/2025 with no spurious value_conflict flag", {
+  # This seam test is the only test in the file that reads the REAL adapter
+  # registry (the other tests use synthetic mk_*() fixtures). A predecessor in
+  # the full-suite alphabetical order (test-adapter-registry.R) defers
+  # clear_adapters(), leaving the registry empty - so this test must establish
+  # its own precondition rather than depend on global state left by others
+  # (same self-registration convention as test-e2e-pipeline.R). register is
+  # idempotent (A33).
+  register_builtin_adapters()
   acirl <- sampleTidy:::adapter_registry()[["acirl_field_xlsx"]]
   main_path <- test_path("fixtures", "acirl", "2400-9999-01_Test_WMF.xlsx")
   meta <- sampleTidy:::file_meta(main_path)
