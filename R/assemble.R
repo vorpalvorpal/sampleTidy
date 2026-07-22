@@ -308,7 +308,16 @@
     if (is.na(home_wo_i) || nrow(results_i) == 0) {
       own_idx <- rep(TRUE, nrow(results_i))
     } else {
-      own_idx <- !is.na(results_i$work_order) & results_i$work_order == home_wo_i
+      # A row is "own" if it carries this file's home work order OR carries NO
+      # work order at all. work_order = NA is "unattributed", NOT "foreign": the
+      # ESdat chemistry parser leaves work_order = NA for lab-QC rows (QC-...
+      # SampleCodes don't match the work-order pattern), whose real QC type
+      # (LAB_D/LCS/MB/MS) only arrives via the sample-metadata join below, after
+      # this partition. Treating NA as foreign flagged ~95 lab-QC rows per real
+      # ESdat bundle as foreign_work_order review items - reconcile's STAGE-0
+      # harvests that flag before the R-8.1 QC filter can skip them. Only a row
+      # with a real work order that differs from home is genuinely foreign.
+      own_idx <- is.na(results_i$work_order) | results_i$work_order == home_wo_i
     }
     foreign_idx <- !own_idx
     # NCP = "Non-Client Parent" (ESdat spec): a foreign work order's field sample
