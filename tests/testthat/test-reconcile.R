@@ -828,6 +828,46 @@ test_that("R-11.3: .rc_key maps NA and blank names to NA (A44 guard, amended hal
   expect_true(is.na(.rc_key("   ")))
 })
 
+# ---- PLAN-15 Work A: .rc_feature_key() punctuation-PRESERVING alias key ------
+# The feature-alias registry key is written by migration-001's `.mig001_normalize`
+# = tolower(trimws(name)) - punctuation is PRESERVED. Reconcile must look features
+# up with the SAME normaliser, or the ~62% of alias keys that contain a dot/space
+# are unreachable. This is a DIFFERENT function from `.rc_key` (which strips all
+# punctuation and is shared by method keys + intra-event dedup - must not change).
+
+test_that("PLAN-15 A: .rc_feature_key case-folds + trims but PRESERVES internal punctuation", {
+  expect_equal(.rc_feature_key("B.S01"), "b.s01")
+  expect_equal(.rc_feature_key(" B.S01 "), "b.s01")   # trims outer whitespace
+  expect_equal(.rc_feature_key("b.s01"), "b.s01")     # already-normalised is stable
+  expect_equal(.rc_feature_key("K.E02"), "k.e02")
+  expect_equal(.rc_feature_key("BH.MW02A"), "bh.mw02a")
+})
+
+test_that("PLAN-15 A: .rc_feature_key reproduces the migration's stored key exactly (tolower+trim)", {
+  # The oracle: identical to what migration-001 writes into feature_alias.alias_key.
+  mig_normalize <- function(x) tolower(trimws(x))
+  names <- c("B.S01", "BS1", "B.S1", "BH.S01", "Old Landfill Bore", "GR-PM01", "K E02")
+  expect_equal(.rc_feature_key(names), mig_normalize(names))
+})
+
+test_that("PLAN-15 A: .rc_feature_key does NOT fuse distinct-punctuation codes (collision oracle: BS1 != B.S1)", {
+  # These strip to the SAME key under `.rc_key` (a real cross-site false merge:
+  # BS1 -> BH.S01 'Upstream'; B.S1 -> B.S01 'Downstream Cripple Creek') - the
+  # punctuation-preserving key MUST keep them apart.
+  expect_equal(length(unique(.rc_key(c("BS1", "B.S1")))), 1L)          # .rc_key fuses them
+  expect_equal(length(unique(.rc_feature_key(c("BS1", "B.S1")))), 2L)  # feature key keeps them apart
+  expect_equal(length(unique(.rc_feature_key(c("BS3", "B.S3")))), 2L)
+})
+
+test_that("PLAN-15 A: .rc_feature_key maps NA and blank/whitespace names to NA (A44 guard)", {
+  expect_true(is.na(.rc_feature_key(NA_character_)))
+  expect_true(is.na(.rc_feature_key("")))
+  expect_true(is.na(.rc_feature_key("   ")))
+  # vectorised NA-safety: mix of real, NA, blank
+  out <- .rc_feature_key(c("B.S01", NA_character_, "  ", "K.E02"))
+  expect_equal(out, c("b.s01", NA, NA, "k.e02"))
+})
+
 #' Read the `distinct_keys=<n>` count from an R-11.3 frozen-snapshot fixture's
 #' own comment header - never a literal in a test body.
 .rc_fixture_header_count <- function(path) {
@@ -965,7 +1005,7 @@ test_that("R-11.4: a dangling alias row (uuid_feature NA) is dropped from the ca
   path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
   DBI::dbExecute(con, "INSERT INTO feature_alias
     (uuid, uuid_feature, name, alias_key, kind, auto_assign, first_seen, last_seen) VALUES
-    ('fa-dangling-r114', NULL, 'T.DANGLE114', 'tdangle114', 'pending', TRUE,
+    ('fa-dangling-r114', NULL, 'T.DANGLE114', 't.dangle114', 'pending', TRUE,
      TIMESTAMP '2025-01-01 00:00:00', TIMESTAMP '2025-01-01 00:00:00')")
   registry <- .rc_load_registry(con)
   cand <- .rc_feature_candidates("T.DANGLE114", as.Date("2025-05-20"), registry)
@@ -977,6 +1017,46 @@ test_that("R-11.4: an auto_assign=FALSE alias (T.BORE, suggestion-only) never en
   registry <- .rc_load_registry(con)
   cand <- .rc_feature_candidates("T.BORE", as.Date("2025-05-20"), registry)
   expect_equal(nrow(cand), 0)
+})
+
+# ---- PLAN-15 A: dotted-key resolution + ambiguous-candidate surfacing --------
+
+test_that("PLAN-15 A: a dotted feature name resolves via the migration-format alias_key (T.S01 -> t.s01)", {
+  # Guards the 62% failure: fixture alias_key is now punctuation-preserving
+  # ('t.s01'), and `.rc_feature_candidates` looks up with `.rc_feature_key`.
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  registry <- .rc_load_registry(con)
+  expect_identical(registry$feature_alias$alias_key[registry$feature_alias$uuid == "fa-0001"], "t.s01")
+  cand <- .rc_feature_candidates("T.S01", as.Date("2025-05-20"), registry)
+  expect_equal(nrow(cand), 1)
+  expect_identical(cand$uuid_feature[[1]], "f-0001")
+})
+
+test_that("PLAN-15 A: an all-auto_assign=FALSE ambiguous key (T.DUAL) does NOT auto-resolve but SURFACES both candidates in review", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  registry <- .rc_load_registry(con)
+  # auto path: nothing (both arms auto_assign=FALSE)
+  expect_equal(nrow(.rc_feature_candidates("T.DUAL", as.Date("2025-05-20"), registry)), 0)
+  # suggestion path: both distinct features surface
+  expect_setequal(.rc_feature_suggestions("T.DUAL", as.Date("2025-05-20"), registry),
+                  c("f-0004", "f-0005"))
+  # end-to-end: pending (not silently unknown), review payload lists BOTH candidates
+  event <- mk_event(mk_row(source_ref = "r1", feature_raw = "T.DUAL"))
+  out <- reconcile_event(event, con)
+  row <- out$clean[out$clean$source_ref == "r1", ]
+  expect_true(row$feature_pending)
+  rv <- out$review[out$review$kind == "unknown_feature" & grepl("r1", out$review$source_ref), ]
+  expect_equal(nrow(rv), 1)
+  expect_true(grepl("subkind=ambiguous", rv$payload[[1]]))
+  expect_true(grepl("f-0004", rv$payload[[1]]) && grepl("f-0005", rv$payload[[1]]))
+})
+
+test_that("PLAN-15 A: the committed alias_key on a pending row is punctuation-preserving (matches migration format)", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  event <- mk_event(mk_row(source_ref = "r1", feature_raw = "B.NEW-POINT7"))
+  out <- reconcile_event(event, con)
+  row <- out$clean[out$clean$source_ref == "r1", ]
+  expect_identical(row$alias_key, "b.new-point7")   # NOT 'bnewpoint7'
 })
 
 # ---- R-11.5: commit-everything conveyor (features) -------------------------
@@ -1201,7 +1281,7 @@ test_that("R-11.7: A45's field-vs-lab EC regression stays green under the amende
   path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
   DBI::dbExecute(con, "INSERT INTO feature_alias
     (uuid, uuid_feature, name, alias_key, kind, auto_assign, first_seen, last_seen) VALUES
-    ('fa-field-r117', 'f-0001', 'T.S01-FIELD', 'ts01field', 'historical_code', TRUE,
+    ('fa-field-r117', 'f-0001', 'T.S01-FIELD', 't.s01-field', 'historical_code', TRUE,
      TIMESTAMP '2025-01-01 00:00:00', TIMESTAMP '2025-01-01 00:00:00')")
   DBI::dbExecute(con, "INSERT INTO \"sample\" (uuid, uuid_feature_alias, uuid_project, date, organisation)
     VALUES ('s-field-r117', 'fa-0001', 'p-0001', TIMESTAMP '2025-05-24 00:00:00', 'ACIRL')")

@@ -96,7 +96,7 @@ test_that("R-11.12: pending backlog counts match the dangling rows exactly, incl
   fa10 <- dplyr::filter(pf, .data$uuid_alias == "fa-0010")
   expect_equal(nrow(fa10), 1)
   expect_equal(fa10$name, "T.S09")
-  expect_equal(fa10$alias_key, "ts09")
+  expect_equal(fa10$alias_key, "t.s09")
   expect_equal(fa10$n_seen, 0)
   expect_equal(fa10$n_samples, 1) # only s-0003 points at fa-0010
 

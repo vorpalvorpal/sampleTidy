@@ -49,6 +49,25 @@
   k
 }
 
+#' Fold a *feature* (sampling-point) name to its registry alias key (PLAN-15 A).
+#'
+#' Unlike `.rc_key`, this PRESERVES internal punctuation - it reproduces exactly
+#' the key that migration-001's `.mig001_normalize` (`tolower(trimws(x))`) writes
+#' into `feature_alias.alias_key`. A feature name encodes `(site, point)` with a
+#' separator (`B.S01`, `K.E02`); stripping the separator fuses genuinely distinct
+#' cross-site codes (`BS1`->BH.S01 vs `B.S1`->B.S01), so reconcile must look
+#' features up with the SAME punctuation-preserving normaliser the migration used.
+#' A NA input, or one that folds to the empty string (blank/whitespace-only),
+#' returns NA (A44 guard). This is deliberately NOT `.rc_key`, which stays the
+#' folded key for lab-method matching and intra-event dedup.
+#' @keywords internal
+#' @noRd
+.rc_feature_key <- function(x) {
+  k <- tolower(trimws(x))
+  k[is.na(x) | k == ""] <- NA_character_
+  k
+}
+
 #' NA-safe vectorised `isTRUE()`.
 #' @keywords internal
 #' @noRd
@@ -126,7 +145,10 @@
 #' @noRd
 .rc_feature_candidates <- function(feature_raw, sample_date, registry) {
   empty <- tibble::tibble(uuid_alias = character(0), uuid_feature = character(0))
-  key <- .rc_key(feature_raw)
+  # PLAN-15 A: features fold with the punctuation-PRESERVING key (`.rc_feature_key`),
+  # matching the migration-written `alias_key`. `.rc_key` (strip) would leave ~62%
+  # of dotted keys unreachable AND fuse cross-site codes (BS1 vs B.S1).
+  key <- .rc_feature_key(feature_raw)
   if (is.na(key)) return(empty)
 
   fa <- registry$feature_alias
@@ -139,6 +161,16 @@
 
   cand <- tibble::tibble(uuid_alias = hit$uuid, uuid_feature = hit$uuid_feature)
 
+  cand <- .rc_narrow_live(cand, sample_date, registry)
+  cand
+}
+
+#' Narrow a candidate tibble to features live at `sample_date` (date_end NA, or
+#' date_end >= sample_date), but only when that leaves >=1 candidate and there is
+#' a genuine ambiguity to break. Shared by the auto-hit and suggestion paths.
+#' @keywords internal
+#' @noRd
+.rc_narrow_live <- function(cand, sample_date, registry) {
   if (length(unique(cand$uuid_feature)) > 1 && !is.na(sample_date)) {
     feat <- registry$feature
     de <- feat$date_end[match(cand$uuid_feature, feat$uuid)]
@@ -147,6 +179,26 @@
     if (nrow(narrowed) >= 1) cand <- narrowed
   }
   cand
+}
+
+#' Suggested candidate features for review (PLAN-15 A). Like
+#' `.rc_feature_candidates` but WITHOUT the `auto_assign` filter, so an ambiguous
+#' key - which migration-001 marks `auto_assign = FALSE` on every arm, e.g.
+#' `b.s01` -> B.S01 AND B.TS41 - still yields its distinct candidate features.
+#' These never auto-resolve; they populate the review payload so an operator can
+#' pick. Dangling (uuid_feature NA) aliases are excluded; date narrowing applies.
+#' @return character vector of DISTINCT candidate `uuid_feature` (possibly empty).
+#' @keywords internal
+#' @noRd
+.rc_feature_suggestions <- function(feature_raw, sample_date, registry) {
+  key <- .rc_feature_key(feature_raw)
+  if (is.na(key)) return(character(0))
+  fa <- registry$feature_alias
+  hit <- fa[!is.na(fa$alias_key) & fa$alias_key == key & !is.na(fa$uuid_feature), , drop = FALSE]
+  if (nrow(hit) == 0) return(character(0))
+  cand <- tibble::tibble(uuid_alias = hit$uuid, uuid_feature = hit$uuid_feature)
+  cand <- .rc_narrow_live(cand, sample_date, registry)
+  unique(cand$uuid_feature)
 }
 
 # ---- R-8.2/R-11.5: feature resolution (conveyor) ---------------------------
@@ -184,7 +236,10 @@
   uuid_alias <- rep(NA_character_, n)
   pending <- rep(FALSE, n)
   status <- rep(NA_character_, n)       # hit | pending | held
-  alias_key <- .rc_key(rows$feature_raw)
+  # PLAN-15 A: the committed/grouping key is the punctuation-PRESERVING feature
+  # key (matches the migration-written alias_key + `.rc_feature_candidates`); the
+  # folded `.rc_key` stays for method keys + intra-event dedup only.
+  alias_key <- .rc_feature_key(rows$feature_raw)
   cand_list <- vector("list", n)
 
   for (i in seq_len(n)) {
@@ -202,7 +257,11 @@
     } else {
       status[[i]] <- "pending"           # unknown (0) or ambiguous (>1)
       pending[[i]] <- TRUE
-      if (length(distinct_feat) > 1) cand_list[[i]] <- distinct_feat
+      # PLAN-15 A: surface EVERY distinct candidate the key reaches (incl. the
+      # all-`auto_assign=FALSE` ambiguous case the auto path drops) so review
+      # carries a real suggestion instead of a blank unknown.
+      sugg <- .rc_feature_suggestions(rows$feature_raw[[i]], row_dates[[i]], registry)
+      if (length(sugg) > 1) cand_list[[i]] <- sugg
     }
   }
 

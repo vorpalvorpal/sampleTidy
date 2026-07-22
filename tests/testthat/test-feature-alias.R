@@ -213,12 +213,11 @@ test_that("R-11.10: the ambiguity nuance - confirming one alias of a genuinely a
   con <- setup$con
   on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
 
-  # fa-0005/fa-0006 both carry alias_key 'tambig2' (the fixture's own literal
-  # - see helper-db.R; NOT `.rc_key("T.AMBIG2")`, which today's pre-R-11.3
-  # `.rc_key()` still renders 't.ambig2' with the dot kept, so calling it here
-  # would silently miss the seeded rows), resolving to DIFFERENT features
-  # (f-0004, f-0005) - the plan's ambiguous-key fixture.
-  key <- "tambig2"
+  # fa-0005/fa-0006 both carry alias_key 't.ambig2' (the fixture's own literal
+  # - see helper-db.R; this is `.rc_feature_key("T.AMBIG2")` = the migration's
+  # punctuation-preserving `tolower(trimws())`, PLAN-15 A), resolving to DIFFERENT
+  # features (f-0004, f-0005) - the plan's ambiguous-key fixture.
+  key <- "t.ambig2"
   before_distinct <- DBI::dbGetQuery(con,
     "SELECT COUNT(DISTINCT uuid_feature) AS n FROM feature_alias WHERE alias_key = ? AND uuid_feature IS NOT NULL",
     params = list(key))$n
