@@ -531,7 +531,11 @@
 
 # ---- R-8.5: sample datetime -------------------------------------------------
 
-.rc_datetime_formats <- c("%d %b %Y %H:%M", "%d %b %Y", "%d/%m/%Y")
+# Union of the ESdat (long + short `%d-%b-%y`) and crosstab dialects seen in
+# `sample_datetime_raw`. Keep in sync with `.st_join_datetime_formats`
+# (assemble.R) and the `esdat` preset (dates.R).
+.rc_datetime_formats <- c("%d %b %Y %H:%M", "%d %b %Y",
+                          "%d-%b-%y %H:%M", "%d-%b-%y", "%d/%m/%Y")
 
 #' Parse `sample_datetime_raw` into `sample_date`/`sample_datetime` (R-8.5,
 #' A11). Unparseable strings queue a `parse_error` review item (held).

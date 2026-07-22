@@ -3,7 +3,12 @@
 # parses an element wins. `esdat`/`iso` list the datetime form before the
 # date-only form so a clock time is not silently dropped when present.
 .lab_datetime_formats <- list(
-  esdat    = c("%d %b %Y %H:%M", "%d %b %Y"),
+  # ESdat exports vary the sample/analysed date rendering: the long form
+  # `"07 May 2024 11:30"` (space, 4-digit year) and the short form
+  # `"07-May-24 11:30"` (hyphen, 2-digit year) both occur in the real corpus.
+  # Both dialects are accepted; datetime forms precede their date-only
+  # counterparts so a clock time is never silently dropped to midnight.
+  esdat    = c("%d %b %Y %H:%M", "%d %b %Y", "%d-%b-%y %H:%M", "%d-%b-%y"),
   crosstab = c("%d/%m/%Y"),
   iso      = c("%Y-%m-%d %H:%M", "%Y-%m-%d")
 )
