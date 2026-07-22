@@ -671,12 +671,29 @@
   )
   if (nrow(cand) == 0) return(NULL)
 
-  if (!is.na(sample_datetime) && nrow(cand) > 1) {
-    has_dt <- !is.na(cand$s_datetime)
-    if (any(has_dt)) {
-      match_dt <- has_dt & (cand$s_datetime == sample_datetime)
-      if (any(match_dt)) cand <- cand[match_dt, , drop = FALSE]
-    }
+  # Mirror .ct_find_or_create_sample's R-11.18/A62 predicate so the reconcile
+  # second-read pass and the commit path agree on identity: an incoming
+  # measurement is a NEW sampling event - no existing row to match - only when
+  # distinctness is PROVABLE (incoming datetime non-NA AND every candidate
+  # datetime non-NA AND none equal). Otherwise reuse (incoming NA, any candidate
+  # NA, or an equal datetime -> uncertain identity, never fabricate a
+  # duplicate). Without this a genuinely new second sampling at the same
+  # feature+date+lab was returned as cand[1,] and skipped as already_present -
+  # and, because the old datetime narrowing was gated on nrow(cand) > 1, a
+  # lone distinct-datetime candidate was matched without any datetime check.
+  # Compare instants as epoch seconds so a tz-tagged incoming POSIXct and the
+  # driver's UTC-returned candidate never raise a spurious "inconsistent tzone"
+  # warning; equality of instants is tz-independent.
+  inc_dt <- as.numeric(sample_datetime)
+  cand_dt <- as.numeric(cand$s_datetime)
+  create_new <- !is.na(inc_dt) &&
+    all(!is.na(cand_dt)) &&
+    !any(cand_dt == inc_dt)
+  if (create_new) return(NULL)
+
+  if (!is.na(inc_dt)) {
+    match_dt <- !is.na(cand_dt) & (cand_dt == inc_dt)
+    if (any(match_dt)) cand <- cand[match_dt, , drop = FALSE]
   }
   cand[1, , drop = FALSE]
 }

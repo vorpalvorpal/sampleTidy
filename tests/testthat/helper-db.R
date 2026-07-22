@@ -363,16 +363,30 @@ seed_db <- function(dir = NULL) {
   # s-0004/an-0004: the sample a second event re-encounters via lm-0009's
   # natural key (R-11.5a, analyte-pending path) - the feature side is
   # already resolved (fa-0001) since only the analyte side is dangling here.
+  # DATETIME is stored as the UTC INSTANT of the FIXTURES.md-documented
+  # Australia/Sydney wall-clock sampling time (AEST = UTC+10 in May, no DST),
+  # i.e. wall-clock minus 10h. This is NOT a wall-clock literal: duckdb reads a
+  # TIMESTAMP literal back as naive/UTC, and production commit
+  # (.ct_find_or_create_sample -> R/commit.R) stores the Sydney-parsed POSIXct,
+  # which duckdb persists as that same UTC instant. Seeding the wall-clock
+  # literal instead (e.g. '...11:45') would make a re-ingest of the SAME
+  # sampling fail to epoch-match (10h off) and be wrongly treated as a new
+  # sampling under the R-11.18/A62 datetime-identity predicate. So: s-0001
+  # 11:45 Sydney -> 01:45 UTC; s-0002 09:30 -> prev-day 23:30; s-0003 08:00 ->
+  # prev-day 22:00; s-0004 08:15 -> prev-day 22:15. The DATE column stays the
+  # naive midnight-UTC calendar day (matched separately via CAST(date AS DATE)),
+  # exactly as commit writes it - do NOT shift the date. Do NOT 'correct' these
+  # datetimes back to the wall-clock literal.
   DBI::dbExecute(con, "INSERT INTO \"sample\"
     (uuid, uuid_feature_alias, uuid_project, date, datetime, organisation) VALUES
     ('s-0001', 'fa-0001', 'p-0001', TIMESTAMP '2025-05-24 00:00:00',
-     TIMESTAMP '2025-05-24 11:45:00', 'ALS'),
+     TIMESTAMP '2025-05-24 01:45:00', 'ALS'),
     ('s-0002', 'fa-0003', 'p-0001', TIMESTAMP '2025-05-25 00:00:00',
-     TIMESTAMP '2025-05-25 09:30:00', 'ALS'),
+     TIMESTAMP '2025-05-24 23:30:00', 'ALS'),
     ('s-0003', 'fa-0010', 'p-0001', TIMESTAMP '2025-05-10 00:00:00',
-     TIMESTAMP '2025-05-10 08:00:00', 'ALS'),
+     TIMESTAMP '2025-05-09 22:00:00', 'ALS'),
     ('s-0004', 'fa-0001', 'p-0001', TIMESTAMP '2025-05-12 00:00:00',
-     TIMESTAMP '2025-05-12 08:15:00', 'ALS')")
+     TIMESTAMP '2025-05-11 22:15:00', 'ALS')")
 
   # No units column on `analysis` (D7 reversed / A63) - each row's units are
   # those of its uuid_lab (an-0002 -> lm-0008 'µS/cm', an-0003 -> lm-0001
