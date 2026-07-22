@@ -327,6 +327,35 @@ test_that("R-13.1: feature_mask 'long' names import as mask_long and collapse in
   expect_identical(nrow(not_imported), 0L)
 })
 
+# ---- feature_alias DDL must match the runtime schema (R-11.1) -------------
+
+test_that("R-13.1: feature_alias is created with all 11 runtime columns (incl. `name`) and the migrated DB is usable by pending_features()", {
+  mig <- .mig001_load()
+  path <- seed_pre_migration_db()
+  mig$mig001_run(db = path, snapshot_dir = withr::local_tempdir(), dry_run = FALSE)
+
+  con <- pre_migration_con(path)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  expect_setequal(
+    DBI::dbListFields(con, "feature_alias"),
+    c("uuid", "uuid_feature", "name", "alias_key", "kind", "n_seen",
+      "auto_assign", "first_seen", "last_seen", "confirmed_by", "comments")
+  )
+
+  # `name` must actually be populated (NOT NULL, non-vacuous) for every row -
+  # the defect this test guards against left it entirely unwritten.
+  n_missing_name <- DBI::dbGetQuery(
+    con, "SELECT COUNT(*) n FROM feature_alias WHERE name IS NULL"
+  )$n
+  expect_equal(n_missing_name, 0L)
+
+  # Prove the migrated DB is actually usable by a runtime writer/reader, not
+  # just structurally correct: pending_features() must run without error.
+  expect_no_error(result <- pending_features(con))
+  expect_s3_class(result, "data.frame")
+})
+
 # ---- R-13.1 step 11: verify is a hard gate ---------------------------------
 
 test_that("R-13.1: the step-11 verify is a hard gate that aborts on any count/checksum mismatch", {

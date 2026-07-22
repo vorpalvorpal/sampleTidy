@@ -187,7 +187,7 @@ mig001_backup <- function(db, snapshot_dir, .now = NULL) {
 #' `auto_assign = FALSE` on every row sharing that key.
 #'
 #' @param con an open DBI connection.
-#' @return data.frame(alias_key, uuid_feature, kind, auto_assign, n_seen).
+#' @return data.frame(alias_key, uuid_feature, kind, auto_assign, n_seen, name).
 .mig001_compute_alias_rows <- function(con) {
   features <- DBI::dbGetQuery(con, "SELECT uuid, name, cypher FROM feature")
   masks <- DBI::dbGetQuery(
@@ -197,14 +197,14 @@ mig001_backup <- function(db, snapshot_dir, .now = NULL) {
   rows <- list()
   order_keys <- character(0)
 
-  add_or_increment <- function(alias_key, uuid_feature, kind) {
+  add_or_increment <- function(alias_key, uuid_feature, kind, name) {
     k <- paste(alias_key, uuid_feature, sep = "")
     if (!is.null(rows[[k]])) {
       rows[[k]]$n_seen <<- rows[[k]]$n_seen + 1L
     } else {
       rows[[k]] <<- list(
         alias_key = alias_key, uuid_feature = uuid_feature,
-        kind = kind, n_seen = 1L
+        kind = kind, n_seen = 1L, name = name
       )
       order_keys <<- c(order_keys, k)
     }
@@ -216,7 +216,7 @@ mig001_backup <- function(db, snapshot_dir, .now = NULL) {
     k <- paste(alias_key, features$uuid[i], sep = "")
     rows[[k]] <- list(
       alias_key = alias_key, uuid_feature = features$uuid[i],
-      kind = "self", n_seen = 0L
+      kind = "self", n_seen = 0L, name = features$name[i]
     )
     order_keys <- c(order_keys, k)
   }
@@ -232,14 +232,14 @@ mig001_backup <- function(db, snapshot_dir, .now = NULL) {
       has_ws <- grepl("\\s", alias_key)
       has_digit <- grepl("[0-9]", alias_key)
       kind <- if (!has_ws && has_digit) "historical_code" else "descriptive"
-      add_or_increment(alias_key, features$uuid[i], kind)
+      add_or_increment(alias_key, features$uuid[i], kind, name = tok)
     }
   }
 
   # Step 5: feature_mask 'long' import.
   for (i in seq_len(nrow(masks))) {
     alias_key <- .mig001_normalize(masks$name[i])
-    add_or_increment(alias_key, masks$uuid_feature[i], "mask_long")
+    add_or_increment(alias_key, masks$uuid_feature[i], "mask_long", name = masks$name[i])
   }
 
   df_list <- lapply(order_keys, function(k) rows[[k]])
@@ -247,6 +247,7 @@ mig001_backup <- function(db, snapshot_dir, .now = NULL) {
   uuid_feature <- vapply(df_list, function(r) r$uuid_feature, character(1))
   kind <- vapply(df_list, function(r) r$kind, character(1))
   n_seen <- vapply(df_list, function(r) as.integer(r$n_seen), integer(1))
+  name <- vapply(df_list, function(r) r$name, character(1))
   auto_assign <- rep(TRUE, length(df_list))
 
   if (length(alias_key) > 0) {
@@ -257,7 +258,7 @@ mig001_backup <- function(db, snapshot_dir, .now = NULL) {
 
   data.frame(
     alias_key = alias_key, uuid_feature = uuid_feature, kind = kind,
-    auto_assign = auto_assign, n_seen = n_seen,
+    auto_assign = auto_assign, n_seen = n_seen, name = name,
     stringsAsFactors = FALSE
   )
 }
@@ -367,17 +368,29 @@ mig001_run <- function(db, snapshot_dir, dry_run = FALSE, .now = NULL) {
           DBI::dbExecute(con, "
             CREATE TABLE feature_alias (
               uuid VARCHAR PRIMARY KEY,
-              alias_key VARCHAR,
               uuid_feature VARCHAR,
+              name VARCHAR NOT NULL,
+              alias_key VARCHAR NOT NULL,
               kind VARCHAR,
-              auto_assign BOOLEAN,
-              n_seen INTEGER
+              n_seen INTEGER DEFAULT 0,
+              auto_assign BOOLEAN DEFAULT TRUE,
+              first_seen TIMESTAMP,
+              last_seen TIMESTAMP,
+              confirmed_by VARCHAR,
+              comments VARCHAR
             )")
 
           alias_df <- .mig001_compute_alias_rows(con)
           if (nrow(alias_df) > 0) {
             alias_df$uuid <- uuid::UUIDgenerate(n = nrow(alias_df))
-            alias_df <- alias_df[, c("uuid", "alias_key", "uuid_feature", "kind", "auto_assign", "n_seen")]
+            alias_df$first_seen <- recorded_at
+            alias_df$last_seen  <- recorded_at
+            alias_df$confirmed_by <- NA_character_
+            alias_df$comments     <- NA_character_
+            alias_df <- alias_df[, c(
+              "uuid", "uuid_feature", "name", "alias_key", "kind", "n_seen",
+              "auto_assign", "first_seen", "last_seen", "confirmed_by", "comments"
+            )]
             DBI::dbWriteTable(con, "feature_alias", alias_df, append = TRUE)
           }
           ambiguous_count <- sum(!alias_df$auto_assign)
