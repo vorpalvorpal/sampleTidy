@@ -271,14 +271,90 @@ test_that("R-9.6: a source with a missing archive copy is kept, never deleted wi
   asset_row <- DBI::dbGetQuery(con, sprintf("SELECT * FROM asset WHERE hash = '%s'", tampered_hash))
   DBI::dbDisconnect(con, shutdown = TRUE)
   expect_gt(nrow(asset_row), 0)
-  copy_path <- file.path(setup$archive_dir, asset_row$uuid[[1]])
-  if (file.exists(copy_path)) file.remove(copy_path)
+  # Tamper with the archived FILE itself (leaving the uuid directory behind) -
+  # matches how .ig_remove_verified() must actually detect the loss (a
+  # directory removal here would silently no-op via file.remove() and never
+  # exercise the guard at all).
+  copy_path <- file.path(setup$archive_dir, asset_row$uuid[[1]], asset_row$filename[[1]])
+  expect_true(file.exists(copy_path))
+  file.remove(copy_path)
+
+  # A second committing input is required so pass 2 actually snapshots and
+  # runs the removal path at all (removal is gated on a snapshot happening -
+  # see R/ingest.R .ig_current_states()/snapshot gate); otherwise this test
+  # would pass vacuously without ever calling .ig_remove_verified(). A
+  # crosstab fixture (unrelated work order/adapter to the esdat pass-1 set)
+  # parses and commits cleanly on its own.
+  crosstab_dir <- testthat::test_path("fixtures", "crosstab")
+  file.copy(file.path(crosstab_dir, "ES2600185_0_XTAB.csv"),
+            file.path(input_dir, "ES2600185_0_XTAB.csv"))
 
   withr::local_options(list("sampletidy.remove_ingested" = TRUE))
   ingest_dir(input_dir, db = setup$db_path)
 
-  # the file whose archive copy is missing must still be present
+  # the file whose archive copy is missing must still be present...
   expect_true(file.exists(file.path(input_dir, tampered_filename)))
+  # ...while at least one intact-archive sibling actually WAS removed, proving
+  # the removal path really executed rather than the test passing because
+  # nothing ran.
+  states_after <- ingest_file_states(setup$db_path)
+  siblings <- states_after[!is.na(states_after$filename) &
+                              states_after$state %in% c("committed", "archived") &
+                              states_after$filename != tampered_filename, ]
+  expect_gt(nrow(siblings), 0)
+  expect_true(any(!file.exists(file.path(input_dir, siblings$filename))))
+})
+
+test_that("direct: .ig_remove_verified() removes the source only when the archived FILE (not just its uuid dir) exists", {
+  db_path <- seed_db(dir = withr::local_tempdir())
+  con <- seed_con(db_path)
+  ensure_test_asset_table(con)
+  DBI::dbDisconnect(con, shutdown = TRUE)
+
+  archive_dir <- withr::local_tempdir()
+  withr::local_options(list("sampletidy.archive_dir" = archive_dir))
+
+  src_dir <- withr::local_tempdir()
+  src <- file.path(src_dir, "direct_removal_test.csv")
+  writeLines("a,b\n1,2\n", src)
+  h <- hash_file(src)
+  uuid <- "u-direct-removal-test"
+
+  con2 <- DBI::dbConnect(duckdb::duckdb(), db_path, read_only = FALSE)
+  DBI::dbExecute(
+    con2,
+    "INSERT INTO asset (uuid, filename, hash) VALUES (?, ?, ?)",
+    params = list(uuid, basename(src), h)
+  )
+  DBI::dbDisconnect(con2, shutdown = TRUE)
+
+  uuid_dir <- file.path(archive_dir, uuid)
+  dir.create(uuid_dir, recursive = FALSE)
+  archived_file <- file.path(uuid_dir, basename(src))
+  writeLines("a,b\n1,2\n", archived_file)
+
+  routed <- tibble::tibble(path = src, hash = h)
+
+  # Case A: verified archive FILE present -> source is removed.
+  removed_a <- sampleTidy:::.ig_remove_verified(db_path, routed)
+  expect_identical(removed_a, src)
+  expect_false(file.exists(src))
+
+  # Case B: archived FILE removed, but the uuid DIRECTORY still survives -
+  # this is exactly the A13/R-9.6 data-loss scenario: a file.exists() check
+  # on the directory would wrongly report "verified" and the source would
+  # be deleted, leaving zero copies of the data anywhere.
+  writeLines("a,b\n1,2\n", src) # recreate the source
+  file.remove(archived_file)
+  expect_true(dir.exists(uuid_dir))
+  expect_false(file.exists(archived_file))
+
+  expect_warning(
+    removed_b <- sampleTidy:::.ig_remove_verified(db_path, routed),
+    "archive copy"
+  )
+  expect_identical(removed_b, character(0))
+  expect_true(file.exists(src))
 })
 
 # ---- R-12.1: adapter match() return-value validation, contained (F6) ------

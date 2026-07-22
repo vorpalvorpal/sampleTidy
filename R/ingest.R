@@ -253,13 +253,17 @@
       next
     }
 
-    asset_row <- DBI::dbGetQuery(con, "SELECT uuid FROM asset WHERE hash = ?", params = list(hash))
+    asset_row <- DBI::dbGetQuery(con, "SELECT uuid, filename FROM asset WHERE hash = ?", params = list(hash))
     if (nrow(asset_row) == 0) {
       next
     }
 
-    copy_path <- file.path(archive_dir, asset_row$uuid[[1]])
-    if (!file.exists(copy_path)) {
+    fn <- asset_row$filename[[1]]
+    copy_path <- if (is.na(fn)) NA_character_ else file.path(archive_dir, asset_row$uuid[[1]], fn)
+    # file_test("-f", ...) requires a REGULAR FILE - file.exists() is TRUE for the
+    # uuid directory even when the archived bytes are gone (the A13/R-9.6 data-loss
+    # bug this guard exists to prevent).
+    if (is.na(copy_path) || !file_test("-f", copy_path)) {
       cli::cli_warn(
         "ingest_dir(): archive copy for {.path {path}} (hash {.val {hash}}) is
          missing at {.path {copy_path}}; keeping the source file (never
