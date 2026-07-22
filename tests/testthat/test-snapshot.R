@@ -59,3 +59,19 @@ test_that("R-9.4: a same-day re-snapshot overwrites (single file per day)", {
   today_files <- list.files(dest_dir, pattern = sprintf("^monitoring_%s\\.duckdb$", Sys.Date()))
   expect_length(today_files, 1)
 })
+
+test_that("R-12.4: snapshot_db() into a non-existent snapshot_dir aborts sampletidy_error and writes no snapshot file", {
+  db_path <- seed_db()
+  # Never created (no mkdir) - the CHECKPOINT-and-copy step's file.copy() into
+  # it must fail, and that failure must be checked (R-12.4), not silently
+  # ignored the way the pre-fix code does (which would file.rename() a .tmp
+  # that was never actually written and "succeed").
+  missing_dir <- file.path(withr::local_tempdir(), "does-not-exist")
+
+  err <- tryCatch(snapshot_db(db = db_path, dest_dir = missing_dir), error = function(e) e)
+  expect_s3_class(err, "sampletidy_error")
+
+  final_name <- sprintf("monitoring_%s.duckdb", format(Sys.Date(), "%Y-%m-%d"))
+  expect_false(file.exists(file.path(missing_dir, final_name)))
+  expect_false(file.exists(file.path(missing_dir, paste0(final_name, ".tmp"))))
+})

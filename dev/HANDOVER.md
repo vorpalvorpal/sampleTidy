@@ -223,6 +223,23 @@ Still worth doing (cheap insurance, not currently biting): a hydration guard in
 `corpus_files()` that fails loudly on a `size > 0` file that reads empty, since
 "unclaimed" would otherwise absorb a regression silently. Optional PLAN-12 item.
 
+**Known limitation — matrix not in the identity key (R-12.14, doc-only, A-6).**
+A two-section (WATER+SOIL) crosstab measuring the same analyte at one
+feature+date+method yields two result rows whose only difference is section
+matrix; both land on the **same** sample (the sample find-or-create key is
+feature+date/datetime, not feature+date+matrix) as two analyses
+indistinguishable by A45's analysis key either (method+analyte+sample, no
+matrix). The model currently cannot represent "same feature/date, two
+matrices" as two samples. Rare in practice — multi-section crosstab files are
+legacy per A34 (current exports are single-matrix) — so this is not fixed
+now; do **not** silently pick one matrix over the other if it recurs.
+Revisit "matrix in the identity key" together with the datetime convention
+the next time either is reworked. No dedicated test (doc-only per PLAN-12
+block B-12.14); a comment at the sample/analysis identity-key sites in `R/`
+was also called for by that block but is **not present as of this note** —
+out of scope for a tests-only unit under a standing "do not touch `R/`"
+instruction; flagged here so a future `R/`-touching unit adds it.
+
 Remaining follow-ups (not blockers):
 - **Act on `dev/tdd-skill-improvements.md`** — the research report on hardening
   the tdd-plan skill so its generated suites catch seam bugs, non-determinism,

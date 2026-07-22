@@ -62,6 +62,28 @@ Sample2e) and aborts with class `sampletidy_parse_error` on an odd count.
 Verified in `test-adapter-esdat.R`, "R-4.2: corrupted Chemistry2e data
 causes parse() to abort loudly".
 
+Note (R-12.15 M7 audit): the paragraph above is now stale as production
+code - `R/adapter-esdat.R` no longer has a `.st_esdat_check_quote_parity()`
+function; the check was reworked into `.st_esdat_check_parseable()`, a
+post-read structural check on `nrow(df) == 0` with data lines present (see
+that function's own comment block). Left here for fixture-construction
+history; do not treat it as a description of current code.
+
+## The CORRUPT_SAMPLE fixture, in detail (R-12.15 M7)
+
+`CORRUPT_SAMPLE.ESDAT_XX0000001_0.Sample2e.CSV` is the Sample2e twin of the
+CORRUPT fixture above (same unterminated-quote-field corruption, one data
+line, exact pinned Sample2e header) - added because the Chemistry2e CORRUPT
+fixture does not actually exercise `.st_esdat_check_parseable()`'s zero-row
+abort as a *distinguishing* test: verified directly, if that check is
+disabled the Chemistry2e path still aborts (via an unrelated
+`ifelse(logical(0), ...)` type bug that `ir_validate()` then rejects), so a
+mutant that disables the real structural check survives the existing
+Chemistry2e test. Sample2e's parser has no such incidental failure on a
+zero-row frame, so `CORRUPT_SAMPLE...` is the fixture that actually pins
+`.st_esdat_check_parseable()`'s own behaviour. See
+`test-adapter-esdat.R`, "R-12.15 M7: ...".
+
 ## xlsx-for-xls substitution
 
 Not applicable to this adapter family - ESdat deliveries are CSV/XML only, no

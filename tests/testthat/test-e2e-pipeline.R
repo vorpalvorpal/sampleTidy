@@ -192,8 +192,25 @@ test_that("R-10.2: QC rows are skipped with the fixture's known counts and revie
   # ESdat is source-of-record for XX1234567 (source preference), so only its
   # 1 LCS + 1 MB QC rows should ever reach reconcile's QC filter
   reviews <- DBI::dbGetQuery(con, "SELECT * FROM review_queue")
-  expect_true(nrow(reviews) >= 0) # sanity: query succeeds even if empty
-  expect_type(report, "list")
+  # R-12.15 T-1 sweep (5th instance): the plan's "review_queue contains
+  # exactly the engineered unknowns (typo feature, unknown unit) and nothing
+  # else" no longer matches the CONTRACT A34 real-fixture rework - the input
+  # dir now also carries the real anonymized ES2537534/ES2600185/ES2617126
+  # corpora, whose feature codes (P.S03, Q.MW02, ...) are naturally unknown
+  # to the seeded registry, not a single deliberately-engineered typo. Direct
+  # replay of reconcile_event()'s R-8.1-8.4 stages (`.rc_qc_filter()`,
+  # `.rc_resolve_features()`) against the real fixtures confirms
+  # review_queue is dominated by real `unknown_feature` groups, not a small
+  # fixed engineered set - see the plan-change note filed for this finding.
+  # Assert what IS specific and derivable: the table is non-empty, holds at
+  # least one unknown_feature item (the dominant, empirically-confirmed
+  # kind), and the report's own tally is internally consistent with what it
+  # actually wrote to the table (catches a report that over/under-counts, or
+  # a no-op that returns an empty report while still queueing rows, or vice
+  # versa).
+  expect_true(nrow(reviews) > 0)
+  expect_true("unknown_feature" %in% reviews$kind)
+  expect_equal(report$review_items_opened, nrow(reviews))
 })
 
 # ---- R-10.3: idempotency ----------------------------------------------------

@@ -178,3 +178,81 @@ test_that("R-1.6: upsert on an existing hash updates updated_at, preserves path_
   sightings_diff_path <- DBI::dbGetQuery(con, "SELECT COUNT(*) AS n FROM ingest_sighting WHERE hash = ?", params = list(hash))$n
   expect_equal(sightings_diff_path, 1)
 })
+
+# --- R-12.9: ingest_file_upsert() must not clobber on re-sight (F15) -----
+# db-schema.R:184-188 unconditionally overwrote filename/size on re-sight,
+# so a later caller taking the NA defaults would null a real filename.
+# Fix must COALESCE-guard: keep the existing non-NULL value when the new
+# one is NA, but still apply a real (non-NA) incoming value.
+
+test_that("R-12.9: re-upsert with filename = NA leaves the stored filename intact (no clobber)", {
+  dir <- withr::local_tempdir()
+  db <- seed_db(dir)
+  con <- seed_con(db)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  hash <- "nofilename-hash-01"
+  ingest_file_upsert(con, hash, path = "/in/keep.csv", filename = "keep.csv", size = 10)
+
+  # Re-sight the SAME path, but this caller takes the filename/size defaults
+  # (NA) rather than passing them explicitly.
+  ingest_file_upsert(con, hash, path = "/in/keep.csv")
+
+  row <- DBI::dbGetQuery(con, "SELECT filename FROM ingest_file WHERE hash = ?", params = list(hash))
+  expect_equal(row$filename, "keep.csv")
+})
+
+test_that("R-12.9: re-upsert with a real filename updates the stored filename", {
+  dir <- withr::local_tempdir()
+  db <- seed_db(dir)
+  con <- seed_con(db)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  hash <- "renamedfile-hash-01"
+  ingest_file_upsert(con, hash, path = "/in/old.csv", filename = "old.csv", size = 10)
+  ingest_file_upsert(con, hash, path = "/in/old.csv", filename = "renamed.csv", size = 20)
+
+  row <- DBI::dbGetQuery(con, "SELECT filename, size FROM ingest_file WHERE hash = ?", params = list(hash))
+  expect_equal(row$filename, "renamed.csv")
+  expect_equal(row$size, 20)
+})
+
+test_that("R-12.9: re-upsert with size = NA leaves the stored size intact (no clobber)", {
+  dir <- withr::local_tempdir()
+  db <- seed_db(dir)
+  con <- seed_con(db)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  hash <- "nosize-hash-01"
+  ingest_file_upsert(con, hash, path = "/in/sized.csv", filename = "sized.csv", size = 42)
+
+  # Re-sight taking the size default (NA), same path.
+  ingest_file_upsert(con, hash, path = "/in/sized.csv", filename = "sized.csv")
+
+  row <- DBI::dbGetQuery(con, "SELECT size FROM ingest_file WHERE hash = ?", params = list(hash))
+  expect_equal(row$size, 42)
+})
+
+test_that("R-12.9: path_first_seen is still set exactly once across a no-clobber re-upsert sequence (A21 regression)", {
+  dir <- withr::local_tempdir()
+  db <- seed_db(dir)
+  con <- seed_con(db)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  hash <- "firstseen-noclobber-hash-01"
+  ingest_file_upsert(con, hash, path = "/in/first.csv", filename = "first.csv", size = 5)
+  first <- DBI::dbGetQuery(con, "SELECT path_first_seen FROM ingest_file WHERE hash = ?", params = list(hash))
+  expect_equal(first$path_first_seen, "/in/first.csv")
+
+  # Re-sight with filename/size taking their NA defaults, and via a
+  # different path (must not touch path_first_seen either way).
+  ingest_file_upsert(con, hash, path = "/in/second.csv")
+
+  second <- DBI::dbGetQuery(con, "SELECT path_first_seen FROM ingest_file WHERE hash = ?", params = list(hash))
+  expect_equal(second$path_first_seen, "/in/first.csv")
+
+  # A third, explicit-values re-sight must still leave path_first_seen alone.
+  ingest_file_upsert(con, hash, path = "/in/third.csv", filename = "third.csv", size = 99)
+  third <- DBI::dbGetQuery(con, "SELECT path_first_seen FROM ingest_file WHERE hash = ?", params = list(hash))
+  expect_equal(third$path_first_seen, "/in/first.csv")
+})

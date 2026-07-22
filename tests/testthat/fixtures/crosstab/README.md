@@ -78,6 +78,13 @@ deleted - it is not required by any test this rework owns; plan 10's
 (currently unimplemented, intentionally red) e2e fixture-existence check is
 out of scope here.
 
+## R-12.8 hardening fixtures (PLAN-12, F14; match()-only, never parsed)
+
+| file | criterion covered | content |
+|---|---|---|
+| `WK7654321_0_XTAB.csv` | dialect marker (`Workgroup:`) past `file_meta()`'s fixed first-2048-byte peek window (R-12.8) | `Matrix: WATER` on line 1 (required), then a single filler row whose one cell is 2200 bytes of `x`, pushing `Workgroup:` (row 3) to start at byte offset 2248 - past `file_meta()`'s 2048-byte `peek`. Otherwise a minimal valid single-section XTAB shape. |
+| `BM1122334_0_XTAB.csv` | UTF-8 BOM (`EF BB BF`) prepended before any text (R-12.8) | Identical minimal shape, with a raw UTF-8 BOM written before `Matrix:` on line 1 - under the peek's latin-1 decode this becomes 3 extra leading characters that defeat `^Matrix:` today. |
+
 ## Verification performed
 
 Every count/name/value documented above (and asserted in

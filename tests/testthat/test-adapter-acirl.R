@@ -168,3 +168,63 @@ test_that("R-6.4: dust sheet is detected and skipped, no dust-derived rows", {
   expect_false(any(out$results$value_num == 12.4, na.rm = TRUE))
   expect_false(any(grepl("PM10", out$results$analyte_raw, ignore.case = TRUE)))
 })
+
+# ---- R-11.15 ACIRL synthetic per-column lab_sample_id ---------------------
+#
+# PLAN-11 R-11.15: the ACIRL adapter emits a synthetic per-column
+# `lab_sample_id` (`"<sheet>!c<col>"`) on BOTH the results rows and the
+# samples rows derived from that column, so the join in assemble.R can use
+# the exact-match branch instead of a feature-name-only fallback. See
+# dev/plans/PLAN-11-feature-alias.md block B-11.15.
+
+test_that("R-11.15: results and samples lab_sample_id is non-NA and matches the '<sheet>!c<col>' format", {
+  meta <- sampleTidy:::file_meta(main_path)
+  out <- acirl_adapter()$parse(main_path, meta)
+  expect_true(all(!is.na(out$results$lab_sample_id)))
+  expect_true(all(!is.na(out$samples$lab_sample_id)))
+  id_pattern <- "^(Field Data 1|Field Data 2)!c[0-9]+$"
+  expect_true(all(grepl(id_pattern, out$results$lab_sample_id)))
+  expect_true(all(grepl(id_pattern, out$samples$lab_sample_id)))
+})
+
+test_that("R-11.15: lab_sample_id is distinct per sample column within a sheet", {
+  meta <- sampleTidy:::file_meta(main_path)
+  out <- acirl_adapter()$parse(main_path, meta)
+  fd1_samples <- out$samples[startsWith(out$samples$lab_sample_id, "Field Data 1!"), ]
+  # Field Data 1 has 2 features x 2 visits = 4 sample columns (FIXTURES.md/README)
+  expect_equal(nrow(fd1_samples), 4)
+  expect_equal(length(unique(fd1_samples$lab_sample_id)), 4)
+})
+
+test_that("R-11.15: a result row's lab_sample_id ties it to its own visit's sample column, not a sibling visit", {
+  meta <- sampleTidy:::file_meta(main_path)
+  out <- acirl_adapter()$parse(main_path, meta)
+
+  s_v1 <- out$samples[out$samples$feature_raw == "T.S01" &
+                         out$samples$sample_datetime_raw == "24/05/2025", ]
+  s_v2 <- out$samples[out$samples$feature_raw == "T.S01" &
+                         out$samples$sample_datetime_raw == "25/05/2025", ]
+  # one T.S01/24-May column and one T.S01/25-May column per water sheet (x2 sheets)
+  expect_equal(nrow(s_v1), 2)
+  expect_equal(nrow(s_v2), 2)
+  # distinct per-column ids - no overlap between the two visits
+  expect_equal(length(intersect(s_v1$lab_sample_id, s_v2$lab_sample_id)), 0)
+
+  # every result row carrying a visit-1 lab_sample_id is a T.S01 row with its
+  # own 3 field analytes (pH/EC/Temperature) - not merged with visit 2's
+  for (lsid in s_v1$lab_sample_id) {
+    res_rows <- out$results[!is.na(out$results$lab_sample_id) &
+                               out$results$lab_sample_id == lsid, ]
+    expect_equal(nrow(res_rows), 3)
+    expect_true(all(res_rows$feature_raw == "T.S01"))
+    expect_setequal(res_rows$analyte_raw, c("pH", "EC", "Temperature"))
+  }
+})
+
+test_that("R-11.15: lab_sample_id is stable across a re-parse of the same file (idempotency)", {
+  meta <- sampleTidy:::file_meta(main_path)
+  out1 <- acirl_adapter()$parse(main_path, meta)
+  out2 <- acirl_adapter()$parse(main_path, meta)
+  expect_identical(out1$samples$lab_sample_id, out2$samples$lab_sample_id)
+  expect_identical(out1$results$lab_sample_id, out2$results$lab_sample_id)
+})

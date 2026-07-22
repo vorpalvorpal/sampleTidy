@@ -318,3 +318,129 @@ test_that("R-5.3: Workgroup cell wins over filename guess on mismatch, with a wa
   expect_silent(sampleTidy:::ir_validate(out$results, kind = "results"))
   expect_silent(sampleTidy:::ir_validate(out$samples, kind = "samples"))
 })
+
+# ---- PLAN-12 R-12.3: crosstab no-silent-drops (F8) ----------------------
+#
+# Two silent-drop paths get a `report$warnings` entry instead: an
+# unsupported (foreign) section marker followed by orphaned rows with no
+# fresh recognised marker, and an analyte header reached with zero
+# sample_cols because the "ALS Sample Number" label was misspelled. Neither
+# changes what IS parsed - the existing two-section (WATER+SOIL) fixture
+# must keep parsing identically with zero new warnings (regression, below).
+# Per the brief's fixture list, only R-12.8 needs committed fixture files;
+# these two build their input in-test.
+
+# Write a minimal XTAB-dialect CSV grid (list of row character-vectors,
+# comma-joined, CRLF-terminated, ASCII-safe) to a tempfile whose cleanup is
+# bound to the CALLING test's frame (language-footguns.md: never let a
+# helper own its own tempfile's cleanup frame - thread `envir` through
+# explicitly rather than relying on `withr`'s default `parent.frame()`,
+# which would bind to this helper's own (already-returned) frame instead).
+write_xtab_grid <- function(rows, envir) {
+  max_cols <- max(vapply(rows, length, integer(1)))
+  pad_row <- function(r) {
+    if (length(r) >= max_cols) r[seq_len(max_cols)] else c(r, rep("", max_cols - length(r)))
+  }
+  lines <- vapply(rows, function(r) paste(pad_row(r), collapse = ","), character(1))
+  text <- paste0(paste(lines, collapse = "\r\n"), "\r\n")
+  path <- withr::local_tempfile(fileext = ".csv", .local_envir = envir)
+  con <- file(path, open = "wb")
+  writeBin(charToRaw(text), con)
+  close(con)
+  path
+}
+
+test_that("R-12.3: foreign section marker + orphaned rows (no fresh marker) get a report$warnings entry naming the row range", {
+  rows <- list(
+    c("Matrix:", "WATER", "", "Sample Type:", "", "REG"),
+    c("Workgroup:", "YY6543210", "", "ALS Sample Number:", "", "YY6543210001"),
+    c("Project name/number:", "Test Project A", "", "Sample Date:", "", "24/05/2025"),
+    c("", "", "", "Client sample ID (1st):", "", "T.S01"),
+    c("", "", "", "", "", ""),
+    c("Analyte grouping/Analyte", "CAS Number", "Unit", "Limit of reporting", "", ""),
+    c("", "", "", "", "", ""),
+    c("EA005P: pH by PC Titrator", "", "", "", "", ""),
+    c("pH Value", "", "pH Unit", "0.01", "", "6.40"), # row 9: real WATER-section result
+    c("QC - Matrix:", "OTHERWO", "", "", "", ""),      # row 10: foreign marker (not "^Matrix:")
+    c("Some Orphan Analyte", "", "", "", "", "9.99"),  # row 11: would-be data, no fresh marker
+    c("Another Orphan Analyte", "", "", "", "", "1.23") # row 12: ditto
+  )
+  path <- write_xtab_grid(rows, environment())
+  meta <- sampleTidy:::file_meta(path)
+  out <- xtab_adapter()$parse(path, meta)
+
+  # What IS parsed is unaffected: the one real WATER-section result survives.
+  expect_equal(nrow(out$results), 1)
+  expect_identical(out$results$value_raw, "6.40")
+
+  # PROVISIONAL ORACLE: R-12.3 - the plan pins only "record one
+  # report$warnings entry (with the row range)", not exact wording. This
+  # asserts the one concrete, plan-derivable fact: the entry names row 10
+  # (1-based), where the foreign "QC - Matrix:" marker was hit.
+  expect_true(length(out$report$warnings) >= 1)
+  expect_true(any(grepl("\\b10\\b", out$report$warnings)))
+})
+
+test_that("R-12.3: misspelled 'ALS Sample Number' label warns instead of silently emitting a zero-row section", {
+  rows <- list(
+    c("Matrix:", "WATER", "", "Sample Type:", "", "REG"),
+    c("Workgroup:", "YZ2223334", "", "ALS Smaple Number:", "", "YZ2223334001"), # typo: "Smaple"
+    c("Project name/number:", "Test Project A", "", "Sample Date:", "", "24/05/2025"),
+    c("", "", "", "Client sample ID (1st):", "", "T.S01"),
+    c("", "", "", "", "", ""),
+    c("Analyte grouping/Analyte", "CAS Number", "Unit", "Limit of reporting", "", ""),
+    c("", "", "", "", "", ""),
+    c("EA005P: pH by PC Titrator", "", "", "", "", ""),
+    c("pH Value", "", "pH Unit", "0.01", "", "6.40")
+  )
+  path <- write_xtab_grid(rows, environment())
+  meta <- sampleTidy:::file_meta(path)
+  out <- xtab_adapter()$parse(path, meta)
+
+  # Unchanged: sample_cols never got populated (the label never matched), so
+  # the analyte row is misclassified as a method-group row - zero results,
+  # zero samples, zero skips.
+  expect_equal(nrow(out$results), 0)
+  expect_equal(nrow(out$samples), 0)
+  expect_equal(nrow(out$report$skipped), 0)
+
+  # PROVISIONAL ORACLE: R-12.3 - exact wording unpinned by the plan; asserts
+  # the one concrete, plan-derivable fact: the warning names the section (its
+  # Matrix: value, "WATER" - the only well-defined section identifier this
+  # parser tracks in scope at the header row).
+  expect_true(length(out$report$warnings) >= 1)
+  expect_true(any(grepl("WATER", out$report$warnings, fixed = TRUE)))
+})
+
+test_that("R-12.3: existing two-section (WATER+SOIL) fixture still parses identically - no new spurious warning", {
+  meta <- sampleTidy:::file_meta(two_section_path)
+  out <- xtab_adapter()$parse(two_section_path, meta)
+  expect_equal(nrow(out$results), 3)
+  expect_equal(nrow(out$samples), 3)
+  expect_identical(out$report$warnings, character(0))
+})
+
+# ---- PLAN-12 R-12.8: crosstab match() robustness (F14) -------------------
+#
+# match()'s dialect-marker peek currently reads only file_meta()'s fixed
+# first-2048-byte window. Two ways a real (very wide) crosstab defeats that:
+# a `Workgroup:` cell past byte 2048, and a UTF-8 BOM on line 1 (which
+# decodes, under the peek's latin-1 locale, as 3 extra leading characters
+# that defeat `^Matrix:`). Fixtures: `WK7654321_0_XTAB.csv`,
+# `BM1122334_0_XTAB.csv` (fixtures/crosstab/README.md).
+
+test_that("R-12.8: dialect marker (Workgroup:) past file_meta()'s 2KiB peek window still match()es", {
+  meta <- sampleTidy:::file_meta(test_path("fixtures", "crosstab", "WK7654321_0_XTAB.csv"))
+  expect_identical(xtab_adapter()$match(meta), "format")
+})
+
+test_that("R-12.8: UTF-8 BOM on line 1 does not defeat match()", {
+  meta <- sampleTidy:::file_meta(test_path("fixtures", "crosstab", "BM1122334_0_XTAB.csv"))
+  expect_identical(xtab_adapter()$match(meta), "format")
+})
+
+test_that("R-12.8: SpreadsheetML .XLS (A37) still returns match() == 'no' after the peek hardening", {
+  meta <- sampleTidy:::file_meta(xtab_xls_path)
+  expect_identical(xtab_adapter()$match(meta), "no")
+  expect_identical(enmrg_adapter()$match(meta), "no")
+})

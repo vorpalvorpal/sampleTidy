@@ -216,3 +216,86 @@ test_that("R-3.1: ir_validate() aborts when sample_type is not in the allowed se
   expect_s3_class(err, "sampletidy_ir_error")
   expect_match(conditionMessage(err), "sample_type", fixed = TRUE)
 })
+
+# --- R-12.5: IR constructors validate BEFORE subsetting -----------------
+#
+# ir_results()/ir_samples() currently subset to the pinned columns BEFORE
+# calling ir_validate() (ir.R:74-77, :97-100), so: (a) a misspelled/extra
+# optional argument is silently dropped instead of being caught by
+# ir_validate()'s extra-column check, and (b) omitting a required column
+# makes the subset step itself throw a raw vctrs subscript error instead of
+# sampletidy_ir_error. The fix validates the assembled tibble before the
+# column subset. These tests exercise the constructor path (not
+# ir_validate() directly, which is already covered by R-3.1 above).
+
+results_args_valid <- as.list(valid_results_row)
+samples_args_valid <- as.list(valid_samples_row)
+
+test_that("R-12.5: ir_results(...) aborts sampletidy_ir_error naming an extra/misspelled column, not silently dropping it", {
+  args <- c(results_args_valid, list(typpo = 1))
+  # tryCatch(error = identity), not expect_error(class=...): the latter's
+  # catch_cnd() semantics only intercept the named class and let a
+  # differently-classed condition (or a non-error return, per the R-12.5
+  # bug) propagate/pass silently. Capture whatever actually happens first,
+  # then assert on it explicitly so both the "silently dropped, no error"
+  # and "wrong error class" failure modes surface as a clean failed
+  # expectation instead of an uncaught error.
+  result <- tryCatch(do.call(ir_results, args), error = identity)
+  expect_s3_class(result, "sampletidy_ir_error")
+  if (inherits(result, "condition")) {
+    expect_match(conditionMessage(result), "typpo", fixed = TRUE)
+  }
+})
+
+test_that("R-12.5: ir_results(...) omitting a required column aborts sampletidy_ir_error naming it, not a raw vctrs subscript error", {
+  args <- results_args_valid[setdiff(names(results_args_valid), "adapter")]
+  result <- tryCatch(do.call(ir_results, args), error = identity)
+  expect_s3_class(result, "sampletidy_ir_error")
+  if (inherits(result, "condition")) {
+    expect_match(conditionMessage(result), "adapter", fixed = TRUE)
+  }
+})
+
+test_that("R-12.5: ir_results() with no args is unchanged - still returns the zero-row prototype", {
+  proto <- ir_results()
+  expect_identical(names(proto), results_cols)
+  expect_equal(nrow(proto), 0)
+})
+
+test_that("R-12.5: ir_results(...) with a valid full-column call is unchanged - still constructs and validates a single row", {
+  row <- do.call(ir_results, results_args_valid)
+  expect_equal(nrow(row), 1)
+  expect_identical(names(row), results_cols)
+  expect_no_error(ir_validate(row, "results"))
+})
+
+test_that("R-12.5: ir_samples(...) aborts sampletidy_ir_error naming an extra/misspelled column, not silently dropping it", {
+  args <- c(samples_args_valid, list(typpo = 1))
+  result <- tryCatch(do.call(ir_samples, args), error = identity)
+  expect_s3_class(result, "sampletidy_ir_error")
+  if (inherits(result, "condition")) {
+    expect_match(conditionMessage(result), "typpo", fixed = TRUE)
+  }
+})
+
+test_that("R-12.5: ir_samples(...) omitting a required column aborts sampletidy_ir_error naming it, not a raw vctrs subscript error", {
+  args <- samples_args_valid[setdiff(names(samples_args_valid), "org")]
+  result <- tryCatch(do.call(ir_samples, args), error = identity)
+  expect_s3_class(result, "sampletidy_ir_error")
+  if (inherits(result, "condition")) {
+    expect_match(conditionMessage(result), "\\borg\\b")
+  }
+})
+
+test_that("R-12.5: ir_samples() with no args is unchanged - still returns the zero-row prototype", {
+  proto <- ir_samples()
+  expect_identical(names(proto), samples_cols)
+  expect_equal(nrow(proto), 0)
+})
+
+test_that("R-12.5: ir_samples(...) with a valid full-column call is unchanged - still constructs and validates a single row", {
+  row <- do.call(ir_samples, samples_args_valid)
+  expect_equal(nrow(row), 1)
+  expect_identical(names(row), samples_cols)
+  expect_no_error(ir_validate(row, "samples"))
+})

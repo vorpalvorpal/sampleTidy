@@ -168,4 +168,58 @@ mismatch_rows <- list(
 )
 write_ascii_csv(mismatch_rows, file.path(here, "ZZ9999999_0_XTAB.csv"))
 
+# =============================================================================
+# R-12.8 hardening fixtures (PLAN-12, F14): match()'s dialect-marker peek
+# currently reads only file_meta()'s fixed first-2048-byte window
+# (`.st_crosstab_peek_lines()` -> `fm$peek`). Two ways real (very wide)
+# crosstabs can defeat that: (1) the `Workgroup:` cell sits past byte 2048,
+# so the byte-limited peek never sees it; (2) a UTF-8 BOM on line 1 decodes
+# under the pinned latin-1 peek locale as 3 extra leading characters, which
+# defeats `^Matrix:`. Both fixtures are match()-only (never parsed in the
+# test suite) - minimal single-section XTAB shape, otherwise identical to
+# `ZZ9999999_0_XTAB.csv` above.
+# =============================================================================
+
+# WK7654321_0_XTAB.csv: `Matrix:` on line 1 (required - it's the section AND
+# match() marker), then one huge filler row (>2048 bytes on its own) BEFORE
+# the `Workgroup:` row, pushing the latter's first byte past offset 2048.
+past_2kb_rows <- list(
+  c("Matrix:", "WATER", "", "Sample Type:", "", "REG"),
+  c("Filler:", strrep("x", 2200)),
+  c("Workgroup:", "WK7654321", "", "ALS Sample Number:", "", "WK7654321001"),
+  c("Project name/number:", "Test Project A", "", "Sample Date:", "", "24/05/2025"),
+  c("", "", "", "Client sample ID (1st):", "", "T.S01"),
+  c("", "", "", "", "", ""),
+  c("Analyte grouping/Analyte", "CAS Number", "Unit", "Limit of reporting", "", ""),
+  c("", "", "", "", "", ""),
+  c("EA005P: pH by PC Titrator", "", "", "", "", ""),
+  c("pH Value", "", "pH Unit", "0.01", "", "6.40")
+)
+write_ascii_csv(past_2kb_rows, file.path(here, "WK7654321_0_XTAB.csv"))
+
+# BM1122334_0_XTAB.csv: same minimal single-section shape, with a raw UTF-8
+# BOM (EF BB BF) prepended before any text - ESdat's own reader strips BOMs;
+# the crosstab path currently does not (R-12.8/F14).
+bom_rows <- list(
+  c("Matrix:", "WATER", "", "Sample Type:", "", "REG"),
+  c("Workgroup:", "BM1122334", "", "ALS Sample Number:", "", "BM1122334001"),
+  c("Project name/number:", "Test Project A", "", "Sample Date:", "", "24/05/2025"),
+  c("", "", "", "Client sample ID (1st):", "", "T.S01"),
+  c("", "", "", "", "", ""),
+  c("Analyte grouping/Analyte", "CAS Number", "Unit", "Limit of reporting", "", ""),
+  c("", "", "", "", "", ""),
+  c("EA005P: pH by PC Titrator", "", "", "", "", ""),
+  c("pH Value", "", "pH Unit", "0.01", "", "6.40")
+)
+bom_path <- file.path(here, "BM1122334_0_XTAB.csv")
+{
+  max_cols_bom <- max(vapply(bom_rows, length, integer(1)))
+  bom_lines <- vapply(bom_rows, function(r) csv_row(pad(r, max_cols_bom)), character(1))
+  bom_text <- paste0(paste(bom_lines, collapse = "\r\n"), "\r\n")
+  con <- file(bom_path, open = "wb")
+  writeBin(as.raw(c(0xEF, 0xBB, 0xBF)), con) # UTF-8 BOM
+  writeBin(charToRaw(bom_text), con)
+  close(con)
+}
+
 message("crosstab fixtures written to ", normalizePath(here))
