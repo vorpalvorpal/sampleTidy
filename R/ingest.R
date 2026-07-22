@@ -263,7 +263,7 @@
     # file_test("-f", ...) requires a REGULAR FILE - file.exists() is TRUE for the
     # uuid directory even when the archived bytes are gone (the A13/R-9.6 data-loss
     # bug this guard exists to prevent).
-    if (is.na(copy_path) || !file_test("-f", copy_path)) {
+    if (is.na(copy_path) || !utils::file_test("-f", copy_path)) {
       cli::cli_warn(
         "ingest_dir(): archive copy for {.path {path}} (hash {.val {hash}}) is
          missing at {.path {copy_path}}; keeping the source file (never

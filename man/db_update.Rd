@@ -4,14 +4,24 @@
 \alias{db_update}
 \title{Update fields on one row, logging one \code{change_log} row per changed field}
 \usage{
-db_update(con, table, uuid, changes, actor, reason, source_hash = NA)
+db_update(
+  con,
+  table,
+  uuid = NULL,
+  changes,
+  actor,
+  reason,
+  source_hash = NA,
+  key = NULL
+)
 }
 \arguments{
 \item{con}{an open read-write DBI connection.}
 
 \item{table}{target table name.}
 
-\item{uuid}{the row's primary key.}
+\item{uuid}{the row's primary key (scalar-uuid path; mutually exclusive
+with \code{key}).}
 
 \item{changes}{named list of field -> new value.}
 
@@ -21,9 +31,12 @@ db_update(con, table, uuid, changes, actor, reason, source_hash = NA)
 
 \item{source_hash}{optional content hash provenance (A1), stored on every
 \code{change_log} row.}
+
+\item{key}{named list of column -> value giving an alternate/composite
+key (mutually exclusive with \code{uuid}).}
 }
 \value{
-\code{uuid}, invisibly.
+\code{uuid} (or \code{key}, when keyed that way), invisibly.
 }
 \description{
 Validates \code{table} against the mutation-layer allowlist and every field
@@ -35,4 +48,11 @@ a lower-level DB error mid-update) rolls back the whole call, including
 any \code{change_log} rows already written in this call - atomicity.
 Participates in the caller's open mutation-layer transaction if there is
 one; otherwise atomic on its own.
+}
+\details{
+Keyed on either the scalar \code{uuid} (back-compat, default path - every
+existing caller unchanged) OR a named-list \code{key} for tables with no \code{uuid}
+column (e.g. \code{analyte_mask}, keyed on \verb{(uuid_analyte, variant)}; PLAN-14
+R-14.1). \code{change_log.uuid_row} is the scalar uuid when keyed that way,
+else \code{NA} (no single row-id exists for a composite key).
 }

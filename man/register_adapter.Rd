@@ -4,11 +4,14 @@
 \alias{register_adapter}
 \title{Register an adapter in the sampleTidy adapter registry}
 \usage{
-register_adapter(a)
+register_adapter(a, quiet = FALSE)
 }
 \arguments{
 \item{a}{a list with elements \code{id}, \code{version}, \code{match}, \code{parse} (DESIGN
 §5).}
+
+\item{quiet}{if \code{TRUE}, suppress the "Overwriting existing adapter
+registration" inform on a duplicate \code{id}. Default \code{FALSE}.}
 }
 \value{
 \code{a}, invisibly.
@@ -18,5 +21,8 @@ Validates the adapter's shape before registering it: \code{id} and \code{version
 must be single non-empty strings; \code{match} must be a function taking
 exactly one argument (\code{file_meta}); \code{parse} must be a function taking
 exactly two arguments (\code{path}, \code{file_meta}). Registering a duplicate \code{id}
-overwrites the existing registration and emits a \code{cli::cli_inform()}.
+overwrites the existing registration and emits a \code{cli::cli_inform()},
+unless \code{quiet = TRUE} (used by \code{register_builtin_adapters()} for its
+defensive self-re-registration; a genuine third-party clobber of a
+built-in id still informs).
 }

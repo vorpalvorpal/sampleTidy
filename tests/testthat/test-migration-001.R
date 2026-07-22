@@ -40,6 +40,7 @@
 .mig001_load <- function() {
   env <- new.env(parent = globalenv())
   path <- testthat::test_path("..", "..", "dev", "migrations", "001-alias-indirection.R")
+  skip_if_not(file.exists(path), "dev/migrations not in built package (run via devtools::test)")
   sys.source(path, envir = env)
   env
 }
