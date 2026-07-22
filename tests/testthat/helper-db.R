@@ -61,7 +61,8 @@
       uuid VARCHAR PRIMARY KEY,
       uuid_feature VARCHAR,               -- NULLABLE: NULL = dangling
       name VARCHAR NOT NULL,              -- raw, as seen ('bs03alt')
-      alias_key VARCHAR NOT NULL,         -- .rc_key(name); NOT unique
+      alias_key VARCHAR NOT NULL,         -- .mig001_normalize(name) = tolower(trimws);
+                                           --   punctuation PRESERVED (PLAN-15); NOT unique
       kind VARCHAR,                       -- self | historical_code |
                                            --   descriptive | transcription_error |
                                            --   mask_long | pending
@@ -258,34 +259,42 @@ seed_db <- function(dir = NULL) {
   DBI::dbExecute(con, "INSERT INTO feature_alias
     (uuid, uuid_feature, name, alias_key, kind, n_seen, auto_assign,
      first_seen, last_seen, confirmed_by) VALUES
-    ('fa-0001', 'f-0001', 'T.S01', 'ts01', 'self', 0, TRUE,
+    ('fa-0001', 'f-0001', 'T.S01', 't.s01', 'self', 0, TRUE,
      TIMESTAMP '2025-01-01 00:00:00', TIMESTAMP '2025-01-01 00:00:00', NULL),
-    ('fa-0002', 'f-0002', 'T.S02', 'ts02', 'self', 0, TRUE,
+    ('fa-0002', 'f-0002', 'T.S02', 't.s02', 'self', 0, TRUE,
      TIMESTAMP '2025-01-01 00:00:00', TIMESTAMP '2025-01-01 00:00:00', NULL),
-    ('fa-0003', 'f-0003', 'T.MW01', 'tmw01', 'self', 0, TRUE,
+    ('fa-0003', 'f-0003', 'T.MW01', 't.mw01', 'self', 0, TRUE,
      TIMESTAMP '2025-01-01 00:00:00', TIMESTAMP '2025-01-01 00:00:00', NULL),
     ('fa-0004', 'f-0003', 'bs03alt', 'bs03alt', 'transcription_error', 0, TRUE,
      TIMESTAMP '2025-01-01 00:00:00', TIMESTAMP '2025-05-01 00:00:00', NULL),
-    ('fa-0005', 'f-0004', 'T.AMBIG2', 'tambig2', 'descriptive', 0, TRUE,
+    ('fa-0005', 'f-0004', 'T.AMBIG2', 't.ambig2', 'descriptive', 0, TRUE,
      TIMESTAMP '2025-01-01 00:00:00', TIMESTAMP '2025-05-01 00:00:00', NULL),
-    ('fa-0006', 'f-0005', 'T.AMBIG2', 'tambig2', 'descriptive', 0, TRUE,
+    ('fa-0006', 'f-0005', 'T.AMBIG2', 't.ambig2', 'descriptive', 0, TRUE,
      TIMESTAMP '2025-01-01 00:00:00', TIMESTAMP '2025-05-01 00:00:00', NULL),
-    ('fa-0007', 'f-0006', 'T.REUSED', 'treused', 'historical_code', 0, TRUE,
+    ('fa-0007', 'f-0006', 'T.REUSED', 't.reused', 'historical_code', 0, TRUE,
      TIMESTAMP '2018-01-01 00:00:00', TIMESTAMP '2020-01-01 00:00:00', NULL),
-    ('fa-0008', 'f-0007', 'T.REUSED', 'treused', 'historical_code', 0, TRUE,
+    ('fa-0008', 'f-0007', 'T.REUSED', 't.reused', 'historical_code', 0, TRUE,
      TIMESTAMP '2024-01-01 00:00:00', TIMESTAMP '2025-05-01 00:00:00', NULL),
-    ('fa-0009', 'f-0003', 'T.BORE', 'tbore', 'descriptive', 0, FALSE,
+    ('fa-0009', 'f-0003', 'T.BORE', 't.bore', 'descriptive', 0, FALSE,
      TIMESTAMP '2025-01-01 00:00:00', TIMESTAMP '2025-01-01 00:00:00', NULL),
-    ('fa-0010', NULL, 'T.S09', 'ts09', 'pending', 0, FALSE,
+    ('fa-0010', NULL, 'T.S09', 't.s09', 'pending', 0, FALSE,
      TIMESTAMP '2025-05-10 08:00:00', TIMESTAMP '2025-05-10 08:00:00', NULL),
-    ('fa-0011', 'f-0004', 'T.S04', 'ts04', 'self', 0, TRUE,
+    ('fa-0011', 'f-0004', 'T.S04', 't.s04', 'self', 0, TRUE,
      TIMESTAMP '2025-01-01 00:00:00', TIMESTAMP '2025-01-01 00:00:00', NULL),
-    ('fa-0012', 'f-0005', 'T.S05', 'ts05', 'self', 0, TRUE,
+    ('fa-0012', 'f-0005', 'T.S05', 't.s05', 'self', 0, TRUE,
      TIMESTAMP '2025-01-01 00:00:00', TIMESTAMP '2025-01-01 00:00:00', NULL),
-    ('fa-0013', 'f-0006', 'T.S06', 'ts06', 'self', 0, TRUE,
+    ('fa-0013', 'f-0006', 'T.S06', 't.s06', 'self', 0, TRUE,
      TIMESTAMP '2025-01-01 00:00:00', TIMESTAMP '2025-01-01 00:00:00', NULL),
-    ('fa-0014', 'f-0007', 'T.S07', 'ts07', 'self', 0, TRUE,
-     TIMESTAMP '2025-01-01 00:00:00', TIMESTAMP '2025-01-01 00:00:00', NULL)")
+    ('fa-0014', 'f-0007', 'T.S07', 't.s07', 'self', 0, TRUE,
+     TIMESTAMP '2025-01-01 00:00:00', TIMESTAMP '2025-01-01 00:00:00', NULL),
+    -- fa-0015/fa-0016: a REALISTIC ambiguous key (both auto_assign FALSE, as
+    -- migration-001 marks any key reaching >1 feature). 'T.DUAL' -> f-0004 AND
+    -- f-0005. PLAN-15 A: reconcile must SURFACE both as review candidates (not
+    -- silently drop to a plain unknown), even though neither auto-resolves.
+    ('fa-0015', 'f-0004', 'T.DUAL', 't.dual', 'descriptive', 0, FALSE,
+     TIMESTAMP '2025-01-01 00:00:00', TIMESTAMP '2025-05-01 00:00:00', NULL),
+    ('fa-0016', 'f-0005', 'T.DUAL', 't.dual', 'descriptive', 0, FALSE,
+     TIMESTAMP '2025-01-01 00:00:00', TIMESTAMP '2025-05-01 00:00:00', NULL)")
 
   # feature_mask (f-0001/long is an alias; f-0002/epa and f-0003/long both
   # resolve the string "AMBIG" - the deliberate ambiguity fixture). Untouched
