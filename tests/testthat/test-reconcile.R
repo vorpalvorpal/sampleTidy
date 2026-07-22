@@ -545,6 +545,52 @@ test_that("R-8.7: a value differing at 1e-3 relative is a conflict", {
   expect_identical(hit$kind, "value_conflict")
 })
 
+# ---- R-11.18/A62: distinct-datetime second sampling is a NEW event ---------
+# The reconcile-side twin of commit's .ct_find_or_create_sample predicate:
+# .rc_find_existing must treat an incoming measurement as a NEW event (return
+# no match) only when distinctness is PROVABLE - incoming datetime non-NA AND
+# every candidate datetime non-NA AND none equal. Both sides must agree, or a
+# second read of a genuinely new sampling is wrongly discarded as
+# already_present.
+
+test_that("R-11.18/A62: a same feature+date+lab+value measurement at a DISTINCT datetime is a new sampling (clean), not already_present", {
+  path <- seed_db()
+  con <- seed_con(path)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  # Seed s-0001/an-0001 is the "<0.1 mg/L" Fluoride row at T.S01 on 2025-05-24
+  # at 11:45, value 100 (lm-0002). The default mk_row re-ingests it verbatim
+  # and is already_present (R-8.7 above). Change ONLY the clock time: a second
+  # sampling of the same feature, same calendar day, same method and same value
+  # but at 15:30 is a DISTINCT sampling event (A62) - two provably-distinct
+  # instants -> the incoming row must land clean/new, NOT be skipped as
+  # already_present. (With the pre-fix single-candidate path this wrongly
+  # matched an-0001 because datetime narrowing was gated on nrow(cand) > 1.)
+  event <- mk_event(mk_row(source_ref = "r1",
+                           sample_datetime_raw = "24 May 2025 15:30"))
+  out <- reconcile_event(event, con)
+
+  expect_true("r1" %in% out$clean$source_ref)
+  expect_false("r1" %in% out$skipped$source_ref[out$skipped$reason == "already_present"])
+})
+
+test_that("R-11.18/A62: an incoming row with NO datetime at an existing feature+date+lab stays already_present (distinctness must be PROVABLE)", {
+  path <- seed_db()
+  con <- seed_con(path)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  # A missing incoming datetime is NOT provable distinctness -> reuse, never
+  # fabricate a duplicate. Guards against a naive "any different-or-absent
+  # datetime -> new event" fix. Date-only raw keeps sample_date = 2025-05-24
+  # (matching s-0001) while sample_datetime is NA.
+  event <- mk_event(mk_row(source_ref = "r1", sample_datetime_raw = "24/05/2025"))
+  out <- reconcile_event(event, con)
+
+  hit <- out$skipped[out$skipped$source_ref == "r1", ]
+  expect_equal(nrow(hit), 1)
+  expect_identical(hit$reason, "already_present")
+})
+
 test_that("R-8.7: conflict with recorded revision 0 and incoming revision 1 becomes a supersede row", {
   path <- seed_db()
   con <- seed_con(path)
