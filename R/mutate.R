@@ -207,19 +207,67 @@ db_append <- function(con, table, df, actor, reason, source_hash = NA) {
 #' Participates in the caller's open mutation-layer transaction if there is
 #' one; otherwise atomic on its own.
 #'
+#' Alternate/composite key: `key` (PLAN-14 R-14.1) --------------------------
+#'
+#' `analyte_mask`/`feature_mask` have no `uuid` column - they are keyed by
+#' `(uuid_analyte, variant)` / `(uuid_feature, variant)`. `db_update()` and
+#' `db_delete()` accept EITHER the original scalar `uuid` (back-compat: every
+#' existing caller is byte-for-byte unchanged - internally this is just
+#' `key = list(uuid = uuid)`) OR a named-list `key` giving the WHERE as the
+#' AND of `col = ?` pairs. Exactly one of `uuid`/`key` must be supplied.
+#'
+#' @keywords internal
+#' @noRd
+.st_resolve_key <- function(table, uuid, key) {
+  if (!is.null(uuid) && !is.null(key)) {
+    cli::cli_abort(
+      "Supply either `uuid` or `key` to table {.val {table}}, not both.",
+      class = "sampletidy_error"
+    )
+  }
+  if (!is.null(uuid)) {
+    checkmate::assert_string(uuid)
+    return(list(uuid = uuid))
+  }
+  checkmate::assert_list(key, min.len = 1, names = "unique")
+  key
+}
+
+#' Update fields on one row, logging one `change_log` row per changed field
+#'
+#' Validates `table` against the mutation-layer allowlist and every field
+#' name in `changes` against the table's real columns *before* writing
+#' anything, so a bad column aborts with no partial write. Reads the current
+#' row, applies each change, and writes one `change_log` row per changed
+#' field (`action = "update"`, with `old`/`new`). Any failure (bad column, or
+#' a lower-level DB error mid-update) rolls back the whole call, including
+#' any `change_log` rows already written in this call - atomicity.
+#' Participates in the caller's open mutation-layer transaction if there is
+#' one; otherwise atomic on its own.
+#'
+#' Keyed on either the scalar `uuid` (back-compat, default path - every
+#' existing caller unchanged) OR a named-list `key` for tables with no `uuid`
+#' column (e.g. `analyte_mask`, keyed on `(uuid_analyte, variant)`; PLAN-14
+#' R-14.1). `change_log.uuid_row` is the scalar uuid when keyed that way,
+#' else `NA` (no single row-id exists for a composite key).
+#'
 #' @param con an open read-write DBI connection.
 #' @param table target table name.
-#' @param uuid the row's primary key.
+#' @param uuid the row's primary key (scalar-uuid path; mutually exclusive
+#'   with `key`).
 #' @param changes named list of field -> new value.
 #' @param actor who is making this change.
 #' @param reason free-text reason, stored on every `change_log` row.
 #' @param source_hash optional content hash provenance (A1), stored on every
 #'   `change_log` row.
-#' @return `uuid`, invisibly.
+#' @param key named list of column -> value giving an alternate/composite
+#'   key (mutually exclusive with `uuid`).
+#' @return `uuid` (or `key`, when keyed that way), invisibly.
 #' @export
-db_update <- function(con, table, uuid, changes, actor, reason, source_hash = NA) {
+db_update <- function(con, table, uuid = NULL, changes, actor, reason,
+                       source_hash = NA, key = NULL) {
   checkmate::assert_string(table)
-  checkmate::assert_string(uuid)
+  key <- .st_resolve_key(table, uuid, key)
   checkmate::assert_list(changes, min.len = 1, names = "unique")
   checkmate::assert_string(actor)
   checkmate::assert_string(reason)
@@ -228,16 +276,26 @@ db_update <- function(con, table, uuid, changes, actor, reason, source_hash = NA
   .st_validate_columns(con, table, names(changes))
 
   quoted_table <- DBI::dbQuoteIdentifier(con, table)
+  where_sql <- paste(
+    vapply(
+      names(key),
+      function(f) paste0(DBI::dbQuoteIdentifier(con, f), " = ?"),
+      character(1)
+    ),
+    collapse = " AND "
+  )
+  key_params <- unname(key)
+  uuid_row <- if (!is.null(uuid)) uuid else NA_character_
 
   db_transaction(con, function(con) {
     current <- DBI::dbGetQuery(
       con,
-      sprintf("SELECT * FROM %s WHERE uuid = ?", quoted_table),
-      params = list(uuid)
+      sprintf("SELECT * FROM %s WHERE %s", quoted_table, where_sql),
+      params = key_params
     )
     if (nrow(current) == 0) {
       cli::cli_abort(
-        "No row with uuid {.val {uuid}} found in table {.val {table}}.",
+        "No row matching the given key found in table {.val {table}}.",
         class = "sampletidy_error"
       )
     }
@@ -255,19 +313,19 @@ db_update <- function(con, table, uuid, changes, actor, reason, source_hash = NA
 
       DBI::dbExecute(
         con,
-        sprintf("UPDATE %s SET %s = ? WHERE uuid = ?", quoted_table, quoted_field),
-        params = list(new_val, uuid)
+        sprintf("UPDATE %s SET %s = ? WHERE %s", quoted_table, quoted_field, where_sql),
+        params = c(list(new_val), key_params)
       )
       .st_write_change_log(
         con, at = at, actor = actor, action = "update", tbl = table,
-        uuid_row = uuid, field = field,
+        uuid_row = uuid_row, field = field,
         old = as.character(old_val), new = as.character(new_val),
         reason = reason, source_hash = source_hash
       )
     }
   })
 
-  invisible(uuid)
+  invisible(if (!is.null(uuid)) uuid else key)
 }
 
 #' Delete a row, logging one `change_log` delete row
@@ -277,44 +335,64 @@ db_update <- function(con, table, uuid, changes, actor, reason, source_hash = NA
 #' caller's open mutation-layer transaction if there is one; otherwise atomic
 #' on its own.
 #'
+#' Keyed on either the scalar `uuid` (back-compat, default path - every
+#' existing caller unchanged) OR a named-list `key` for tables with no `uuid`
+#' column (PLAN-14 R-14.1); see `db_update()`'s doc for the shared key
+#' mechanism. `change_log.uuid_row` is the scalar uuid when keyed that way,
+#' else `NA`. CONTRACT A72 (delete-missing aborts `sampletidy_error`) applies
+#' identically to both key forms.
+#'
 #' @param con an open read-write DBI connection.
 #' @param table target table name.
-#' @param uuid the row's primary key.
+#' @param uuid the row's primary key (scalar-uuid path; mutually exclusive
+#'   with `key`).
 #' @param actor who is making this change.
 #' @param reason free-text reason, stored on the `change_log` row.
-#' @return `uuid`, invisibly.
+#' @param key named list of column -> value giving an alternate/composite
+#'   key (mutually exclusive with `uuid`).
+#' @return `uuid` (or `key`, when keyed that way), invisibly.
 #' @export
-db_delete <- function(con, table, uuid, actor, reason) {
+db_delete <- function(con, table, uuid = NULL, actor, reason, key = NULL) {
   checkmate::assert_string(table)
-  checkmate::assert_string(uuid)
+  key <- .st_resolve_key(table, uuid, key)
   checkmate::assert_string(actor)
   checkmate::assert_string(reason)
 
   .st_validate_table(table)
   quoted_table <- DBI::dbQuoteIdentifier(con, table)
+  where_sql <- paste(
+    vapply(
+      names(key),
+      function(f) paste0(DBI::dbQuoteIdentifier(con, f), " = ?"),
+      character(1)
+    ),
+    collapse = " AND "
+  )
+  key_params <- unname(key)
+  uuid_row <- if (!is.null(uuid)) uuid else NA_character_
 
   db_transaction(con, function(con) {
     at <- Sys.time()
     n_affected <- DBI::dbExecute(
       con,
-      sprintf("DELETE FROM %s WHERE uuid = ?", quoted_table),
-      params = list(uuid)
+      sprintf("DELETE FROM %s WHERE %s", quoted_table, where_sql),
+      params = key_params
     )
     if (n_affected == 0) {
       cli::cli_abort(
-        "No row with uuid {.val {uuid}} found in table {.val {table}}.",
+        "No row matching the given key found in table {.val {table}}.",
         class = "sampletidy_error"
       )
     }
     .st_write_change_log(
       con, at = at, actor = actor, action = "delete", tbl = table,
-      uuid_row = uuid, field = NA_character_,
-      old = uuid, new = NA_character_,
+      uuid_row = uuid_row, field = NA_character_,
+      old = uuid_row, new = NA_character_,
       reason = reason, source_hash = NA_character_
     )
   })
 
-  invisible(uuid)
+  invisible(if (!is.null(uuid)) uuid else key)
 }
 
 # ---- domain helpers (A16: resolve their own connection) --------------------

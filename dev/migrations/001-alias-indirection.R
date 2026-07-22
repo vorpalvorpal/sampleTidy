@@ -393,8 +393,25 @@ mig001_run <- function(db, snapshot_dir, dry_run = FALSE, .now = NULL) {
           DBI::dbExecute(con, "DROP TABLE analysis")
 
           # ---- Step 8: rebuild sample (uuid_feature -> uuid_feature_alias). ----
+          # duckdb 1.4.1 FK-catalog defect (found in PLAN-14 R-14.1 testing,
+          # confirmed by isolated repro): `CREATE TABLE X_new; ...; DROP TABLE
+          # X; ALTER TABLE X_new RENAME TO X` leaves the renamed table's FK
+          # constraint pointing at a ghost catalog entry for the pre-rename
+          # name. Any LATER DELETE from a table upstream in that FK chain
+          # (e.g. `analyte`, via `lab_method.uuid_analyte`) then fails with
+          # "Catalog Error: Table with name X_new does not exist!", even for
+          # rows the rename never touched. Fix: recreate the table directly
+          # UNDER ITS FINAL NAME (no intermediate name, no RENAME) - back up
+          # the original via a TEMP table, DROP + CREATE under the same final
+          # name, then re-insert. Verified this clears the defect while still
+          # enforcing the FK (a delete of a still-referenced row is correctly
+          # blocked). Schema and the uuid_feature -> uuid_feature_alias
+          # projection are otherwise unchanged from the prior _new/RENAME
+          # version.
+          DBI::dbExecute(con, "CREATE TEMP TABLE _mig001_sample_bak AS SELECT * FROM \"sample\"")
+          DBI::dbExecute(con, "DROP TABLE \"sample\"")
           DBI::dbExecute(con, "
-            CREATE TABLE sample_new (
+            CREATE TABLE \"sample\" (
               uuid VARCHAR PRIMARY KEY,
               uuid_feature_alias VARCHAR REFERENCES feature_alias(uuid),
               uuid_project VARCHAR,
@@ -408,18 +425,23 @@ mig001_run <- function(db, snapshot_dir, dry_run = FALSE, .now = NULL) {
               comments VARCHAR
             )")
           DBI::dbExecute(con, "
-            INSERT INTO sample_new
+            INSERT INTO \"sample\"
             SELECT s.uuid, fa.uuid, s.uuid_project, s.date, s.date_start, s.datetime,
                    s.datetime_start, s.organisation, s.person, s.purpose, s.comments
-            FROM \"sample\" s
+            FROM _mig001_sample_bak s
             JOIN feature_alias fa ON fa.uuid_feature = s.uuid_feature AND fa.kind = 'self'
           ")
-          DBI::dbExecute(con, "DROP TABLE \"sample\"")
-          DBI::dbExecute(con, "ALTER TABLE sample_new RENAME TO \"sample\"")
+          DBI::dbExecute(con, "DROP TABLE _mig001_sample_bak")
 
           # ---- Step 8 (cont.): rebuild lab_method, uuid_analyte nullable. ----
+          # Same duckdb 1.4.1 FK-catalog defect and same fix (recreate under
+          # the final name, no RENAME) - see the `sample` rebuild's comment
+          # above for the full explanation. `lab_method` is the exact table
+          # PLAN-14 R-14.1's `db_delete()` on `analyte` was blocked by.
+          DBI::dbExecute(con, "CREATE TEMP TABLE _mig001_lab_method_bak AS SELECT * FROM lab_method")
+          DBI::dbExecute(con, "DROP TABLE lab_method")
           DBI::dbExecute(con, "
-            CREATE TABLE lab_method_new (
+            CREATE TABLE lab_method (
               uuid VARCHAR PRIMARY KEY,
               uuid_analyte VARCHAR REFERENCES analyte(uuid),
               name VARCHAR,
@@ -434,13 +456,12 @@ mig001_run <- function(db, snapshot_dir, dry_run = FALSE, .now = NULL) {
               comments VARCHAR
             )")
           DBI::dbExecute(con, "
-            INSERT INTO lab_method_new
+            INSERT INTO lab_method
             SELECT uuid, uuid_analyte, name, method, organisation, rl_low, rl_high,
                    reported_as, api, uuid_project, uuid_feature, comments
-            FROM lab_method
+            FROM _mig001_lab_method_bak
           ")
-          DBI::dbExecute(con, "DROP TABLE lab_method")
-          DBI::dbExecute(con, "ALTER TABLE lab_method_new RENAME TO lab_method")
+          DBI::dbExecute(con, "DROP TABLE _mig001_lab_method_bak")
 
           # ---- R-13.2: restore units / conversion_constant (additive). ----
           DBI::dbExecute(con, "ALTER TABLE lab_method ADD COLUMN units VARCHAR")
