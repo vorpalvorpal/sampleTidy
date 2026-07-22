@@ -123,6 +123,35 @@ test_that("R-9.1: db_delete() removes the row and writes a change_log delete ent
   expect_equal(log_row$action, "delete")
 })
 
+test_that("PLAN-14 R-14.1/M6a: db_delete() with a composite `key` ANDs every column - it does not over-delete on an OR", {
+  path <- seed_db()
+  con <- seed_con(path)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  # `analyte_mask` (already on `.st_mutate_allowlist`) has no `uuid` column -
+  # it is keyed on (uuid_analyte, variant) - so this is the only allowlisted
+  # shape that forces db_delete() through its composite-key `WHERE ... AND
+  # ...` path (mutate.R:363-370) rather than the scalar-uuid path every
+  # production caller uses. Not part of helper-db.R's shared seed schema
+  # (that mirrors the LIVE db; analyte_mask is PLAN-14), so it is created
+  # locally in this test body only - no shared helper DDL is touched.
+  DBI::dbExecute(con, "CREATE TABLE analyte_mask (uuid_analyte VARCHAR, variant VARCHAR, name VARCHAR)")
+  DBI::dbExecute(con, "INSERT INTO analyte_mask (uuid_analyte, variant, name) VALUES
+    ('A', 'long', 'Analyte A (long)'),
+    ('A', 'short', 'Analyte A (short)'),
+    ('B', 'long', 'Analyte B (long)')")
+
+  db_delete(con, "analyte_mask", key = list(uuid_analyte = "A", variant = "long"),
+            actor = "tester", reason = "composite-key delete test")
+
+  remaining <- DBI::dbGetQuery(con, "SELECT uuid_analyte, variant FROM analyte_mask ORDER BY uuid_analyte, variant")
+  # Exactly the (A, long) row is gone; (A, short) and (B, long) - each of
+  # which matches only ONE of the two key columns - must both survive. Under
+  # an `OR` these would be wrongly deleted too (over-delete).
+  expect_equal(nrow(remaining), 2)
+  expect_setequal(paste(remaining$uuid_analyte, remaining$variant), c("A short", "B long"))
+})
+
 test_that("R-9.1: direct-write bypass is lint-guarded - no forbidden raw SQL writes in R/", {
   pkg_root <- normalizePath(file.path(testthat::test_path(), "..", ".."))
   r_dir <- file.path(pkg_root, "R")
