@@ -152,6 +152,54 @@ test_that("PLAN-14 R-14.1/M6a: db_delete() with a composite `key` ANDs every col
   expect_setequal(paste(remaining$uuid_analyte, remaining$variant), c("A short", "B long"))
 })
 
+test_that("PLAN-14 R-14.1/A32: db_update()/db_delete() abort when a composite `key` matches MORE than one row, leaving both rows and change_log untouched", {
+  path <- seed_db()
+  con <- seed_con(path)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  # `feature_mask` (already on `.st_mutate_allowlist`) has no `uuid` column
+  # and no uniqueness constraint on (uuid_feature, variant) - so two rows can
+  # legitimately share a key value. The table is already part of
+  # helper-db.R's shared seed schema (seeded with f-0001/f-0002/f-0003), so
+  # only the two extra F1/long rows for this test are inserted here - 'F1'
+  # does not collide with the seeded uuid_feature values.
+  DBI::dbExecute(con, "INSERT INTO feature_mask (uuid_feature, variant, name) VALUES
+    ('F1', 'long', 'Bore Twelve'),
+    ('F1', 'long', 'Borehole 12')")
+
+  before <- count_change_log(con)
+
+  expect_error(
+    db_update(con, "feature_mask", key = list(uuid_feature = "F1", variant = "long"),
+               changes = list(name = "X"), actor = "tester", reason = "ambiguous-key update"),
+    class = "sampletidy_error"
+  )
+
+  after_update <- count_change_log(con)
+  expect_equal(after_update, before)
+
+  rows_after_update <- DBI::dbGetQuery(
+    con, "SELECT name FROM feature_mask WHERE uuid_feature = 'F1' AND variant = 'long' ORDER BY name"
+  )
+  expect_equal(nrow(rows_after_update), 2)
+  expect_setequal(rows_after_update$name, c("Bore Twelve", "Borehole 12"))
+
+  expect_error(
+    db_delete(con, "feature_mask", key = list(uuid_feature = "F1", variant = "long"),
+               actor = "tester", reason = "ambiguous-key delete"),
+    class = "sampletidy_error"
+  )
+
+  after_delete <- count_change_log(con)
+  expect_equal(after_delete, before)
+
+  rows_after_delete <- DBI::dbGetQuery(
+    con, "SELECT name FROM feature_mask WHERE uuid_feature = 'F1' AND variant = 'long' ORDER BY name"
+  )
+  expect_equal(nrow(rows_after_delete), 2)
+  expect_setequal(rows_after_delete$name, c("Bore Twelve", "Borehole 12"))
+})
+
 test_that("R-9.1: direct-write bypass is lint-guarded - no forbidden raw SQL writes in R/", {
   pkg_root <- normalizePath(file.path(testthat::test_path(), "..", ".."))
   r_dir <- file.path(pkg_root, "R")

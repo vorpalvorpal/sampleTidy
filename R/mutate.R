@@ -299,6 +299,15 @@ db_update <- function(con, table, uuid = NULL, changes, actor, reason,
         class = "sampletidy_error"
       )
     }
+    if (nrow(current) > 1) {
+      cli::cli_abort(
+        paste0(
+          "Key must resolve to exactly one row in table {.val {table}}, ",
+          "but matched {nrow(current)} rows."
+        ),
+        class = "sampletidy_error"
+      )
+    }
 
     at <- Sys.time()
     for (field in names(changes)) {
@@ -381,6 +390,15 @@ db_delete <- function(con, table, uuid = NULL, actor, reason, key = NULL) {
     if (n_affected == 0) {
       cli::cli_abort(
         "No row matching the given key found in table {.val {table}}.",
+        class = "sampletidy_error"
+      )
+    }
+    if (n_affected > 1) {
+      cli::cli_abort(
+        paste0(
+          "Key must resolve to exactly one row in table {.val {table}}, ",
+          "but matched {n_affected} rows."
+        ),
         class = "sampletidy_error"
       )
     }
