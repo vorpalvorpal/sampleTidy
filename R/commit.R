@@ -143,7 +143,7 @@
         uuid = alias_uuid, uuid_feature = NA_character_, name = name_raw,
         alias_key = uk, kind = "pending", n_seen = as.integer(incr),
         auto_assign = FALSE, first_seen = now, last_seen = now,
-        source_hash = clean$source_hash[[first_i]], confirmed_by = NA_character_,
+        confirmed_by = NA_character_,
         comments = NA_character_
       )
       db_append(con, "feature_alias", row, actor = actor, reason = reason,

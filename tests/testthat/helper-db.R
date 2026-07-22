@@ -69,7 +69,6 @@
       auto_assign BOOLEAN DEFAULT TRUE,   -- FALSE = suggest only, never resolve
       first_seen TIMESTAMP,
       last_seen TIMESTAMP,
-      source_hash VARCHAR,
       confirmed_by VARCHAR,               -- NULL = unconfirmed guess
       comments VARCHAR
     )
@@ -258,36 +257,35 @@ seed_db <- function(dir = NULL) {
   #    lookup) - paired with sample s-0003/analysis an-0003 below.
   DBI::dbExecute(con, "INSERT INTO feature_alias
     (uuid, uuid_feature, name, alias_key, kind, n_seen, auto_assign,
-     first_seen, last_seen, source_hash, confirmed_by) VALUES
+     first_seen, last_seen, confirmed_by) VALUES
     ('fa-0001', 'f-0001', 'T.S01', 'ts01', 'self', 0, TRUE,
-     TIMESTAMP '2025-01-01 00:00:00', TIMESTAMP '2025-01-01 00:00:00', NULL, NULL),
+     TIMESTAMP '2025-01-01 00:00:00', TIMESTAMP '2025-01-01 00:00:00', NULL),
     ('fa-0002', 'f-0002', 'T.S02', 'ts02', 'self', 0, TRUE,
-     TIMESTAMP '2025-01-01 00:00:00', TIMESTAMP '2025-01-01 00:00:00', NULL, NULL),
+     TIMESTAMP '2025-01-01 00:00:00', TIMESTAMP '2025-01-01 00:00:00', NULL),
     ('fa-0003', 'f-0003', 'T.MW01', 'tmw01', 'self', 0, TRUE,
-     TIMESTAMP '2025-01-01 00:00:00', TIMESTAMP '2025-01-01 00:00:00', NULL, NULL),
+     TIMESTAMP '2025-01-01 00:00:00', TIMESTAMP '2025-01-01 00:00:00', NULL),
     ('fa-0004', 'f-0003', 'bs03alt', 'bs03alt', 'transcription_error', 0, TRUE,
-     TIMESTAMP '2025-01-01 00:00:00', TIMESTAMP '2025-05-01 00:00:00', NULL, NULL),
+     TIMESTAMP '2025-01-01 00:00:00', TIMESTAMP '2025-05-01 00:00:00', NULL),
     ('fa-0005', 'f-0004', 'T.AMBIG2', 'tambig2', 'descriptive', 0, TRUE,
-     TIMESTAMP '2025-01-01 00:00:00', TIMESTAMP '2025-05-01 00:00:00', NULL, NULL),
+     TIMESTAMP '2025-01-01 00:00:00', TIMESTAMP '2025-05-01 00:00:00', NULL),
     ('fa-0006', 'f-0005', 'T.AMBIG2', 'tambig2', 'descriptive', 0, TRUE,
-     TIMESTAMP '2025-01-01 00:00:00', TIMESTAMP '2025-05-01 00:00:00', NULL, NULL),
+     TIMESTAMP '2025-01-01 00:00:00', TIMESTAMP '2025-05-01 00:00:00', NULL),
     ('fa-0007', 'f-0006', 'T.REUSED', 'treused', 'historical_code', 0, TRUE,
-     TIMESTAMP '2018-01-01 00:00:00', TIMESTAMP '2020-01-01 00:00:00', NULL, NULL),
+     TIMESTAMP '2018-01-01 00:00:00', TIMESTAMP '2020-01-01 00:00:00', NULL),
     ('fa-0008', 'f-0007', 'T.REUSED', 'treused', 'historical_code', 0, TRUE,
-     TIMESTAMP '2024-01-01 00:00:00', TIMESTAMP '2025-05-01 00:00:00', NULL, NULL),
+     TIMESTAMP '2024-01-01 00:00:00', TIMESTAMP '2025-05-01 00:00:00', NULL),
     ('fa-0009', 'f-0003', 'T.BORE', 'tbore', 'descriptive', 0, FALSE,
-     TIMESTAMP '2025-01-01 00:00:00', TIMESTAMP '2025-01-01 00:00:00', NULL, NULL),
+     TIMESTAMP '2025-01-01 00:00:00', TIMESTAMP '2025-01-01 00:00:00', NULL),
     ('fa-0010', NULL, 'T.S09', 'ts09', 'pending', 0, FALSE,
-     TIMESTAMP '2025-05-10 08:00:00', TIMESTAMP '2025-05-10 08:00:00',
-     'seed-hash-pending-feature', NULL),
+     TIMESTAMP '2025-05-10 08:00:00', TIMESTAMP '2025-05-10 08:00:00', NULL),
     ('fa-0011', 'f-0004', 'T.S04', 'ts04', 'self', 0, TRUE,
-     TIMESTAMP '2025-01-01 00:00:00', TIMESTAMP '2025-01-01 00:00:00', NULL, NULL),
+     TIMESTAMP '2025-01-01 00:00:00', TIMESTAMP '2025-01-01 00:00:00', NULL),
     ('fa-0012', 'f-0005', 'T.S05', 'ts05', 'self', 0, TRUE,
-     TIMESTAMP '2025-01-01 00:00:00', TIMESTAMP '2025-01-01 00:00:00', NULL, NULL),
+     TIMESTAMP '2025-01-01 00:00:00', TIMESTAMP '2025-01-01 00:00:00', NULL),
     ('fa-0013', 'f-0006', 'T.S06', 'ts06', 'self', 0, TRUE,
-     TIMESTAMP '2025-01-01 00:00:00', TIMESTAMP '2025-01-01 00:00:00', NULL, NULL),
+     TIMESTAMP '2025-01-01 00:00:00', TIMESTAMP '2025-01-01 00:00:00', NULL),
     ('fa-0014', 'f-0007', 'T.S07', 'ts07', 'self', 0, TRUE,
-     TIMESTAMP '2025-01-01 00:00:00', TIMESTAMP '2025-01-01 00:00:00', NULL, NULL)")
+     TIMESTAMP '2025-01-01 00:00:00', TIMESTAMP '2025-01-01 00:00:00', NULL)")
 
   # feature_mask (f-0001/long is an alias; f-0002/epa and f-0003/long both
   # resolve the string "AMBIG" - the deliberate ambiguity fixture). Untouched
