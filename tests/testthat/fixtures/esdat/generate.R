@@ -69,7 +69,19 @@ chem_rows <- list(
     "pH Unit", "", "", "", ""),
   c("YY0000001", "16984-48-8", "Fluoride", "", "1.0", "mg/L", "T", "Numeric",
     "EK040P: Fluoride by PC Titrator", "26 May 2025", "26 May 2025", "0.1",
-    "mg/L", "", "", "", "")
+    "mg/L", "", "", "", ""),
+  # NCP cross-reference row (R-4.6 / PLAN-07 R-7.4). Compound SampleCode
+  # `<origWO>001_<homeWO>`: an ESdat "NCP" result belonging to another work
+  # order (ZZ9999999) that the lab bundled into THIS report (XX1234567). The
+  # chemistry parser detects the compound code and marks it sample_type="NCP"
+  # (Chemistry2e has no Sample_Type column, so this is the only parse-time
+  # signal). Assembly (R-7.4) counts it in n_ncp_foreign and drops it before
+  # commit, never flagging it foreign_work_order. Distinct from the plain
+  # YY0000001 row above, which is a GENUINE foreign row (no `_<home>` suffix)
+  # and MUST still be flagged for review.
+  c("ZZ9999999001_XX1234567", "16984-48-8", "Fluoride", "", "0.8", "mg/L",
+    "T", "Numeric", "EK040P: Fluoride by PC Titrator", "26 May 2025",
+    "26 May 2025", "0.1", "mg/L", "", "", "", "")
 )
 chem_rows <- lapply(chem_rows, splice_method_type)
 stopifnot(all(vapply(chem_rows, length, integer(1)) == length(chem_header)))

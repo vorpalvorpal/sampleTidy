@@ -151,23 +151,22 @@ test_that("R-5.1 (real XTAB): CAS number, units and Fluoride below-detection val
   expect_true(all(fl$below_detection))
 })
 
-test_that("R-5.1 (real XTAB): degree-sign mojibake is a UTF-8-encoded U+FFFD, not a raw latin-1 byte - it survives latin-1 decode unfixed", {
-  # A34 finding (reported, not silently patched - normalise_lab_text()'s fix
-  # table lives outside this adapter's ownership): the real file's only
-  # non-ASCII bytes here are `EF BF BD` (valid UTF-8 for U+FFFD), not a
-  # single raw latin-1 high byte. Decoding those 3 bytes under the pinned
-  # latin-1 locale (CONTRACT A34/A35) yields three separate Latin-1
-  # characters ("ï¿½"), which does not match any
-  # `normalise_lab_text()` substitution (those match a literal single
-  # U+FFFD or specific 0xA1-derived mojibake) - so it passes through
-  # unfixed. This differs from what REAL-FIXTURES.md's general "raw
-  # 0xB0/0xB5 bytes are untouched" note implies for this specific cell.
+test_that("R-5.4 (real XTAB): degree/micro mojibake is repaired to proper UTF-8 (UTF-8 read + normalise_lab_text)", {
+  # Root-caused 2026-07-22: XTAB.csv is valid UTF-8 whose only non-ASCII bytes
+  # here are `EF BF BD` (valid UTF-8 for a single U+FFFD). The dialect now
+  # reads UTF-8 (was wrongly latin-1, which SHATTERED the one U+FFFD into the
+  # three-char "ix-triple" that defeats normalise_lab_text()'s repair table).
+  # Read as UTF-8, the lone U+FFFD is repaired: `\ufffdC` -> degree-C,
+  # `\ufffdS/cm` -> micro-S/cm. No residual mojibake marker survives.
   meta <- sampleTidy:::file_meta(xtab_real_path)
   out <- xtab_adapter()$parse(xtab_real_path, meta)
   ec_rows <- out$results[grepl("Conductivity", out$results$analyte_raw), ]
   expect_equal(nrow(ec_rows), 2) # only samples 002/003 have a value; 001 is "----"
-  expect_true(all(ec_rows$analyte_raw == "Electrical Conductivity @ 25ï¿½C"))
-  expect_true(all(ec_rows$units_raw == "ï¿½S/cm"))
+  expect_true(all(ec_rows$analyte_raw == "Electrical Conductivity @ 25\u00b0C"))
+  expect_true(all(ec_rows$units_raw == "\u00b5S/cm"))
+  # not unknown, not mojibake: no U+FFFD (or its shattered triple) anywhere.
+  expect_false(any(grepl("\ufffd|\u00ef\u00bf\u00bd", ec_rows$analyte_raw)))
+  expect_false(any(grepl("\ufffd|\u00ef\u00bf\u00bd", ec_rows$units_raw)))
 })
 
 test_that("R-5.1 (real XTAB): ir_validate() passes", {
@@ -220,8 +219,8 @@ test_that("R-5.1 (real ENMRG): 'Units'/'LOR' header spellings read correctly, no
   out <- enmrg_adapter()$parse(enmrg_real_path, meta)
   ec_rows <- out$results[grepl("Conductivity", out$results$analyte_raw), ]
   expect_equal(nrow(ec_rows), 7)
-  expect_true(all(ec_rows$analyte_raw == "Electrical Conductivity @ 25°C"))
-  expect_true(all(ec_rows$units_raw == "µS/cm"))
+  expect_true(all(ec_rows$analyte_raw == "Electrical Conductivity @ 25\u00b0C"))
+  expect_true(all(ec_rows$units_raw == "\u00b5S/cm"))
   expect_true(all(!is.na(ec_rows$rl) & ec_rows$rl == 1))
 })
 

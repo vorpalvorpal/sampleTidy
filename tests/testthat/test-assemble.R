@@ -471,6 +471,52 @@ test_that("R-7.4: a non-NCP foreign-work-order row is flagged for review", {
   expect_true(length(event$report$warnings) >= 1)
 })
 
+test_that("R-7.4 (seam: real ESdat parser -> assemble_events): a compound-SampleCode NCP row is counted in n_ncp_foreign, dropped from results, and NOT flagged, while a plain foreign row IS flagged", {
+  # SEAM test (like R-11.15 below): the other R-7.4 tests hand-build results
+  # with an explicit sample_type = "NCP", which bypasses the exact bug this
+  # fix closes - the ESdat Chemistry2e parser hard-codes sample_type =
+  # "unknown", and the multi-work-order partition (R-7.4) runs on that raw
+  # output BEFORE the sample-metadata join could fill it. So the NCP marker
+  # must come from the parser's compound-SampleCode detection (R-4.6), or NCP
+  # cross-references leak into results as foreign_work_order review items.
+  # This test drives the REAL adapter, so a regression in either half fails it.
+  register_builtin_adapters()
+  esdat <- sampleTidy:::adapter_registry()[["esdat"]]
+  chem_path <- test_path("fixtures", "esdat", "PROJ_A.ESDAT_XX1234567_0.Chemistry2e.CSV")
+  meta <- sampleTidy:::file_meta(chem_path)
+  parsed_chem <- esdat$parse(chem_path, meta)
+
+  parsed <- list(
+    "h-chem" = mk_parsed_entry(
+      results = parsed_chem$results,
+      report = parsed_chem$report,
+      meta = list(work_order_guess = "XX1234567")
+    )
+  )
+  out <- assemble_events(parsed)
+  expect_length(out$events, 1)
+  event <- out$events[[1]]
+  expect_valid_event(event)
+  expect_identical(event$work_order, "XX1234567")
+
+  # the compound NCP cross-reference (ZZ9999999001_XX1234567) is counted and
+  # dropped, never committed, never flagged
+  expect_identical(event$report$n_ncp_foreign, 1L)
+  expect_false(any(event$results$work_order == "ZZ9999999", na.rm = TRUE))
+  expect_false(any(event$results$sample_type == "NCP", na.rm = TRUE))
+  expect_false(any(grepl("ZZ9999999", vapply(event$results$review_payload,
+    function(p) paste(unlist(p), collapse = " "), character(1)))))
+
+  # the plain foreign row (YY0000001, NO compound suffix) is a genuine foreign
+  # result and IS kept + flagged foreign_work_order for review
+  yy <- event$results[!is.na(event$results$work_order) &
+    event$results$work_order == "YY0000001", ]
+  expect_equal(nrow(yy), 1)
+  expect_true(isTRUE(yy$needs_review[[1]]))
+  expect_identical(yy$review_payload[[1]]$subkind, "foreign_work_order")
+  expect_true(any(grepl("foreign_work_order", event$report$warnings, fixed = TRUE)))
+})
+
 # ---- R-7.5: event object shape / states completeness --------------------
 
 # ---- R-11.15: ACIRL synthetic lab_sample_id seam (adapter -> assemble) --

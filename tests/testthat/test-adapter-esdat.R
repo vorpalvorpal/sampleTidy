@@ -127,8 +127,8 @@ test_that("R-4.1: corrupted Chemistry2e fixture still matches exact (header-only
 test_that("R-4.2: Chemistry2e row count equals source data rows; none silently dropped", {
   meta <- sampleTidy:::file_meta(chem_path)
   out <- esdat_adapter()$parse(chem_path, meta)
-  expect_equal(nrow(out$results), 10)
-  expect_equal(out$report$n_rows, 10)
+  expect_equal(nrow(out$results), 11)
+  expect_equal(out$report$n_rows, 11)
 })
 
 test_that("R-4.2: multi-work-order rows are not filtered by the adapter", {
@@ -139,6 +139,30 @@ test_that("R-4.2: multi-work-order rows are not filtered by the adapter", {
   expect_true("YY0000001" %in% wo)
   # both work orders' rows are present in the SAME output (never filtered)
   expect_equal(sum(out$results$work_order == "YY0000001", na.rm = TRUE), 1)
+})
+
+test_that("R-4.6: a compound `<orig>001_<home>` SampleCode parses sample_type = NCP; plain codes stay unknown", {
+  # ESdat bundles cross-reference "NCP" results from OTHER work orders into a
+  # report. Chemistry2e carries no Sample_Type column, so the parser must
+  # detect them from the compound SampleCode alone. work_order stays the
+  # ORIGINATING (foreign) WO so assembly (R-7.4) treats the row as
+  # foreign-AND-NCP: counted in n_ncp_foreign and dropped, never committed.
+  meta <- sampleTidy:::file_meta(chem_path)
+  out <- esdat_adapter()$parse(chem_path, meta)
+
+  ncp <- out$results[out$results$lab_sample_id == "ZZ9999999001_XX1234567", ]
+  expect_equal(nrow(ncp), 1)
+  expect_identical(ncp$sample_type, "NCP")
+  # work_order is the originating/foreign WO, NOT the home WO
+  expect_identical(ncp$work_order, "ZZ9999999")
+
+  # a plain home-work-order sample code stays "unknown" (filled later by the
+  # Sample2e join), and so does a plain foreign code with NO compound suffix
+  plain_home <- out$results[out$results$lab_sample_id == "XX1234567001", ]
+  expect_true(all(plain_home$sample_type == "unknown"))
+  plain_foreign <- out$results[out$results$lab_sample_id == "YY0000001", ]
+  expect_identical(plain_foreign$sample_type, "unknown")
+  expect_silent(sampleTidy:::ir_validate(out$results, kind = "results"))
 })
 
 test_that("R-4.2: '<'-prefixed Fluoride row: value_raw '<0.1', below_detection TRUE, rl 0.1", {

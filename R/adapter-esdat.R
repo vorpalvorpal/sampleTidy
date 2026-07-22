@@ -73,14 +73,36 @@ esdat_adapter <- function() {
 # latin-1 locale - readr strips a literal UTF-8 BOM at the byte level before
 # applying that locale (verified empirically), but `.st_strip_bom()` is kept
 # as a defensive second layer over the first header cell per PLAN-04.
-.st_esdat_read_header <- function(path) {
-  df <- readr::read_csv(
-    path,
-    n_max = 0,
-    col_types = readr::cols(.default = readr::col_character()),
-    locale = readr::locale(encoding = "latin1"),
-    show_col_types = FALSE
+# Read an ESdat CSV with the symmetric encoding fallback (R-4.2/A35). Real
+# Chemistry2e/Sample2e CSVs are genuinely latin-1 (bytes 0xB0/0xB5), so latin-1
+# stays the PRIMARY encoding and a clean file (zero mojibake probe) is never
+# re-read - the UTF-8 alternate is a no-op except on a genuinely mis-encoded
+# file. `...` carries per-call args (e.g. `n_max = 0` for the header read).
+.st_esdat_read_csv <- function(path, filename, ...) {
+  extra <- list(...)
+  read_one <- function(enc) {
+    args <- c(
+      list(
+        path,
+        col_types = readr::cols(.default = readr::col_character()),
+        locale = readr::locale(encoding = enc),
+        show_col_types = FALSE
+      ),
+      extra
+    )
+    do.call(readr::read_csv, args)
+  }
+  .st_read_grid_with_encoding_fallback(
+    read_fn = read_one,
+    primary_encoding = "latin1",
+    alternate_encoding = "UTF-8",
+    text_extractor = function(d) unlist(d, use.names = FALSE),
+    source_label = filename
   )
+}
+
+.st_esdat_read_header <- function(path, filename = basename(path)) {
+  df <- .st_esdat_read_csv(path, filename, n_max = 0)
   nms <- names(df)
   if (length(nms) >= 1) {
     nms[1] <- .st_strip_bom(nms[1])
@@ -165,18 +187,40 @@ esdat_adapter <- function() {
 # --- R-4.2 Chemistry2e -> ir_results -----------------------------------------
 
 .st_esdat_parse_chemistry <- function(path, fm, version) {
-  df <- readr::read_csv(
-    path,
-    col_types = readr::cols(.default = readr::col_character()),
-    locale = readr::locale(encoding = "latin1"),
-    show_col_types = FALSE
-  )
+  df <- .st_esdat_read_csv(path, fm$filename)
   .st_esdat_check_parseable(path, df)
   n <- nrow(df)
   source_ref <- paste0("row", seq_len(n))
 
   sample_code <- df$SampleCode
   work_order <- stringr::str_extract(sample_code, .st_esdat_work_order_re)
+
+  # NCP cross-reference detection (R-4.6, feeds PLAN-07 R-7.4).
+  # NCP = "Non-Client Parent" (ESdat Electronic Lab Data Format spec): when the
+  # lab runs its batch QC (a Lab Duplicate or Matrix Spike) on a field sample
+  # belonging to ANOTHER client, the spec requires that parent sample's results
+  # to be reported for QC auditability - with Field_ID/depth/client info stripped
+  # - and its Sample_Type set to NCP. So these are another client's results, not
+  # ours; they must be dropped, never committed into our dataset.
+  # ESdat bundles these NCP cross-reference results from OTHER work orders into a
+  # report. They are identifiable at parse time ONLY by a compound SampleCode of the shape
+  # `<origWO>001_<homeWO>` (a leading work order + sequence, an underscore,
+  # then the home work order). Chemistry2e carries no Sample_Type column, so
+  # the authoritative sample-metadata join (assemble.R
+  # `.st_join_samples_onto_results`, "always overrides sample_type") runs too
+  # late to be seen by the R-7.4 multi-work-order partition, which operates on
+  # this raw parser output. Mark these rows `NCP` here so that partition counts
+  # them in `n_ncp_foreign` and drops them before commit, instead of leaking
+  # them as `foreign_work_order` review items. `work_order` is deliberately
+  # left as the ORIGINATING (foreign) WO extracted above, so the row reads as
+  # foreign-AND-NCP (assemble.R:314) - do NOT rewrite it to the home WO, or the
+  # row would look "own" and be wrongly committed. Every other row stays
+  # `"unknown"` (filled by the later sample join). The `^[A-Z]{2}\d{7}` prefix
+  # is `.st_esdat_work_order_re`, reused here so both stay consistent.
+  ncp_re <- paste0(.st_esdat_work_order_re, "\\d*_[A-Z]{2}\\d{7}$")
+  sample_type <- ifelse(
+    !is.na(sample_code) & grepl(ncp_re, sample_code), "NCP", "unknown"
+  )
 
   analyte_raw <- normalise_lab_text(df$OriginalChemName)
   method_raw <- normalise_lab_text(df$Method_Name)
@@ -220,7 +264,7 @@ esdat_adapter <- function() {
     org = "ALS",
     adapter = paste0("esdat/", version),
     lab_sample_id = sample_code,
-    sample_type = "unknown",
+    sample_type = sample_type,
     feature_raw = NA_character_,
     analyte_raw = analyte_raw,
     cas_number = cas_number,
@@ -254,12 +298,7 @@ esdat_adapter <- function() {
 # --- R-4.3 Sample2e -> ir_samples ---------------------------------------------
 
 .st_esdat_parse_sample <- function(path, fm, version) {
-  df <- readr::read_csv(
-    path,
-    col_types = readr::cols(.default = readr::col_character()),
-    locale = readr::locale(encoding = "latin1"),
-    show_col_types = FALSE
-  )
+  df <- .st_esdat_read_csv(path, fm$filename)
   .st_esdat_check_parseable(path, df)
   n <- nrow(df)
   source_ref <- paste0("row", seq_len(n))
