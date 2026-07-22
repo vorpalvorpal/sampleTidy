@@ -115,20 +115,52 @@ als_enmrg_adapter <- function() {
   if (first_ok && workgroup_ok) "format" else "no"
 }
 
+# R-12.8: how many bytes to read (own read, independent of file_meta()'s
+# fixed 2048-byte peek) and how many leading lines to keep when peeking for
+# match() dialect markers. A very wide crosstab can push its `Workgroup:`
+# row past byte 2048; reading a generous byte budget and then slicing by
+# LINE (not byte offset) means the marker is found wherever it sits within
+# the first N lines, however long those lines are.
+.ST_CROSSTAB_PEEK_BYTES <- 65536L
+.ST_CROSSTAB_PEEK_N_LINES <- 20L
+
 # The first few "rows" of a candidate file as character strings (one string
 # per row, cells comma-joined), used only to test for structural markers -
-# never for content parsing. CSV: split file_meta()'s latin-1 peek on line
-# breaks (adequate because the markers tested are pure ASCII, so a wrong
-# encoding guess at this stage cannot hide them). XLS/XLSX: read a handful
-# of rows as text via readxl, since the file is binary and file_meta()'s
+# never for content parsing. CSV: read our own byte peek (own read, not
+# file_meta()'s fixed 2048-byte window - R-12.8), strip a leading UTF-8 BOM
+# before decoding (a BOM decodes under the latin1 peek as 3 extra leading
+# characters that defeat `^Matrix:` - R-12.8), then split on line breaks and
+# keep the first N lines (adequate because the markers tested are pure
+# ASCII, so a wrong encoding guess at this stage cannot hide them). XLS/XLSX:
+# read a handful of rows as text via readxl, since the file is binary and a
 # byte peek cannot be interpreted as text at all.
 .st_crosstab_peek_lines <- function(fm) {
   if (identical(fm$ext, "csv")) {
-    txt <- fm$peek
-    if (is.null(txt) || !nzchar(txt)) {
+    raw_bytes <- tryCatch(
+      readBin(fm$path, what = "raw", n = .ST_CROSSTAB_PEEK_BYTES),
+      error = function(e) raw(0)
+    )
+    if (length(raw_bytes) == 0) {
       return(NULL)
     }
-    return(strsplit(txt, "\r\n|\n")[[1]])
+    if (length(raw_bytes) >= 3 &&
+      identical(raw_bytes[1:3], as.raw(c(0xef, 0xbb, 0xbf)))) {
+      raw_bytes <- raw_bytes[-(1:3)]
+    }
+    raw_bytes <- raw_bytes[raw_bytes != as.raw(0)]
+    txt <- tryCatch(
+      {
+        t <- rawToChar(raw_bytes)
+        Encoding(t) <- "latin1"
+        enc2utf8(t)
+      },
+      error = function(e) ""
+    )
+    if (!nzchar(txt)) {
+      return(NULL)
+    }
+    lines <- strsplit(txt, "\r\n|\n")[[1]]
+    return(lines[seq_len(min(length(lines), .ST_CROSSTAB_PEEK_N_LINES))])
   }
 
   df <- tryCatch(
@@ -342,6 +374,11 @@ als_enmrg_adapter <- function() {
   header_seen <- FALSE
   sample_cols <- integer(0)
   in_unsupported_section <- FALSE
+  # B-12.3 (F8): track the foreign marker's row/text so the eventual
+  # "rows skipped" warning can name the row range, whether the unsupported
+  # block ends at a fresh recognised marker or runs to end of file.
+  unsupported_marker_row <- NA_integer_
+  unsupported_marker_text <- NA_character_
 
   reset_section_state <- function() {
     sample_type_by_col <<- list()
@@ -371,10 +408,20 @@ als_enmrg_adapter <- function() {
     marker_col <- .st_crosstab_find_col(row_trimmed, .ST_CROSSTAB_ANY_MARKER_RE)
     if (!is.na(marker_col)) {
       if (grepl(dialect$first_row_regex, row_trimmed[[marker_col]])) {
+        if (in_unsupported_section) {
+          # B-12.3 (F8): a recognised marker ends the foreign block - record
+          # the row range that was skipped rather than letting it vanish
+          # untraced.
+          warnings_vec <- c(warnings_vec, sprintf(
+            "%s: unsupported section marker '%s' at row %d; rows %d-%d skipped (no recognised dialect marker until row %d).",
+            fm$filename, unsupported_marker_text, unsupported_marker_row,
+            unsupported_marker_row, r - 1L, r
+          ))
+          in_unsupported_section <- FALSE
+        }
         section_matrix <- .st_ct_at(row_trimmed, marker_col + 1L)
         section_workgroup <- NA_character_
         reset_section_state()
-        in_unsupported_section <- FALSE
         handled <- TRUE
         # Do NOT `next` here (A34): this same physical row also carries
         # this section's "Sample Type:" label, which must still be read
@@ -382,8 +429,11 @@ als_enmrg_adapter <- function() {
       } else {
         # A foreign section marker (e.g. real ENMRG's trailing
         # "QC - Matrix:" block): skip it and everything after it until a
-        # recognised marker reappears (if ever).
+        # recognised marker reappears (if ever). B-12.3 (F8): remember
+        # where it started so the eventual warning can name the row range.
         in_unsupported_section <- TRUE
+        unsupported_marker_row <- r
+        unsupported_marker_text <- row_trimmed[[marker_col]]
         next
       }
     }
@@ -463,6 +513,17 @@ als_enmrg_adapter <- function() {
       analyte_col <- .st_crosstab_find_col(row_trimmed, "Analyte grouping")
       header_seen <- TRUE
       sample_cols <- sort(as.integer(names(lab_sample_id_by_col)))
+
+      if (length(sample_cols) == 0) {
+        # B-12.3 (F8): the "ALS Sample Number" label was never matched
+        # (e.g. misspelled), so every following analyte row will be
+        # misclassified as a method-group row and this section will emit
+        # zero results/samples/skips - warn instead of failing silently.
+        warnings_vec <- c(warnings_vec, sprintf(
+          "%s: analyte header reached at row %d with no sample columns identified for section '%s' (missing or misspelled 'ALS Sample Number' label); this section will emit no results.",
+          fm$filename, r, section_matrix
+        ))
+      }
 
       for (c in sample_cols) {
         key <- as.character(c)
@@ -556,6 +617,17 @@ als_enmrg_adapter <- function() {
         confidence = 1
       )
     }
+  }
+
+  if (in_unsupported_section) {
+    # B-12.3 (F8): the foreign block ran to end of file without a fresh
+    # recognised marker reappearing - record the row range that was
+    # skipped rather than letting it vanish untraced.
+    warnings_vec <- c(warnings_vec, sprintf(
+      "%s: unsupported section marker '%s' at row %d; rows %d-%d skipped (no recognised dialect marker before end of file).",
+      fm$filename, unsupported_marker_text, unsupported_marker_row,
+      unsupported_marker_row, n_rows
+    ))
   }
 
   results <- if (length(results_rows) == 0) {
