@@ -356,6 +356,79 @@ test_that("R-8.4: text-only results pass through unconverted with quantified TRU
   expect_true(row$quantified)
 })
 
+# ---- R-11.16: quantified from parse_value(); write rl_high (F4) -----------
+# Producer-side pins: unlike test-commit.R's R-11.16 tests (which hand-build
+# `clean` and so only exercise the consumer), these drive the real
+# `.rc_resolve_units_values()`/`reconcile_event()` producer end to end. A
+# fresh date (15 Jan 2026, not 24 May 2025) keeps the row off the seeded
+# an-0001 fluoride three-way match, landing it in `clean` as new.
+
+test_that("R-11.16: a real '>2000 mg/L' row produces quantified = FALSE and rl_high = 2000000 (converted to canonical ug/L)", {
+  path <- seed_db()
+  con <- seed_con(path)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  event <- mk_event(mk_row(source_ref = "r1", lab_sample_id = "XX1234567099",
+                           sample_datetime_raw = "15 Jan 2026 09:00",
+                           value_raw = ">2000", value_num = 2000, below_detection = FALSE,
+                           rl = NA_real_, units_raw = "mg/L"))
+  out <- reconcile_event(event, con)
+  row <- out$clean[out$clean$source_ref == "r1", ]
+  expect_equal(nrow(row), 1)
+  expect_false(row$quantified)
+  expect_equal(row$rl_high, 2000000, tolerance = 1e-9)
+})
+
+test_that("R-11.16: a real plain-numeric row still produces quantified = TRUE", {
+  path <- seed_db()
+  con <- seed_con(path)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  event <- mk_event(mk_row(source_ref = "r1", lab_sample_id = "XX1234567099",
+                           sample_datetime_raw = "15 Jan 2026 09:00",
+                           value_raw = "2.3", value_num = 2.3, below_detection = FALSE,
+                           rl = 0.1, units_raw = "mg/L"))
+  out <- reconcile_event(event, con)
+  row <- out$clean[out$clean$source_ref == "r1", ]
+  expect_equal(nrow(row), 1)
+  expect_true(row$quantified)
+})
+
+test_that("R-11.16: a real '<0.01' row keeps quantified = FALSE and rl_converted still set", {
+  path <- seed_db()
+  con <- seed_con(path)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  event <- mk_event(mk_row(source_ref = "r1", lab_sample_id = "XX1234567099",
+                           sample_datetime_raw = "15 Jan 2026 09:00",
+                           value_raw = "<0.01", value_num = 0.01, below_detection = TRUE,
+                           rl = 0.01, units_raw = "mg/L"))
+  out <- reconcile_event(event, con)
+  row <- out$clean[out$clean$source_ref == "r1", ]
+  expect_equal(nrow(row), 1)
+  expect_false(row$quantified)
+  expect_equal(row$rl_converted, 10, tolerance = 1e-9)
+})
+
+test_that("R-11.16 end-to-end: commit_event() on a real '>2000 mg/L' clean row stores quantified = FALSE and rl_high = 2000000", {
+  path <- seed_db()
+  con <- seed_con(path)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  event <- mk_event(mk_row(source_ref = "r1", lab_sample_id = "XX1234567099",
+                           sample_datetime_raw = "15 Jan 2026 09:00",
+                           value_raw = ">2000", value_num = 2000, below_detection = FALSE,
+                           rl = NA_real_, units_raw = "mg/L"))
+  out <- reconcile_event(event, con)
+  commit_event(event, out, con)
+
+  new_row <- DBI::dbGetQuery(con,
+    "SELECT quantified, rl_high FROM analysis WHERE uuid NOT IN ('an-0001','an-0002','an-0003','an-0004')")
+  expect_equal(nrow(new_row), 1)
+  expect_false(new_row$quantified[[1]])
+  expect_equal(new_row$rl_high[[1]], 2000000)
+})
+
 # ---- R-8.5: sample datetime -----------------------------------------------
 
 test_that("R-8.5: an ESdat-format datetime yields both sample_date and sample_datetime", {

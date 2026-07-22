@@ -459,7 +459,7 @@
   keep <- rep(TRUE, n)
   value_converted <- rep(NA_real_, n)
   rl_converted <- rep(NA_real_, n)
-  quantified <- rep(NA, n)
+  rl_high <- rep(NA_real_, n)
 
   skipped_list <- list()
   review_list <- list()
@@ -476,17 +476,16 @@
 
     is_text <- !is.na(rows$value_chr[[i]])
     if (is_text) {
-      quantified[[i]] <- TRUE
       next
     }
 
-    quantified[[i]] <- !isTRUE(rows$below_detection[[i]])
-
     if (isTRUE(rows$analyte_pending[[i]])) {
-      # No analyte -> no canonical units. Pass the value through unconverted;
-      # units_raw stays and lands on lab_method.units at commit (D7/A63).
+      # No analyte -> no canonical units. Pass the value/quantified/rl_high
+      # through unconverted (R-11.16: provenance, like value); units_raw
+      # stays and lands on lab_method.units at commit (D7/A63).
       value_converted[[i]] <- rows$value_num[[i]]
       rl_converted[[i]] <- rows$rl[[i]]
+      rl_high[[i]] <- parsed$rl_high[[i]]
       next
     }
 
@@ -495,7 +494,10 @@
     units_from <- normalise_lab_text(rows$units_raw[[i]])
 
     conv <- tryCatch(
-      unify_value(c(rows$value_num[[i]], rows$rl[[i]]), c(units_from, units_from), c(units_to, units_to)),
+      unify_value(
+        c(rows$value_num[[i]], rows$rl[[i]], parsed$rl_high[[i]]),
+        rep(units_from, 3), rep(units_to, 3)
+      ),
       sampletidy_units_error = function(e) e
     )
     if (inherits(conv, "condition")) {
@@ -512,12 +514,14 @@
     }
     value_converted[[i]] <- conv[[1]]
     rl_converted[[i]] <- conv[[2]]
+    rl_high[[i]] <- conv[[3]]
   }
 
   kept <- rows[keep, , drop = FALSE]
   kept$value_converted <- value_converted[keep]
   kept$rl_converted <- rl_converted[keep]
-  kept$quantified <- quantified[keep]
+  kept$quantified <- parsed$quantified[keep]
+  kept$rl_high <- rl_high[keep]
 
   skipped <- if (length(skipped_list) > 0) dplyr::bind_rows(skipped_list) else .rc_proto_skip()
   review <- if (length(review_list) > 0) dplyr::bind_rows(review_list) else .rc_proto_review()
