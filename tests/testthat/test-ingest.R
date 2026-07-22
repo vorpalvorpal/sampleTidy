@@ -60,13 +60,15 @@ test_that("R-9.5: subdirectory content is untouched and cruft files are ignored"
   input_dir <- build_e2e_input_dir()
 
   report <- ingest_dir(input_dir, db = setup$db_path)
-  # R-12.15 T-1 sweep (5th instance): the fixture's two cruft files
-  # (old_export.bak, .DS_Store - see build_e2e_input_dir()) are the only
-  # files that land `ignored`; assert the report's own files_by_state
-  # reflects that specific, fixture-derived count rather than merely
-  # existing as a list.
+  # R-12.15 T-1 sweep (5th instance): assert the report's own files_by_state
+  # reflects a specific, fixture-derived count rather than merely existing as
+  # a list. Since R-12.7 makes files_by_state a TERMINAL-state tally (not the
+  # route-time snapshot), `ignored` is the two cruft files (old_export.bak,
+  # .DS_Store) PLUS the four XX1234567 crosstab/enmrg sources that
+  # assemble_events() supersede-drops to a better source (route-time
+  # reporting counted those four as `claimed`): 2 + 4 = 6.
   expect_true(report$n_files_routed > 0)
-  expect_equal(unname(report$files_by_state[["ignored"]]), 2L)
+  expect_equal(unname(report$files_by_state[["ignored"]]), 6L)
 
   # the subdirectory and its contents are never touched
   subdir <- file.path(input_dir, "subdir")
@@ -407,9 +409,13 @@ test_that("R-12.2: when EVERY event throws in reconcile, ingest_dir() still cont
   input_dir <- build_e2e_input_dir()
 
   call_n <- 0L
+  event_kept_hashes <- character(0)
   testthat::local_mocked_bindings(
     reconcile_event = function(event, con) {
       call_n <<- call_n + 1L
+      event_kept_hashes <<- c(
+        event_kept_hashes, event$files$hash[sampleTidy:::.ig_kept_rows(event$files)]
+      )
       stop("R-12.2 injected systemic reconcile failure ", call_n)
     }
   )
@@ -436,14 +442,18 @@ test_that("R-12.2: when EVERY event throws in reconcile, ingest_dir() still cont
   expect_s3_class(caught, "sampletidy_error")
 
   states <- ingest_file_states(setup$db_path)
-  fixture_states <- states[!states$filename %in% c("old_export.bak", ".DS_Store"), ]
-  expect_true(nrow(fixture_states) > 0)
   # every kept file of every event was contained (marked failed) before the
-  # abort fired - not left mid-pipeline, and not silently reported as a
-  # quiet all-failed report (the abort itself is the loud signal).
-  kept_fixture_states <- fixture_states[fixture_states$state != "ignored", ]
-  expect_true(nrow(kept_fixture_states) > 0)
-  expect_true(all(kept_fixture_states$state == "failed"))
+  # abort fired - not left mid-pipeline, and not silently reported as a quiet
+  # all-failed report (the abort itself is the loud signal). Assert this
+  # against the EXACT set of hashes that entered an event (captured in the
+  # mock), not a filename/state heuristic: files that never joined an event -
+  # route-time `quarantined` cruft (random.csv, random.xlsx, NOT_ESDAT.xml,
+  # ES2600185_0_XTAB.XLS), assemble-stage supersede-dropped `ignored`
+  # sources, and the seeded legacy `archived` row - are legitimately not
+  # `failed` and must not be swept into this check.
+  event_states <- states[states$hash %in% unique(event_kept_hashes), ]
+  expect_true(nrow(event_states) > 0)
+  expect_true(all(event_states$state == "failed"))
 })
 
 # ---- R-12.7: ingest report uses terminal file states (F13) ----------------
