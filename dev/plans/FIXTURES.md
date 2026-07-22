@@ -236,9 +236,11 @@ OriginalChemName,Prefix,Result,Result_Unit,Total_or_Filtered,Result_Type,
 Method_Type,Method_Name,Extraction_Date,Analysed_Date,EQL,EQL_Units,Comments,
 Lab_Qualifier,UCL,LCL`. `Method_Type` = human method name (e.g. "pH by PC
 Titrator"); `Method_Name` = coded method ("EA005P: pH by PC Titrator"). Rows
-for XX1234567 (3 samples × the analytes) plus 2 QC rows and 1 NCP row. Pin
-these data rows (Method_Type omitted from the table below for brevity — the
-generator derives it from Method_Name):
+for XX1234567 (3 samples × the analytes) plus 2 QC rows, 1 plain foreign-work-
+order row (`YY0000001`), and 1 compound-SampleCode NCP cross-reference row
+(`ZZ9999999001_XX1234567`, PLAN-04 R-4.6). Pin these data rows (Method_Type
+omitted from the table below for brevity — the generator derives it from
+Method_Name):
 
 | SampleCode | ChemCode | OriginalChemName | Prefix | Result | Result_Unit | T/F | Method_Name | EQL |
 |---|---|---|---|---|---|---|---|---|
@@ -252,10 +254,17 @@ generator derives it from Method_Name):
 | QC-000001 | 16984-48-8 | Fluoride | (blank) | 0.5 | mg/L | T | EK040P: Fluoride by PC Titrator | 0.1 |
 | QC-000002 | (blank) | pH Value | (blank) | 7.00 | pH Unit | T | EA005P: pH by PC Titrator | 0.01 |
 | YY0000001 | 16984-48-8 | Fluoride | (blank) | 1.0 | mg/L | T | EK040P: Fluoride by PC Titrator | 0.1 |
+| ZZ9999999001_XX1234567 | 16984-48-8 | Fluoride | (blank) | 0.8 | mg/L | T | EK040P: Fluoride by PC Titrator | 0.1 |
 
 Analysed_Date `26 May 2025` for all; Extraction_Date blank or `26 May 2025`.
 The `Observation` row is the text-value branch. The QC rows' Sample_Type comes
-from Sample2e (below); the `YY0000001` row is the NCP/foreign-work-order row.
+from Sample2e (below). The `YY0000001` row is a **plain** foreign-work-order
+row (no `_<home>` suffix) — a genuine foreign result that assembly flags
+`foreign_work_order` for review. The `ZZ9999999001_XX1234567` row is a
+**compound-SampleCode NCP cross-reference** (PLAN-04 R-4.6): the chemistry
+parser marks it `sample_type = "NCP"` from the `<orig>001_<home>` code (there
+is no Sample_Type column in Chemistry2e), and assembly (R-7.4) counts it in
+`n_ncp_foreign` and drops it before commit, never flagging it.
 
 **Sample2e** columns exactly: `SampleCode,Sampled_Date_Time,Field_ID,Blank1,
 Depth,Blank2,Matrix_Type,Sample_Type,Parent_Sample,Blank3,SDG,Lab_Name,
@@ -305,11 +314,16 @@ cell (empty branch).
 
 ## Cross-plan expectations (assert these end to end)
 
-- ESdat XX1234567 Chemistry2e → 10 result rows; after Sample2e join, the 3
-  Normal samples' rows carry datetimes 11:45/11:10/11:00 and sample_type
-  Normal; QC rows carry LCS/MB; YY0000001 carries NCP.
-- Assembly event `XX1234567`: NCP row counted (`n_ncp_foreign` = 1), absent
-  from results; source-preference keeps ESdat over XTAB/ENMRG.
+- ESdat XX1234567 Chemistry2e → 11 result rows; the compound-SampleCode NCP
+  cross-reference (`ZZ9999999001_XX1234567`) parses `sample_type = "NCP"` and
+  is dropped at assembly, leaving 10 rows to the event. After Sample2e join,
+  the 3 Normal samples' rows carry datetimes 11:45/11:10/11:00 and sample_type
+  Normal; QC rows carry LCS/MB; the plain `YY0000001` row is flagged
+  `foreign_work_order`.
+- Assembly event `XX1234567`: the compound NCP row is counted
+  (`n_ncp_foreign` = 1) and absent from results; the plain `YY0000001` foreign
+  row is kept and flagged for review; source-preference keeps ESdat over
+  XTAB/ENMRG.
 - Reconcile: T.S01/T.S02/T.MW01 resolve to f-0001/f-0002/f-0003 (via their
   self-aliases fa-0001/fa-0002/fa-0003); "AMBIG" would be ambiguous; a typo
   `T.S0l` (lowercase L) → `unknown_feature`, and **under plan 11's

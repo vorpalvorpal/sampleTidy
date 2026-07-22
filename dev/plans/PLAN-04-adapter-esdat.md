@@ -53,12 +53,33 @@ Field mapping (IR ← source): `work_order` ← `SampleCode` prefix
 `rl` ← `EQL` numeric; `lab_qualifier`, `comments` ← as-is; `analysed_date` ←
 parsed `esdat` format; `org = "ALS"`; `adapter = "esdat/<version>"`;
 `source_ref` ← `paste0("row", <1-based data row>)`; `confidence = 1`;
-`sample_type = "unknown"` — the adapter parses each file independently and
-never reads siblings; assembly (plan 07 R-7.3) fills the authoritative value
-from Sample2e.
+`sample_type` — `"unknown"` for ordinary rows (the adapter parses each file
+independently and never reads siblings; assembly, plan 07 R-7.3, fills the
+authoritative value from Sample2e), EXCEPT the compound-SampleCode NCP rows of
+R-4.6 below, which are marked `"NCP"` at parse time.
+
+## R-4.6 NCP cross-reference detection (Chemistry2e)
+
+ESdat bundles "NCP" cross-reference results belonging to OTHER work orders
+into a report. Chemistry2e carries no `Sample_Type`/`Lab_Report_Number` column,
+so the only parse-time signal is a **compound `SampleCode`** of the shape
+`<origWO>001_<homeWO>` — a leading work order + sequence, an underscore, then
+the home work order (e.g. `ES2617015001_ES2617126`). The chemistry parser
+detects these (regex `^[A-Z]{2}\d{7}\d*_[A-Z]{2}\d{7}$`, whose WO prefix reuses
+`.st_esdat_work_order_re`) and sets `sample_type = "NCP"`; `work_order` is left
+as the ORIGINATING (foreign) WO so assembly (R-7.4) reads the row as
+foreign-AND-NCP — counted in `n_ncp_foreign` and dropped before commit, never
+flagged `foreign_work_order`. This detection MUST run before the R-7.4
+multi-work-order partition, which operates on this raw parser output BEFORE the
+sample-metadata join could fill `sample_type` (that join, "always overrides
+sample_type", runs too late for the partition). A plain code with no `_<home>`
+suffix stays `"unknown"` — a genuine foreign row remains reviewable. Criterion:
+a `<orig>001_<home>` row parses `sample_type = "NCP"` with `work_order` = the
+originating WO; plain codes stay `"unknown"`; `ir_validate()` passes.
 
 Criteria (fixture: 2 work orders × 3 samples × 3 analytes + 2 QC rows +
-1 NCP row, one `<`-prefixed, one `>`-prefixed, one text result, one µ-unit):
+1 plain foreign row + 1 compound-SampleCode NCP row, one `<`-prefixed, one
+`>`-prefixed, one text result, one µ-unit):
 - row count = source data rows; no row silently dropped;
 - multi-work-order partitioning: `work_order` column has both ids; rows are
   NOT filtered by work order (reconciler/assembly decide);

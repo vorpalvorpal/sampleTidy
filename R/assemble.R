@@ -311,6 +311,13 @@
       own_idx <- !is.na(results_i$work_order) & results_i$work_order == home_wo_i
     }
     foreign_idx <- !own_idx
+    # NCP = "Non-Client Parent" (ESdat spec): a foreign work order's field sample
+    # pulled in only as the parent leg of this report's batch-QC duplicate/spike
+    # (another client's material, client info stripped). Count it for QC-audit
+    # visibility (`n_ncp_foreign`) and drop it - it is not our data, so it is
+    # never committed and never flagged for review. The ESdat chemistry parser
+    # marks these rows NCP from their compound SampleCode (adapter-esdat.R R-4.6),
+    # since this partition runs on raw parser output, before the sample join.
     ncp_idx <- foreign_idx & !is.na(results_i$sample_type) & results_i$sample_type == "NCP"
     other_foreign_idx <- foreign_idx & !ncp_idx
 

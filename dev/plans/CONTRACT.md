@@ -295,11 +295,22 @@ for lab reports; `sample.organisation ∈ {ACIRL, Internal, ALS}`;
   section (keep multi-section support; it is legacy/rare). Section-scalar labels
   (`Matrix:`/`Client - Matrix:`, `Workgroup:`, `Project name/number:`) remain at
   col 0 with value at col 1.
+  **Encoding correction (root-caused 2026-07-22):** XTAB.csv is NOT legacy
+  latin-1 — it is valid **UTF-8** whose degree/micro signs arrive already
+  destroyed on disk to a single U+FFFD replacement char (bytes `ef bf bd`).
+  Reading it under a latin-1 locale SHATTERS that one U+FFFD into three chars
+  (`ï¿½`) that defeat `normalise_lab_text()`'s single-U+FFFD repair table (so
+  `Electrical Conductivity @ 25°C` became `unknown_analyte`). The `als_xtab`
+  dialect now declares `encoding = "UTF-8"`; both crosstab and ESdat CSV reads
+  gained a **symmetric UTF-8↔latin1 quality fallback** (probe = residual
+  mojibake cells after `normalise_lab_text()`; a clean read scores 0 and is
+  never re-read, so it is a no-op for correctly-encoded files).
 - **A35** ESdat CSV encoding (drives PLAN-04 fix; reconciles A27). Real
   Chemistry2e/Sample2e CSVs carry **latin-1** bytes (e.g. `0xB0` = `°`); the
-  adapter MUST read them with a latin-1 locale (as the XTAB dialect does) then
-  let `normalise_lab_text()` repair the mojibake — reading as UTF-8 makes
-  `gsub()` abort on valid legacy files. **A27 refined:** a file is `failed`
+  adapter MUST read them with a latin-1 locale (latin-1 stays the ESdat
+  **primary** encoding under the A34 symmetric fallback — note the XTAB dialect
+  itself is now UTF-8, not latin-1) then let `normalise_lab_text()` repair the
+  mojibake — reading as UTF-8 makes `gsub()` abort on valid legacy files. **A27 refined:** a file is `failed`
   (parse crash) only on genuine structural failure (unreadable, or invalid even
   under latin-1), NOT merely for containing a non-UTF-8 byte. The CORRUPT
   fixture must be revised to represent true corruption under this rule.

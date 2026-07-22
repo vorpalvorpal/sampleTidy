@@ -32,13 +32,19 @@
 # the trigger for a full per-section state reset inside the parser);
 # `label_regex` locates the "ALS Sample Number(:)"/"ALS Sample number:" row,
 # whose column position differs between XTAB and ENMRG; `encoding` is the CSV
-# read locale (XTAB ships as legacy latin-1 bytes, ENMRG as UTF-8).
+# read locale. Both XTAB.csv and ENMRG.CSV are valid UTF-8: XTAB.csv is NOT
+# legacy latin-1 - its degree/micro signs arrive already destroyed on disk to
+# a single U+FFFD replacement char (bytes `ef bf bd`), so reading it as latin-1
+# would SHATTER that one U+FFFD into three chars ("ix-triple") that defeat the
+# `normalise_lab_text()` repair table (CONTRACT A34, root-caused 2026-07-22).
+# `.st_crosstab_read_grid` wraps the read in a symmetric UTF-8<->latin1 quality
+# fallback so a mis-encoded file is rescued rather than silently corrupted.
 .st_crosstab_dialects <- list(
   als_xtab = list(
     id = "als_xtab",
     first_row_regex = "^Matrix:",
     label_regex = "^ALS Sample num",
-    encoding = "latin1"
+    encoding = "UTF-8"
   ),
   als_enmrg = list(
     id = "als_enmrg",
@@ -211,24 +217,39 @@ als_enmrg_adapter <- function() {
 # parses cleanly.
 .st_crosstab_read_grid <- function(path, fm, dialect) {
   if (identical(fm$ext, "csv")) {
-    df <- suppressWarnings(readr::read_csv(
-      path,
-      col_types = readr::cols(.default = readr::col_character()),
-      col_names = FALSE,
-      locale = readr::locale(encoding = dialect$encoding),
-      show_col_types = FALSE
+    # Symmetric encoding fallback (R-5.4): primary = the dialect's declared
+    # encoding, alternate = the other of {UTF-8, latin1}. A clean file scores a
+    # zero mojibake probe and is never re-read, so this is a no-op for
+    # correctly-encoded files.
+    primary_enc <- dialect$encoding
+    alternate_enc <- if (identical(toupper(primary_enc), "UTF-8")) "latin1" else "UTF-8"
+    read_one <- function(enc) {
+      df <- suppressWarnings(readr::read_csv(
+        path,
+        col_types = readr::cols(.default = readr::col_character()),
+        col_names = FALSE,
+        locale = readr::locale(encoding = enc),
+        show_col_types = FALSE
+      ))
+      as.matrix(df)
+    }
+    return(.st_read_grid_with_encoding_fallback(
+      read_fn = read_one,
+      primary_encoding = primary_enc,
+      alternate_encoding = alternate_enc,
+      text_extractor = function(m) as.vector(m),
+      source_label = fm$filename
     ))
   } else if (fm$ext %in% c("xls", "xlsx")) {
     df <- suppressMessages(readxl::read_excel(
       path, sheet = 1, col_names = FALSE, col_types = "text"
     ))
-  } else {
-    cli::cli_abort(
-      "{.path {path}} has an unsupported extension for the crosstab adapter ({fm$ext}).",
-      class = "sampletidy_parse_error"
-    )
+    return(as.matrix(df))
   }
-  as.matrix(df)
+  cli::cli_abort(
+    "{.path {path}} has an unsupported extension for the crosstab adapter ({fm$ext}).",
+    class = "sampletidy_parse_error"
+  )
 }
 
 # --- R-5.1 shared parser: the row-by-row state machine -------------------

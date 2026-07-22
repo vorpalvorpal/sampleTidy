@@ -184,6 +184,7 @@ section.
 - **R-4.1** — R-4.1: corrupted Chemistry2e fixture still matches exact (header-only fingerprint)
 - **R-4.2** — R-4.2: Chemistry2e row count equals source data rows; none silently dropped
 - **R-4.2** — R-4.2: multi-work-order rows are not filtered by the adapter
+- **R-4.6** — R-4.6: a compound `<orig>001_<home>` SampleCode parses sample_type = NCP; plain codes stay unknown
 - **R-4.2** — R-4.2: '<'-prefixed Fluoride row: value_raw '<0.1', below_detection TRUE, rl 0.1
 - **R-4.2** — R-4.2: '>'-prefixed Fluoride row: value_raw '>2000', quantified FALSE, rl_high semantics
 - **R-4.2** — R-4.2: text 'Observation' result keeps its value_chr, not coerced to numeric
@@ -270,6 +271,7 @@ ambiguity notes referenced below.
 - event contains only its own work order's rows → "R-7.4: multi-work-order ESdat file contributes only its own work order's rows to the event"
 - NCP counted in n_ncp_foreign, absent from results, not flagged for review → "R-7.4: NCP rows are counted in n_ncp_foreign, absent from results, and not flagged for review"
 - non-NCP foreign row flagged for review → "R-7.4: a non-NCP foreign-work-order row is flagged for review"
+- seam (real ESdat parser → assemble_events): compound-SampleCode NCP row counted/dropped/not-flagged, plain foreign row flagged → "R-7.4 (seam: real ESdat parser -> assemble_events): a compound-SampleCode NCP row is counted in n_ncp_foreign, dropped from results, and NOT flagged, while a plain foreign row IS flagged"
 
 ### R-7.5 event object shape
 - shape validated on every constructive test above via the local `expect_valid_event()` helper (not a separate test - used inline)

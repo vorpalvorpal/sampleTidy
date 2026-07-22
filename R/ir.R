@@ -34,6 +34,11 @@
   samples = c("source_hash", "org", "adapter")
 )
 
+# Sample_Type vocabulary. QC/lab types (LCS, MB, LAB_D, MS) and NCP are
+# non-`Normal`. NCP = "Non-Client Parent" (ESdat spec): another client's field
+# sample reported only as the parent of a batch-QC duplicate/spike - dropped by
+# assembly (R-7.4) / reconcile (R-8.1), never committed. `unknown` is the ESdat
+# chemistry-parser default, later filled by the sample-metadata join.
 .st_ir_sample_type_allowed <- c("Normal", "LCS", "MB", "LAB_D", "MS", "NCP", "unknown")
 
 # Zero-length vector of the right type for a prototype column.

@@ -13,7 +13,7 @@ Differences (observed):
 | label cell | `ALS Sample Number:` | `ALS Sample number:` |
 | label col index | 3 (0-based) | 4 |
 | first row label | `Matrix:` | `Client - Matrix:` |
-| encoding | legacy (latin-1/MacRoman bytes) | UTF-8 |
+| encoding | **UTF-8** (see R-5.4) | UTF-8 |
 | QC columns | absent | present (extra sample columns) |
 | file ext | `.csv` / `.XLS` | `.CSV` |
 
@@ -107,6 +107,36 @@ Work order resolution precedence: Workgroup cell > filename guess; mismatch
 between the two → parse succeeds but `report$warnings` records it and the
 Workgroup value wins. Criterion: fixture named `ZZ9999999_0_XTAB.csv`
 containing Workgroup `XX1234567` yields work_order `XX1234567` + warning.
+
+## R-5.4 Encoding + symmetric encoding fallback (root-caused 2026-07-22)
+
+**`als_xtab` reads UTF-8, not latin-1.** Real XTAB.csv is valid UTF-8 whose
+degree/micro signs arrive already destroyed on disk to a single U+FFFD
+replacement char (bytes `ef bf bd`). Reading it under a latin-1 locale SHATTERS
+that one U+FFFD into three chars (`ï¿½`) that defeat `normalise_lab_text()`'s
+single-U+FFFD repair table — so `Electrical Conductivity @ 25°C` silently
+became `unknown_analyte`. The dialect's `encoding` is therefore `"UTF-8"`.
+
+**Symmetric encoding fallback** (`.st_read_grid_with_encoding_fallback`, shared
+with the ESdat adapter): every data-file CSV read reads with its declared
+primary encoding, then computes a QUALITY PROBE = the number of text cells that
+STILL contain a mojibake marker (U+FFFD, the shattered triple `ï¿½`, or the
+escape spelling `<ef><bf><bd>`) AFTER `normalise_lab_text()` has run (warnings
+suppressed). If the probe is 0 the primary read is returned immediately (a
+clean file is NEVER re-read). If the probe is positive the file is re-read with
+the alternate encoding, and the alternate is adopted ONLY when it has the same
+row count as the primary AND a strictly lower probe; a `cli::cli_inform` note
+naming the file and both encodings is emitted. crosstab: primary =
+`dialect$encoding`, alternate = the other of {UTF-8, latin1}. ESdat keeps
+latin-1 as its primary (those files are genuinely latin-1), so the fallback is
+a strict no-op on clean ESdat files.
+
+Criteria: (a) real XTAB fixture (`ES2600185_0_XTAB.csv`) parses to analyte
+`Electrical Conductivity @ 25°C` and unit `µS/cm` (not `unknown`, no residual
+mojibake marker); (b) a read whose default encoding is wrong is rescued by the
+alternate; (c) a clean read is not re-read (probe == 0 path); (d) an
+irrecoverable case (alternate no cleaner, or a different row count) keeps the
+primary read.
 
 ## Fixtures
 

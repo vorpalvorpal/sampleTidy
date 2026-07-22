@@ -84,6 +84,13 @@
 # ---- R-8.1: QC filter -------------------------------------------------------
 
 #' Split `results` into QC-filtered-out rows and survivors (R-8.1)
+#'
+#' Anything whose `sample_type` is not `Normal`/`unknown`/NA is a lab QC or
+#' cross-reference row and is skipped (never committed): `LCS`, `MB`, `LAB_D`,
+#' `MS`, and `NCP`. NCP = "Non-Client Parent" (ESdat spec) - another client's
+#' field sample reported only as the parent leg of a batch-QC duplicate/spike;
+#' assembly (R-7.4) normally drops NCP earlier, but this filter also excludes it
+#' defensively should one reach here.
 #' @keywords internal
 #' @noRd
 .rc_qc_filter <- function(results) {

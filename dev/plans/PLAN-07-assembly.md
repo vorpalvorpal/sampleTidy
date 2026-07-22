@@ -61,10 +61,19 @@ An ESdat file whose results span several work orders (QC context; DESIGN
 rows for other work orders with `sample_type = "NCP"` are counted in the
 event report (`n_ncp_foreign`) and go no further; non-NCP rows for a
 *different* work order (unexpected) → event-level warning + those rows to
-review (`kind = "other"`, subkind `foreign_work_order`). Criteria: plan-04
+review (`kind = "other"`, subkind `foreign_work_order`). This partition runs
+on the RAW per-file parser output, before the R-7.3 sample-metadata join, so
+the `sample_type = "NCP"` it keys on must already be present on that output.
+For ESdat Chemistry2e (no `Sample_Type` column) that marker is now set at
+parse time from the compound `<orig>001_<home>` SampleCode (PLAN-04 R-4.6),
+so the NCP-drop path is genuinely reachable for real ESdat deliveries — before
+R-4.6, every Chemistry2e row reached this partition as `"unknown"` and NCP
+cross-references leaked into review as `foreign_work_order`. Criteria: plan-04
 two-work-order fixture: event for `XX1234567` contains only its rows; the
 NCP row is counted, absent from results, and not in review; an engineered
-non-NCP foreign row lands in review.
+non-NCP foreign row lands in review. Seam-tested end-to-end (real ESdat parser
+→ `assemble_events()`) in `test-assemble.R` so the parser/partition contract
+can't silently drift.
 
 ## R-7.5 Event object (pinned shape)
 
