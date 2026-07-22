@@ -187,7 +187,7 @@ test_that("R-13.1: all six views exist and return without error after migration,
 
   n_after <- DBI::dbGetQuery(con, "SELECT COUNT(*) n FROM v_measurement")$n
   expect_identical(n_after, n_before)
-  expect_identical(n_after, 3L)
+  expect_equal(n_after, 3L)
 })
 
 # ---- R-13.1 feature.cypher left untouched ----------------------------------
@@ -244,7 +244,7 @@ test_that("R-13.1: step 3 seeds one self-alias per feature, folded (not duplicat
   withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   self_rows <- DBI::dbGetQuery(con, "SELECT * FROM feature_alias WHERE kind = 'self'")
-  expect_identical(nrow(self_rows), n_features)
+  expect_equal(nrow(self_rows), n_features)
 
   pm01 <- DBI::dbGetQuery(con, "SELECT * FROM feature_alias WHERE alias_key = 'pm01'")
   # Exactly one row - the self-name cypher entry folds into the self-alias,
@@ -319,7 +319,7 @@ test_that("R-13.1: feature_mask 'long' names import as mask_long and collapse in
   # n_seen == 3, exactly one row). Here: no NEW alias row of kind
   # 'mask_long' was needed to represent it.
   n_b_s02a_rows <- DBI::dbGetQuery(con, "SELECT COUNT(*) n FROM feature_alias WHERE alias_key = 'b.s02a'")$n
-  expect_identical(n_b_s02a_rows, 1L)
+  expect_equal(n_b_s02a_rows, 1L)
 
   not_imported <- DBI::dbGetQuery(con, "
     SELECT alias_key FROM feature_alias

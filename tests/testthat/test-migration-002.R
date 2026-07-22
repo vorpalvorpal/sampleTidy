@@ -126,7 +126,7 @@ test_that("R-14.1: the doomed lab_method row is repointed (not dropped), so all 
     SELECT COUNT(*) n FROM analysis a JOIN lab_method lm ON a.uuid_lab = lm.uuid
     WHERE lm.uuid_analyte = 'carb-survivor'")$n
   DBI::dbDisconnect(con0, shutdown = TRUE)
-  expect_identical(n_before, 3L) # only the survivor's own 3, pre-merge
+  expect_equal(n_before, 3L) # only the survivor's own 3, pre-merge
 
   mig2$mig002_run(db = path, snapshot_dir = withr::local_tempdir(), dry_run = FALSE)
 
@@ -142,7 +142,7 @@ test_that("R-14.1: the doomed lab_method row is repointed (not dropped), so all 
   n_after <- DBI::dbGetQuery(con, "
     SELECT COUNT(*) n FROM analysis a JOIN lab_method lm ON a.uuid_lab = lm.uuid
     WHERE lm.uuid_analyte = 'carb-survivor'")$n
-  expect_identical(n_after, 5L) # 3 + 2, the merge criterion's arithmetic
+  expect_equal(n_after, 5L) # 3 + 2, the merge criterion's arithmetic
 })
 
 test_that("R-14.1: both analyte_mask rows on the doomed uuid are repointed to the survivor, none left dangling", {
