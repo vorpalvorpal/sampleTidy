@@ -43,7 +43,7 @@ test_that("R-9.3: the archive copy exists and is byte-identical to the source", 
 
   asset_row <- DBI::dbGetQuery(con, sprintf("SELECT * FROM asset WHERE hash = '%s'", hash))
   expect_equal(nrow(asset_row), 1)
-  copy_path <- file.path(setup$archive_dir, asset_row$uuid[[1]])
+  copy_path <- file.path(setup$archive_dir, asset_row$uuid[[1]], asset_row$filename[[1]])
   expect_true(file.exists(copy_path))
   expect_identical(readBin(copy_path, "raw", file.size(copy_path)),
                     readBin(src_path, "raw", file.size(src_path)))
