@@ -579,6 +579,67 @@ test_that("R-12.6: db_delete() on a nonexistent uuid aborts sampletidy_error and
   expect_equal(nrow(log_rows), 0)
 })
 
+# ---- PLAN-11/A32: db_update() TIMESTAMP change_log tz normalization --------
+#
+# db_update() logged change_log.old/new for TIMESTAMP fields via bare
+# as.character() on the two POSIXct values. `old_val` (read back from duckdb)
+# is always UTC-tagged; a caller-supplied `new_val` in a non-UTC tz formats in
+# ITS OWN tzone, so change_log.old/new land in different timezones and `new`
+# does not match the value actually stored. Fix: .st_changelog_str() renders
+# any POSIXct in UTC before logging/comparing. Pinning the whole test under a
+# non-UTC local tz (Australia/Sydney) makes it deterministic and exercises
+# the bug (it would be silently UTC-equivalent under a UTC session tz).
+
+test_that("PLAN-11/A32: db_update() logs TIMESTAMP change_log old/new in a single (UTC) timezone, matching the stored column", {
+  withr::local_timezone("Australia/Sydney")
+
+  path <- seed_db()
+  con <- seed_con(path)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  # fa-0001's seeded last_seen is TIMESTAMP '2025-01-01 00:00:00' (helper-db.R).
+  # 2025-01-01 20:00:00 AEDT (Australia/Sydney, UTC+11 in Jan) = 2025-01-01
+  # 09:00:00 UTC - a different instant from the seeded value, expressed in a
+  # non-UTC tz, the real shape of the R-14.x/.ct_materialise_feature_aliases()
+  # `last_seen` bump path.
+  new_instant_syd <- as.POSIXct("2025-01-01 20:00:00", tz = "Australia/Sydney")
+
+  before <- count_change_log(con)
+  db_update(con, "feature_alias", "fa-0001",
+            changes = list(last_seen = new_instant_syd),
+            actor = "tester", reason = "bump last_seen (tz test)")
+  after <- count_change_log(con)
+  expect_equal(after - before, 1)
+
+  stored <- DBI::dbGetQuery(
+    con, "SELECT last_seen FROM feature_alias WHERE uuid = 'fa-0001'"
+  )$last_seen
+  stored_utc_str <- format(stored, tz = "UTC", format = "%Y-%m-%d %H:%M:%S")
+  expect_equal(stored_utc_str, "2025-01-01 09:00:00")
+
+  log_row <- DBI::dbGetQuery(
+    con,
+    "SELECT * FROM change_log WHERE tbl = 'feature_alias' AND uuid_row = 'fa-0001' AND field = 'last_seen'"
+  )
+  expect_equal(nrow(log_row), 1)
+  # Non-vacuous: fails under bare as.character() (Sydney "2025-01-01 20:00:00"
+  # instead of the UTC-matching stored string).
+  expect_equal(log_row$new, stored_utc_str)
+  expect_equal(log_row$new, "2025-01-01 09:00:00")
+
+  # tz-robust skip-unchanged: re-submitting the SAME instant, still expressed
+  # in the non-UTC Sydney tz (a tz different from the UTC tz the stored value
+  # carries), must skip - no new change_log row for that field. Fails under
+  # bare as.character() (the two tz-differing strings never compare equal, so
+  # the field is spuriously logged as "changed" every time).
+  before2 <- count_change_log(con)
+  db_update(con, "feature_alias", "fa-0001",
+            changes = list(last_seen = new_instant_syd),
+            actor = "tester", reason = "no-op re-submit, same instant, same tz expression")
+  after2 <- count_change_log(con)
+  expect_equal(after2, before2)
+})
+
 test_that("R-12.6: a commit-time failure rolls back the whole call and aborts sampletidy_error, leaving no partial write (dbCommit() must sit inside the tryCatch)", {
   path <- seed_db()
   con <- seed_con(path)

@@ -124,6 +124,22 @@ db_transaction <- function(con, fn) {
 
 # ---- change_log writer ------------------------------------------------------
 
+# change_log old/new are VARCHAR; normalize POSIXct to a single canonical
+# timezone (UTC) so the audit trail is internally consistent and matches
+# the value duckdb actually stores (A32). Non-POSIXct values keep their
+# existing as.character() rendering; NA stays NA.
+#' @keywords internal
+#' @noRd
+.st_changelog_str <- function(x) {
+  if (inherits(x, "POSIXct")) {
+    out <- format(x, tz = "UTC", format = "%Y-%m-%d %H:%M:%S")
+    out[is.na(x)] <- NA_character_
+    out
+  } else {
+    as.character(x)
+  }
+}
+
 #' @keywords internal
 #' @noRd
 .st_write_change_log <- function(con, at, actor, action, tbl, uuid_row, field,
@@ -314,7 +330,7 @@ db_update <- function(con, table, uuid = NULL, changes, actor, reason,
       old_val <- current[[field]][[1]]
       new_val <- changes[[field]]
 
-      if (identical(as.character(new_val), as.character(old_val))) {
+      if (identical(.st_changelog_str(new_val), .st_changelog_str(old_val))) {
         next
       }
 
@@ -328,7 +344,7 @@ db_update <- function(con, table, uuid = NULL, changes, actor, reason,
       .st_write_change_log(
         con, at = at, actor = actor, action = "update", tbl = table,
         uuid_row = uuid_row, field = field,
-        old = as.character(old_val), new = as.character(new_val),
+        old = .st_changelog_str(old_val), new = .st_changelog_str(new_val),
         reason = reason, source_hash = source_hash
       )
     }
