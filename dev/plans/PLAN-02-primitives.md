@@ -68,10 +68,15 @@ commas (`"1,320"`) parse as 1320; whitespace tolerated.
 
 ## R-2.4 `parse_lab_datetime(x, formats, tz = "Australia/Sydney")`
 
-Accepted named formats (pin): `esdat` = `"%d %b %Y %H:%M"` and `"%d %b %Y"`;
-`crosstab` = `"%d/%m/%Y"`; `iso` = `"%Y-%m-%d %H:%M"` and `"%Y-%m-%d"`.
+Accepted named formats (pin): `esdat` = `"%d %b %Y %H:%M"`, `"%d %b %Y"`,
+`"%d-%b-%y %H:%M"`, `"%d-%b-%y"` (real ESdat exports render sample/analysed
+dates in both the long `"07 May 2024 11:30"` and the short `"07-May-24 11:30"`
+dialect — corpus-confirmed 2026-07-23); `crosstab` = `"%d/%m/%Y"`; `iso` =
+`"%Y-%m-%d %H:%M"` and `"%Y-%m-%d"`. Within a preset, datetime forms precede
+their date-only counterpart so a clock time is never dropped to midnight.
 Returns POSIXct in tz. Criteria:
 - `"24 May 2025 11:45"` → 2025-05-24 11:45 AEST; `"26 May 2025"` → midnight;
+- `"07-May-24 11:30"` → 2024-05-07 11:30 AEST; `"07-May-24"` → midnight;
 - `"05/01/2026"` parses as **5 January** (d/m/y — the load-bearing assertion);
 - `"13/13/2025"` → NA (not silently reinterpreted); mixed vector parses
   element-wise; empty string → NA;

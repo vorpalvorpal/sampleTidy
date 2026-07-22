@@ -447,6 +447,27 @@ test_that("R-8.5: an ESdat-format datetime yields both sample_date and sample_da
   expect_false(is.na(row$sample_datetime))
 })
 
+test_that("R-8.5: a short-date ESdat datetime '07-May-24 11:30' resolves, not a parse_error", {
+  path <- seed_db()
+  con <- seed_con(path)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  # Real ESdat exports render some sample datetimes hyphen/2-digit-year; the
+  # reconciler must resolve this dialect rather than queue a spurious
+  # parse_error (the dominant avoidable review item in the 2026-07-23 corpus
+  # dry-run: 443 of them, all this exact format).
+  event <- mk_event(mk_row(source_ref = "r1", feature_raw = "T.S02", lab_sample_id = "XX1234567002",
+                           sample_datetime_raw = "07-May-24 11:30"))
+  out <- reconcile_event(event, con)
+  expect_equal(nrow(out$review[out$review$source_ref == "r1", ]), 0)
+  row <- out$clean[out$clean$source_ref == "r1", ]
+  expect_equal(nrow(row), 1)
+  expect_equal(row$sample_date, as.Date("2024-05-07"))
+  expect_false(is.na(row$sample_datetime))
+  expect_equal(format(row$sample_datetime, "%Y-%m-%d %H:%M:%S", tz = "Australia/Sydney"),
+               "2024-05-07 11:30:00")
+})
+
 test_that("R-8.5: a crosstab-format (date-only) datetime yields date only", {
   path <- seed_db()
   con <- seed_con(path)

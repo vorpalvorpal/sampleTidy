@@ -17,6 +17,38 @@ test_that("R-2.4: 'esdat' date-only format parses to midnight", {
   expect_equal(format(result, "%Y-%m-%d %H:%M:%S", tz = "Australia/Sydney"), "2025-05-26 00:00:00")
 })
 
+test_that("R-2.4: 'esdat' short-date dialect '07-May-24 11:30' parses (corpus-confirmed 2026-07-23)", {
+  withr::local_locale(c(LC_TIME = "C"))
+  # Real ESdat exports (e.g. the BWMF April 2024 rain-event files) render the
+  # sample datetime as hyphen/2-digit-year rather than space/4-digit-year;
+  # before this was accepted the reconciler flagged 443 spurious parse_errors.
+  dt <- parse_lab_datetime("07-May-24 11:30", formats = "esdat")
+  expect_equal(format(dt, "%Y-%m-%d %H:%M:%S", tz = "Australia/Sydney"), "2024-05-07 11:30:00")
+  # Date-only short form falls through to midnight, never dropping a clock time.
+  d <- parse_lab_datetime("07-May-24", formats = "esdat")
+  expect_equal(format(d, "%Y-%m-%d %H:%M:%S", tz = "Australia/Sydney"), "2024-05-07 00:00:00")
+})
+
+test_that("R-2.4: the short-date ESdat dialect parses under every sample-datetime format list", {
+  withr::local_locale(c(LC_TIME = "C"))
+  # `.lab_datetime_formats$esdat`, `.st_join_datetime_formats` (assemble) and
+  # `.rc_datetime_formats` (reconcile) are three independent literal lists that
+  # each parse `sample_datetime_raw`; this guards them against drifting apart
+  # (only one of the three raised the corpus parse_errors, but all three must
+  # accept the dialect for the join key, reconcile and preset paths to agree).
+  lists <- list(
+    esdat_preset = .lab_datetime_formats$esdat,
+    assemble     = .st_join_datetime_formats,
+    reconcile    = .rc_datetime_formats
+  )
+  for (nm in names(lists)) {
+    dt <- parse_lab_datetime("07-May-24 11:30", lists[[nm]])
+    expect_equal(format(dt, "%Y-%m-%d %H:%M:%S", tz = "Australia/Sydney"),
+                 "2024-05-07 11:30:00",
+                 info = nm)
+  }
+})
+
 test_that("R-2.4: 'crosstab' format is d/m/y - '05/01/2026' parses as 5 January (load-bearing)", {
   result <- parse_lab_datetime("05/01/2026", formats = "crosstab")
   expect_equal(format(result, "%Y-%m-%d", tz = "Australia/Sydney"), "2026-01-05")

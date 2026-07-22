@@ -12,7 +12,11 @@
 
 # Combined datetime-format vector covering both dialects seen across
 # `sample_datetime_raw` values at assembly time (ESdat + crosstab/ACIRL).
-.st_join_datetime_formats <- c("%d %b %Y %H:%M", "%d %b %Y", "%d/%m/%Y")
+# The two `%d-%b-%y` forms cover the ESdat short-date rendering
+# (`"07-May-24 11:30"`); keep this union in sync with `.rc_datetime_formats`
+# (reconcile.R) and the `esdat` preset (dates.R).
+.st_join_datetime_formats <- c("%d %b %Y %H:%M", "%d %b %Y",
+                               "%d-%b-%y %H:%M", "%d-%b-%y", "%d/%m/%Y")
 
 #' Strip the `/<version>` suffix from an `adapter` IR column value
 #' @keywords internal
