@@ -426,7 +426,7 @@ mig001_run <- function(db, snapshot_dir, dry_run = FALSE, .now = NULL) {
           DBI::dbExecute(con, "
             CREATE TABLE \"sample\" (
               uuid VARCHAR PRIMARY KEY,
-              uuid_feature_alias VARCHAR REFERENCES feature_alias(uuid),
+              uuid_feature_alias VARCHAR NOT NULL REFERENCES feature_alias(uuid),
               uuid_project VARCHAR,
               date TIMESTAMP,
               date_start TIMESTAMP,

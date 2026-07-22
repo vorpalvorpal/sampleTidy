@@ -356,6 +356,26 @@ test_that("R-13.1: feature_alias is created with all 11 runtime columns (incl. `
   expect_s3_class(result, "data.frame")
 })
 
+test_that("R-13.1: the migrated `sample` rebuild keeps uuid_feature_alias NOT NULL (matches CONTRACT / helper-db.R)", {
+  mig <- .mig001_load()
+  path <- seed_pre_migration_db()
+  mig$mig001_run(db = path, snapshot_dir = withr::local_tempdir(), dry_run = FALSE)
+
+  con <- pre_migration_con(path)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  is_nullable <- DBI::dbGetQuery(con, "
+    SELECT is_nullable FROM information_schema.columns
+    WHERE table_name='sample' AND column_name='uuid_feature_alias'
+  ")$is_nullable
+  expect_identical(is_nullable, "NO")
+
+  expect_error(DBI::dbExecute(con, "
+    INSERT INTO \"sample\" (uuid, uuid_feature_alias, date)
+    VALUES ('s-null-test', NULL, TIMESTAMP '2024-01-01 00:00:00')
+  "))
+})
+
 # ---- R-13.1 step 11: verify is a hard gate ---------------------------------
 
 test_that("R-13.1: the step-11 verify is a hard gate that aborts on any count/checksum mismatch", {
