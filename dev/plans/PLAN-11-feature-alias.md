@@ -381,7 +381,6 @@ feature_alias(
   auto_assign  BOOLEAN DEFAULT TRUE,  -- FALSE = suggest only, never resolve
   first_seen   TIMESTAMP,
   last_seen    TIMESTAMP,
-  source_hash  VARCHAR,
   confirmed_by VARCHAR,               -- NULL = unconfirmed guess
   comments     VARCHAR
 )
@@ -395,6 +394,19 @@ inserting; a dangling `(NULL, alias_key)` row is reused, not duplicated.
 Declared in `helper-db.R`'s core DDL (tests) and created by the migration
 (live). **Not** in `ensure_schema()` — that is ops-tables-only (A50).
 `feature_alias` is added to `.st_mutate_allowlist` in `R/mutate.R`.
+
+**No `source_hash` column (A64).** An alias's creating-file hash is *not*
+denormalised onto the row. It is recoverable by joining the alias's own
+`change_log` insert row (`tbl = 'feature_alias'`, `uuid_row = <alias uuid>`,
+whose `source_hash` the writer already records in-transaction, CONTRACT §
+`change_log.source_hash`) — exactly the "recoverable via join, so don't store
+it" principle applied to `analysis`. Dropping it also converges the test DDL
+with the live migration DDL (`001-alias-indirection.R`), which never carried
+`source_hash`. `lab_method` likewise has no creating-file hash, so the two
+dimension tables are now consistent. The alias's *usage* across later files is
+still tracked by `n_seen`/`last_seen`; only the redundant creation-hash column
+is removed. Provenance of the write itself is unaffected — the writer still
+passes `source_hash` to `db_append()` for the `change_log` row.
 
 Criteria: the table exists after `seed_db()`; `alias_key` is always
 `.rc_key(name)`; the same `alias_key` may exist against two different features
