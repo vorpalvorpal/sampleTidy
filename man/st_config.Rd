@@ -21,3 +21,13 @@ A get resolves, in order: the option, then the environment variable
 \verb{SAMPLETIDY_<KEY>} (key upper-cased), then a built-in default. Keys with
 no built-in default abort if neither the option nor the env var is set.
 }
+\details{
+Env-var overrides are string-only: \verb{SAMPLETIDY_<KEY>} always yields a
+single character value. This is fine for scalar keys (paths,
+\code{remove_ingested}, coerced), but a list-valued key such as
+\code{field_analytes} cannot be safely sourced from an env var - a single
+string would silently shrink the allowlist to one entry. For the known
+list-valued keys, \code{st_config()} aborts if it would otherwise fall through
+to the env var; set such a key in code via \code{st_config(key, value)}
+instead (see PLAN-12 R-12.11).
+}

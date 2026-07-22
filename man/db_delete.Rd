@@ -4,25 +4,37 @@
 \alias{db_delete}
 \title{Delete a row, logging one \code{change_log} delete row}
 \usage{
-db_delete(con, table, uuid, actor, reason)
+db_delete(con, table, uuid = NULL, actor, reason, key = NULL)
 }
 \arguments{
 \item{con}{an open read-write DBI connection.}
 
 \item{table}{target table name.}
 
-\item{uuid}{the row's primary key.}
+\item{uuid}{the row's primary key (scalar-uuid path; mutually exclusive
+with \code{key}).}
 
 \item{actor}{who is making this change.}
 
 \item{reason}{free-text reason, stored on the \code{change_log} row.}
+
+\item{key}{named list of column -> value giving an alternate/composite
+key (mutually exclusive with \code{uuid}).}
 }
 \value{
-\code{uuid}, invisibly.
+\code{uuid} (or \code{key}, when keyed that way), invisibly.
 }
 \description{
 Validates \code{table} against the mutation-layer allowlist, deletes the row,
 and writes one \code{change_log} row (\code{action = "delete"}). Participates in the
 caller's open mutation-layer transaction if there is one; otherwise atomic
 on its own.
+}
+\details{
+Keyed on either the scalar \code{uuid} (back-compat, default path - every
+existing caller unchanged) OR a named-list \code{key} for tables with no \code{uuid}
+column (PLAN-14 R-14.1); see \code{db_update()}'s doc for the shared key
+mechanism. \code{change_log.uuid_row} is the scalar uuid when keyed that way,
+else \code{NA}. CONTRACT A72 (delete-missing aborts \code{sampletidy_error}) applies
+identically to both key forms.
 }

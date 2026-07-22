@@ -6,7 +6,9 @@
 \usage{
 add_feature(
   name,
-  site = NA_character_,
+  site,
+  lon,
+  lat,
   flow = NA_character_,
   matrix = NA_character_,
   geom_wkt = NA_character_,
@@ -19,6 +21,10 @@ add_feature(
 \item{name}{feature name.}
 
 \item{site}{site name.}
+
+\item{lon}{longitude, \verb{DOUBLE NOT NULL} on the live schema.}
+
+\item{lat}{latitude, \verb{DOUBLE NOT NULL} on the live schema.}
 
 \item{flow}{flow type (e.g. \code{"surface"}), optional.}
 
