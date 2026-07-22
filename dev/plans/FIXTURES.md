@@ -185,6 +185,17 @@ the units are on `lm-0002`.)
 | s-0003 | fa-0010 (pending) | 2025-05-10 | 2025-05-10 08:00:00 | ALS |
 | s-0004 | fa-0001 | 2025-05-12 | 2025-05-12 08:15:00 | ALS |
 
+> **Datetime storage convention (tz-faithfulness).** The `datetime` values above
+> — and s-0001's — are the **Australia/Sydney wall-clock** sampling times (the
+> human-facing meaning). Production commit (`.ct_find_or_create_sample`) stores
+> the Sydney-parsed instant, which duckdb persists as its **UTC** equivalent, so
+> the `helper-db.R` SQL seed stores each datetime as the **UTC instant** =
+> wall-clock **−10h** (AEST = UTC+10 in May, no DST): s-0001 `01:45`, s-0002
+> `2025-05-24 23:30`, s-0003 `2025-05-09 22:00`, s-0004 `2025-05-11 22:15`. This
+> is required for the R-11.18/A62 datetime-identity predicate: a re-ingest of the
+> same sampling (also Sydney-parsed) must epoch-match its stored candidate. The
+> `date` column stays the naive midnight-UTC calendar day, matched separately.
+
 **`analysis` has NO units column** (D7 reversed / A63). Each row's units are
 those of its `uuid_lab`, shown here in brackets for readability only — they are
 **not** stored on these rows.
