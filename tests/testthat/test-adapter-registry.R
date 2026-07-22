@@ -102,3 +102,31 @@ test_that("R-3.3: adapter_registry() returns adapters as a named list keyed by i
   reg <- adapter_registry()
   expect_setequal(names(reg), c("aaa", "bbb"))
 })
+
+test_that("R-12.10: register_builtin_adapters() emits no Overwriting inform when a built-in re-registers itself", {
+  clear_adapters()
+  withr::defer(clear_adapters())
+
+  # First call populates the registry with all four built-ins (as .onLoad()
+  # / the start of ingest_dir() do). The second call is the defensive
+  # re-registration A33 performs on every ingest_dir() run: same ids, freshly
+  # constructed built-in adapter objects. That must be silent.
+  register_builtin_adapters()
+  expect_no_message(register_builtin_adapters(), message = "Overwriting")
+
+  reg <- adapter_registry()
+  expect_setequal(names(reg), c("esdat", "als_xtab", "als_enmrg", "acirl_field_xlsx"))
+})
+
+test_that("R-12.10: a third-party adapter registered over a built-in id still emits an Overwriting inform", {
+  clear_adapters()
+  withr::defer(clear_adapters())
+
+  register_builtin_adapters()
+
+  clobber <- make_dummy_adapter("esdat", "99.0")
+  expect_message(register_adapter(clobber), "Overwriting")
+
+  reg <- adapter_registry()
+  expect_equal(reg[["esdat"]]$version, "99.0")
+})

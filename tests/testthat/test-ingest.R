@@ -60,7 +60,13 @@ test_that("R-9.5: subdirectory content is untouched and cruft files are ignored"
   input_dir <- build_e2e_input_dir()
 
   report <- ingest_dir(input_dir, db = setup$db_path)
-  expect_type(report, "list")
+  # R-12.15 T-1 sweep (5th instance): the fixture's two cruft files
+  # (old_export.bak, .DS_Store - see build_e2e_input_dir()) are the only
+  # files that land `ignored`; assert the report's own files_by_state
+  # reflects that specific, fixture-derived count rather than merely
+  # existing as a list.
+  expect_true(report$n_files_routed > 0)
+  expect_equal(unname(report$files_by_state[["ignored"]]), 2L)
 
   # the subdirectory and its contents are never touched
   subdir <- file.path(input_dir, "subdir")
@@ -110,7 +116,13 @@ test_that("R-9.5: dry_run = TRUE produces a report with zero core-table DB write
   report <- ingest_dir(input_dir, db = setup$db_path, dry_run = TRUE)
   after <- all_core_counts(setup$db_path)
 
-  expect_type(report, "list")
+  # R-12.15 T-1 sweep (5th instance): pin dry_run's own documented contract
+  # (ingest_dir() roxygen: "dry_run = TRUE still routes, parses, assembles
+  # and reconciles ... but skips commit_event() ... entirely") rather than
+  # just checking `report` exists.
+  expect_true(isTRUE(report$dry_run))
+  expect_true(report$n_files_routed > 0)
+  expect_equal(report$n_events_committed, 0L)
   expect_equal(after, before)
   expect_length(list.files(setup$snapshot_dir), 0)
 })
@@ -267,6 +279,43 @@ test_that("R-9.6: a source with a missing archive copy is kept, never deleted wi
   expect_true(file.exists(file.path(input_dir, tampered_filename)))
 })
 
+# ---- R-12.1: adapter match() return-value validation, contained (F6) ------
+
+test_that("R-12.1: an ingest run containing one file whose adapter match() returns NA still commits the other good files (per-file containment, not a whole-run abort)", {
+  setup <- ingest_test_setup()
+  input_dir <- build_e2e_input_dir()
+
+  bad_adapter_id <- "r121_bad_na_adapter"
+  register_adapter(list(
+    id = bad_adapter_id, version = "1.0",
+    match = function(fm) if (grepl("R121BADFILE", fm$filename)) NA_character_ else "no",
+    parse = function(path, file_meta) list(results = ir_results(), samples = ir_samples(), report = list())
+  ))
+  withr::defer({
+    if (exists(bad_adapter_id, envir = sampleTidy:::.st_adapter_registry, inherits = FALSE)) {
+      rm(list = bad_adapter_id, envir = sampleTidy:::.st_adapter_registry)
+    }
+  })
+
+  st_test_write_file(input_dir, "R121BADFILE_0.csv", content = "a,b\n1,2\n")
+
+  expect_no_error(report <- ingest_dir(input_dir, db = setup$db_path))
+
+  states <- ingest_file_states(setup$db_path)
+  bad_state <- states[!is.na(states$filename) & states$filename == "R121BADFILE_0.csv", ]
+  expect_equal(nrow(bad_state), 1)
+  expect_identical(bad_state$state, "failed")
+  expect_match(bad_state$state_reason, bad_adapter_id, fixed = TRUE)
+
+  # the good fixture files still land in real terminal states, unaffected by
+  # the third-party adapter's bad return value on the unrelated marker file
+  good_states <- states[!states$filename %in% c("old_export.bak", ".DS_Store", "R121BADFILE_0.csv"), ]
+  expect_true(nrow(good_states) > 0)
+  expect_true(all(good_states$state %in%
+    c("committed", "archived", "ignored", "quarantined", "failed", "needs_review")))
+  expect_true(any(good_states$state %in% c("committed", "archived")))
+})
+
 test_that("R-9.6: a subsequent run over the emptied directory is a clean no-op", {
   setup <- ingest_test_setup()
   input_dir <- withr::local_tempdir()
@@ -283,4 +332,184 @@ test_that("R-9.6: a subsequent run over the emptied directory is a clean no-op",
   expect_no_error(ingest_dir(input_dir, db = setup$db_path))
   after_second <- all_core_counts(setup$db_path)
   expect_equal(after_second, after_removal)
+})
+
+# ---- R-12.2: per-event containment in the ingest loop (F7, A60) -----------
+#
+# NOTE (PLAN-12 sequencing): reconcile.R still queries the dropped
+# `sample.uuid_feature` column (owned by P11-reconcile, not this unit), so
+# ANY real event with clean rows currently aborts the instant the real
+# `reconcile_event()`/`commit_event()` run over real fixture data - entirely
+# independently of whether R-12.2's own containment logic exists yet. To
+# isolate the criterion actually under test here (does `ingest_dir()`
+# contain a per-event reconcile/commit failure, and does a 100%-failure run
+# abort loudly) from that unrelated, already-tracked red, both tests below
+# mock `reconcile_event()`/`commit_event()` at the `ingest_dir()` boundary -
+# the same fault-injection idiom already used for `snapshot_db()` in the
+# R-9.6 tests above - rather than depending on the currently-broken real
+# reconcile/commit path. `route_files()`/parse/`assemble_events()` before
+# that point are real (real fixtures, real `event$files`).
+
+test_that("R-12.2: a per-event reconcile failure is contained - the poisoned event's kept files are marked failed with events_failed counted and a cli_warn names it, while sibling events still reach committed/archived terminal states", {
+  setup <- ingest_test_setup()
+  input_dir <- build_e2e_input_dir()
+
+  call_n <- 0L
+  poisoned_hashes <- character(0)
+  ok_resolved <- list(
+    clean = tibble::tibble(source_ref = character(0)),
+    skipped = tibble::tibble(source_ref = character(0), reason = character(0)),
+    review = tibble::tibble()
+  )
+  testthat::local_mocked_bindings(
+    reconcile_event = function(event, con) {
+      call_n <<- call_n + 1L
+      if (call_n == 1L) {
+        poisoned_hashes <<- event$files$hash[sampleTidy:::.ig_kept_rows(event$files)]
+        stop("R-12.2 injected reconcile failure")
+      }
+      ok_resolved
+    },
+    commit_event = function(event, resolved, con) {
+      for (h in event$files$hash[sampleTidy:::.ig_kept_rows(event$files)]) {
+        ingest_file_set_state(con, h, "committed", reset = TRUE)
+      }
+      invisible(NULL)
+    }
+  )
+
+  expect_warning(
+    report <- ingest_dir(input_dir, db = setup$db_path),
+    regexp = "R-12.2 injected reconcile failure",
+    fixed = TRUE
+  )
+
+  expect_true(length(poisoned_hashes) > 0)
+  states <- ingest_file_states(setup$db_path)
+  poisoned_states <- states[states$hash %in% poisoned_hashes, ]
+  expect_true(nrow(poisoned_states) > 0)
+  expect_true(all(poisoned_states$state == "failed"))
+  expect_true(all(grepl("R-12.2 injected reconcile failure", poisoned_states$state_reason, fixed = TRUE)))
+
+  expect_identical(report$events_failed, 1L)
+
+  # sibling events (kept files belonging to any OTHER event) still reach a
+  # real commit terminal state - the poison event does not block the run.
+  sibling_states <- states[!states$hash %in% poisoned_hashes &
+                              !states$filename %in% c("old_export.bak", ".DS_Store"), ]
+  expect_true(nrow(sibling_states) > 0)
+  expect_true(any(sibling_states$state == "committed"))
+  expect_true(call_n > 1)
+})
+
+test_that("R-12.2: when EVERY event throws in reconcile, ingest_dir() still contains each one (failed + counted) during the loop, then aborts class sampletidy_error after the loop - not a quiet all-failed report and not a bare abort on the first failure", {
+  setup <- ingest_test_setup()
+  input_dir <- build_e2e_input_dir()
+
+  call_n <- 0L
+  testthat::local_mocked_bindings(
+    reconcile_event = function(event, con) {
+      call_n <<- call_n + 1L
+      stop("R-12.2 injected systemic reconcile failure ", call_n)
+    }
+  )
+
+  caught <- NULL
+  warnings_seen <- 0L
+  withCallingHandlers(
+    tryCatch(
+      ingest_dir(input_dir, db = setup$db_path),
+      error = function(e) caught <<- e
+    ),
+    warning = function(w) {
+      warnings_seen <<- warnings_seen + 1L
+      invokeRestart("muffleWarning")
+    }
+  )
+
+  # the loop reached every event (not a bare abort on the first failure) ...
+  expect_true(call_n > 1,
+    info = "abort must happen AFTER the per-event loop, not on the first thrown event")
+  expect_true(warnings_seen >= call_n)
+  # ... and the run still surfaces the systemic wipe-out loudly.
+  expect_false(is.null(caught))
+  expect_s3_class(caught, "sampletidy_error")
+
+  states <- ingest_file_states(setup$db_path)
+  fixture_states <- states[!states$filename %in% c("old_export.bak", ".DS_Store"), ]
+  expect_true(nrow(fixture_states) > 0)
+  # every kept file of every event was contained (marked failed) before the
+  # abort fired - not left mid-pipeline, and not silently reported as a
+  # quiet all-failed report (the abort itself is the loud signal).
+  kept_fixture_states <- fixture_states[fixture_states$state != "ignored", ]
+  expect_true(nrow(kept_fixture_states) > 0)
+  expect_true(all(kept_fixture_states$state == "failed"))
+})
+
+# ---- R-12.7: ingest report uses terminal file states (F13) ----------------
+#
+# Same isolation note as R-12.2 above: `reconcile_event()`/`commit_event()`
+# are mocked to produce a controlled, real `ingest_file` terminal state (via
+# the real `ingest_file_set_state()`) so `.ig_build_report()`'s own
+# re-querying behaviour can be asserted independently of the unrelated
+# P11-reconcile `sample.uuid_feature` red.
+
+test_that("R-12.7: files_by_state reports the run's real terminal state (committed) for a run that commits an event, not the route-time 'claimed' state", {
+  setup <- ingest_test_setup()
+  input_dir <- build_e2e_input_dir()
+
+  ok_resolved <- list(
+    clean = tibble::tibble(source_ref = character(0)),
+    skipped = tibble::tibble(source_ref = character(0), reason = character(0)),
+    review = tibble::tibble()
+  )
+  testthat::local_mocked_bindings(
+    reconcile_event = function(event, con) ok_resolved,
+    commit_event = function(event, resolved, con) {
+      for (h in event$files$hash[sampleTidy:::.ig_kept_rows(event$files)]) {
+        ingest_file_set_state(con, h, "committed", reset = TRUE)
+      }
+      invisible(NULL)
+    }
+  )
+
+  report <- ingest_dir(input_dir, db = setup$db_path)
+
+  expect_true(report$n_events > 0)
+  expect_false("claimed" %in% names(report$files_by_state))
+  expect_true("committed" %in% names(report$files_by_state))
+  expect_equal(
+    unname(report$files_by_state[["committed"]]),
+    sum(ingest_file_states(setup$db_path)$state == "committed")
+  )
+})
+
+test_that("R-12.7: files_by_state shows 'needs_review' for a needs_review-only event, not 'claimed'", {
+  setup <- ingest_test_setup()
+  input_dir <- build_e2e_input_dir()
+
+  review_resolved <- list(
+    clean = tibble::tibble(source_ref = character(0)),
+    skipped = tibble::tibble(source_ref = character(0), reason = character(0)),
+    review = tibble::tibble(kind = "other")
+  )
+  testthat::local_mocked_bindings(
+    reconcile_event = function(event, con) review_resolved,
+    commit_event = function(event, resolved, con) {
+      for (h in event$files$hash[sampleTidy:::.ig_kept_rows(event$files)]) {
+        ingest_file_set_state(con, h, "needs_review", reset = TRUE)
+      }
+      invisible(NULL)
+    }
+  )
+
+  report <- ingest_dir(input_dir, db = setup$db_path)
+
+  expect_true(report$n_events > 0)
+  expect_false("claimed" %in% names(report$files_by_state))
+  expect_true("needs_review" %in% names(report$files_by_state))
+  expect_equal(
+    unname(report$files_by_state[["needs_review"]]),
+    sum(ingest_file_states(setup$db_path)$state == "needs_review")
+  )
 })

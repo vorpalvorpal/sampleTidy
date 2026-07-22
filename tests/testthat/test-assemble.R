@@ -312,6 +312,35 @@ test_that("R-7.3: ESdat results (feature_raw NA) gain feature_raw from the Sampl
   expect_identical(event$results$feature_raw[event$results$lab_sample_id == "XX1234567002"][[1]], "T.S02")
 })
 
+test_that("R-12.15 M1: a crosstab row's INLINE feature_raw wins over a joinable sample's differing feature (A44.2 is.na() guard)", {
+  # T-2 M1 mutation-kill: every other fixture in this file has the joined
+  # sample's feature equal to the row's own inline feature, so removing the
+  # A44.2 `is.na(feature_raw)` guard is invisible to them (the unconditional
+  # fill would write back the SAME value it already has). Here the crosstab
+  # row carries a non-NA inline feature_raw ("T.S01") and is joined by
+  # lab_sample_id (not the feature-key fallback, which would trivially force
+  # equality) to a sample row whose feature_raw genuinely differs
+  # ("T.MW01") - e.g. a mislabelled Sample2e row for the same lab code. The
+  # guarded code must leave the crosstab row's own inline value alone.
+  parsed <- list(
+    "h-xtab" = mk_parsed_entry(
+      results = mk_result(source_hash = "h-xtab", adapter = "als_xtab/1",
+                           lab_sample_id = "XX1234567001", feature_raw = "T.S01"),
+      meta = list(work_order_guess = "XX1234567")
+    ),
+    "h-samp" = mk_parsed_entry(
+      samples = mk_sample(source_hash = "h-samp", lab_sample_id = "XX1234567001",
+                           feature_raw = "T.MW01"),
+      meta = list(work_order_guess = "XX1234567")
+    )
+  )
+  out <- assemble_events(parsed)
+  event <- out$events[[1]]
+  expect_valid_event(event)
+  expect_equal(nrow(event$results), 1)
+  expect_identical(event$results$feature_raw[[1]], "T.S01")
+})
+
 test_that("R-7.3: fallback join matches on feature_raw when lab_sample_id is absent", {
   # Single visit per feature - avoids the unresolved "date part" mechanism
   # for results (see PLAN-CHANGE-REQUESTS.md).
@@ -443,6 +472,59 @@ test_that("R-7.4: a non-NCP foreign-work-order row is flagged for review", {
 })
 
 # ---- R-7.5: event object shape / states completeness --------------------
+
+# ---- R-11.15: ACIRL synthetic lab_sample_id seam (adapter -> assemble) --
+#
+# NOTE: unlike the rest of this file (whose `parsed` inputs are hand-built
+# via ir_results()/ir_samples() so it stays independent of plans 04-06's
+# landing order - see the file header), R-11.15's own criteria are pinned
+# against the REAL two-visit ACIRL fixture routed through the REAL adapter
+# (dev/plans/PLAN-11-feature-alias.md block B-11.15: "after assemble_events()
+# on the two-visit ACIRL fixture ..."). This is a genuine producer(adapter)
+# -> consumer(assemble) seam per phase4-test-authoring.md's seam-test
+# mandate, so this one test intentionally breaks the file's usual
+# synthetic-input pattern rather than hand-rolling a stand-in for the
+# adapter's output.
+
+test_that("R-11.15 (mandatory seam test): real ACIRL adapter output -> real assemble_events() keeps the 25-May visit dated 25/05/2025 with no spurious value_conflict flag", {
+  acirl <- sampleTidy:::adapter_registry()[["acirl_field_xlsx"]]
+  main_path <- test_path("fixtures", "acirl", "2400-9999-01_Test_WMF.xlsx")
+  meta <- sampleTidy:::file_meta(main_path)
+  parsed_acirl <- acirl$parse(main_path, meta)
+
+  parsed <- list(
+    "h-acirl" = mk_parsed_entry(
+      results = parsed_acirl$results,
+      samples = parsed_acirl$samples,
+      report = parsed_acirl$report,
+      meta = list(work_order_guess = parsed_acirl$report$header$report_no)
+    )
+  )
+  out <- assemble_events(parsed)
+  expect_length(out$events, 1)
+  event <- out$events[[1]]
+  expect_valid_event(event)
+
+  t_s01 <- event$results[event$results$feature_raw == "T.S01", ]
+  # both visit dates survive distinctly on the joined results - the 25-May
+  # rows are NOT re-dated to 24-May (the F2 bug this criterion closes)
+  expect_setequal(unique(t_s01$sample_datetime_raw), c("24/05/2025", "25/05/2025"))
+  visit2 <- t_s01[t_s01$sample_datetime_raw == "25/05/2025", ]
+  expect_true(nrow(visit2) > 0)
+
+  # no ACIRL result is flagged value_conflict/sample_datetime_mismatch for a
+  # spurious multi-date (feature-only) match - NA-safe on review_kind
+  spurious <- event$results$needs_review %in% TRUE &
+    !is.na(event$results$review_kind) &
+    event$results$review_kind == "value_conflict"
+  expect_equal(sum(spurious), 0)
+
+  # both sampling dates exist as distinct samples on the assembled event
+  # (the committed-DB half of this criterion is pinned by the e2e suite,
+  # PLAN-11 file-ownership table - test-e2e-pipeline.R)
+  t_s01_samples <- event$samples[event$samples$feature_raw == "T.S01", ]
+  expect_setequal(unique(t_s01_samples$sample_datetime_raw), c("24/05/2025", "25/05/2025"))
+})
 
 test_that("R-7.5: assemble_events() states tibble covers every input hash exactly once", {
   parsed <- list(

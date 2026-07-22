@@ -1308,3 +1308,136 @@ test_that("R-11.19: two candidates spanning DIFFERENT analytes still go to revie
   expect_equal(nrow(hit), 1)
   expect_identical(hit$kind, "unknown_analyte")
 })
+
+# =============================================================================
+# PLAN 12 - R-12.13: within-batch duplicate guard before commit (A-7)
+# =============================================================================
+#
+# R-8.6 dedups across *methods*; two identical-key rows from the SAME method
+# in one batch (a lab re-listing a determination) each independently pass the
+# three-way (which only consults the DB, not sibling rows in this batch) and
+# would otherwise commit as two analyses on one sample. The fix is a
+# `duplicated()` check over `(uuid_feature_alias, sample_date, uuid_analyte,
+# uuid_lab)` in `clean` before commit - route the exact dupe to REVIEW, never
+# collapse it (pinned 2026-07-22, Phase-3 D13: A54 - the pipeline records the
+# question, never invents the answer by silently picking one of two
+# uncompared rows). The key is `uuid_feature_alias`, NOT `uuid_feature`
+# (PLAN-12 "Ordering vs PLAN-11" + R-12.13 fix text, explicit).
+#
+# PROVISIONAL ORACLE: R-12.13 pins the *disposition* (review, not skip, not
+# collapse) but not the exact review `kind` string. "batch_duplicate" below is
+# a placeholder in the existing snake_case vocabulary
+# (unknown_feature/unknown_analyte/unknown_unit/parse_error/value_conflict);
+# Phase 6 must confirm or rename it against the real implementation.
+
+test_that("R-12.13: two identical-key same-method rows in one batch commit as ONE analysis, the other routed to review (not collapsed, not both committed)", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  # T.S02/f-0002 has no seeded analysis, so the three-way sees BOTH rows as
+  # "new" absent the R-12.13 guard - the exact bug this criterion fixes.
+  event <- mk_event(mk_rows(
+    mk_row(source_ref = "r1", lab_sample_id = "XX1234567002", feature_raw = "T.S02",
+           value_raw = "2.3", value_num = 2.3, below_detection = FALSE, rl = 0.1),
+    mk_row(source_ref = "r2", lab_sample_id = "XX1234567002", feature_raw = "T.S02",
+           value_raw = "2.3", value_num = 2.3, below_detection = FALSE, rl = 0.1)
+  ))
+  out <- reconcile_event(event, con)
+
+  # Exactly one of the two source_refs lands in clean - not zero (collapsed
+  # away), not two (the pre-fix bug: one sample gets two analyses).
+  expect_equal(sum(c("r1", "r2") %in% out$clean$source_ref), 1)
+
+  loser <- setdiff(c("r1", "r2"), out$clean$source_ref)
+  expect_equal(length(loser), 1)
+  # Routed to REVIEW, not skipped and not silently dropped (D13: never collapse).
+  expect_false(loser %in% out$skipped$source_ref)
+  hit <- out$review[out$review$source_ref == loser, ]
+  expect_equal(nrow(hit), 1)
+  expect_identical(hit$kind, "batch_duplicate") # PROVISIONAL ORACLE: R-12.13
+})
+
+test_that("R-12.13: distinct-key rows in the same batch are unaffected - both commit", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  # Same feature/analyte/method but DIFFERENT sample dates - genuinely two
+  # distinct measurements, must not trip the within-batch guard.
+  event <- mk_event(mk_rows(
+    mk_row(source_ref = "r1", lab_sample_id = "XX1234567002", feature_raw = "T.S02",
+           value_raw = "2.3", value_num = 2.3, below_detection = FALSE, rl = 0.1,
+           sample_datetime_raw = "24 May 2025 11:45"),
+    mk_row(source_ref = "r2", lab_sample_id = "XX1234567002", feature_raw = "T.S02",
+           value_raw = "2.4", value_num = 2.4, below_detection = FALSE, rl = 0.1,
+           sample_datetime_raw = "25 May 2025 11:45")
+  ))
+  out <- reconcile_event(event, con)
+  expect_true("r1" %in% out$clean$source_ref)
+  expect_true("r2" %in% out$clean$source_ref)
+  expect_false(any(out$review$kind == "batch_duplicate")) # PROVISIONAL ORACLE: R-12.13
+})
+
+test_that("R-12.13: interacts correctly with R-8.6 - cross-method dedup runs FIRST, then the within-batch guard catches the remaining same-method dupe", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  # r1/r3: same key AND same method (lm-0002) - the R-12.13 case.
+  # r2: same key but a DIFFERENT method (lm-0004, higher rl_low) - loses to r1
+  # under R-8.6's method preference BEFORE R-12.13 ever sees it.
+  event <- mk_event(mk_rows(
+    mk_row(source_ref = "r1", lab_sample_id = "XX1234567002", feature_raw = "T.S02",
+           method_raw = "EK040P: Fluoride by PC Titrator",
+           value_raw = "2.3", value_num = 2.3, below_detection = FALSE, rl = 0.1),
+    mk_row(source_ref = "r2", lab_sample_id = "XX1234567002", feature_raw = "T.S02",
+           method_raw = "EK040T: Fluoride by alt method",
+           value_raw = "2.5", value_num = 2.5, below_detection = FALSE, rl = 0.5),
+    mk_row(source_ref = "r3", lab_sample_id = "XX1234567002", feature_raw = "T.S02",
+           method_raw = "EK040P: Fluoride by PC Titrator",
+           value_raw = "2.3", value_num = 2.3, below_detection = FALSE, rl = 0.1)
+  ))
+  out <- reconcile_event(event, con)
+
+  # R-8.6 already removes r2 as a cross-method duplicate.
+  dup2 <- out$skipped[out$skipped$source_ref == "r2", ]
+  expect_equal(nrow(dup2), 1)
+  expect_identical(dup2$reason, "method_duplicate")
+
+  # Of the surviving same-method pair (r1, r3), exactly one commits and the
+  # other is routed to review by R-12.13 - never both, never neither.
+  expect_equal(sum(c("r1", "r3") %in% out$clean$source_ref), 1)
+  loser <- setdiff(c("r1", "r3"), out$clean$source_ref)
+  expect_identical(out$review$kind[out$review$source_ref == loser], "batch_duplicate") # PROVISIONAL ORACLE: R-12.13
+})
+
+test_that("R-12.13: the guard is keyed on uuid_feature_alias, NOT uuid_feature - two DIFFERENT (both-resolved) aliases of the same feature are not flagged as duplicates", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  # fa-0003 (self-alias 'T.MW01') and fa-0004 ('bs03alt') both resolve to the
+  # SAME uuid_feature f-0003 (FIXTURES.md/helper-db.R), but are two distinct
+  # feature_alias rows. Same analyte/method/date on both incoming rows: if the
+  # guard were (wrongly) keyed on uuid_feature, this pair would be flagged; a
+  # key of uuid_feature_alias (as PLAN-12 explicitly pins) must not flag it.
+  event <- mk_event(mk_rows(
+    mk_row(source_ref = "r1", feature_raw = "T.MW01", lab_sample_id = "XX9999999991",
+           sample_datetime_raw = "24 May 2025 11:45"),
+    mk_row(source_ref = "r2", feature_raw = "bs03alt", lab_sample_id = "XX9999999992",
+           sample_datetime_raw = "24 May 2025 11:45")
+  ))
+  out <- reconcile_event(event, con)
+  expect_true("r1" %in% out$clean$source_ref)
+  expect_true("r2" %in% out$clean$source_ref)
+  expect_false(any(out$review$kind == "batch_duplicate" & # PROVISIONAL ORACLE: R-12.13
+                     out$review$source_ref %in% c("r1", "r2")))
+})
+
+test_that("R-12.13: NA-safe key - two rows with an unresolved (NA) uuid_feature_alias are never matched to each other as batch dupes (A44/[#5])", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  # Two genuinely distinct lab rows for the SAME never-seen feature code, same
+  # analyte/method/date: both carry uuid_feature_alias = NA (feature_pending,
+  # R-11.5). A naive duplicated()-on-NA would spuriously pair them; the guard
+  # must exclude the NA key from the match (documented A44 behaviour), not
+  # coerce it into a spurious duplicate flag. Both must independently commit
+  # dangling, each with its own R-11.5 review item.
+  event <- mk_event(mk_rows(
+    mk_row(source_ref = "r1", feature_raw = "T.NEVER-SEEN-CODE-R1213", lab_sample_id = "XX9999999997"),
+    mk_row(source_ref = "r2", feature_raw = "T.NEVER-SEEN-CODE-R1213", lab_sample_id = "XX9999999998")
+  ))
+  out <- reconcile_event(event, con)
+  expect_true("r1" %in% out$clean$source_ref)
+  expect_true("r2" %in% out$clean$source_ref)
+  expect_false(any(out$review$kind == "batch_duplicate" & # PROVISIONAL ORACLE: R-12.13
+                     out$review$source_ref %in% c("r1", "r2")))
+})

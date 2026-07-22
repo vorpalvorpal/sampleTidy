@@ -212,3 +212,81 @@ test_that("R-3.6: router_matrix() returns (path, adapter, tier) for every adapte
   expect_equal(tier_of(path_b, "m1"), "no")
   expect_equal(tier_of(path_b, "m2"), "format")
 })
+
+# --- R-12.1 match() return-value validation (F6, contained registry lookup) --
+
+test_that("R-12.1: an adapter match() returning NA fails only that file (reason names the adapter); other files route normally", {
+  clear_adapters()
+  withr::defer(clear_adapters())
+  register_adapter(make_matcher_adapter("na_adapter", function(fm) if (grepl("BADNA", fm$filename)) NA_character_ else "no"))
+  register_adapter(make_matcher_adapter("normal_adapter", function(fm) if (fm$ext == "csv") "format" else "no"))
+
+  dir <- withr::local_tempdir()
+  db <- seed_db(dir)
+  con <- seed_con(db)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  path_bad <- st_test_write_file(dir, "BADNA_0.csv", content = "a,b\n1,2\n")
+  path_ok <- st_test_write_file(dir, "FINE_0.csv", content = "c,d\n3,4\n")
+
+  result <- route_files(c(path_bad, path_ok), con)
+
+  bad_row <- result[result$path == path_bad, ]
+  ok_row <- result[result$path == path_ok, ]
+
+  expect_equal(bad_row$state[[1]], "failed")
+  expect_match(bad_row$reason[[1]], "na_adapter", fixed = TRUE)
+  expect_equal(ok_row$state[[1]], "claimed")
+  expect_equal(ok_row$adapter[[1]], "normal_adapter")
+})
+
+test_that("R-12.1: an adapter match() returning a value outside the tier vocabulary ('weird') fails only that file (reason names the adapter and the bad value); other files route normally", {
+  clear_adapters()
+  withr::defer(clear_adapters())
+  register_adapter(make_matcher_adapter("weird_adapter", function(fm) if (grepl("BADWEIRD", fm$filename)) "weird" else "no"))
+  register_adapter(make_matcher_adapter("normal_adapter2", function(fm) if (fm$ext == "csv") "format" else "no"))
+
+  dir <- withr::local_tempdir()
+  db <- seed_db(dir)
+  con <- seed_con(db)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  path_bad <- st_test_write_file(dir, "BADWEIRD_0.csv", content = "a,b\n1,2\n")
+  path_ok <- st_test_write_file(dir, "FINE2_0.csv", content = "c,d\n3,4\n")
+
+  result <- route_files(c(path_bad, path_ok), con)
+
+  bad_row <- result[result$path == path_bad, ]
+  ok_row <- result[result$path == path_ok, ]
+
+  expect_equal(bad_row$state[[1]], "failed")
+  expect_match(bad_row$reason[[1]], "weird_adapter", fixed = TRUE)
+  expect_match(bad_row$reason[[1]], "weird", fixed = TRUE)
+  expect_equal(ok_row$state[[1]], "claimed")
+})
+
+test_that("R-12.1 regression: an adapter match() that throws still fails only that file, unchanged by the return-value validation fix", {
+  clear_adapters()
+  withr::defer(clear_adapters())
+  register_adapter(make_matcher_adapter("thrower2", function(fm) {
+    if (grepl("THROWS2", fm$filename)) stop("kaboom2 from match()") else "no"
+  }))
+  register_adapter(make_matcher_adapter("normal3", function(fm) if (fm$ext == "csv") "format" else "no"))
+
+  dir <- withr::local_tempdir()
+  db <- seed_db(dir)
+  con <- seed_con(db)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  path_throws <- st_test_write_file(dir, "THROWS2_0.csv", content = "a,b\n1,2\n")
+  path_ok <- st_test_write_file(dir, "FINE3_0.csv", content = "c,d\n3,4\n")
+
+  result <- route_files(c(path_throws, path_ok), con)
+
+  throw_row <- result[result$path == path_throws, ]
+  ok_row <- result[result$path == path_ok, ]
+
+  expect_equal(throw_row$state[[1]], "failed")
+  expect_match(throw_row$reason[[1]], "kaboom2 from match()", fixed = TRUE)
+  expect_equal(ok_row$state[[1]], "claimed")
+})

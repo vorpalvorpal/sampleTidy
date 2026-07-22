@@ -27,10 +27,15 @@ test_that("R-9.1: db_append() of 2 rows writes 2 change_log rows with one shared
   on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
 
   before <- count_change_log(con)
+  # lon/lat added (R-11.17): the live `feature` table declares them DOUBLE NOT
+  # NULL (helper-db.R's DDL now mirrors that), so a fixture omitting them
+  # fails on an unrelated NOT NULL constraint rather than testing db_append()
+  # itself - reconciled per the P11-mutate brief.
   new_features <- tibble::tibble(
     uuid = c("f-1001", "f-1002"), name = c("T.NEW1", "T.NEW2"),
     site = c("TestSite", "TestSite"), flow = c("surface", "surface"),
-    matrix = c("water", "water")
+    matrix = c("water", "water"), lon = c(150.1001, 150.1002),
+    lat = c(-33.1001, -33.1002)
   )
   db_append(con, "feature", new_features, actor = "tester", reason = "bulk add")
 
@@ -103,8 +108,9 @@ test_that("R-9.1: db_delete() removes the row and writes a change_log delete ent
   con <- seed_con(path)
   on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
 
-  DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix) VALUES
-    ('f-9999', 'T.THROWAWAY', 'TestSite', 'surface', 'water')")
+  # lon/lat added (R-11.17 reconciliation - see the db_append test above).
+  DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix, lon, lat) VALUES
+    ('f-9999', 'T.THROWAWAY', 'TestSite', 'surface', 'water', 150.9999, -33.9999)")
   before <- count_change_log(con)
 
   db_delete(con, "feature", uuid = "f-9999", actor = "tester", reason = "cleanup")
@@ -144,7 +150,12 @@ test_that("R-9.1: add_feature() inserts a row and a change_log entry", {
   on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
   before <- count_change_log(con)
 
-  add_feature(name = "T.NEW1", site = "TestSite", flow = "surface", matrix = "water",
+  # lon/lat added (R-11.17 reconciliation): the fixed add_feature() signature
+  # requires them (live `feature.lon`/`lat` are DOUBLE NOT NULL) - see the
+  # dedicated R-11.17 tests below for the missing-lon/lat and round-trip
+  # cases this baseline test doesn't cover.
+  add_feature(name = "T.NEW1", site = "TestSite", lon = 150.5001, lat = -33.5001,
+              flow = "surface", matrix = "water",
               actor = "tester", reason = "new monitoring point")
 
   n_features <- DBI::dbGetQuery(con, "SELECT count(*) AS n FROM feature WHERE name = 'T.NEW1'")$n
@@ -230,4 +241,295 @@ test_that("R-9.1: review_queue() has stable columns on a zero-row result", {
   expect_equal(nrow(empty), 0)
   expect_true(all(c("uuid", "created_at", "kind", "work_order", "source_hash", "payload",
                      "status", "resolution", "resolved_by", "resolved_at") %in% names(empty)))
+})
+
+# ---- R-11.17: add_feature() aligned to the live `feature` schema (F5/A-4) --
+#
+# The live `feature` table is 19 columns, `lon`/`lat` DOUBLE NOT NULL, and
+# `add_feature()` (mutate.R:324-338) omits them - a broken exported API that
+# cannot insert against the live-shaped DDL. Fix: add lon/lat as required
+# (no-default) arguments, checkmate-validated as numbers, aborting
+# `sampletidy_error` at the argument check (not a raw DB constraint error)
+# when omitted. `virtual` stays (A58/A67).
+
+test_that("R-11.17: add_feature() with lon/lat inserts against the live-shaped DDL and the row round-trips coordinates + virtual", {
+  path <- seed_db()
+  withr::local_options(list("sampletidy.live_db" = path))
+  con <- seed_con(path)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  add_feature(name = "T.NEWCOORD", site = "SiteA", lon = 150.1234, lat = -33.5678,
+              virtual = TRUE, actor = "tester", reason = "new monitoring point")
+
+  row <- DBI::dbGetQuery(
+    con, "SELECT lon, lat, virtual FROM feature WHERE name = 'T.NEWCOORD'"
+  )
+  expect_equal(nrow(row), 1)
+  expect_equal(row$lon, 150.1234)
+  expect_equal(row$lat, -33.5678)
+  expect_true(row$virtual)
+})
+
+test_that("R-11.17: add_feature() omitting lon/lat aborts as sampletidy_error at the argument check, not a DB error", {
+  path <- seed_db()
+  withr::local_options(list("sampletidy.live_db" = path))
+  con <- seed_con(path)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  before <- count_change_log(con)
+
+  err <- tryCatch(
+    add_feature(name = "T.NOLONLAT", site = "TestSite", actor = "tester",
+                reason = "missing coordinates"),
+    error = function(e) e
+  )
+  expect_s3_class(err, "sampletidy_error")
+  # NB db_transaction() (mutate.R:106-115) already wraps *any* error raised
+  # inside its fn(con) body - including a raw DB constraint failure - as
+  # class sampletidy_error with the prefix "Mutation transaction failed and
+  # was rolled back: ...". So `class = "sampletidy_error"` alone does not
+  # discriminate "argument check fired first" from "DB write was attempted
+  # and failed" - both look identical on class. The two ARE distinguishable
+  # on the message: a DB-path failure carries that specific wrapper prefix
+  # (verified against the transaction-wrap code, not guessed); an
+  # argument-check failure never enters db_transaction() at all, so it can
+  # never carry it.
+  expect_false(
+    grepl("Mutation transaction failed", conditionMessage(err), fixed = TRUE),
+    info = paste("error passed through db_transaction()'s DB-failure wrapper",
+                 "instead of failing at the argument check:", conditionMessage(err))
+  )
+
+  n_features <- DBI::dbGetQuery(con, "SELECT count(*) AS n FROM feature WHERE name = 'T.NOLONLAT'")$n
+  expect_equal(n_features, 0)
+  after <- count_change_log(con)
+  expect_equal(after, before)
+})
+
+test_that("R-11.17: .st_test_core_ddl's feature columns match the live schema (drift detector; SAMPLETIDY_CORPUS_DB-gated)", {
+  corpus_db <- Sys.getenv("SAMPLETIDY_CORPUS_DB")
+  skip_if(corpus_db == "", "SAMPLETIDY_CORPUS_DB not set")
+
+  # Materialise the real test DDL (run the interpreter, don't regex the
+  # string) into a throwaway in-memory DuckDB so we introspect what it
+  # actually creates, then diff against the live authoritative schema.
+  mem_con <- DBI::dbConnect(duckdb::duckdb())
+  on.exit(DBI::dbDisconnect(mem_con, shutdown = TRUE), add = TRUE)
+  DBI::dbExecute(mem_con, .st_test_core_ddl$feature)
+  test_cols <- DBI::dbGetQuery(
+    mem_con,
+    "SELECT column_name, is_nullable FROM information_schema.columns WHERE table_name = 'feature'"
+  )
+
+  live_con <- DBI::dbConnect(duckdb::duckdb(), corpus_db, read_only = TRUE)
+  on.exit(DBI::dbDisconnect(live_con, shutdown = TRUE), add = TRUE)
+  live_cols <- DBI::dbGetQuery(
+    live_con,
+    "SELECT column_name, is_nullable FROM information_schema.columns WHERE table_name = 'feature'"
+  )
+
+  missing_live <- setdiff(test_cols$column_name, live_cols$column_name)
+  expect_true(
+    length(missing_live) == 0,
+    info = paste("test DDL columns absent from the live feature table:",
+                 paste(missing_live, collapse = ", "))
+  )
+
+  live_nullable <- setNames(live_cols$is_nullable, live_cols$column_name)
+  for (col in test_cols$column_name) {
+    test_nullable <- test_cols$is_nullable[test_cols$column_name == col]
+    expect_identical(
+      test_nullable, unname(live_nullable[[col]]),
+      info = paste0("nullability drift on feature.", col, ": test DDL says ",
+                     test_nullable, ", live says ", live_nullable[[col]])
+    )
+  }
+})
+
+test_that("R-11.17: .st_test_core_ddl's feature DDL declares `virtual` (A58/A67 - the column exists live, not test-only drift)", {
+  mem_con <- DBI::dbConnect(duckdb::duckdb())
+  on.exit(DBI::dbDisconnect(mem_con, shutdown = TRUE))
+  DBI::dbExecute(mem_con, .st_test_core_ddl$feature)
+  cols <- DBI::dbGetQuery(
+    mem_con,
+    "SELECT column_name, data_type FROM information_schema.columns
+     WHERE table_name = 'feature' AND column_name = 'virtual'"
+  )
+  expect_equal(nrow(cols), 1)
+  expect_equal(cols$data_type, "BOOLEAN")
+})
+
+# ---- R-11.20: `feature_alias` in `.st_mutate_allowlist` (Phase-3 D1) -------
+#
+# `.st_mutate_allowlist` (mutate.R:40-43) did not list `feature_alias`, so
+# every db_append() in the pending-alias materialisation / confirmation path
+# aborted - the entire commit-everything path. Fix: add "feature_alias".
+
+test_that("R-11.20: db_append() to `feature_alias` succeeds and writes a change_log row (D1 fix)", {
+  path <- seed_db()
+  con <- seed_con(path)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  before <- count_change_log(con)
+
+  new_alias <- tibble::tibble(
+    uuid = "fa-9001", uuid_feature = "f-0001", name = "T.NEWALIAS",
+    alias_key = "tnewalias", kind = "pending", n_seen = 0L, auto_assign = TRUE
+  )
+  db_append(con, "feature_alias", new_alias, actor = "tester", reason = "new pending alias")
+
+  n_alias <- DBI::dbGetQuery(con, "SELECT count(*) AS n FROM feature_alias WHERE uuid = 'fa-9001'")$n
+  expect_equal(n_alias, 1)
+
+  after <- count_change_log(con)
+  expect_equal(after - before, 1)
+  log_row <- DBI::dbGetQuery(con, "SELECT * FROM change_log WHERE uuid_row = 'fa-9001'")
+  expect_equal(nrow(log_row), 1)
+  expect_equal(log_row$tbl, "feature_alias")
+  expect_equal(log_row$action, "insert")
+})
+
+test_that("R-11.20: db_append() to a still-non-allowlisted table (e.g. 'guideline') is still refused with sampletidy_error (allowlist regression)", {
+  path <- seed_db()
+  con <- seed_con(path)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  before <- count_change_log(con)
+
+  df <- tibble::tibble(uuid = "g-0001", name = "some guideline")
+  err <- tryCatch(
+    db_append(con, "guideline", df, actor = "tester", reason = "should be refused"),
+    error = function(e) e
+  )
+  expect_s3_class(err, "sampletidy_error")
+
+  after <- count_change_log(con)
+  expect_equal(after, before)
+})
+
+test_that("R-11.20: the pre-existing .st_mutate_allowlist entries are unchanged - feature_alias is an addition, not a replacement (security boundary regression)", {
+  pre_existing <- c(
+    "feature", "feature_mask", "analyte", "analyte_mask", "lab_method",
+    "project", "sample", "analysis", "asset", "review_queue"
+  )
+  dropped <- setdiff(pre_existing, .st_mutate_allowlist)
+  expect_true(
+    length(dropped) == 0,
+    info = paste("allowlist entries dropped:", paste(dropped, collapse = ", "))
+  )
+  expect_true("feature_alias" %in% .st_mutate_allowlist)
+})
+
+# ---- R-12.6: mutation-layer correctness (F12) -------------------------------
+#
+# Three independent defects in mutate.R: (1) db_update() logs a change_log
+# row for every field in `changes` with no old != new comparison - phantom
+# "update" records for unchanged fields; (2) db_delete() on a nonexistent
+# uuid runs a 0-row DELETE but still writes a delete change_log row - a
+# phantom delete record; (3) DBI::dbCommit() sits outside db_transaction()'s
+# tryCatch, so a commit-time error escapes unwrapped with no rollback
+# attempt. Fix: (1) db_update() skips a field whose as.character(new) equals
+# as.character(old) - no UPDATE, no log row; (2) db_delete() captures the
+# affected-row count and, when zero, ABORTS sampletidy_error and writes no
+# log row (PINNED 2026-07-22, Phase-3 D2, CONTRACT A72 - matches
+# db_update()'s existing "no row" behaviour; PLAN-14 R-14.1 depends on this);
+# (3) dbCommit() moves inside the tryCatch so a commit failure rolls back and
+# re-throws as sampletidy_error.
+
+test_that("R-12.6: db_update() skips the change_log row for a field whose new value equals its current value, logging only the field that actually changed", {
+  path <- seed_db()
+  con <- seed_con(path)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  before <- count_change_log(con)
+  # s-0001's seeded organisation is already 'ALS' (helper-db.R) - unchanged;
+  # person is unseeded (NULL) -> 'J. Tester' - changed.
+  db_update(con, "sample", "s-0001",
+            changes = list(organisation = "ALS", person = "J. Tester"),
+            actor = "tester", reason = "one field unchanged, one changed")
+
+  after <- count_change_log(con)
+  expect_equal(after - before, 1)
+
+  log_rows <- DBI::dbGetQuery(
+    con, "SELECT * FROM change_log WHERE tbl = 'sample' AND uuid_row = 's-0001'"
+  )
+  expect_equal(nrow(log_rows), 1)
+  expect_equal(log_rows$field, "person")
+  expect_equal(log_rows$new, "J. Tester")
+  expect_true(all(log_rows$field != "organisation"))
+
+  updated <- DBI::dbGetQuery(con, "SELECT organisation, person FROM \"sample\" WHERE uuid = 's-0001'")
+  expect_equal(updated$organisation, "ALS")
+  expect_equal(updated$person, "J. Tester")
+})
+
+test_that("R-12.6: db_update() where every field in `changes` is unchanged writes zero change_log rows (degenerate all-unchanged shape)", {
+  path <- seed_db()
+  con <- seed_con(path)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  before <- count_change_log(con)
+  db_update(con, "sample", "s-0001",
+            changes = list(organisation = "ALS"),
+            actor = "tester", reason = "no-op update, nothing actually changes")
+
+  after <- count_change_log(con)
+  expect_equal(after, before)
+
+  log_rows <- DBI::dbGetQuery(
+    con, "SELECT * FROM change_log WHERE tbl = 'sample' AND uuid_row = 's-0001'"
+  )
+  expect_equal(nrow(log_rows), 0)
+})
+
+test_that("R-12.6: db_delete() on a nonexistent uuid aborts sampletidy_error and writes no delete change_log row (A72, pinned Phase-3 D2)", {
+  path <- seed_db()
+  con <- seed_con(path)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  before <- count_change_log(con)
+  err <- tryCatch(
+    db_delete(con, "feature", uuid = "f-does-not-exist", actor = "tester",
+              reason = "delete of a row that was never there"),
+    error = function(e) e
+  )
+  expect_s3_class(err, "sampletidy_error")
+
+  after <- count_change_log(con)
+  expect_equal(after, before)
+
+  log_rows <- DBI::dbGetQuery(
+    con, "SELECT * FROM change_log WHERE uuid_row = 'f-does-not-exist'"
+  )
+  expect_equal(nrow(log_rows), 0)
+})
+
+test_that("R-12.6: a commit-time failure rolls back the whole call and aborts sampletidy_error, leaving no partial write (dbCommit() must sit inside the tryCatch)", {
+  path <- seed_db()
+  con <- seed_con(path)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  # Force DBI::dbCommit() itself to fail - a commit-time error, distinct from
+  # a mutation error inside fn(con). Mocks the DBI generic the same way
+  # test-commit.R mocks uuid::UUIDgenerate() (an already-loaded namespace
+  # function referenced via `::` from production code).
+  testthat::local_mocked_bindings(
+    dbCommit = function(...) stop("simulated commit failure"),
+    .package = "DBI"
+  )
+
+  before <- count_change_log(con)
+  err <- tryCatch(
+    db_update(con, "sample", "s-0001",
+              changes = list(organisation = "ACIRL"),
+              actor = "tester", reason = "forced commit failure"),
+    error = function(e) e
+  )
+  expect_s3_class(err, "sampletidy_error")
+
+  after <- count_change_log(con)
+  expect_equal(after, before,
+    info = "change_log row from the pre-commit UPDATE must be rolled back, not just uncommitted")
+
+  unchanged <- DBI::dbGetQuery(con, "SELECT organisation FROM \"sample\" WHERE uuid = 's-0001'")
+  expect_equal(unchanged$organisation, "ALS",
+    info = "the pre-commit UPDATE must be rolled back, leaving no partial write")
 })

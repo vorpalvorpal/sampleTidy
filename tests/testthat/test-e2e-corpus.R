@@ -264,7 +264,11 @@ test_that("R-10.5: a dry run against a copy of the real DB completes, finds alre
   # the behaviour is a visible decision rather than an accident.
   expect_true(after[["ingest_file"]] > 0)
 
-  expect_type(report, "list")
+  # R-12.15 T-1 sweep (5th instance): pin dry_run's own documented contract
+  # instead of merely checking `report` exists - complements (does not
+  # duplicate) the rows_already_present check right below.
+  expect_true(isTRUE(report$dry_run))
+  expect_equal(report$n_events_committed, 0L)
   # DESIGN §7 / R-10.5: the point of this gate is old-pipeline overlap - the
   # real DB already holds these analyses, so a dry run must recognise them
   # rather than propose them all as new.
