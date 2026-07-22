@@ -12,13 +12,18 @@
 #' must be single non-empty strings; `match` must be a function taking
 #' exactly one argument (`file_meta`); `parse` must be a function taking
 #' exactly two arguments (`path`, `file_meta`). Registering a duplicate `id`
-#' overwrites the existing registration and emits a `cli::cli_inform()`.
+#' overwrites the existing registration and emits a `cli::cli_inform()`,
+#' unless `quiet = TRUE` (used by `register_builtin_adapters()` for its
+#' defensive self-re-registration; a genuine third-party clobber of a
+#' built-in id still informs).
 #'
 #' @param a a list with elements `id`, `version`, `match`, `parse` (DESIGN
 #'   §5).
+#' @param quiet if `TRUE`, suppress the "Overwriting existing adapter
+#'   registration" inform on a duplicate `id`. Default `FALSE`.
 #' @return `a`, invisibly.
 #' @export
-register_adapter <- function(a) {
+register_adapter <- function(a, quiet = FALSE) {
   checkmate::assert_list(a, names = "unique")
 
   if (is.null(a$id) || !checkmate::test_string(a$id, min.chars = 1)) {
@@ -49,7 +54,7 @@ register_adapter <- function(a) {
     )
   }
 
-  if (exists(a$id, envir = .st_adapter_registry, inherits = FALSE)) {
+  if (!quiet && exists(a$id, envir = .st_adapter_registry, inherits = FALSE)) {
     cli::cli_inform("Overwriting existing adapter registration for {.val {a$id}}.")
   }
 

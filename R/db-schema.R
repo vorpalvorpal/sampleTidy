@@ -127,7 +127,7 @@ ensure_schema <- function(con) {
 # `{parsed,failed,quarantined}` set: test-db-schema.R's terminal-state test
 # exercises exactly this edge (claimed -> ignored, then asserts the
 # now-terminal row rejects a further transition), which only makes sense if
-# that edge is legal. See final report for this discrepancy.
+# that edge is legal. This discrepancy was adjudicated as A31.
 .st_ingest_transitions <- list(
   seen          = c("claimed", "ignored", "quarantined"),
   claimed       = c("parsed", "failed", "quarantined", "ignored"),
@@ -145,8 +145,10 @@ ensure_schema <- function(con) {
 #'
 #' On first sight of `hash`, inserts a new row in state `"seen"` with
 #' `path_first_seen` set to `path`. On a later sight of the same hash,
-#' updates `filename`/`size`/`updated_at` but never overwrites
-#' `path_first_seen`; if `path` differs from the row's `path_first_seen`, and
+#' updates `filename`/`size`/`updated_at`, COALESCE-guarding `filename` and
+#' `size` so an `NA` argument keeps the existing stored value rather than
+#' clobbering it (R-12.9); `path_first_seen` is never overwritten. If `path`
+#' differs from the row's `path_first_seen`, and
 #' this exact `(hash, path)` pair has not already been recorded, appends one
 #' `ingest_sighting` row (A20/A21: sightings are deduped by `(hash, path)`).
 #'
@@ -183,7 +185,9 @@ ingest_file_upsert <- function(con, hash, path, filename = NA_character_, size =
 
   DBI::dbExecute(
     con,
-    "UPDATE ingest_file SET filename = ?, size = ?, updated_at = ? WHERE hash = ?",
+    "UPDATE ingest_file
+      SET filename = COALESCE(?, filename), size = COALESCE(?, size), updated_at = ?
+      WHERE hash = ?",
     params = list(filename, size, now, hash)
   )
 
