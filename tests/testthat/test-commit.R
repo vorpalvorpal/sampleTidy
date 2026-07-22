@@ -78,6 +78,43 @@ mk_resolved <- function(clean = mk_clean_row(), review = tibble::tibble(),
 
 count_rows <- function(con, table) DBI::dbGetQuery(con, sprintf('SELECT count(*) AS n FROM "%s"', table))$n
 
+#' Local copies of test-reconcile.R's `mk_row`/`mk_event` builders (verbatim,
+#' lines ~18-50 there) - no cross-file name collision since each testthat
+#' test file runs in its own environment. Needed here to drive a REAL
+#' reconcile_event() re-ingest against the analysis this file's commit_event()
+#' just stored (R-8.7/A63 conversion_constant idempotency, below).
+mk_row <- function(...) {
+  defaults <- list(
+    source_hash = "hash-1", source_ref = "row1", work_order = "XX1234567",
+    revision = 0L, org = "ALS", adapter = "esdat/1",
+    lab_sample_id = "XX1234567001", sample_type = "Normal",
+    feature_raw = "T.S01", analyte_raw = "Fluoride",
+    cas_number = "16984-48-8", method_raw = "EK040P: Fluoride by PC Titrator",
+    total_or_filtered = "T", units_raw = "mg/L", value_raw = "<0.1",
+    value_num = 0.1, value_chr = NA_character_, below_detection = TRUE,
+    rl = 0.1, lab_qualifier = NA_character_, analysed_date = as.Date("2025-05-26"),
+    comments = NA_character_, confidence = 1,
+    sample_datetime_raw = "24 May 2025 11:45", sampler = NA_character_,
+    matrix_raw = "WATER", parent_sample = NA_character_
+  )
+  args <- utils::modifyList(defaults, list(...))
+  tibble::as_tibble(args)
+}
+
+mk_event <- function(results, work_order = "XX1234567", orphan = FALSE) {
+  list(
+    work_order = work_order, orphan = orphan, results = results,
+    samples = tibble::tibble(),
+    files = tibble::tibble(hash = character(), filename = character(),
+                           adapter = character(), rank = integer(), kept = logical()),
+    report = list(n_results = nrow(results), n_by_sample_type = list(),
+                  n_ncp_foreign = 0L,
+                  skipped = tibble::tibble(hash = character(), source_ref = character(),
+                                          reason = character()),
+                  warnings = character())
+  )
+}
+
 # ---- R-9.2 criteria -------------------------------------------------------
 
 test_that("R-9.2: committing new clean rows creates exactly matching sample/analysis counts", {
@@ -824,4 +861,51 @@ test_that("R-11.18/A62: an incoming datetime equal to an existing sample's datet
     "SELECT uuid_sample FROM analysis WHERE uuid NOT IN ('an-0001','an-0002','an-0003','an-0004')")
   expect_equal(nrow(linked), 1)
   expect_identical(linked$uuid_sample[[1]], "s-r1118-c")
+})
+
+# ---- R-8.7/A63: conversion_constant idempotency (end-to-end commit + reconcile) ----
+
+test_that("R-8.7/A63: a re-ingested reading under a conversion_constant method is already_present, not a false value_conflict", {
+  setup <- commit_test_setup()
+  con <- setup$con
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  # Step 1: store a Fluoride-as-F reading of 3 mg/L via REAL commit under
+  # lm-0012 (conversion_constant = 2.0). `value_converted` must be the
+  # CANONICAL post-unit-conversion figure commit actually receives from a real
+  # reconcile - a-0002's registered canonical unit is ug/L (FIXTURES.md: "canonical
+  # units deliberately differ from reported units to force conversion"), so 3
+  # mg/L canonicalises to 3000 (NOT 3 - passing 3 straight through would
+  # silently skip that real unit conversion and desync from what Step 2's
+  # real reconcile_event() independently computes for the identical raw
+  # reading, see escalation note in the session report).
+  files <- tibble::tibble(hash = setup$hash, filename = basename(setup$path),
+                          adapter = "esdat/1", rank = 3L, kept = TRUE)
+  clean <- mk_clean_row(
+    source_ref = "c1", source_hash = setup$hash,
+    uuid_feature = "f-0001", uuid_lab = "lm-0012", uuid_analyte = "a-0002",
+    analyte_raw = "Fluoride as F", method_raw = "EK040P: Fluoride by PC Titrator",
+    units_raw = "mg/L", value_raw = "3", value_num = 3, value_converted = 3000,
+    below_detection = FALSE,
+    sample_date = as.Date("2025-05-24"),
+    sample_datetime = as.POSIXct("2025-05-24 11:45:00", tz = "Australia/Sydney")
+  )
+  commit_event(mk_commit_event(files), mk_resolved(clean = clean), con)
+
+  stored <- DBI::dbGetQuery(con, "SELECT value FROM analysis WHERE uuid_lab = 'lm-0012'")
+  expect_equal(stored$value, 6000)  # 3000 * conversion_constant (2.0) - pins commit's cc-multiply
+
+  # Step 2: re-ingest the IDENTICAL measurement via REAL reconcile_event().
+  event <- mk_event(mk_row(
+    source_ref = "r1", analyte_raw = "Fluoride as F",
+    cas_number = "16984-48-8", method_raw = "EK040P: Fluoride by PC Titrator",
+    org = "ALS", units_raw = "mg/L", value_raw = "3", value_num = 3,
+    below_detection = FALSE, rl = 0.1,
+    sample_datetime_raw = "24 May 2025 11:45"
+  ))
+  out <- reconcile_event(event, con)
+
+  expect_true("r1" %in% out$skipped$source_ref)
+  expect_identical(out$skipped$reason[out$skipped$source_ref == "r1"], "already_present")
+  expect_false("r1" %in% out$review$source_ref)
 })
