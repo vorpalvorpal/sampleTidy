@@ -754,7 +754,7 @@
 #' @return `list(kept, skipped, review)`. `kept` gains a `supersedes` column.
 #' @keywords internal
 #' @noRd
-.rc_three_way <- function(rows, con, event) {
+.rc_three_way <- function(rows, con, event, registry) {
   n <- nrow(rows)
   if (n == 0) {
     rows$supersedes <- character(0)
@@ -777,6 +777,12 @@
     if (is.null(existing)) next
 
     inc_value <- rows$value_converted[[i]]
+    # A63/D7: the stored analysis.value is post-conversion_constant (applied at
+    # commit); make the incoming value canonical too before the R-8.7/A14
+    # idempotency comparison, matching the seam-table contract (PLAN-11 B-11-seam-table).
+    cc <- registry$lab_method$conversion_constant[
+      match(rows$uuid_lab[[i]], registry$lab_method$uuid)]
+    if (!is.na(cc) && !is.na(inc_value)) inc_value <- inc_value * cc
     inc_chr <- rows$value_chr[[i]]
     inc_quant <- rows$quantified[[i]]
     exist_value <- existing$value[[1]]
@@ -976,7 +982,7 @@ reconcile_event <- function(event, con) {
   active <- mp$kept
 
   # R-8.7 / R-11.7
-  tw <- .rc_three_way(active, con, event)
+  tw <- .rc_three_way(active, con, event, registry)
   add_skip(tw$skipped)
   add_review(tw$review)
   clean <- tw$kept
