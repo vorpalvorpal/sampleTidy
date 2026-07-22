@@ -111,17 +111,22 @@ test_that("R-8.2: direct feature name resolves", {
   expect_identical(out$clean$uuid_feature[out$clean$source_ref == "r1"], "f-0001")
 })
 
-test_that("R-8.2: mask alias resolves to the masked feature's uuid", {
+test_that("R-8.2: a mask-only name does not resolve (feature_mask join removed, R-11.4)", {
   path <- seed_db()
   con <- seed_con(path)
   on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
 
-  # Fresh date (no seeded analysis at f-0001/20 May) so the mask-resolved row
-  # lands in `clean`; the default 24-May row is seeded already_present.
+  # "Test Surface 01" only exists in feature_mask, which reconcile no longer
+  # joins for candidate matching (R-11.4) - it must land in clean as a
+  # dangling/pending row, not resolve to f-0001.
   event <- mk_event(mk_row(source_ref = "r1", feature_raw = "Test Surface 01",
                            sample_datetime_raw = "20 May 2025 09:00"))
   out <- reconcile_event(event, con)
-  expect_identical(out$clean$uuid_feature[out$clean$source_ref == "r1"], "f-0001")
+  row <- out$clean[out$clean$source_ref == "r1", ]
+  expect_equal(nrow(row), 1)
+  expect_true(row$feature_pending)
+  expect_true(is.na(row$uuid_feature_alias))
+  expect_true(any(out$review$source_ref == "r1" & out$review$kind == "unknown_feature"))
 })
 
 test_that("R-8.2: a typo feature queues one grouped review item covering all its rows", {
@@ -145,11 +150,13 @@ test_that("R-8.2: an ambiguous feature name queues review listing both candidate
   con <- seed_con(path)
   on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
 
-  event <- mk_event(mk_row(source_ref = "r1", feature_raw = "AMBIG"))
+  # "T.AMBIG2" (fa-0005/fa-0006, both auto_assign) resolves to two distinct
+  # features f-0004 AND f-0005 - the genuine ambiguity fixture.
+  event <- mk_event(mk_row(source_ref = "r1", feature_raw = "T.AMBIG2"))
   out <- reconcile_event(event, con)
   ambiguous <- out$review[out$review$kind == "unknown_feature" & out$review$source_ref == "r1", ]
   expect_equal(nrow(ambiguous), 1)
-  expect_true(grepl("f-0002", ambiguous$payload[[1]]) && grepl("f-0003", ambiguous$payload[[1]]))
+  expect_true(grepl("f-0004", ambiguous$payload[[1]]) && grepl("f-0005", ambiguous$payload[[1]]))
 })
 
 test_that("R-8.2: no fuzzy matching - a Levenshtein-1 miss stays unknown_feature", {
@@ -161,7 +168,12 @@ test_that("R-8.2: no fuzzy matching - a Levenshtein-1 miss stays unknown_feature
   event <- mk_event(mk_row(source_ref = "r1", feature_raw = "T.S011"))
   out <- reconcile_event(event, con)
   expect_equal(nrow(out$review[out$review$kind == "unknown_feature" & out$review$source_ref == "r1", ]), 1)
-  expect_false("r1" %in% out$clean$source_ref)
+  # Row still flows to clean (commit-everything, PLAN-11), but must NOT have
+  # resolved to f-0001 via fuzzy matching.
+  row <- out$clean[out$clean$source_ref == "r1", ]
+  expect_equal(nrow(row), 1)
+  expect_true(row$feature_pending)
+  expect_true(is.na(row$uuid_feature_alias))
 })
 
 test_that("R-8.2: a NA feature_raw is unknown (never a phantom hit into clean) - A44", {
@@ -210,7 +222,11 @@ test_that("R-8.3: the same name under a different org does not cross-resolve", {
   event <- mk_event(mk_row(source_ref = "r1", analyte_raw = "pH", org = "ALS",
                            cas_number = NA_character_, units_raw = "pH"))
   out <- reconcile_event(event, con)
-  expect_false("r1" %in% out$clean$source_ref)
+  row <- out$clean[out$clean$source_ref == "r1", ]
+  expect_equal(nrow(row), 1)
+  expect_true(row$analyte_pending)
+  expect_true(is.na(row$uuid_analyte))
+  expect_true(is.na(row$uuid_lab))
   expect_true(any(out$review$source_ref == "r1" & out$review$kind == "unknown_analyte"))
 })
 
@@ -463,8 +479,8 @@ test_that("R-8.7: a lab measurement is distinct from a field measurement of the 
   # a-0003 at the same feature+date, but different methods -> two distinct
   # measurements, NOT a conflict. Seed an existing FIELD EC, then reconcile an
   # incoming LAB EC and assert it lands clean/new (not already_present/conflict).
-  DBI::dbExecute(con, "INSERT INTO \"sample\" (uuid, uuid_feature, uuid_project, date, organisation)
-    VALUES ('s-field', 'f-0001', 'p-0001', TIMESTAMP '2025-05-24 00:00:00', 'ACIRL')")
+  DBI::dbExecute(con, "INSERT INTO \"sample\" (uuid, uuid_feature_alias, uuid_project, date, organisation)
+    VALUES ('s-field', 'fa-0001', 'p-0001', TIMESTAMP '2025-05-24 00:00:00', 'ACIRL')")
   DBI::dbExecute(con, "INSERT INTO analysis (uuid, uuid_sample, uuid_lab, value, quantified)
     VALUES ('an-field-ec', 's-field', 'lm-0006', 0.45, TRUE)")
 
@@ -553,10 +569,13 @@ test_that("R-8.7: conflict with no recorded revision queues for review", {
   # all -> recorded revision is NA -> A12 "no recorded revision -> review",
   # regardless of the incoming revision value.
   DBI::dbExecute(con, "INSERT INTO project (uuid, name, type) VALUES ('p-0002', 'CD2222222', 'Work order')")
-  DBI::dbExecute(con, "INSERT INTO \"sample\" (uuid, uuid_feature, uuid_project, date, organisation) VALUES
-    ('s-0002', 'f-0002', 'p-0002', TIMESTAMP '2025-06-01 00:00:00', 'ALS')")
+  # HARNESS FIX: 's-0002'/'an-0002' collide with helper-db.R's own seeded
+  # rows (uuid PK) - use locally-scoped uuids instead (pure infra fix,
+  # pre-existing, unrelated to the R-11.2 schema rename below).
+  DBI::dbExecute(con, "INSERT INTO \"sample\" (uuid, uuid_feature_alias, uuid_project, date, organisation) VALUES
+    ('s-0102', 'fa-0002', 'p-0002', TIMESTAMP '2025-06-01 00:00:00', 'ALS')")
   DBI::dbExecute(con, "INSERT INTO analysis (uuid, uuid_sample, uuid_lab, value, quantified, rl_low) VALUES
-    ('an-0002', 's-0002', 'lm-0003', 0.5, TRUE, 1)")
+    ('an-0102', 's-0102', 'lm-0003', 0.5, TRUE, 1)")
 
   event <- mk_event(mk_row(source_ref = "r1", work_order = "CD2222222", revision = 5L,
                            feature_raw = "T.S02", analyte_raw = "Electrical Conductivity @ 25°C",
@@ -605,11 +624,33 @@ test_that("R-8.8: clean/review/skipped are disjoint and complete over a mixed ev
   ))
   out <- reconcile_event(event, con)
 
-  all_refs <- c(out$clean$source_ref, out$review$source_ref, out$skipped$source_ref)
+  clean_refs <- out$clean$source_ref
+  review_refs <- out$review$source_ref
+  skipped_refs <- out$skipped$source_ref
+  all_refs <- c(clean_refs, review_refs, skipped_refs)
   input_refs <- event$results$source_ref
-  expect_setequal(all_refs, input_refs)
-  expect_equal(length(all_refs), length(input_refs))
-  expect_equal(sum(duplicated(all_refs)), 0)
+
+  # (a) completeness: every input row appears somewhere.
+  expect_setequal(unique(all_refs), input_refs)
+  # (b) under commit-everything (PLAN-11), a dangling row is legitimately in
+  # BOTH clean and review at once - but skipped is still disjoint from both.
+  expect_equal(length(intersect(skipped_refs, union(clean_refs, review_refs))), 0)
+
+  # unknown_feature/unknown_analyte rows: pending, so in BOTH clean and review.
+  expect_true("unk_feature" %in% clean_refs)
+  expect_true("unk_feature" %in% review_refs)
+  expect_true("unk_analyte" %in% clean_refs)
+  expect_true("unk_analyte" %in% review_refs)
+  # unknown_unit row is review-held, NOT in clean.
+  expect_true("bad_unit" %in% review_refs)
+  expect_false("bad_unit" %in% clean_refs)
+  # qc / non-sample rows are skipped.
+  expect_true("qc" %in% skipped_refs)
+  expect_true("ns_row" %in% skipped_refs)
+  # a fresh row is clean-only.
+  expect_true("fresh" %in% clean_refs)
+  expect_false("fresh" %in% review_refs)
+  expect_false("fresh" %in% skipped_refs)
 })
 
 test_that("R-8.7/R-8.8: reconcile_event() is pure - DB row counts are unchanged after a run", {

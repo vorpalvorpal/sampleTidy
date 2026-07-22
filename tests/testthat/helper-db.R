@@ -304,7 +304,8 @@ seed_db <- function(dir = NULL) {
     ('a-0001', 'pH', 'pH', 'field', NULL),
     ('a-0002', 'Fluoride', 'µg/L', 'anion', '16984-48-8'),
     ('a-0003', 'Electrical Conductivity', 'mS/cm', 'field', NULL),
-    ('a-0004', 'Temperature', '°C', 'field', NULL)")
+    ('a-0004', 'Temperature', '°C', 'field', NULL),
+    ('a-0005', 'Standing Water Level', 'm', 'field', NULL)")
 
   # lab_method (analyte_raw + organisation -> uuid_lab -> uuid_analyte).
   # lm-0002/lm-0004 are the duplicate-method pair (R-8.6): same analyte, ALS;
@@ -319,8 +320,8 @@ seed_db <- function(dir = NULL) {
   #    an-0004 below.
   # lm-0010/lm-0011 are the R-11.19/A65 fixture: two genuinely distinct
   # methods differing ONLY in name capitalisation, same organisation (ACIRL),
-  # same method (field), both resolving to the SAME analyte (a-0004) -
-  # mirroring the live 'Standing Water Level' / 'Standing water level' pair
+  # same method (field), both resolving to the SAME analyte (a-0005, length,
+  # units 'm') - mirroring the live 'Standing Water Level' / 'Standing water level' pair
   # that currently strands every such ACIRL reading as unknown_analyte. An
   # incoming 'Standing Water Level' must resolve to lm-0010 (exact raw-name
   # match) and 'Standing water level' to lm-0011.
@@ -339,8 +340,8 @@ seed_db <- function(dir = NULL) {
     ('lm-0007', 'a-0004', 'Temperature', NULL, 'ACIRL', NULL, 'deg C', NULL),
     ('lm-0008', NULL, 'EC New Method', 'EA010Z: Conductivity by new method', 'ALS', 1, 'µS/cm', NULL),
     ('lm-0009', NULL, 'Sulphate', 'EA045: Sulphate by IC', 'ALS', 0.5, 'mg/L', NULL),
-    ('lm-0010', 'a-0004', 'Standing Water Level', 'field', 'ACIRL', NULL, 'm', NULL),
-    ('lm-0011', 'a-0004', 'Standing water level', 'field', 'ACIRL', NULL, 'm', NULL),
+    ('lm-0010', 'a-0005', 'Standing Water Level', 'field', 'ACIRL', NULL, 'm', NULL),
+    ('lm-0011', 'a-0005', 'Standing water level', 'field', 'ACIRL', NULL, 'm', NULL),
     ('lm-0012', 'a-0002', 'Fluoride as F', 'EK040P: Fluoride by PC Titrator', 'ALS', 0.1, 'mg/L', 2.0)")
 
   # project
