@@ -234,9 +234,11 @@ acirl_field_xlsx_adapter <- function() {
 
 # Extracts REPORT NO: / SAMPLED BY: / SAMPLE DATE:, each sitting one cell to
 # the right of its key cell (`vector_from_key(direction = "right")`).
-# Missing keys are tolerated (parse continues; a warning is recorded) rather
-# than aborting - `vector_from_key()` itself aborts on zero matches, so
-# presence is checked first via `str_which_df()`.
+# Missing keys and ambiguous (duplicate) keys are both tolerated (parse
+# continues; a warning is recorded, value NA) rather than aborting -
+# `vector_from_key()` itself aborts on zero *or* multiple matches, so
+# presence/uniqueness is checked first via `str_which_df(multiple_matches =
+# TRUE)`.
 .st_acirl_parse_front_page <- function(front_grid) {
   warnings_vec <- character(0)
 
@@ -245,6 +247,12 @@ acirl_field_xlsx_adapter <- function() {
     if (nrow(hits) == 0) {
       warnings_vec <<- c(warnings_vec, sprintf(
         "Front page: '%s' key not found.", label
+      ))
+      return(NA_character_)
+    }
+    if (nrow(hits) > 1) {
+      warnings_vec <<- c(warnings_vec, sprintf(
+        "Front page: '%s' key found in multiple cells; ambiguous, skipped.", label
       ))
       return(NA_character_)
     }
