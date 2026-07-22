@@ -104,7 +104,11 @@ db_transaction <- function(con, fn) {
   attr(con, "sampletidy_mutate_txn") <- TRUE
 
   result <- tryCatch(
-    fn(con),
+    {
+      out <- fn(con)
+      DBI::dbCommit(con)
+      out
+    },
     error = function(e) {
       try(DBI::dbRollback(con), silent = TRUE)
       cli::cli_abort(
@@ -115,7 +119,6 @@ db_transaction <- function(con, fn) {
     }
   )
 
-  DBI::dbCommit(con)
   result
 }
 
@@ -243,6 +246,11 @@ db_update <- function(con, table, uuid, changes, actor, reason, source_hash = NA
     for (field in names(changes)) {
       old_val <- current[[field]][[1]]
       new_val <- changes[[field]]
+
+      if (identical(as.character(new_val), as.character(old_val))) {
+        next
+      }
+
       quoted_field <- DBI::dbQuoteIdentifier(con, field)
 
       DBI::dbExecute(
@@ -287,11 +295,17 @@ db_delete <- function(con, table, uuid, actor, reason) {
 
   db_transaction(con, function(con) {
     at <- Sys.time()
-    DBI::dbExecute(
+    n_affected <- DBI::dbExecute(
       con,
       sprintf("DELETE FROM %s WHERE uuid = ?", quoted_table),
       params = list(uuid)
     )
+    if (n_affected == 0) {
+      cli::cli_abort(
+        "No row with uuid {.val {uuid}} found in table {.val {table}}.",
+        class = "sampletidy_error"
+      )
+    }
     .st_write_change_log(
       con, at = at, actor = actor, action = "delete", tbl = table,
       uuid_row = uuid, field = NA_character_,

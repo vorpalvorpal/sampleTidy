@@ -574,7 +574,11 @@
 
 #' Within `(feature, sample_date, uuid_analyte)`, when surviving rows come from
 #' different `uuid_lab`, keep the lowest `lab_method.rl_low` (NA loses to any
-#' number); tie -> keep the higher `value_num` (R-8.6).
+#' number); tie -> keep the higher `value_num` (R-8.6). This picks a winning
+#' LAB, not a winning ROW: every row sharing the winning `uuid_lab` survives
+#' (R-8.6 dedups ACROSS methods only). Same-lab duplicates are deliberately
+#' left for the R-12.13 within-batch guard, which runs after this stage
+#' (PLAN-12 "Ordering vs PLAN-11" - R-8.6 first, R-12.13 catches what's left).
 #'
 #' R-11.5b re-keys on the RESOLVED feature where known, else the ALIAS uuid
 #' where pending (paste() would otherwise silently recycle a dropped
@@ -604,10 +608,13 @@
 
     ord <- order(is.na(rl_low[idx]), rl_low[idx], -rows$value_num[idx])
     winner <- idx[ord[[1]]]
-    losers <- setdiff(idx, winner)
+    kept_uuid_lab <- rows$uuid_lab[[winner]]
+    # Only rows from a LOSING lab are eliminated here; rows sharing the
+    # winning lab (same-method duplicates) are left in `kept` for R-12.13.
+    losers <- idx[rows$uuid_lab[idx] != kept_uuid_lab]
+    if (length(losers) == 0) next
     keep[losers] <- FALSE
 
-    kept_uuid_lab <- rows$uuid_lab[[winner]]
     for (li in losers) {
       skipped_list[[length(skipped_list) + 1]] <- tibble::tibble(
         source_ref = rows$source_ref[[li]], reason = "method_duplicate",
@@ -797,6 +804,59 @@
   list(kept = kept, skipped = skipped, review = review)
 }
 
+# ---- R-12.13: within-batch duplicate guard before commit -------------------
+
+#' Guard against two identical-key rows from the SAME method committing as
+#' two analyses on one sample (R-12.13/A-7). R-8.6 dedups ACROSS methods by
+#' consulting sibling rows in this batch; R-8.7/R-11.7's three-way outcome
+#' only consults the DB, so two rows sharing `(uuid_feature_alias,
+#' sample_date, uuid_analyte, uuid_lab)` in one batch each independently look
+#' "new" and would both commit. This runs on the POST-three-way `clean` set
+#' and catches exactly that remaining same-method case.
+#'
+#' Rows with ANY NA key component (an unresolved alias/analyte/lab - A44) are
+#' NEVER matched, to each other or to anything else: `duplicated()`-style
+#' NA-coalescing would spuriously pair two genuinely distinct pending rows
+#' (e.g. two first-sightings of the same never-seen feature code). The first
+#' row (batch order) of each exact-duplicate group is kept; the rest are
+#' routed to REVIEW, never collapsed/skipped (PINNED, Phase-3 D13: A54 - the
+#' pipeline records the question, never invents the answer by silently
+#' picking one of two uncompared rows a human has not seen).
+#'
+#' @return `list(kept, review)`.
+#' @keywords internal
+#' @noRd
+.rc_batch_duplicate <- function(rows) {
+  n <- nrow(rows)
+  if (n == 0) return(list(kept = rows, review = .rc_proto_review()))
+
+  key <- paste(rows$uuid_feature_alias, as.character(rows$sample_date),
+               rows$uuid_analyte, rows$uuid_lab, sep = "||")
+  eligible <- !is.na(rows$uuid_feature_alias) & !is.na(rows$sample_date) &
+    !is.na(rows$uuid_analyte) & !is.na(rows$uuid_lab)
+
+  keep <- rep(TRUE, n)
+  review_list <- list()
+
+  for (k in unique(key[eligible])) {
+    idx <- which(eligible & key == k)
+    if (length(idx) <= 1) next
+    winner <- idx[[1]]
+    losers <- idx[-1]
+    keep[losers] <- FALSE
+    for (li in losers) {
+      review_list[[length(review_list) + 1]] <- tibble::tibble(
+        source_ref = rows$source_ref[[li]], kind = "batch_duplicate",
+        payload = paste0(rows$source_ref[[li]], ",kept_source_ref=", rows$source_ref[[winner]]),
+        n_rows = 1L, source_hash = rows$source_hash[[li]]
+      )
+    }
+  }
+
+  review <- if (length(review_list) > 0) dplyr::bind_rows(review_list) else .rc_proto_review()
+  list(kept = rows[keep, , drop = FALSE], review = review)
+}
+
 # ---- top-level entry point --------------------------------------------------
 
 #' Reconcile one assembled event against the registry/analysis DB.
@@ -903,6 +963,12 @@ reconcile_event <- function(event, con) {
   add_skip(tw$skipped)
   add_review(tw$review)
   clean <- tw$kept
+
+  # R-12.13: within-batch duplicate guard (post three-way, catches
+  # same-method dupes the DB-only three-way cannot see).
+  bd <- .rc_batch_duplicate(clean)
+  add_review(bd$review)
+  clean <- bd$kept
 
   skipped <- if (length(skipped_acc) > 0) dplyr::bind_rows(skipped_acc) else .rc_proto_skip()[, skip_cols]
   review <- if (length(review_acc) > 0) dplyr::bind_rows(review_acc) else .rc_proto_review()[, review_cols]
