@@ -88,7 +88,63 @@
 #' @param actor who is making this change.
 #' @param reason free-text reason, stored on every `change_log` row.
 #' @return list(merged, survivor, deleted) - see `mig002_run()`'s doc.
+#' The two `change_log.reason` suffixes the FK detach/reattach workaround
+#' appends (below), factored into constants so the pre-flight torn-migration
+#' guard (`.mig002_torn_guard()`) and the writer never drift apart.
+.mig002_detach_reason <- "(temporary FK detach, duckdb 1.4.1 chained-FK limitation)"
+.mig002_reattach_reason <- "(FK reattach, duckdb 1.4.1 chained-FK limitation)"
+
+#' Pre-flight guard: abort loudly if a PRIOR run of this migration's FK
+#' detach/reattach workaround was interrupted mid-way (Phase-8b remediation)
+#'
+#' The detach/reattach loop in `mig002_carbophenothion_merge()` is
+#' deliberately non-transactional (see that function's own comment) - each
+#' `db_update()` commits on its own. A crash between the detach step
+#' (`analysis.uuid_lab` -> NULL, committed) and the matching reattach step
+#' leaves the dependent `analysis` row PERMANENTLY orphaned: a fresh re-run
+#' re-derives `dependents` from `SELECT uuid FROM analysis WHERE uuid_lab =
+#' <lm>`, which now returns 0 rows for the orphaned row (it is already NULL),
+#' so the re-run's detach/reattach loop no-ops and silently reports success
+#' while the orphan stays orphaned forever.
+#'
+#' This guard keys off the migration's OWN `change_log` audit trail rather
+#' than `analysis.uuid_lab IS NULL` directly, so it cannot false-positive on
+#' a legitimately-NULL `uuid_lab` (the column is nullable with no NOT NULL
+#' constraint) - only an UNPAIRED detach (a detach row logged with no
+#' matching reattach row) indicates a torn prior run. A first clean run, or
+#' any fully-completed run, always leaves detach_count == reattach_count.
+#'
+#' @param con an open DBI connection (read-only is fine).
+#' @return invisible(NULL); aborts (`class = "sampletidy_error"`) if torn.
+.mig002_torn_guard <- function(con) {
+  detach_count <- DBI::dbGetQuery(
+    con,
+    "SELECT COUNT(*) n FROM change_log
+     WHERE tbl = 'analysis' AND field = 'uuid_lab' AND reason LIKE ?",
+    params = list(paste0("%", .mig002_detach_reason))
+  )$n[[1]]
+  reattach_count <- DBI::dbGetQuery(
+    con,
+    "SELECT COUNT(*) n FROM change_log
+     WHERE tbl = 'analysis' AND field = 'uuid_lab' AND reason LIKE ?",
+    params = list(paste0("%", .mig002_reattach_reason))
+  )$n[[1]]
+
+  if (detach_count > reattach_count) {
+    cli::cli_abort(c(
+      "002-registry-remediation: database appears to be from an INTERRUPTED migration run.",
+      "x" = "{detach_count} FK-detach change_log row(s) but only {reattach_count} matching reattach row(s) - an unpaired detach, left by a prior run that crashed mid-workaround.",
+      "i" = "Re-running this migration cannot recover it: the orphaned `analysis` row(s) are invisible to a fresh dependent lookup and would stay permanently detached.",
+      "i" = "You MUST restore from the pre-migration backup taken before the interrupted run (see the logged `restore_command`), then re-run the migration."
+    ), class = "sampletidy_error")
+  }
+
+  invisible(NULL)
+}
+
 mig002_carbophenothion_merge <- function(con, actor, reason) {
+  .mig002_torn_guard(con)
+
   dupes <- .mig002_carb_dupes(con)
   if (nrow(dupes) < 2) {
     return(list(
@@ -132,7 +188,7 @@ mig002_carbophenothion_merge <- function(con, actor, reason) {
       db_update(
         con, "analysis", uuid = a_uuid,
         changes = list(uuid_lab = NA_character_), actor = actor,
-        reason = paste(reason, "(temporary FK detach, duckdb 1.4.1 chained-FK limitation)")
+        reason = paste(reason, .mig002_detach_reason)
       )
     }
     db_update(
@@ -143,7 +199,7 @@ mig002_carbophenothion_merge <- function(con, actor, reason) {
       db_update(
         con, "analysis", uuid = a_uuid,
         changes = list(uuid_lab = lm_uuid), actor = actor,
-        reason = paste(reason, "(FK reattach, duckdb 1.4.1 chained-FK limitation)")
+        reason = paste(reason, .mig002_reattach_reason)
       )
     }
   }
@@ -400,11 +456,24 @@ mig002_backup <- function(db, snapshot_dir, .now = NULL) {
 #' state even though the merge's FK workaround touches `analysis` rows
 #' in transit.
 #'
-#' Naturally idempotent on every re-run: R-14.1 via its own existence
-#' pre-check, R-14.2 via `db_update()`'s built-in skip-unchanged-field
-#' behaviour (R-12.6) - no separate `schema_version` marker gate is needed
-#' (and `schema_version` is not in the mutation-layer allowlist, A32/A50, so
-#' this migration does not write one).
+#' Idempotent on a CONSISTENT starting state - a clean DB, or one left by a
+#' FULLY-COMPLETED prior run: R-14.1 via its own existence pre-check, R-14.2
+#' via `db_update()`'s built-in skip-unchanged-field behaviour (R-12.6) - no
+#' separate `schema_version` marker gate is needed (and `schema_version` is
+#' not in the mutation-layer allowlist, A32/A50, so this migration does not
+#' write one). This is NOT unconditional re-run safety: the R-14.1 merge's FK
+#' detach/reattach workaround (see `mig002_carbophenothion_merge()`'s own
+#' comment) is deliberately non-transactional, so a process crash BETWEEN a
+#' detach and its matching reattach leaves the affected `analysis` row(s)
+#' permanently orphaned in a way a fresh re-run cannot see (the orphaned rows
+#' are already NULL, so the re-run's own dependent lookup returns none of
+#' them) - simply re-running over a torn DB would silently "succeed" while
+#' leaving that corruption in place. An INTERRUPTED run must instead be
+#' recovered by RESTORING THE PRE-MIGRATION BACKUP (never by re-running over
+#' the torn DB); `.mig002_torn_guard()` detects this state from the
+#' migration's own `change_log` audit trail (an unpaired FK-detach row) and
+#' makes a torn re-run ABORT LOUDLY (`class = "sampletidy_error"`) rather
+#' than silently reporting `status = "migrated"`.
 #'
 #' @param db path to the live DuckDB file.
 #' @param snapshot_dir directory for the pre-migration backup.

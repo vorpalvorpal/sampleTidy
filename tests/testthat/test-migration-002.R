@@ -298,6 +298,48 @@ test_that("R-14.1: a second run is idempotent via the existence pre-check - no a
   expect_identical(state_after_2, state_after_1)
 })
 
+test_that("Phase-8b: a torn prior run (unpaired FK detach in change_log) makes mig002_run() abort loudly instead of silently reporting success", {
+  mig2 <- .mig002_load()
+  path <- .seed_002_db()
+
+  # Simulate a crash mid-merge, THE WAY THE MIGRATION ITSELF WOULD: a real
+  # db_update() detach of one of the doomed lab_method's dependent `analysis`
+  # rows, using the migration's own detach-reason constant, with no matching
+  # reattach - an unpaired detach left in `change_log`, exactly what a
+  # process crash between the detach and reattach steps would leave behind.
+  with_db_write(function(con) {
+    db_update(
+      con, "analysis", uuid = "an-carb-d1",
+      changes = list(uuid_lab = NA_character_), actor = "test-crash-sim",
+      reason = paste(
+        "PLAN-14 R-14.1: merge duplicate Carbophenothion analyte",
+        mig2$.mig002_detach_reason
+      )
+    )
+  }, db = path)
+
+  con0 <- pre_migration_con(path)
+  before_row <- DBI::dbGetQuery(con0, "SELECT uuid_lab FROM analysis WHERE uuid = 'an-carb-d1'")
+  DBI::dbDisconnect(con0, shutdown = TRUE)
+  expect_true(is.na(before_row$uuid_lab))
+
+  err <- tryCatch(
+    mig2$mig002_run(db = path, snapshot_dir = withr::local_tempdir(), dry_run = FALSE),
+    error = function(e) e
+  )
+  expect_true(inherits(err, "sampletidy_error"))
+  expect_true(grepl("interrupt", conditionMessage(err), ignore.case = TRUE))
+  expect_true(grepl("restore", conditionMessage(err), ignore.case = TRUE))
+  expect_true(grepl("backup", conditionMessage(err), ignore.case = TRUE))
+
+  # The aborted run must leave the torn row exactly as it was found - still
+  # NA, never further mangled (no partial "recovery" attempt).
+  con <- pre_migration_con(path)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+  after_row <- DBI::dbGetQuery(con, "SELECT uuid_lab FROM analysis WHERE uuid = 'an-carb-d1'")
+  expect_true(is.na(after_row$uuid_lab))
+})
+
 # =============================================================================
 # R-14.2: backfill reported_as / conversion_constant
 # =============================================================================
