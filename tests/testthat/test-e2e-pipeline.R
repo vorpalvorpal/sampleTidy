@@ -157,7 +157,7 @@ test_that("R-10.2: the provenance chain is intact - source_hash matches an archi
     expect_false(is.na(src_hash))
     asset_row <- DBI::dbGetQuery(con, sprintf("SELECT * FROM asset WHERE hash = '%s'", src_hash))
     expect_equal(nrow(asset_row), 1)
-    copy_path <- file.path(st_config("archive_dir"), asset_row$uuid[[1]])
+    copy_path <- file.path(st_config("archive_dir"), asset_row$uuid[[1]], asset_row$filename[[1]])
     input_path <- file.path(input_dir, asset_row$filename[[1]])
     if (file.exists(input_path)) {
       expect_identical(

@@ -25,12 +25,24 @@ snapshot_db <- function(db = st_config("live_db"), dest_dir = st_config("snapsho
   with_db_write(
     function(con) {
       DBI::dbExecute(con, "CHECKPOINT")
-      file.copy(db, tmp_path, overwrite = TRUE)
+      copied <- file.copy(db, tmp_path, overwrite = TRUE)
+      if (!isTRUE(copied)) {
+        cli::cli_abort(
+          "Failed to snapshot {.path {db}} to {.path {tmp_path}}.",
+          class = "sampletidy_error"
+        )
+      }
     },
     db = db
   )
 
-  file.rename(tmp_path, final_path)
+  renamed <- file.rename(tmp_path, final_path)
+  if (!isTRUE(renamed)) {
+    cli::cli_abort(
+      "Failed to finalize snapshot from {.path {tmp_path}} to {.path {final_path}}.",
+      class = "sampletidy_error"
+    )
+  }
 
   final_path
 }
