@@ -114,7 +114,8 @@ test_that("R-9.2: committing new clean rows creates exactly matching sample/anal
   new_dates <- DBI::dbGetQuery(con,
     "SELECT CAST(s.date AS DATE) AS d FROM \"sample\" s
        JOIN feature_alias fa ON fa.uuid = s.uuid_feature_alias
-      WHERE fa.uuid_feature IN ('f-0001','f-0002') AND s.uuid != 's-0001'")
+      WHERE fa.uuid_feature IN ('f-0001','f-0002')
+        AND s.uuid NOT IN ('s-0001','s-0002','s-0003','s-0004')")
   expect_setequal(as.character(new_dates$d), c("2025-06-10", "2025-06-11"))
 })
 
@@ -211,7 +212,8 @@ test_that("R-9.2: provenance chain - every committed analysis has a change_log i
 
   commit_event(event, resolved, con)
 
-  new_analysis <- DBI::dbGetQuery(con, "SELECT uuid FROM analysis WHERE uuid != 'an-0001'")
+  new_analysis <- DBI::dbGetQuery(con,
+    "SELECT uuid FROM analysis WHERE uuid NOT IN ('an-0001','an-0002','an-0003','an-0004')")
   expect_equal(nrow(new_analysis), 1)
   log_row <- DBI::dbGetQuery(con, sprintf(
     "SELECT * FROM change_log WHERE uuid_row = '%s' AND action = 'insert'", new_analysis$uuid[[1]]))
