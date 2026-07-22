@@ -161,7 +161,7 @@ acirl_field_xlsx_adapter <- function() {
         revision = 0L,
         org = "ACIRL",
         adapter = adapter_tag,
-        lab_sample_id = NA_character_,
+        lab_sample_id = rr$lab_sample_id,
         sample_type = "Normal",
         feature_raw = rr$feature_raw,
         analyte_raw = rr$analyte_raw,
@@ -188,7 +188,7 @@ acirl_field_xlsx_adapter <- function() {
         work_order = header$report_no,
         org = "ACIRL",
         adapter = adapter_tag,
-        lab_sample_id = NA_character_,
+        lab_sample_id = sr$lab_sample_id,
         feature_raw = sr$feature_raw,
         sample_datetime_raw = sr$sample_datetime_raw,
         sample_type = "Normal",
@@ -451,6 +451,13 @@ acirl_field_xlsx_adapter <- function() {
 
         results_rows[[length(results_rows) + 1]] <- list(
           source_ref = source_ref,
+          # R-11.15: synthetic per-column lab_sample_id, keyed on sheet name
+          # + column index (both stable across a re-parse of the same file,
+          # distinct per sample column) - ties this result to the exact
+          # sample column it came from, so `.st_join_samples_onto_results()`
+          # (assemble.R) takes the exact-match branch instead of the
+          # feature-name-only fallback that conflates sibling visits.
+          lab_sample_id = sprintf("%s!c%d", sheet_name, j),
           feature_raw = feature_by_col[[as.character(j)]],
           analyte_raw = analyte_raw_val,
           units_raw = .st_acirl_repair_units(analyte_raw_val, units_cell),
@@ -465,8 +472,12 @@ acirl_field_xlsx_adapter <- function() {
 
   samples_rows <- lapply(sample_cols, function(j) {
     key <- as.character(j)
+    # R-11.15: same synthetic id as the results rows derived from this
+    # column (source_ref happens to share the identical "<sheet>!c<col>"
+    # format already, so lab_sample_id is set to the same value here).
     list(
       source_ref = sprintf("%s!c%d", sheet_name, j),
+      lab_sample_id = sprintf("%s!c%d", sheet_name, j),
       feature_raw = feature_by_col[[key]],
       sample_datetime_raw = sample_datetime_by_col[[key]],
       comments = if (is.null(comments_by_col[[key]])) NA_character_ else comments_by_col[[key]]

@@ -39,7 +39,7 @@
 # exclusively through db-schema.R's own helpers (A32) rather than db_append().
 .st_mutate_allowlist <- c(
   "feature", "feature_mask", "analyte", "analyte_mask", "lab_method",
-  "project", "sample", "analysis", "asset", "review_queue"
+  "project", "sample", "analysis", "asset", "review_queue", "feature_alias"
 )
 
 #' @keywords internal
@@ -313,6 +313,8 @@ db_delete <- function(con, table, uuid, actor, reason) {
 #'
 #' @param name feature name.
 #' @param site site name.
+#' @param lon longitude, `DOUBLE NOT NULL` on the live schema.
+#' @param lat latitude, `DOUBLE NOT NULL` on the live schema.
 #' @param flow flow type (e.g. `"surface"`), optional.
 #' @param matrix sample matrix (e.g. `"water"`), optional.
 #' @param geom_wkt optional WKT geometry string.
@@ -321,14 +323,23 @@ db_delete <- function(con, table, uuid, actor, reason) {
 #' @param reason free-text reason, stored on the `change_log` row.
 #' @return the new feature's uuid, invisibly.
 #' @export
-add_feature <- function(name, site = NA_character_, flow = NA_character_,
+add_feature <- function(name, site, lon, lat, flow = NA_character_,
                          matrix = NA_character_, geom_wkt = NA_character_,
                          virtual = FALSE, actor, reason) {
   checkmate::assert_string(name)
+  checkmate::assert_string(site)
+  if (missing(lon) || missing(lat)) {
+    cli::cli_abort(
+      "add_feature() requires both {.arg lon} and {.arg lat}.",
+      class = "sampletidy_error"
+    )
+  }
+  checkmate::assert_number(lon)
+  checkmate::assert_number(lat)
   new_uuid <- uuid::UUIDgenerate()
   row <- tibble::tibble(
-    uuid = new_uuid, name = name, site = site, flow = flow, matrix = matrix,
-    geom_wkt = geom_wkt, virtual = virtual
+    uuid = new_uuid, name = name, site = site, lon = lon, lat = lat,
+    flow = flow, matrix = matrix, geom_wkt = geom_wkt, virtual = virtual
   )
   with_db_write(
     function(con) db_append(con, "feature", row, actor = actor, reason = reason),

@@ -140,6 +140,15 @@
   samples_feature_key <- .st_normalise_key(samples$feature_raw)
   results_feature_key <- .st_normalise_key(results$feature_raw)
 
+  # R-12.14 (A45): `lab_sample_id` here is IR-internal ONLY - a per-file/
+  # per-source-column linkage device (e.g. the ACIRL adapter's synthetic
+  # "<sheet>!c<col>" id, R-11.15) used to pick the right sample-metadata row
+  # for a result. It is NEVER part of the sample/analysis DB identity key.
+  # The identity key is (feature, date, analyte, method) - see A45 in
+  # CONTRACT.md and the reconciler's three-way match (R/reconcile.R
+  # `.rc_find_existing`, R-8.7). Do not repurpose `lab_sample_id` (or this
+  # exact-match branch) as an identity join outside this file - that was
+  # the A39 fixture bug this comment exists to prevent a recurrence of.
   for (i in seq_len(n)) {
     lab_id <- results$lab_sample_id[[i]]
     if (!is.na(lab_id)) {
