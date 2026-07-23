@@ -105,7 +105,9 @@ test_that("R-7.1: three files sharing a work order form one event", {
     )
   )
 
-  out <- assemble_events(parsed)
+  # R-7.3a fires here legitimately: this fixture IS a Chemistry2e with no
+  # companion Sample2e, i.e. the exact production shape that guard names.
+  out <- suppressWarnings(assemble_events(parsed))
   expect_length(out$events, 1)
   event <- out$events[[1]]
   expect_valid_event(event)
@@ -424,7 +426,9 @@ test_that("R-7.4: multi-work-order ESdat file contributes only its own work orde
       meta = list(work_order_guess = "XX1234567")
     )
   )
-  out <- assemble_events(parsed)
+  # R-7.3a fires here legitimately: this fixture IS a Chemistry2e with no
+  # companion Sample2e, i.e. the exact production shape that guard names.
+  out <- suppressWarnings(assemble_events(parsed))
   expect_length(out$events, 1)
   event <- out$events[[1]]
   expect_valid_event(event)
@@ -522,7 +526,9 @@ test_that("R-7.4 (seam: real ESdat parser -> assemble_events): a compound-Sample
       meta = list(work_order_guess = "XX1234567")
     )
   )
-  out <- assemble_events(parsed)
+  # R-7.3a fires here legitimately: this fixture IS a Chemistry2e with no
+  # companion Sample2e, i.e. the exact production shape that guard names.
+  out <- suppressWarnings(assemble_events(parsed))
   expect_length(out$events, 1)
   event <- out$events[[1]]
   expect_valid_event(event)
@@ -641,4 +647,57 @@ test_that("R-7.5: assemble_events() states tibble covers every input hash exactl
   expect_equal(nrow(out$states), length(parsed))
   # each hash appears exactly once
   expect_equal(sum(duplicated(out$states$hash)), 0)
+})
+
+test_that("R-7.3a: an event with results but no sample metadata AND no feature_raw warns and names the work order; an event with either source of a point name does not", {
+  # The real failure this guards: an ESdat Chemistry2e assembled with no
+  # companion Sample2e. Every row keeps feature_raw = NA and reaches review as a
+  # bare `feature_raw=NA` item that names no cause.
+  broken <- list(
+    "h-chem-only" = mk_parsed_entry(
+      results = mk_result(
+        source_hash = "h-chem-only", work_order = "ES2413933",
+        feature_raw = NA_character_
+      ),
+      meta = list(work_order_guess = "ES2413933", filename = "ES2413933.Chemistry2e.CSV")
+    )
+  )
+  expect_warning(
+    assemble_events(broken),
+    class = "sampletidy_no_sample_metadata"
+  )
+  # the message must name the work order and the file, or it is no more
+  # actionable than the `feature_raw=NA` item it replaces
+  w <- tryCatch(assemble_events(broken), warning = function(w) w)
+  expect_match(conditionMessage(w), "ES2413933")
+  expect_match(conditionMessage(w), "Chemistry2e")
+
+  # NEGATIVE CONTROL 1: results carry their own feature_raw and there is still no
+  # samples IR. Many adapters work this way; the event is complete, not broken.
+  with_names <- list(
+    "h-inline" = mk_parsed_entry(
+      results = mk_result(source_hash = "h-inline", feature_raw = "T.S01"),
+      meta = list(work_order_guess = "XX1234567")
+    )
+  )
+  expect_no_warning(assemble_events(with_names))
+
+  # NEGATIVE CONTROL 2: feature_raw is NA on the results, but a samples IR exists
+  # to supply it - the ordinary ESdat pair. Without this control the test would
+  # still pass if the guard ignored `event_samples` entirely.
+  paired <- list(
+    "h-chem" = mk_parsed_entry(
+      results = mk_result(
+        source_hash = "h-chem", work_order = "ES2413933",
+        lab_sample_id = "ES2413933001", feature_raw = NA_character_
+      ),
+      samples = mk_sample(
+        source_hash = "h-chem", source_ref = "srow1", work_order = "ES2413933",
+        lab_sample_id = "ES2413933001", feature_raw = "B.S01",
+        sample_datetime_raw = "2024-05-07 11:30", sample_type = "Normal"
+      ),
+      meta = list(work_order_guess = "ES2413933")
+    )
+  )
+  expect_no_warning(assemble_events(paired))
 })
