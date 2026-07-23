@@ -640,6 +640,82 @@ test_that("PLAN-11/A32: db_update() logs TIMESTAMP change_log old/new in a singl
   expect_equal(after2, before2)
 })
 
+# ---- R-15.30: add_feature() creates a self alias, resolves by name (F.9) --
+#
+# `add_feature()` (mutate.R:452) appends to `feature` only - no `feature_alias`
+# row - so a feature created through it is unreachable by its own name until
+# someone hand-curates an alias, and migration 003's table-wide self-arm rule
+# has nothing to flip for it (PLAN-15 F.9, S-15.8). The fix must create the
+# `kind = 'self'` alias in the SAME transaction as the `feature` insert, with
+# its own `change_log` row. Asserting merely "a feature_alias row exists" is
+# too weak - it would pass on a self alias of the wrong kind, or one with
+# auto_assign = FALSE, that `.rc_feature_candidates()`'s Layer-1 exact match
+# never reaches. So this test reconciles a raw carrying exactly the new
+# feature's own canonical name through the REAL Layer-1 resolver
+# (`.rc_resolve_features()`, R-11.5) and asserts it RESOLVES, not queues as
+# `unknown_feature`.
+
+test_that("R-15.30: add_feature() creates a self alias in the same transaction that a raw naming the feature actually RESOLVES against", {
+  path <- seed_db()
+  withr::local_options(list("sampletidy.live_db" = path))
+  con <- seed_con(path)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  before <- count_change_log(con)
+
+  new_uuid <- add_feature(
+    name = "T.NEWSELF9001", site = "TestSite", lon = 150.7001, lat = -33.7001,
+    flow = "surface", matrix = "water",
+    actor = "tester", reason = "F.9: post-001 feature must get a self alias"
+  )
+
+  # The self alias itself: kind='self', auto_assign TRUE (the ONLY combination
+  # `.rc_feature_candidates()`'s Layer-1 exact match reaches), alias_key the
+  # punctuation-preserving fold of the feature's own name (matches migration
+  # 001's `.mig001_normalize` / `.rc_feature_key`). Single-bracket indexing
+  # throughout so a zero-row result (today's broken code) fails as a clean
+  # assertion mismatch rather than an R "subscript out of bounds" error.
+  self_alias <- DBI::dbGetQuery(con, sprintf(
+    "SELECT * FROM feature_alias WHERE uuid_feature = '%s' AND kind = 'self'", new_uuid
+  ))
+  expect_equal(nrow(self_alias), 1)
+  expect_true(isTRUE(self_alias$auto_assign[1]))
+  expect_equal(self_alias$alias_key[1], .rc_feature_key("T.NEWSELF9001"))
+
+  # change_log provenance for the alias creation, same transaction as the
+  # feature insert (S-15.8): exactly 2 new rows sharing one `at`.
+  after <- count_change_log(con)
+  expect_equal(after - before, 2)
+  alias_uuid <- self_alias$uuid[1]
+  log_rows <- DBI::dbGetQuery(con, sprintf(
+    "SELECT * FROM change_log WHERE uuid_row IN ('%s', '%s')", new_uuid, alias_uuid
+  ))
+  expect_equal(nrow(log_rows), 2)
+  expect_equal(length(unique(log_rows$at)), 1)
+  alias_log <- log_rows[log_rows$tbl == "feature_alias", ]
+  expect_equal(nrow(alias_log), 1)
+  expect_equal(alias_log$action[1], "insert")
+  expect_equal(alias_log$uuid_row[1], alias_uuid)
+
+  # The trap: a feature_alias row of the wrong kind/auto_assign would pass a
+  # weaker "a row exists" check while leaving the feature UNREACHABLE. Feed a
+  # raw naming the new feature through the REAL Layer-1 resolver and assert it
+  # RESOLVES rather than landing `feature_pending`/`unknown_feature`.
+  registry <- .rc_load_registry(con)
+  rows <- tibble::tibble(
+    source_ref = "r-selfcheck",
+    feature_raw = "T.NEWSELF9001",
+    sample_datetime_raw = NA_character_,
+    source_hash = "selfcheck-hash"
+  )
+  result <- .rc_resolve_features(rows, registry, work_order = "WO-TEST", orphan = FALSE)
+  row <- result$kept[result$kept$source_ref == "r-selfcheck", ]
+  expect_equal(nrow(row), 1)
+  expect_false(row$feature_pending[1])
+  expect_equal(row$uuid_feature[1], new_uuid)
+  expect_false(is.na(row$uuid_feature_alias[1]))
+  expect_false("unknown_feature" %in% result$review$kind)
+})
+
 test_that("R-12.6: a commit-time failure rolls back the whole call and aborts sampletidy_error, leaving no partial write (dbCommit() must sit inside the tryCatch)", {
   path <- seed_db()
   con <- seed_con(path)

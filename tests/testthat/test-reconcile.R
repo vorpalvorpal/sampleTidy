@@ -1791,8 +1791,9 @@ test_that("B.1/B.3: a feature whose name prefix != its site is EXCLUDED from the
 
 # ---- B.2: boundaries and parsing --------------------------------------------
 
-test_that("B.2: a DIRECT (no dot/space) boundary NEVER auto-resolves - falsified against the F2 collision oracle (TS1 curated -> TH.S01, the OPPOSITE site from a naive TS01->T.S01 parse)", {
+test_that("R-15.4/R-15.24/R-15.25/B.2: a DIRECT (no dot/space) boundary NEVER auto-resolves - falsified against the F2 collision oracle (TS1 curated -> TH.S01, the OPPOSITE site from a naive TS01->T.S01 parse)", {
   path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  registry <- .rc_load_registry(con)
   event <- mk_event(mk_rows(
     mk_row(source_ref = "direct", feature_raw = "TS01", lab_sample_id = "XX9999997001",
            sample_datetime_raw = "02 Jun 2025 09:00"),
@@ -1833,6 +1834,18 @@ test_that("B.2: a DIRECT (no dot/space) boundary NEVER auto-resolves - falsified
   curated_row <- out$clean[out$clean$source_ref == "curated", ]
   expect_false(curated_row$feature_pending)
   expect_identical(curated_row$uuid_feature, "f-0008")
+
+  # R-15.24/R-15.25 (F.4): the collision oracle at Layer-1 candidate level,
+  # positively specified. The retired oracle asserted only that TS1 and TS01
+  # give DIFFERENT answers - satisfiable by the broken longest-match mutation
+  # too, since a naive TS01 -> T.S01 parse (f-0001) also differs from TS1's
+  # f-0008. Assert each result's IDENTITY on its own; never compare the two.
+  cand_ts1 <- .rc_feature_candidates("TS1", as.Date("2025-06-02"), registry)
+  expect_equal(nrow(cand_ts1), 1)
+  expect_identical(cand_ts1$uuid_feature[[1]], "f-0008")   # TS1 -> TH.S01 (R-15.24)
+
+  cand_ts01 <- .rc_feature_candidates("TS01", as.Date("2025-06-02"), registry)
+  expect_equal(nrow(cand_ts01), 0)   # TS01 -> zero candidates (R-15.25), not "!= TS1"
 })
 
 test_that("B.2: boundary set is '.'/' ' ONLY - '_' inside a point is neither a split point nor stripped, and a residual with a second separator is unparseable", {
@@ -2156,7 +2169,7 @@ test_that("B.6: two identical structurally-resolved rows in one batch are subjec
 
 # ---- B.7: acceptance criteria (every negative paired with a positive) ------
 
-test_that("B.7: a structural miss (site recognised, no matching point) carries a subkind=structural suggestion in review, and neither a feature nor a structural alias is fabricated across reconcile+commit", {
+test_that("R-15.1/R-15.2/R-15.3/B.7: a structural miss (site recognised, no matching point) carries a subkind=structural suggestion in review, and neither a feature nor a structural alias is fabricated across reconcile+commit", {
   path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
   before <- DBI::dbGetQuery(con, "SELECT count(*) AS n FROM feature")$n
   fa_before <- DBI::dbGetQuery(con, "SELECT count(*) AS n FROM feature_alias")$n
