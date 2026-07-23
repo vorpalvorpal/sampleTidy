@@ -37,9 +37,12 @@ exactly** keeps them apart, which is what migration 001 already does.
 
 ### The real model (user's reframe, confirmed)
 
-The string is `(site, point)`; the dot is just a separator. The registry has exactly
-**4 sites**: B (452 points), K (396), L (34), BH (12). Every feature name is
-`SITE.POINT`; no name has 2+ delimiters; `BH` must win longest-prefix over `B`.
+The string is `(site, point)`; the dot is just a separator. The registry currently
+holds **4 sites**: B (452 points), K (396), L (34), BH (12) — a measurement, NOT a
+constant: the site set is read from `feature.site` at runtime and tests must not
+hard-code it. Every feature name is `SITE.POINT` and `name` prefix == `site` for
+894 of 894; no *registry* name has 2+ delimiters (an incoming raw may, and must then
+go to review); `BH` must win longest-prefix over `B`.
 
 ## Design — a layered resolver (replaces the single strip-key lookup)
 
@@ -56,10 +59,17 @@ Resolution order for each incoming `feature_raw`, per row, within an event/WO:
   filtered out before the candidate stage → blank "unknown" with no help.)
 
 ### Layer 2 — structural (site, point) parse (FALLBACK, un-aliased names only)
-- Known-site set: derive from `feature.name` prefixes (B, K, L, BH) — maintained
-  list, longest-match first (BH before B). Boundary = dot / space / direct.
-- Point normalisation within the matched site: uppercase; zero-pad numeric runs
-  (`S1`→`S01`) — applied ONLY to compare against existing (site, point) features.
+> **Superseded in detail by "Work B — PINNED SPEC" below.** Where this summary and
+> that spec disagree, the spec wins. Corrections it makes: the site set comes from
+> the `feature.site` COLUMN (not a name-prefix parse); a DIRECT (empty) boundary
+> never auto-resolves; canonicalisation STRIPS leading zeros rather than zero-padding;
+> and "un-aliased" means the key reaches ZERO alias rows.
+
+- Known-site set: read `DISTINCT feature.site`, longest-match first (BH before B).
+  Boundary = dot / space (a direct, separator-less run is suggestion-only).
+- Point normalisation within the matched site: uppercase; drop leading zeros within
+  each digit run (`S01`→`S1`) — applied ONLY to compare against existing
+  (site, point) features.
 - Auto-resolve ONLY on an exact, unique `(site, point)` feature hit. Zero hits or
   >1 → review (carry the structural parse as a suggested candidate). Never fabricate
   a point that doesn't exist in that site.
@@ -98,17 +108,201 @@ Resolution order for each incoming `feature_raw`, per row, within an event/WO:
   ambiguous b.s01 emits 2 candidates; method-key/intra-event-dedup behaviour
   UNCHANGED (blast-radius guard). Gate: dry-run `unknown_feature` collapses to the
   genuine residual.
-- **B. Layer-2 structural (site, point) resolver.** New site-registry helper +
-  parser. Tests: `B S01`/`BS01` → B.S01 (formatting variants absorbed WITHOUT an
-  explicit alias); unknown site → review; non-existent point in site → review, not
-  fabricated; BH beats B (longest match).
-  **Site set comes from the `feature.site` COLUMN, not a name-prefix parse** — the
-  column is authoritative and already populated (supersedes the "derive from
-  `feature.name` prefixes" wording in Layer 2 above).
-- **C. Layer-3 WO single-site disambiguation.** Tests: all-BH-resolved WO + novel
-  irregular code → assumes BH (exact hit → resolve + provenance; no hit → suggest);
-  MIXED-site WO → heuristic does NOT fire; curated BS1 inside an all-B WO still →
-  BH.S01 (curation wins over WO context).
+- **B. Layer-2 structural (site, point) resolver.** Specified in full below.
+- **C. Layer-3 WO single-site disambiguation.** Specified in full below.
+
+---
+
+## Work B — Layer-2 structural (site, point) resolver (PINNED SPEC)
+
+Rewritten 2026-07-23 from the cold plan review; every rule below is pinned because a
+test writer would otherwise have to guess it. Adjudication record:
+`dev/tdd-run/p15-bc-plan-adjudication.md`.
+
+### B.1 Site registry
+- Site set = `SELECT DISTINCT site FROM feature` where `site` is non-NULL and
+  non-blank. **From the COLUMN, never from a `feature.name` prefix parse** — this
+  supersedes the "derive from `feature.name` prefixes (B, K, L, BH) — maintained
+  list" wording in the Layer-2 design note above, and the "exactly 4 sites" claim.
+- Matching is case-insensitive, **longest `nchar` first** (so `BH` beats `B`).
+- Tests MUST NOT hard-code the site count or the specific site letters; they read the
+  set from the fixture DB. (Live today: B 452 / K 396 / L 34 / BH 12, and
+  `name` prefix == `site` for 894 of 894 — but that is context, not a test constant.)
+
+### B.2 Boundaries and parsing
+- Input = `.rc_feature_key(feature_raw)` (the Layer-1 punctuation-preserving key).
+- Boundary set = `.` and ` ` (space) **only**. `-` and `_` are NOT boundaries (60 and
+  11 live alias keys respectively contain them inside a single token, e.g.
+  `mid-swamp`, `b.b_mw11`).
+- Split at the **FIRST** boundary only. A residual point part still containing `.` or
+  ` ` is NOT parseable → review.
+- **A DIRECT (empty) boundary NEVER auto-resolves.** `BS01` yields a review
+  suggestion only. This is not a nicety: `bs1` → BH.S01 exists as an
+  `auto_assign=TRUE` curated alias while no `bs01` alias exists, so a longest-match
+  parse of `BS01` → B + S01 would auto-resolve to **the opposite catchment from
+  `BS1`** — the exact cross-site merge this plan exists to prevent. Auto-resolve
+  requires a dot or space boundary.
+  *(This supersedes the original bullet's `BS01 → B.S01` criterion, which was
+  self-contradictory against the collision oracle.)*
+
+### B.3 Point canonicalisation
+- Canonical point = **uppercase, then drop leading zeros within each maximal digit
+  run**. NOT zero-padding: digit width is not uniform, so no fixed pad works —
+  `B.G###` is 3-wide (380 points), `L.G##` 2-wide (25), and `K.G` has **both**
+  (`K.G01`..`K.G025` 2-wide, `K.G026`+ 3-wide). Pad-to-2 makes `B.G001`..`B.G380`
+  unreachable; pad-to-3 makes `K.G01` unreachable.
+- Worked set the tests MUST pin: `S1`→`S1`, `S01`→`S1`, `S001`→`S1`, `MW02A`→`MW2A`,
+  `TS41`→`TS41`, `E02`→`E2`, `centroid`→`CENTROID`.
+- Registry side: a feature's point = `feature.name` minus its leading `site` and
+  exactly one following separator (`feature` has **no `point` column**). A feature
+  whose name prefix ≠ its `site` is EXCLUDED from the structural index.
+- **Invariant test:** canonical `(site, point)` is injective over the whole feature
+  table. Verified true today (894 distinct keys over 894 features, 0 collisions; K.G
+  alone 360/360). A future `K.G001` alongside `K.G01` would break it, and the test
+  must fail loudly if so.
+
+### B.4 When Layer 2 runs (gating)
+- Layer 2 runs **only when the key reaches ZERO `feature_alias` rows** — i.e. when
+  `.rc_feature_suggestions()` returns no candidates. Any key reaching ≥1 alias row
+  counts as ALIASED and is left to Layer 1 / review, regardless of `auto_assign`,
+  regardless of whether the alias is dangling.
+- This is load-bearing, not conservatism: `b.s01` reaches two `auto_assign=FALSE`
+  rows (B.S01 + B.TS41). Layer 1 drops it, and a structural parse of `B.S01` IS a
+  unique hit — so without this gate Layer 2 would silently auto-resolve exactly the
+  curated ambiguity that §"Scope basis" parks pending a user ruling.
+- **Existing dangling alias ⇒ never auto-resolve.** When a dangling `feature_alias`
+  row exists for the row's `alias_key`, Layers 2 and 3 attach the structural hit as a
+  SUGGESTION on that pending alias and stop. Otherwise idempotency breaks: today such
+  a row is `feature_pending`, `.rc_resolve_existing_pending()` (reconcile.R:490-497)
+  fills its alias, and re-ingest matches on `s.uuid_feature_alias`
+  (`.rc_find_existing`, reconcile.R:724-731). Resolving it flips `feature_pending` to
+  FALSE, which switches that lookup to `fa.uuid_feature` — which cannot see the
+  already-committed sample, because that sample's alias has `uuid_feature IS NULL`.
+  **The same measurement would commit twice.** Promotion stays with
+  `confirm_feature_aliases()`, which already re-points and merges collisions.
+
+### B.5 Liveness
+- Before accepting a hit, Layer 2 applies an **unconditional** live-at-`sample_date`
+  filter (`date_end` NA or `>= sample_date`). If the filter empties the set → review.
+- Deliberately NOT a reuse of `.rc_narrow_live()`: that helper only narrows when
+  `length(unique(cand$uuid_feature)) > 1` (reconcile.R:173-180), and a structural hit
+  is unique by construction, so reusing it would be a no-op and would resolve to a
+  defunct feature. Fixture `f-0006 T.S06` (`date_end 2020-06-30`) is the ready-made case.
+
+### B.6 The alias side of a structural hit
+A Layer-2 hit yields a `uuid_feature` but no `uuid_feature_alias`, and that gap is
+not cosmetic — `sample.uuid_feature_alias` is `NOT NULL`, `.rc_batch_duplicate()`
+gates on non-NA `uuid_feature_alias` (reconcile.R:930-933), and `.fa_find_collisions`
+keys off the alias.
+- **PINNED:** reconcile attaches the target feature's **self-alias** uuid, via a
+  read-only lookup (honouring the A32 read-only contract). If the target has no
+  self-alias, the row goes to REVIEW — it must never commit with a NA alias.
+- Commit does **NOT** materialise a new `kind='structural'` alias. A structural
+  resolution is a deterministic, re-derivable rule, not curation; registering it would
+  accrete un-curated aliases and (at `auto_assign=FALSE`) churn ambiguity on the next
+  ingest. Operators promote a variant via `confirm_feature_aliases()`.
+- Consequence to assert: structurally-resolved rows ARE subject to the R-12.13/A-7
+  within-batch duplicate guard (two identical `T S01` rows in one batch must not both
+  commit).
+
+### B.7 Acceptance criteria (each must be able to FAIL)
+The original "unknown site → review" and "non-existent point in site → review, not
+fabricated" are **vacuous** — every unresolved raw already emits `unknown_feature` and
+creates nothing, so a no-op implementation passes both. Replace with:
+- Every negative case is paired with the positive control `T S01 → T.S01` **in the
+  same test**, so a disabled resolver fails.
+- The review payload must carry a structural suggestion token
+  (`subkind=structural,site=…,point=…`). `.rc_feature_review` emits only
+  `subkind=ambiguous` today (reconcile.R:299-306), so this cannot pass on current code.
+- `count(*) FROM feature` unchanged (nothing fabricated).
+- `BS01` must NOT auto-resolve to `T.S01`-equivalent (the B.2 direct-boundary rule),
+  asserted against the fixture collision oracle (F2).
+
+---
+
+## Work C — Layer-3 WO single-site disambiguation (PINNED SPEC)
+
+### C.1 What "the event/WO" means
+- The site set is computed over **the current event only**, never re-queried from the
+  DB. `reconcile_event()` sees one event = all files of a work order *present in this
+  batch* (`.st_group_events`, assemble.R:89-110), so a WO split across two runs would
+  otherwise resolve the same raw differently per batching — and, via B.4/B.6, commit a
+  second sample.
+- Layer 3 is **SKIPPED entirely** when `event$orphan` is TRUE or `work_order` is NA
+  (`.st_build_event`, assemble.R:238). An orphan event is a bag of unattributed files;
+  its "single site" is meaningless.
+- The provenance row records the site set used, so a differing later run is diagnosable.
+
+### C.2 Which rows Layer 3 may retry
+- Only rows with **no recognised site**, or an ambiguous one.
+- **Layer 3 NEVER applies to a row that yielded a recognised site prefix**, even if
+  its point missed. Without this guard, `K.S01` (no such feature) inside an all-B WO
+  gets re-sited to `B.S01` — a cross-site merge.
+- Candidate point = the canonicalised raw with a leading *recognised* site token
+  removed if present, else the whole canonicalised raw. A candidate still containing a
+  separator is not retried.
+- Layer 3 reuses Layer 2's canonical point **unchanged**, substituting only the site.
+  It never re-parses the raw and never overrides a Layer-2 auto-resolve.
+
+### C.3 The `iff` gate, operationally
+- Resolved = `!is.na(uuid_feature)` after Layers 1-2 (reconcile.R:253-256).
+- A resolved feature with NA or blank `site` makes the event **ineligible** (fail closed).
+- Curation always wins: a Layer-1 curated alias is never overridden.
+
+### C.4 Provenance
+- Reconcile is read-only (reconcile.R:4-6, CONTRACT A32) and **cannot** write
+  `change_log`. The resolution reason rides on the clean row; **COMMIT** writes the row
+  at step 1b (commit.R:684), mirroring `.fa_merge_samples` (feature-alias.R:200-208):
+  `action='provenance'`, `tbl='sample'`, `uuid_row=<sample uuid>`,
+  `field='uuid_feature_alias'`, `old=NA`, `new=<alias uuid>`,
+  `reason='wo_site_inferred: <raw> -> <feature.name> (sites={B})'`,
+  `source_hash=<row hash>`. Same shape for `structural_parse`.
+- **Confidence rides on the clean row's existing `confidence` field** (`R/ir.R:17,26`
+  declares `confidence = "double"`). `change_log` has NO `confidence` column — do not
+  invent one, and do not smuggle it into `reason`.
+
+### C.5 Acceptance criteria (each must be able to FAIL)
+The original "MIXED-site WO → heuristic does NOT fire" and "curated BS1 inside an
+all-B WO still → BH.S01" are both **vacuous** on today's code, and the second is
+self-defeating: `BS1`→BH.S01 makes that event's resolved-site set `{B, BH}`, i.e.
+multi-site, so Layer 3 never fires and the test cannot distinguish "curation wins"
+from "Layer 3 disabled". Replace with:
+- **Positive control on the same fixture:** the identical unresolved raw resolves in
+  the single-site event and stays in review in the mixed-site event, asserted across
+  two events **in one test**.
+- Pin explicitly whether one curated cross-site alias suppresses Layer 3 for the whole
+  event. **Ruling: it does** — the site set is computed from resolved rows regardless
+  of how they resolved, so a curated `BS1`→BH.S01 inside an otherwise-all-B WO makes
+  the event multi-site and disables Layer 3. Fail closed.
+
+---
+
+## Fixture work (`tests/testthat/helper-db.R`) — prerequisite for B and C
+
+- **F1 (BLOCKING).** helper-db.R:232-239 seeds all 7 features with `site='TestSite'`
+  while naming them `T.S01…`, violating the live prefix==site invariant. With the site
+  set read from the column (B.1) the set is `{"TestSite"}` and **no Work-B test can
+  ever produce a structural hit** — every criterion passes vacuously down the review
+  path. Fix: set `site` to the name prefix (`'T'`), and add a prefix-extending second
+  site — `TH.S01`, `TH.MW02A` with `site='TH'` plus self-aliases — to give the B/BH
+  longest-match case. (`test-mutate.R:36/113/234/358` use `'TestSite'` in their own
+  inserts / `add_feature()` calls and are unaffected.)
+- **F2.** Collision oracle mirroring `bs1`→BH.S01: alias
+  `('TS1','ts1','historical_code', auto_assign TRUE)` → `TH.S01`, so B.2's rule
+  (`TS01` must NOT auto-resolve to `T.S01`) is falsifiable.
+- **F3.** Digit-width pair: `T.G001` (3-wide, mirrors `B.G###`) and `TH.G01` (2-wide,
+  mirrors `K.G##`). A pad-to-2 impl fails `T G1 → T.G001`; pad-to-3 fails `TH G1 → TH.G01`.
+- **F4.** A point present in one site and absent in the other (keep `T.MW01`, do NOT
+  add `TH.MW01`) for Layer-3's "assume S → no hit → suggest"; `TH.MW02A` supplies
+  "assume S → exact hit → resolve".
+- **F5.** A second work order / project (only `p-0001 'XX1234567'` exists,
+  helper-db.R:355-356) plus two event fixtures — single-site and mixed-site — carrying
+  the SAME unresolved raw, required for C.5's positive control.
+- **F6.** A dangling alias whose key is structurally parseable
+  (`('fa-00xx', NULL, 'T S09', 't s09', 'pending')`) with a committed sample, so B.4's
+  idempotency rule is testable.
+- **F7.** No new row needed for B.5: `f-0006 T.S06` (`date_end 2020-06-30`,
+  helper-db.R:238) plus a 2025 raw `T S06` is the ready-made defunct-feature case.
 
 ### Scope basis for B and C (reassessed 2026-07-23, post-Work-A)
 
