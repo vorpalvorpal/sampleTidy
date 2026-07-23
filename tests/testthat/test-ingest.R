@@ -357,6 +357,67 @@ test_that("direct: .ig_remove_verified() removes the source only when the archiv
   expect_true(file.exists(src))
 })
 
+test_that("direct: .ig_remove_verified() keeps the source when the archive copy EXISTS but its CONTENT differs", {
+  # The archive lives on OneDrive, where a dehydrated placeholder, a truncated
+  # upload or a conflicted rewrite is still a regular file of the right name.
+  # An existence-only check would delete the source and leave corrupt bytes as
+  # the only remaining copy.
+  db_path <- seed_db(dir = withr::local_tempdir())
+  con <- seed_con(db_path)
+  ensure_test_asset_table(con)
+  DBI::dbDisconnect(con, shutdown = TRUE)
+
+  archive_dir <- withr::local_tempdir()
+  withr::local_options(list("sampletidy.archive_dir" = archive_dir))
+
+  src_dir <- withr::local_tempdir()
+  src <- file.path(src_dir, "content_check_test.csv")
+  writeLines("a,b\n1,2\n", src)
+  h <- hash_file(src)
+  uuid <- "u-content-check-test"
+
+  con2 <- DBI::dbConnect(duckdb::duckdb(), db_path, read_only = FALSE)
+  DBI::dbExecute(
+    con2,
+    "INSERT INTO asset (uuid, filename, hash) VALUES (?, ?, ?)",
+    params = list(uuid, basename(src), h)
+  )
+  DBI::dbDisconnect(con2, shutdown = TRUE)
+
+  uuid_dir <- file.path(archive_dir, uuid)
+  dir.create(uuid_dir, recursive = FALSE)
+  archived_file <- file.path(uuid_dir, basename(src))
+
+  routed <- tibble::tibble(path = src, hash = h)
+
+  # Case A: a TRUNCATED archive copy (0 bytes) - the placeholder scenario.
+  file.create(archived_file)
+  expect_true(utils::file_test("-f", archived_file))
+  expect_warning(
+    removed_empty <- sampleTidy:::.ig_remove_verified(db_path, routed),
+    "does NOT match"
+  )
+  expect_identical(removed_empty, character(0))
+  expect_true(file.exists(src))
+
+  # Case B: a same-size-ish but DIFFERENT archive copy.
+  writeLines("a,b\n9,9\n", archived_file)
+  expect_false(identical(hash_file(archived_file), h))
+  expect_warning(
+    removed_wrong <- sampleTidy:::.ig_remove_verified(db_path, routed),
+    "does NOT match"
+  )
+  expect_identical(removed_wrong, character(0))
+  expect_true(file.exists(src))
+
+  # Case C: correct bytes -> the source is removed, proving A and B were
+  # blocked by the CONTENT check and not by some unrelated failure.
+  writeLines("a,b\n1,2\n", archived_file)
+  expect_identical(hash_file(archived_file), h)
+  expect_identical(sampleTidy:::.ig_remove_verified(db_path, routed), src)
+  expect_false(file.exists(src))
+})
+
 # ---- R-12.1: adapter match() return-value validation, contained (F6) ------
 
 test_that("R-12.1: an ingest run containing one file whose adapter match() returns NA still commits the other good files (per-file containment, not a whole-run abort)", {

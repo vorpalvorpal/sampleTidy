@@ -21,8 +21,15 @@
   field_analytes = function() {
     c("pH", "Temperature", "Conductivity", "EC")
   },
+  # TRUE since 2026-07-23 (Robin): a successfully ingested source file is
+  # deleted from the input directory once its archive copy has been verified.
+  # Supersedes the original A13 default of FALSE. The safety property A13
+  # actually cares about is unchanged and in fact strengthened - see
+  # `.ig_remove_verified()`, which now requires the archived bytes to re-hash
+  # to the source's SHA-256, not merely to exist. Removal additionally
+  # requires a successful snapshot (`R/ingest.R`).
   remove_ingested = function() {
-    FALSE
+    TRUE
   },
   # Deliberately reads SAMPLETIDY_CORPUS (not the SAMPLETIDY_CORPUS_DIR
   # pattern used for the option/env-var lookup below) - see PLAN-01 R-1.1.

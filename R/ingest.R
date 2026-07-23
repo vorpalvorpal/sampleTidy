@@ -227,12 +227,24 @@
 #'
 #' Opens a fresh read-only connection (the pipeline's read-write connection
 #' must already be closed - DuckDB is single-writer, but a read-only
-#' connection can coexist). For each routed input path/hash: if an `asset`
-#' row exists for that hash AND its archive copy exists on disk AND the
-#' source file still exists, the source is deleted. If an `asset` row
-#' exists but the archive copy is missing, the source is kept and a warning
-#' is emitted - files are never deleted without a verified copy. Files with
-#' no `asset` row (cruft, failed, quarantined) are left untouched.
+#' connection can coexist). For each routed input path/hash the source is
+#' deleted only when ALL of the following hold:
+#'
+#' * an `asset` row exists for that hash;
+#' * the archive copy exists on disk as a REGULAR FILE (not merely its uuid
+#'   directory);
+#' * re-hashing the archived bytes reproduces the same SHA-256; and
+#' * the source file still exists.
+#'
+#' The content check is not redundant with the existence check: the archive
+#' lives on OneDrive/SharePoint, where a dehydrated placeholder, a truncated
+#' upload or a conflicted rewrite all present as a regular file of the right
+#' name. Deletion is irreversible, so "a file is there" is not sufficient
+#' evidence that "the data is there".
+#'
+#' Any failed check keeps the source and emits a warning - files are never
+#' deleted without a verified copy. Files with no `asset` row (cruft,
+#' failed, quarantined) are left untouched.
 #'
 #' @param db path to the DuckDB file.
 #' @param routed the tibble returned by [route_files()].
@@ -268,6 +280,22 @@
         "ingest_dir(): archive copy for {.path {path}} (hash {.val {hash}}) is
          missing at {.path {copy_path}}; keeping the source file (never
          deleting without a verified copy)."
+      )
+      next
+    }
+
+    # EXISTENCE IS NOT ENOUGH. The archive lives on OneDrive/SharePoint, where a
+    # copy can be a dehydrated placeholder, a truncated upload, or a conflicted
+    # rewrite - all of which are regular files of the right name. Re-hash the
+    # archived bytes and require them to equal the hash we are about to delete
+    # the source for. This is the difference between "a file is there" and "the
+    # data is there", and deletion is irreversible.
+    copy_hash <- tryCatch(hash_file(copy_path), error = function(e) NA_character_)
+    if (is.na(copy_hash) || !identical(copy_hash, hash)) {
+      cli::cli_warn(
+        "ingest_dir(): archive copy at {.path {copy_path}} does NOT match the
+         source {.path {path}} (expected hash {.val {hash}}, archived copy
+         hashes to {.val {copy_hash}}); keeping the source file."
       )
       next
     }
