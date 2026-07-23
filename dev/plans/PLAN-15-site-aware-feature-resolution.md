@@ -421,30 +421,38 @@ Robin's rulings on the 9 collision-class rows. **Rule 1** = one-off mislabelling
 **Rule 2** = a recurring issue Robin wants to review every time → leave open.
 **Rule 3** = the same-named point is decommissioned → close at the last sample date.
 
-| alias_key | resolves_to | rule | `date_end` | status |
+ALL NINE ARE SETTLED (Robin, 2026-07-23). `date_end` is inclusive; `date_start` stays
+NULL on every row. These are DATA, not derivable — an implementer must use exactly
+these literals and must not recompute them.
+
+| alias_key | resolves_to | rule | `date_end` | basis |
 |---|---|---|---|---|
-| `b.s01` | B.TS41 | 1 | 2026-01-20 | SETTLED (target has 1 sample) |
-| `b.ts02` | B.TS27 | 1 | 2021-11-11 | SETTLED (target has 1 sample) |
-| `b.ts41` | B.TMW15 | 1 | 2024-04-07 | SETTLED (target has 1 sample) |
-| `b.s22` | B.S06 | 2 | NULL (stays open) | SETTLED |
-| `b.s04` | B.S01 | 1 | ⚠ OPEN | target has 184 samples 2002-11-30→2026-03-15; "the sample date" undetermined |
-| `b.s22` | B.TS18 | 1 | ⚠ OPEN | target has 6 samples 2020-05-18→2021-11-11 |
-| `k.e02` | K.S06 | 1 | ⚠ OPEN | target has 23 samples 2020-08-10→2025-09-03 |
-| `b.ts18` | B.S30 | 3 | ⚠ OPEN | whose last sample? B.TS18 ended 2021-11-11; B.S30 ran 2022-03-01→2023-09-12 |
-| `b.ts40` | B.TS39 | 3 | ⚠ OPEN | whose last sample? B.TS40 ended 2024-04-07; B.TS39 ran 2022-09-26→2025-05-28 |
+| `b.s01` | B.TS41 | 1 | **2026-01-20** | exact — target's only sample |
+| `b.ts02` | B.TS27 | 1 | **2021-11-11** | exact — target's only sample |
+| `b.ts41` | B.TMW15 | 1 | **2024-04-07** | exact — target's only sample |
+| `b.s22` | B.S06 | 2 | **NULL** (stays open) | recurring; Robin reviews every time |
+| `b.s04` | B.S01 | 1 | **2026-03-15** | proxy — target's last sample |
+| `b.s22` | B.TS18 | 1 | **2021-11-11** | proxy — target's last sample |
+| `k.e02` | K.S06 | 1 | **2025-09-03** | proxy — target's last sample |
+| `b.ts18` | B.S30 | 3 | **2021-11-11** | earlier of the two candidates (B.TS18's last) |
+| `b.ts40` | B.TS39 | 3 | **2024-04-07** | earlier of the two candidates (B.TS40's last) |
 
-**Why 5 are OPEN.** Per-alias usage is unrecoverable: migration 001 repoints every
-sample to its *self* alias, and the raw feature string was never retained on `sample`.
-So for `n_seen == 1` against a many-sampled target we know the mislabelling happened
-once but not *when*. And for rule 3 the two candidate dates belong to different
-features. Note `b.ts18`/`b.ts40` look like **renames** rather than mislabellings —
-B.TS18's samples stop 2021-11-11 and B.S30's start 2022-03-01, with no overlap — in
-which case they need a `date_start` on the alias, not a `date_end`, or the alias can
-never match a single target sample.
+**On the 3 proxies.** Per-alias usage is unrecoverable — migration 001 repoints every
+sample to its *self* alias and the raw string was never retained on `sample` — so for
+`n_seen == 1` against a many-sampled target we know the mislabelling happened once but
+not *when*. Robin's ruling: use the target's last sample date. This is deliberately
+conservative (the alias stays live across the target's whole history) and can be
+tightened later if a specific incident date surfaces.
 
-**These 5 values are the ONLY thing blocked.** E.1-E.4 are date-agnostic and are built
-now; migration 003 ships with the 4 settled rows and gains the rest once Robin rules.
-An implementer must NOT invent values for the open rows.
+**On the 2 rule-3 rows.** Both were flagged as looking like **renames** rather than
+mislabellings — B.TS18's samples stop 2021-11-11 and B.S30's start 2022-03-01, with no
+overlap; same shape for B.TS40/B.TS39. Robin ruled: use the earlier date. Consequence,
+accepted and intended: the alias becomes **inert for its target** (it can never match a
+B.S30 / B.TS39 sample, all of which post-date the bound), so `b.ts18` and `b.ts40`
+resolve cleanly to their same-named features B.TS18 / B.TS40 via the unbounded `self`
+alias. In effect this RETIRES the two aliases, which is the desired outcome — the
+strings stop being ambiguous. A test must assert exactly that, not the (impossible)
+target match.
 
 ### E.6 Acceptance criteria (each must be able to FAIL)
 - An alias with `date_end` in the past does NOT resolve a later-dated row — paired in
