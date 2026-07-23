@@ -41,10 +41,10 @@ test_that("R-1.1: field_analytes default is the pinned vector", {
   expect_equal(st_config("field_analytes"), c("pH", "Temperature", "Conductivity", "EC"))
 })
 
-test_that("R-1.1: remove_ingested default is FALSE (A13)", {
+test_that("R-1.1: remove_ingested default is TRUE (supersedes A13's FALSE, 2026-07-23)", {
   withr::local_options(list("sampletidy.remove_ingested" = NULL))
   withr::local_envvar(c(SAMPLETIDY_REMOVE_INGESTED = NA))
-  expect_identical(st_config("remove_ingested"), FALSE)
+  expect_identical(st_config("remove_ingested"), TRUE)
 })
 
 test_that("R-1.1: corpus_dir defaults from Sys.getenv(SAMPLETIDY_CORPUS)", {

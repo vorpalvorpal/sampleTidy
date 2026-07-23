@@ -1018,6 +1018,57 @@ Acceptance (must be able to FAIL): assert `v_measurement_epa` returns a row coun
 **> 0** *and* equal to an independently computed base-table query for the same
 filter — a bare `>= 0` assertion is exactly the gate that let this through.
 
+### F.17 Retain the non-tabular lab deliverables (APPROVED — Robin, 2026-07-23)
+Every PDF and `.XLS` sibling of an ingested work order is currently
+`quarantined` with reason `unclaimed`, gets **no `asset` row**, and is therefore
+never copied into the archive. Measured after the cutover ingest: 10 files
+`archived`, **19 `quarantined`** — the COA, COC, QC and QCI PDFs of all eight
+work orders, plus each `XTAB.XLS`.
+
+That was harmless while `remove_ingested` was FALSE, because nothing was ever
+deleted. **It is now load-bearing:** the default is TRUE as of 2026-07-23, so
+ingested sources are deleted from the input directory. Quarantined files are
+correctly left alone by `.ig_remove_verified()` (no `asset` row → skipped), so
+nothing is lost today — but the input directory will accumulate every PDF
+forever while the data files disappear from beside them, which is exactly the
+state that invites a manual "clean up the leftovers" sweep that deletes the only
+copy of a certificate of analysis.
+
+Robin wants these retained. Scope to be fleshed out at implementation; the
+shape is roughly:
+
+* register the non-tabular siblings of a committed event as `asset` rows with
+  an appropriate `type` (they are evidence, not `"Chemical analysis"` data) and
+  archive the bytes, so `.ig_remove_verified()` will then clean them up too;
+* decide whether that happens through the router (a new low-tier "retain-only"
+  adapter that claims them) or as a post-commit sweep over the event's sibling
+  files — the router path keeps one code path for "what happened to this file",
+  which is probably worth the extra plumbing;
+* `ingest_file` needs a terminal state that means "kept deliberately, not
+  parsed"; `quarantined` currently conflates "we could not read this" with
+  "we do not parse this kind of file".
+
+Acceptance (must be able to FAIL): ingest a work order whose directory contains
+a COA PDF; assert the PDF has an `asset` row AND a byte-identical archive copy
+AND that a subsequent `remove_ingested` pass deletes the source. Assert the run
+reports **zero** `quarantined` files for that event — a test that merely counts
+`asset` rows would pass while the PDF still sat unclaimed.
+
+### F.18 Legacy `asset` rows with no retained bytes (OPEN — found 2026-07-23)
+**1,272 of 2,556 `asset` rows have no archive copy on disk**, and a sample of 40
+of their filenames could not be found anywhere under the `assets/` tree. These
+are legacy rows migrated in with the pre-package data; the 1,258 legacy rows
+that *do* have copies show the old system used the same
+`<archive_dir>/<uuid>/<filename>` layout, so the missing ones are genuinely
+absent rather than stored elsewhere.
+
+Nothing is at risk of deletion because of this — `.ig_remove_verified()` only
+ever considers files routed in the current run — but the `asset` table currently
+overstates what is actually retained by roughly half, and anything that trusts
+it as an evidence index is wrong. Needs a decision: locate the bytes (another
+backup? the pre-cutover SharePoint tree?), or mark the rows as
+`bytes_not_retained` so the registry stops claiming a copy exists.
+
 ## Registry data changes pending the live cutover
 
 **The authoritative DB is not yet on the package schema.** `/Users/rjs/OneDrive - Blue
