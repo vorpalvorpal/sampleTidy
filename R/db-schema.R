@@ -153,7 +153,7 @@ ensure_schema <- function(con) {
 #' `ingest_sighting` row (A20/A21: sightings are deduped by `(hash, path)`).
 #'
 #' @param con an open read-write DBI connection.
-#' @param hash SHA-256 content hash (R-1.2 `hash_file()`).
+#' @param hash xxHash128 content hash (R-1.2 `hash_file()`).
 #' @param path the file path currently being observed.
 #' @param filename basename of the file (optional).
 #' @param size file size in bytes (optional).

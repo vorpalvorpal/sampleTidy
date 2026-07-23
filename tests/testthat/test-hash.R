@@ -1,14 +1,15 @@
-# Plan 01 - R-1.2 hash_file(): SHA-256 of file contents (A5).
+# Plan 01 - R-1.2 hash_file(): xxHash128 of file contents (A5).
+# Algorithm changed 2026-07-23 (SHA-256 -> xxHash128) to match the 2,407
+# legacy asset rows written by the pre-package system. See PLAN-CHANGE-REQUESTS.
 
 test_that("R-1.2: known 3-byte fixture file hashes to its precomputed digest", {
   dir <- withr::local_tempdir()
   path <- st_test_write_file(dir, "foo.txt", raw = charToRaw("foo"))
-  # sha256("foo") - verified independently via digest::digest(algo = "sha256")
-  # before being baked into this assertion.
-  expect_identical(
-    hash_file(path),
-    "2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae"
-  )
+  # xxHash128("foo") - verified independently via rlang::hash_file() on a
+  # 3-byte file before being baked into this assertion.
+  expect_identical(hash_file(path), "79aef92e83454121ab6e5f64077e7d8a")
+  # width is part of the contract: 32 hex chars, not 64
+  expect_equal(nchar(hash_file(path)), 32L)
 })
 
 test_that("R-1.2: two files with identical bytes but different names/mtimes hash equal", {

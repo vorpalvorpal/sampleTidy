@@ -713,3 +713,61 @@ were always carried by `source_hash`, not by the value string.
 
 Mutation-checked both ways: reverting `values.R` kills 9 assertions; reverting
 `commit.R` kills 2.
+
+---
+
+## A5 / R-1.2 — file hash changed from SHA-256 to xxHash128 (Robin, 2026-07-23)
+
+**Pinned contract changed.** A5 was `digest::digest(file = TRUE, algo = "sha256")`.
+It is now `rlang::hash_file()` — xxHash128, a 32-character hex digest.
+
+**Why.** The pre-package system already wrote xxHash128 into `asset.hash`. Found
+by reading `~/Desktop/WEM.data`: `R/new/import/import_dust.R:319` and
+`R/shiny/app.R:1670` write `hash = hash_file(...)`, and `R/new/bmcc/reorient_pdf.R:92`
+shows it is `rlang::hash_file()`. **2,407 of the 2,433 hashed asset rows were
+xxHash128; only the 26 sampleTidy wrote were SHA-256.** Keeping SHA-256 would have
+left 99% of the archive permanently unverifiable — which is exactly what happened
+during F.18, where a recovery pass compared SHA-256 against those 32-char values,
+could never match, and reported "0 of 1,272 recoverable" as though it were a fact
+about the data.
+
+**This is a NON-cryptographic hash.** Appropriate here — it is a content-addressing
+and de-duplication key for lab deliverables, not tamper-evidence. Do not reuse it
+as such.
+
+**Stored values were migrated by RECOMPUTING from the bytes, never by conversion**,
+and only after confirming the stored SHA-256 still reproduced from those same bytes
+(26 of 26 asset, 16 of 16 ingest_file passed that gate):
+
+| Table | Migrated | Left as SHA-256 |
+|---|---:|---|
+| `asset.hash` | 26 | 0 — table is now uniformly xxHash128 (1,464 rows) |
+| `ingest_file.hash` | 16 | **13** — bytes no longer exist anywhere, see below |
+| `change_log.source_hash` | 0 | **1,412 — deliberately not migrated** |
+| `review_queue.source_hash` | 0 | 4 |
+
+**`ingest_file.hash` had to be migrated** — it is the re-ingest identity key, so
+leaving it SHA-256 would make every already-ingested file hash differently on the
+next run and look new. That is the duplicate-commit hazard F.10 exists to prevent.
+
+**`change_log.source_hash` is deliberately NOT migrated.** `change_log` is not in
+`.st_mutate_allowlist` (`R/mutate.R:40`) — the audit log is append-only by design,
+and rewriting it would require bypassing the mutation layer, violating A32. Those
+1,412 rows keep SHA-256 and remain traceable by recomputing SHA-256 on the archived
+file. **Any tool that joins `change_log.source_hash` to `asset.hash` must handle
+both widths**: 32 = xxHash128 (current), 64 = SHA-256 (pre-2026-07-23).
+
+### 13 quarantined lab deliverables are LOST — F.17 was not hypothetical
+
+The 13 unmigratable `ingest_file` rows are the COA / COC / QC / QCI PDFs and
+`XTAB.XLS` siblings of work orders ES2600185, ES2610538, ES2612444, ES2614070 and
+ES2617126. All are `quarantined`, all have `uuid_asset` NULL, and **none exists
+anywhere under the SharePoint tree** (searched all 15,045 files by name). Their
+data siblings survive because those were archived and have `asset` rows.
+
+They were not removed by the 2026-07-23 deletion pass: that log
+(`scratchpad/removed_inputs_2026-07-23.txt`) is 42 files, all `.csv`/`.CSV`/`.XML`,
+and `.ig_remove_verified()` skips anything without an `asset` row. So they were
+lost by some other route while sitting unarchived in the input directory — which
+is precisely the failure mode F.17 describes. **F.17 should be treated as
+remediation of a realised loss, not as a precaution.**

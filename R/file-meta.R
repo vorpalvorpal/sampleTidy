@@ -18,7 +18,7 @@
 #'
 #' @param path path to an existing, readable file.
 #' @return a list with elements `path`, `filename`, `ext` (lower-cased, no
-#'   leading dot), `size` (bytes), `hash` (SHA-256, via [hash_file()]),
+#'   leading dot), `size` (bytes), `hash` (xxHash128, via [hash_file()]),
 #'   `sheet_names` (via `readxl::excel_sheets()` for xls/xlsx, else `NULL`),
 #'   `peek` (first ~2048 bytes, latin-1 decoded, always a character
 #'   scalar), `work_order_guess` (first `[A-Z]{2}\d{7}` match in the

@@ -26,7 +26,7 @@
   # Supersedes the original A13 default of FALSE. The safety property A13
   # actually cares about is unchanged and in fact strengthened - see
   # `.ig_remove_verified()`, which now requires the archived bytes to re-hash
-  # to the source's SHA-256, not merely to exist. Removal additionally
+  # to the source's content hash, not merely to exist. Removal additionally
   # requires a successful snapshot (`R/ingest.R`).
   remove_ingested = function() {
     TRUE

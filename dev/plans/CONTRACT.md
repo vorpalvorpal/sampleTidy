@@ -164,7 +164,12 @@ for lab reports; `sample.organisation ∈ {ACIRL, Internal, ALS}`;
   `Sys.getenv("SAMPLETIDY_CORPUS")` and `skip_if` unset.
 - **A4** `NS` ("no sample") values are recorded skips with reason, never
   silent drops (deviation from old `cleanBDLvalues`).
-- **A5** File hash = SHA-256 (`digest::digest(file = TRUE, algo = "sha256")`).
+- **A5** File hash = xxHash128 (`rlang::hash_file()`), a 32-char hex digest.
+  CHANGED 2026-07-23 (was SHA-256 via `digest::digest(algo = "sha256")`): the
+  pre-package system wrote xxHash128 into `asset.hash`, so 2,407 of 2,433
+  hashed rows already used it and only 26 were SHA-256. Stored SHA-256 values
+  were migrated. Non-cryptographic by design - this is a content-addressing
+  key, not tamper-evidence. See PLAN-CHANGE-REQUESTS.md.
 - **A6** *(amended by A54 — read A54 with this.)* Unknown feature/analyte/unit never auto-adds registry rows (old code
   auto-added); always a `review_queue` item.
 - **A7** Migrations: additive-only, idempotent, recorded in `schema_version`.
