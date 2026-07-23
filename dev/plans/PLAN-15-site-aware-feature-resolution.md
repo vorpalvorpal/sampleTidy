@@ -814,6 +814,27 @@ rows. The 4 exceptions are data errors, not semantics — two are exactly one mo
 are one day apart. Resolve those 4 explicitly rather than letting the drop silently pick
 a winner.
 
+**⛔ BLOCKING, found during the 2026-07-23 cutover ingest: the premise DOES NOT
+HOLD for newly ingested rows.** Of the 36 samples committed by the first real
+ingest, **35 have `datetime` NULL and `date` populated**. Only the single ESdat
+row carries a `datetime`. The ALS `ENMRG` and `XTAB` sources are **date-only** —
+their header literally reads `Sample date:,01/04/2026` with no time — so the
+adapter has no time to store and leaves `datetime` NULL.
+
+So `date` is **not** redundant going forward: for date-only sources it is the
+ONLY record of when the sample was taken. Dropping it as specified would erase
+the sampling date of every ENMRG/XTAB row. Robin's premise was verified true for
+the 15,113 legacy rows and is false for new ones — the column stopped being a
+copy of `datetime` the moment a date-only adapter was added.
+
+**F.11 therefore cannot proceed as written.** The options, needing a ruling:
+(a) keep `date` and fix its convention instead (one migration, no code change);
+(b) have date-only adapters write `datetime` at local midnight and accept that a
+genuine midnight sampling becomes indistinguishable from "no time recorded" —
+note this recreates exactly the ambiguity that made the 2,046 legacy `00:00`
+rows unresolvable; or (c) add an explicit `time_known` flag and drop `date`.
+Do not start F.11 until this is settled.
+
 **Premise NOT verified for `date_start`. Do not drop it in the same pass.**
 `date_start` vs `datetime_start` **disagree on 223 of 15,066** rows, and 45 rows have a
 NULL `date_start` with a non-NULL `datetime_start`. Something other than
