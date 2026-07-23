@@ -238,6 +238,16 @@ seed_db <- function(dir = NULL) {
   # must beat 'T' - mirrors the live BH-before-B case). f-0010/f-0011 are the
   # F3 digit-width pair (T.G### 3-wide vs TH.G## 2-wide). f-0012 is the F6
   # structural target for the dangling-alias/idempotency fixture below.
+  # PLAN-15 F8 (audit delta 4): f-0013 'Q.S01' with site 'Z' is the ONLY row
+  # where the name prefix DISAGREES with the `site` column. Without it every
+  # B.1 assertion is unfalsifiable: an implementation that derives the site
+  # set from a `feature.name` prefix parse instead of the COLUMN produces the
+  # identical set on a fixture where the two always agree. With this row the
+  # column-read set contains 'Z' and never 'Q', and B.3's "a feature whose
+  # name prefix != its site is EXCLUDED from the structural index" becomes a
+  # live rule rather than an empty branch. It carries a self-alias like every
+  # other feature, so a prefix-parsing implementation WOULD auto-resolve the
+  # raw 'Q S01' - which is exactly what the B.1 test now forbids.
   DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix, date_end, lon, lat) VALUES
     ('f-0001', 'T.S01', 'T', 'surface', 'water', NULL, 150.0001, -33.0001),
     ('f-0002', 'T.S02', 'T', 'surface', 'water', NULL, 150.0002, -33.0002),
@@ -250,7 +260,8 @@ seed_db <- function(dir = NULL) {
     ('f-0009', 'TH.MW02A', 'TH', NULL, 'groundwater', NULL, 150.1009, -33.1009),
     ('f-0010', 'T.G001', 'T', 'surface', 'water', NULL, 150.1010, -33.1010),
     ('f-0011', 'TH.G01', 'TH', 'surface', 'water', NULL, 150.1011, -33.1011),
-    ('f-0012', 'T.S08', 'T', 'surface', 'water', NULL, 150.1012, -33.1012)")
+    ('f-0012', 'T.S08', 'T', 'surface', 'water', NULL, 150.1012, -33.1012),
+    ('f-0013', 'Q.S01', 'Z', 'surface', 'water', NULL, 150.1013, -33.1013)")
 
   # feature_alias. Every feature gets a self-alias (fa-0001..fa-0003,
   # fa-0011..fa-0014; kind = 'self'), uniform with no special case for
@@ -336,7 +347,15 @@ seed_db <- function(dir = NULL) {
     -- measurement under this alias, making the would-be double-commit
     -- idempotency failure demonstrable if the gate is skipped.
     ('fa-0023', NULL, 'T S08', 't s08', 'pending', 0, FALSE,
-     TIMESTAMP '2025-05-10 08:00:00', TIMESTAMP '2025-05-10 08:00:00', NULL)")
+     TIMESTAMP '2025-05-10 08:00:00', TIMESTAMP '2025-05-10 08:00:00', NULL),
+    -- PLAN-15 F8: the self-alias of f-0013 'Q.S01' (site 'Z'). Present so the
+    -- prefix != site feature is uniform with every other feature AND so a
+    -- name-prefix-derived site set would actually RESOLVE the raw 'Q S01'
+    -- (structural hit + self-alias available). Without this row that wrong
+    -- implementation would fall to review via B.6's no-self-alias rule and
+    -- the B.1 test could not tell it apart from a correct one.
+    ('fa-0024', 'f-0013', 'Q.S01', 'q.s01', 'self', 0, TRUE,
+     TIMESTAMP '2025-01-01 00:00:00', TIMESTAMP '2025-01-01 00:00:00', NULL)")
 
   # feature_mask (f-0001/long is an alias; f-0002/epa and f-0003/long both
   # resolve the string "AMBIG" - the deliberate ambiguity fixture). Untouched

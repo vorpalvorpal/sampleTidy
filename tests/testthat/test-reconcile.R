@@ -1729,18 +1729,53 @@ test_that("R-12.13: NA-safe key - two rows with an unresolved (NA) uuid_feature_
 
 # ---- B.1: site registry -----------------------------------------------------
 
-test_that("B.1: .rc_site_registry() reads the site set from feature.site (never hardcoded), longest nchar first", {
+test_that("B.1: .rc_site_registry() reads the site set from the feature.site COLUMN (never a feature.name prefix parse), longest nchar first", {
   path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
   registry <- .rc_load_registry(con)
-
-  expected <- unique(registry$feature$site[!is.na(registry$feature$site) & trimws(registry$feature$site) != ""])
   sites <- .rc_site_registry(registry)
 
-  # SET identity read from the DB, not a literal - B.1 forbids hard-coding
-  # the site count or letters.
-  expect_setequal(sites, expected)
+  # LITERAL oracle over the seeded fixture (helper-db.R), NOT a re-derivation
+  # of the same expression the implementation itself would use. The old
+  # `expected <- unique(registry$feature$site[...])` form was satisfied by ANY
+  # implementation that read *some* site-like set - including a name-prefix
+  # parse, because on the old fixture prefix and site always agreed.
+  # B.1's "tests must not hard-code the site set" bars encoding the LIVE
+  # registry's {B, K, L, BH}; the throwaway fixture's own site set is a test
+  # constant we own and is pinned here deliberately.
+  expect_setequal(sites, c("T", "TH", "Z"))
   # longest-match-first: nchar is non-increasing across the returned order.
   expect_true(!is.unsorted(rev(nchar(sites))))
+
+  # F8 discriminator: f-0013 is NAMED 'Q.S01' but SITED 'Z'. A name-prefix
+  # parse yields 'Q' and never 'Z'; the column yields 'Z' and never 'Q'.
+  expect_true("Z" %in% sites)
+  expect_false("Q" %in% sites)
+})
+
+test_that("B.1/B.3: a feature whose name prefix != its site is EXCLUDED from the structural index - the raw 'Q S01' (f-0013 'Q.S01', site 'Z') never resolves", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  # The B.1 unit test above cannot reach this: it dies on the missing
+  # `.rc_site_registry` symbol. This is the same rule at RESOLUTION level,
+  # which is what actually protects data. f-0013 carries a self-alias
+  # (fa-0024), so an implementation that derived the site from a name prefix
+  # would produce a unique structural hit WITH a usable alias and auto-commit
+  # the row under a feature whose real site is 'Z'. Paired with the positive
+  # control so a merely-disabled resolver fails the test too.
+  event <- mk_event(mk_rows(
+    mk_row(source_ref = "prefix_not_site", feature_raw = "Q S01",
+           lab_sample_id = "XX9999979001", sample_datetime_raw = "20 Jun 2025 09:00"),
+    mk_row(source_ref = "control", feature_raw = "T S01",
+           lab_sample_id = "XX9999979002", sample_datetime_raw = "20 Jun 2025 09:00")
+  ))
+  out <- reconcile_event(event, con)
+
+  pns <- out$clean[out$clean$source_ref == "prefix_not_site", ]
+  expect_true(pns$feature_pending)
+  expect_true(is.na(pns$uuid_feature))
+
+  ctl <- out$clean[out$clean$source_ref == "control", ]
+  expect_false(ctl$feature_pending)
+  expect_identical(ctl$uuid_feature, "f-0001")
 })
 
 # ---- B.2: boundaries and parsing --------------------------------------------
@@ -1763,6 +1798,17 @@ test_that("B.2: a DIRECT (no dot/space) boundary NEVER auto-resolves - falsified
   direct_row <- out$clean[out$clean$source_ref == "direct", ]
   expect_true(direct_row$feature_pending)
   expect_true(is.na(direct_row$uuid_feature))
+
+  # ... but B.2's other half: a direct boundary is SUGGESTION-ONLY, not
+  # silence. The review item must still carry the structural parse so the
+  # operator sees what was rejected. Without this assert an implementation
+  # that emits a bare payload (no subkind) for the direct case passes.
+  rv_direct <- out$review[out$review$kind == "unknown_feature" &
+                            grepl("direct", out$review$source_ref, fixed = TRUE), ]
+  expect_equal(nrow(rv_direct), 1)
+  expect_true(grepl("subkind=structural", rv_direct$payload[[1]], fixed = TRUE))
+  # anchored: a bare grepl("site=T") also matches the OTHER site, "site=TH".
+  expect_true(grepl("(^|,)site=T(,|$)", rv_direct$payload[[1]], ignore.case = TRUE))
 
   # POSITIVE CONTROL (same test): the boundary form DOES auto-resolve -
   # proves the resolver is active, not merely disabled.
@@ -1792,9 +1838,15 @@ test_that("B.2: boundary set is '.'/' ' ONLY - '_' inside a point is neither a s
     # active, not merely disabled.
     mk_row(source_ref = "clean_form", feature_raw = "T S02", lab_sample_id = "XX9999996002",
            sample_datetime_raw = "03 Jun 2025 09:00"),
-    # "T.MW.01" splits at the FIRST '.' only, leaving residual "mw.01" which
-    # still contains '.' - not parseable.
-    mk_row(source_ref = "double_dot", feature_raw = "T.MW.01", lab_sample_id = "XX9999996003",
+    # "T.T.S01" splits at the FIRST '.' only, leaving residual "t.s01" which
+    # still contains '.' - NOT parseable, so the row goes to review.
+    # This raw (not the old "T.MW.01") is what makes the rule falsifiable: an
+    # implementation that re-splits, or recurses on, the residual finds site
+    # T + point S01 and auto-resolves to f-0001 - attaching the measurement to
+    # a real, wrong feature. "T.MW.01" could not catch that: every
+    # re-splitting of it misses the index anyway, so the assertion held for
+    # correct and incorrect implementations alike.
+    mk_row(source_ref = "second_separator", feature_raw = "T.T.S01", lab_sample_id = "XX9999996003",
            sample_datetime_raw = "03 Jun 2025 09:00")
   ))
   out <- reconcile_event(event, con)
@@ -1807,9 +1859,11 @@ test_that("B.2: boundary set is '.'/' ' ONLY - '_' inside a point is neither a s
   expect_false(cf$feature_pending)
   expect_identical(cf$uuid_feature, "f-0002")
 
-  dd <- out$clean[out$clean$source_ref == "double_dot", ]
+  dd <- out$clean[out$clean$source_ref == "second_separator", ]
   expect_true(dd$feature_pending)
   expect_true(is.na(dd$uuid_feature))
+  # named negative: specifically NOT the feature a residual re-split reaches.
+  expect_false(identical(dd$uuid_feature, "f-0001"))
 })
 
 # ---- B.3: point canonicalisation --------------------------------------------
@@ -1841,25 +1895,59 @@ test_that("B.3: canonical (site, point) is injective over the whole feature tabl
   point_raw <- substr(feat$name[idx], nchar(feat$site[idx]) + 2, nchar(feat$name[idx]))
   canon_key <- paste(toupper(feat$site[idx]), .rc_canonical_point(point_raw), sep = "|")
 
+  # B.3's own invariant: injective, and it must fail loudly if a future
+  # same-site pair (the live K.G01 / K.G001 hazard) ever collides.
   expect_equal(length(unique(canon_key)), length(canon_key))   # 0 collisions
-  expect_true(length(canon_key) >= 12)   # non-trivial: not vacuously empty
+
+  # LITERAL oracle. `length(unique(x)) == length(x)` plus a >= floor held for
+  # ANY canonicaliser - a pad-to-3 or a no-op uppercase is equally injective
+  # over this fixture, so the old form pinned nothing about the VALUES.
+  # These are the 12 seeded prefix==site features; f-0013 'Q.S01'/site 'Z' is
+  # absent because B.3 EXCLUDES a feature whose name prefix != its site.
+  expect_setequal(canon_key, c(
+    "T|S1", "T|S2", "T|MW1", "T|S4", "T|S5", "T|S6", "T|S7", "T|S8",
+    "T|G1", "TH|S1", "TH|MW2A", "TH|G1"
+  ))
+  expect_equal(length(canon_key), 12L)
+  expect_false("Z|S1" %in% canon_key)   # excluded: name prefix 'Q' != site 'Z'
+  expect_false("Q|S1" %in% canon_key)
 })
 
-test_that("B.3: the digit-width pair (T.G001 3-wide, TH.G01 2-wide) defeats both a pad-to-2 and a pad-to-3 canonicalisation", {
+test_that("B.3: digit width is never assumed - a 1-digit raw reaches a 3-wide point (T.G001), a 2-wide point (TH.G01) and a 2-char point (T.S01) alike", {
   path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  # WHAT THIS CATCHES (the old docstring's arithmetic was wrong and is
+  # corrected here): a SYMMETRIC fixed-width zero-pad applied to BOTH the raw
+  # and the registry side is algebraically equivalent to stripping leading
+  # zeros - pad-to-3 turns 'G1' and 'G001' both into 'G001', pad-to-2 turns
+  # both into 'G01' - so no fixture can distinguish it, and the old
+  # "defeats both a pad-to-2 and a pad-to-3" claim was unachievable.
+  # What this test DOES falsify: (a) no canonicalisation at all (a literal
+  # string compare misses 'G1' vs 'G001'); (b) an asymmetric pad, applied to
+  # the raw but not the registry side or vice versa; (c) any per-site or
+  # per-prefix width assumption - r1 and r3 are BOTH site T and need widths
+  # 3 and 2 respectively from the same 1-digit raw form.
+  # NOTE the T.G001/TH.G01 pair is CROSS-site, so it does not reproduce the
+  # live within-site K.G01/K.G026 mixed width; the within-site half is r1+r3,
+  # and the collision hazard that mixed width creates is covered by the
+  # injectivity invariant above, not here.
   event <- mk_event(mk_rows(
     mk_row(source_ref = "r1", feature_raw = "T G1", lab_sample_id = "XX9999998001",
            sample_datetime_raw = "01 Jun 2025 09:00"),
     mk_row(source_ref = "r2", feature_raw = "TH G1", lab_sample_id = "XX9999998002",
+           sample_datetime_raw = "01 Jun 2025 09:00"),
+    mk_row(source_ref = "r3", feature_raw = "T S1", lab_sample_id = "XX9999998003",
            sample_datetime_raw = "01 Jun 2025 09:00")
   ))
   out <- reconcile_event(event, con)
   row1 <- out$clean[out$clean$source_ref == "r1", ]
   row2 <- out$clean[out$clean$source_ref == "r2", ]
+  row3 <- out$clean[out$clean$source_ref == "r3", ]
   expect_false(row1$feature_pending)
-  expect_identical(row1$uuid_feature, "f-0010")   # T.G001 (3-wide)
+  expect_identical(row1$uuid_feature, "f-0010")   # T.G001 (3-wide digit run)
   expect_false(row2$feature_pending)
-  expect_identical(row2$uuid_feature, "f-0011")   # TH.G01 (2-wide)
+  expect_identical(row2$uuid_feature, "f-0011")   # TH.G01 (2-wide digit run)
+  expect_false(row3$feature_pending)
+  expect_identical(row3$uuid_feature, "f-0001")   # T.S01 (2-wide, SAME site as r1)
 })
 
 # ---- B.4: when Layer 2 runs (gating) ----------------------------------------
@@ -1910,8 +1998,20 @@ test_that("B.4: an EXISTING dangling alias for a structurally-parseable key (F6)
   # DANGLING alias; T.S08 (f-0012) exists in the registry and structurally
   # matches this key (site T, point S08 -> S8) - a unique hit if Layer 2 ran
   # unguarded. s-0005/an-0005 is the pre-committed measurement under fa-0023.
+  #
+  # The F6 raw is deliberately used TWICE, at two different dates, because
+  # the two halves of B.4 have MUTUALLY EXCLUSIVE dispositions on one row:
+  #  - "dangling_new" (20 Jun, no seeded sample) is a NEW measurement, stays
+  #    in `clean`, and is where the gate/suggestion behaviour is observable;
+  #  - "dangling_repeat" (15 May 09:15, byte-identical to s-0005/an-0005) is
+  #    a REPEAT, so a correct .rc_three_way() classifies it already_present
+  #    and REMOVES it from `clean` - it is the idempotency half only.
+  # Asserting both dispositions on a single row (the pre-delta form) was
+  # unsatisfiable under every correct implementation.
   event <- mk_event(mk_rows(
-    mk_row(source_ref = "dangling", feature_raw = "T S08",
+    mk_row(source_ref = "dangling_new", feature_raw = "T S08",
+           lab_sample_id = "XX9999994003", sample_datetime_raw = "20 Jun 2025 09:00"),
+    mk_row(source_ref = "dangling_repeat", feature_raw = "T S08",
            analyte_raw = "pH Value", org = "ALS", method_raw = "EA005P: pH by PC Titrator",
            units_raw = "pH", value_raw = "7.05", value_num = 7.05, below_detection = FALSE,
            rl = NA_real_, cas_number = NA_character_, lab_sample_id = "XX9999994001",
@@ -1919,17 +2019,20 @@ test_that("B.4: an EXISTING dangling alias for a structurally-parseable key (F6)
     # positive control (same test): a FRESH, un-aliased structural raw for
     # the SAME target feature (extra zero-padding, reaching zero alias rows)
     # DOES auto-resolve - proving the gate, not a disabled resolver, is why
-    # the dangling-alias row above stayed pending.
+    # the dangling-alias rows above stayed pending.
     mk_row(source_ref = "fresh", feature_raw = "T.S008", lab_sample_id = "XX9999994002",
            sample_datetime_raw = "16 May 2025 09:00")
   ))
   out <- reconcile_event(event, con)
 
-  dg <- out$clean[out$clean$source_ref == "dangling", ]
+  dg <- out$clean[out$clean$source_ref == "dangling_new", ]
+  expect_equal(nrow(dg), 1)
   expect_true(dg$feature_pending)
   expect_true(is.na(dg$uuid_feature))
   expect_identical(dg$uuid_feature_alias, "fa-0023")   # filled via R-11.5a natural key
-  rv <- out$review[out$review$kind == "unknown_feature" & grepl("dangling", out$review$source_ref), ]
+  # both F6 rows share alias_key 't s08', so they group into ONE review item.
+  rv <- out$review[out$review$kind == "unknown_feature" &
+                     grepl("dangling_new", out$review$source_ref, fixed = TRUE), ]
   expect_equal(nrow(rv), 1)
   expect_true(grepl("subkind=structural", rv$payload[[1]]))   # B.4/B.7: structural suggestion attached
 
@@ -1937,15 +2040,24 @@ test_that("B.4: an EXISTING dangling alias for a structurally-parseable key (F6)
   expect_false(fr$feature_pending)
   expect_identical(fr$uuid_feature, "f-0012")
 
-  # idempotency: the "dangling" row is the SAME measurement already committed
-  # as s-0005/an-0005 - it must be recognised as already_present (matched via
-  # s.uuid_feature_alias = fa-0023), never a second sample under fa-0023.
-  expect_true("dangling" %in% out$skipped$source_ref)
-  expect_identical(out$skipped$reason[out$skipped$source_ref == "dangling"], "already_present")
+  # idempotency: the "dangling_repeat" row is the SAME measurement already
+  # committed as s-0005/an-0005 - it must be recognised as already_present
+  # (matched via s.uuid_feature_alias = fa-0023) and dropped from `clean`.
+  expect_true("dangling_repeat" %in% out$skipped$source_ref)
+  expect_identical(out$skipped$reason[out$skipped$source_ref == "dangling_repeat"], "already_present")
+  expect_false("dangling_repeat" %in% out$clean$source_ref)
 
   commit_event(event, out, con)
-  n_samples <- DBI::dbGetQuery(con, "SELECT count(*) AS n FROM \"sample\" WHERE uuid_feature_alias = 'fa-0023'")$n
-  expect_equal(n_samples, 1)
+  # THE oracle for the double-commit hazard, counted on the MEASUREMENT.
+  # Counting `sample WHERE uuid_feature_alias = 'fa-0023'` was blind to it:
+  # the failure mode B.4 exists to prevent is an ungated Layer 2 resolving
+  # 't s08' to f-0012 and attaching f-0012's SELF alias fa-0021, so the
+  # duplicate lands under fa-0021 and the fa-0023 count stays 1 either way.
+  n_meas <- DBI::dbGetQuery(con, paste(
+    "SELECT count(*) AS n FROM analysis a",
+    "JOIN \"sample\" s ON s.uuid = a.uuid_sample",
+    "WHERE CAST(s.date AS DATE) = DATE '2025-05-15' AND a.uuid_lab = 'lm-0001'"))$n
+  expect_equal(n_meas, 1)
 })
 
 # ---- B.5: liveness -----------------------------------------------------------
@@ -1986,7 +2098,13 @@ test_that("B.6: a Layer-2 structural hit carries the target's self-alias uuid; a
     ('f-local-s99', 'T.S99', 'T', 'surface', 'water', 150.9999, -33.0099)")
 
   event <- mk_event(mk_rows(
-    mk_row(source_ref = "with_alias", feature_raw = "T S02", lab_sample_id = "XX9999992001",
+    # The target is f-0007 (T.S07), NOT f-0002: f-0007 carries TWO alias rows
+    # - fa-0008 ('T.REUSED', kind historical_code, inserted FIRST) and
+    # fa-0014 ('T.S07', kind self). B.6 pins "the target's SELF-alias uuid",
+    # and only a two-alias target can tell that apart from "the first alias
+    # row found for this uuid_feature", which is what f-0002 (one alias)
+    # could not.
+    mk_row(source_ref = "with_alias", feature_raw = "T S07", lab_sample_id = "XX9999992001",
            sample_datetime_raw = "06 Jun 2025 09:00"),
     mk_row(source_ref = "no_alias", feature_raw = "T S99", lab_sample_id = "XX9999992002",
            sample_datetime_raw = "06 Jun 2025 09:00")
@@ -1995,8 +2113,9 @@ test_that("B.6: a Layer-2 structural hit carries the target's self-alias uuid; a
 
   wa <- out$clean[out$clean$source_ref == "with_alias", ]
   expect_false(wa$feature_pending)
-  expect_identical(wa$uuid_feature, "f-0002")
-  expect_identical(wa$uuid_feature_alias, "fa-0002")   # T.S02's self-alias
+  expect_identical(wa$uuid_feature, "f-0007")
+  expect_identical(wa$uuid_feature_alias, "fa-0014")   # T.S07's SELF alias
+  expect_false(identical(wa$uuid_feature_alias, "fa-0008"))  # not the first-listed alias
 
   no_alias_row <- out$clean[out$clean$source_ref == "no_alias", ]
   expect_true(no_alias_row$feature_pending)   # never committed with a NA alias
@@ -2015,14 +2134,21 @@ test_that("B.6: two identical structurally-resolved rows in one batch are subjec
   out <- reconcile_event(event, con)
   expect_equal(sum(c("r1", "r2") %in% out$clean$source_ref), 1)
   loser <- setdiff(c("r1", "r2"), out$clean$source_ref)
+  # guard first: if the guard wrongly COLLAPSED both rows away, `loser` is
+  # length 2 (and length 0 if both committed). Either way the `==` below
+  # would recycle/compare against a zero- or two-length vector and the
+  # failure would report as an opaque length mismatch rather than the real
+  # defect. Mirrors the R-12.13 test at the top of this file.
+  expect_equal(length(loser), 1)
   expect_identical(out$review$kind[out$review$source_ref == loser], "batch_duplicate")
 })
 
 # ---- B.7: acceptance criteria (every negative paired with a positive) ------
 
-test_that("B.7: a structural miss (site recognised, no matching point) carries a subkind=structural suggestion in review, and feature count never changes across reconcile+commit", {
+test_that("B.7: a structural miss (site recognised, no matching point) carries a subkind=structural suggestion in review, and neither a feature nor a structural alias is fabricated across reconcile+commit", {
   path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
   before <- DBI::dbGetQuery(con, "SELECT count(*) AS n FROM feature")$n
+  fa_before <- DBI::dbGetQuery(con, "SELECT count(*) AS n FROM feature_alias")$n
 
   event <- mk_event(mk_rows(
     mk_row(source_ref = "miss", feature_raw = "T S88", lab_sample_id = "XX9999990001",
@@ -2039,8 +2165,10 @@ test_that("B.7: a structural miss (site recognised, no matching point) carries a
   rv <- out$review[out$review$kind == "unknown_feature" & grepl("miss", out$review$source_ref), ]
   expect_equal(nrow(rv), 1)
   expect_true(grepl("subkind=structural", rv$payload[[1]]))
-  expect_true(grepl("site=T", rv$payload[[1]], ignore.case = TRUE))
-  expect_true(grepl("point=S88", rv$payload[[1]], ignore.case = TRUE))
+  # ANCHORED: a bare grepl("site=T") is also satisfied by "site=TH", i.e. by
+  # an implementation that suggested the WRONG (other) site.
+  expect_true(grepl("(^|,)site=T(,|$)", rv$payload[[1]], ignore.case = TRUE))
+  expect_true(grepl("(^|,)point=S88(,|$)", rv$payload[[1]], ignore.case = TRUE))
 
   h <- out$clean[out$clean$source_ref == "hit", ]
   expect_false(h$feature_pending)
@@ -2048,6 +2176,49 @@ test_that("B.7: a structural miss (site recognised, no matching point) carries a
   commit_event(event, out, con)
   after <- DBI::dbGetQuery(con, "SELECT count(*) AS n FROM feature")$n
   expect_equal(after, before)   # B.7: never fabricate a feature
+
+  # B.6: commit must NOT materialise a kind='structural' feature_alias - a
+  # structural resolution is a re-derivable rule, not curation. (The plain
+  # `count(*) FROM feature` above cannot fail on today's code at all: commit.R
+  # has no INSERT INTO feature. The alias counts below are the discriminating
+  # half of "nothing fabricated"; the feature count is retained only because
+  # B.7 names it as a criterion.)
+  n_struct <- DBI::dbGetQuery(con, "SELECT count(*) AS n FROM feature_alias WHERE kind = 'structural'")$n
+  expect_equal(n_struct, 0)
+  # exactly ONE new alias - the R-11.8 pending alias for the UNRESOLVED
+  # 'T S88' row. The resolved 'T S01' row rides f-0001's existing self-alias
+  # and must add nothing.
+  fa_after <- DBI::dbGetQuery(con, "SELECT count(*) AS n FROM feature_alias")$n
+  expect_equal(fa_after, fa_before + 1)
+  new_kinds <- DBI::dbGetQuery(con,
+    "SELECT kind, alias_key FROM feature_alias WHERE uuid_feature IS NULL AND alias_key = 't s88'")
+  expect_equal(nrow(new_kinds), 1)
+  expect_identical(new_kinds$kind[[1]], "pending")
+})
+
+test_that("B.6: an event whose ONLY row is structurally resolved adds no feature_alias row at all at commit (no kind='structural' curation accreted)", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  fa_before <- DBI::dbGetQuery(con, "SELECT count(*) AS n FROM feature_alias")$n
+
+  # 'T S01' reaches ZERO alias rows (the curated key is 't.s01', dotted), so
+  # it can only resolve through Layer 2 - and B.6 pins that the resolution
+  # rides f-0001's existing SELF alias rather than registering 't s01'.
+  event <- mk_event(mk_row(source_ref = "r1", feature_raw = "T S01",
+                           lab_sample_id = "XX9999978001",
+                           sample_datetime_raw = "21 Jun 2025 09:00"))
+  out <- reconcile_event(event, con)
+  r1 <- out$clean[out$clean$source_ref == "r1", ]
+  expect_false(r1$feature_pending)                     # positive control
+  expect_identical(r1$uuid_feature, "f-0001")
+  expect_identical(r1$uuid_feature_alias, "fa-0001")
+
+  commit_event(event, out, con)
+  fa_after <- DBI::dbGetQuery(con, "SELECT count(*) AS n FROM feature_alias")$n
+  expect_equal(fa_after, fa_before)
+  expect_equal(DBI::dbGetQuery(con,
+    "SELECT count(*) AS n FROM feature_alias WHERE alias_key = 't s01'")$n, 0)
+  expect_equal(DBI::dbGetQuery(con,
+    "SELECT count(*) AS n FROM feature_alias WHERE kind = 'structural'")$n, 0)
 })
 
 # =============================================================================
@@ -2148,8 +2319,12 @@ test_that("C.2: Layer 3 never retries a row that yielded a recognised site prefi
     # retried as TH, even though TH.S77 exists and the event's sole site is TH.
     mk_row(source_ref = "recognised_site_missed_point", feature_raw = "T S77",
            lab_sample_id = "XX9999987003", sample_datetime_raw = "11 Jun 2025 09:00"),
-    # NEGATIVE b: unrecognised prefix "XX" leaves a residual separator
-    # ("XX.MW02A") - not retried per the "no surviving separator" rule.
+    # NEGATIVE b: "XX.MW02A" has no recognised site token, so under the
+    # orchestrator's C.2 ruling (the "leading recognised site token removed
+    # if present" clause is STRUCK - Layer 3 only ever sees rows that yielded
+    # NO recognised site) the candidate point is the WHOLE canonicalised raw,
+    # which still contains '.'. Not retried, per "a candidate still containing
+    # a separator is not retried".
     mk_row(source_ref = "residual_separator", feature_raw = "XX.MW02A",
            lab_sample_id = "XX9999987004", sample_datetime_raw = "11 Jun 2025 09:00")
   ))
@@ -2166,6 +2341,50 @@ test_that("C.2: Layer 3 never retries a row that yielded a recognised site prefi
   rs <- out$clean[out$clean$source_ref == "residual_separator", ]
   expect_true(rs$feature_pending)
   expect_true(is.na(rs$uuid_feature))
+})
+
+test_that("C.2/C.1 MISS path: when the assumed site yields NO hit the row stays in review and the review payload SUGGESTS that site (never a fabricated or a nearest-other-site match)", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  # Fixture F4, until now unused: T.MW01 (f-0003) exists and TH.MW01 does
+  # NOT. In an all-TH event the raw 'MW01' is retried assuming TH, misses,
+  # and per C.1 "else keep as review with S as the suggested site".
+  # This is the branch that separates "assume S, no hit -> review" from the
+  # two failure modes either side of it: fabricating a TH.MW01, or falling
+  # back to the other site's T.MW01 (a cross-site merge).
+  event <- mk_event(mk_rows(
+    mk_row(source_ref = "root", feature_raw = "TH.S01",
+           lab_sample_id = "XX9999976001", sample_datetime_raw = "23 Jun 2025 09:00"),
+    # POSITIVE control (same test): 'MW02A' under the same assumed site TH IS
+    # an exact hit (TH.MW02A, f-0009) - Layer 3 is active, not disabled.
+    mk_row(source_ref = "l3_hit", feature_raw = "MW02A",
+           lab_sample_id = "XX9999976002", sample_datetime_raw = "23 Jun 2025 09:00"),
+    mk_row(source_ref = "l3_miss", feature_raw = "MW01",
+           lab_sample_id = "XX9999976003", sample_datetime_raw = "23 Jun 2025 09:00")
+  ))
+  out <- reconcile_event(event, con)
+
+  hit <- out$clean[out$clean$source_ref == "l3_hit", ]
+  expect_false(hit$feature_pending)
+  expect_identical(hit$uuid_feature, "f-0009")
+
+  miss <- out$clean[out$clean$source_ref == "l3_miss", ]
+  expect_true(miss$feature_pending)
+  expect_true(is.na(miss$uuid_feature))
+  # explicitly NOT the same point in the OTHER site.
+  expect_false(identical(miss$uuid_feature, "f-0003"))   # T.MW01
+
+  rv <- out$review[out$review$kind == "unknown_feature" &
+                     grepl("l3_miss", out$review$source_ref, fixed = TRUE), ]
+  expect_equal(nrow(rv), 1)
+  # PROVISIONAL ORACLE (C.1/B.7): the plan pins the review payload grammar as
+  # `subkind=structural,site=...,point=...` and pins that Layer 3's miss keeps
+  # "S as the suggested site", but does not name a distinct subkind for the
+  # Layer-3 case. Phase 6 re-checks the token against real output; the
+  # load-bearing half is the anchored site=TH, which must be the ASSUMED site.
+  expect_true(grepl("subkind=structural", rv$payload[[1]], fixed = TRUE))
+  expect_true(grepl("(^|,)site=TH(,|$)", rv$payload[[1]], ignore.case = TRUE))
+  expect_false(grepl("(^|,)site=T(,|$)", rv$payload[[1]], ignore.case = TRUE))
+  expect_true(grepl("(^|,)point=MW1(,|$)", rv$payload[[1]], ignore.case = TRUE))
 })
 
 # ---- C.3: the iff gate, operationally ---------------------------------------
@@ -2211,11 +2430,28 @@ test_that("C.3: a resolved feature with NA/blank site makes the whole event INEL
 
 test_that("C.3: curation always wins - a row gated by an existing feature_alias entry (B.4) is never resolved by WO site-inference either", {
   path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  # THE discriminating row is "gated_no_site". The previous form used
+  # 'T S08' (gated by fa-0023), but that raw yields a RECOGNISED site prefix,
+  # so C.2's "Layer 3 never retries a recognised-site row" already blocks it
+  # and an implementation that ignored B.4's alias gate in Layer 3 entirely
+  # left the suite at its exact baseline. A gated key with NO site prefix is
+  # reachable by Layer 3 and only the gate can stop it.
+  DBI::dbExecute(con, "INSERT INTO feature_alias
+    (uuid, uuid_feature, name, alias_key, kind, n_seen, auto_assign, first_seen, last_seen, confirmed_by) VALUES
+    ('fa-local-s08', NULL, 'S08', 's08', 'pending', 0, FALSE,
+     TIMESTAMP '2025-05-01 08:00:00', TIMESTAMP '2025-05-01 08:00:00', NULL)")
+
   event <- mk_event(mk_rows(
     mk_row(source_ref = "root", feature_raw = "T.S01",
            lab_sample_id = "XX9999985001", sample_datetime_raw = "13 Jun 2025 09:00"),
-    # gated by fa-0023 (F6 dangling alias) - must stay unresolved even though
-    # the event's sole site is T and T.S08 exists.
+    # gated by the DANGLING alias 's08' and carrying no site token at all.
+    # The event's sole resolved site is T and T.S08 (f-0012) exists, so
+    # Layer 3 assuming T WOULD hit - the B.4 gate is the only thing between
+    # this row and a silent auto-resolution over a curator's pending alias.
+    mk_row(source_ref = "gated_no_site", feature_raw = "S08",
+           lab_sample_id = "XX9999985004", sample_datetime_raw = "13 Jun 2025 09:00"),
+    # second negative, kept for documentation: gated by fa-0023 AND
+    # site-prefixed, so both B.4 and C.2 forbid it.
     mk_row(source_ref = "gated", feature_raw = "T S08",
            lab_sample_id = "XX9999985002", sample_datetime_raw = "13 Jun 2025 09:00"),
     # positive control (same test): a DIFFERENT un-aliased no-site row DOES
@@ -2225,6 +2461,12 @@ test_that("C.3: curation always wins - a row gated by an existing feature_alias 
   ))
   out <- reconcile_event(event, con)
 
+  gns <- out$clean[out$clean$source_ref == "gated_no_site", ]
+  expect_equal(nrow(gns), 1)
+  expect_true(gns$feature_pending)
+  expect_true(is.na(gns$uuid_feature))
+  expect_false(identical(gns$uuid_feature, "f-0012"))  # the site-inferred hit it must NOT take
+
   g <- out$clean[out$clean$source_ref == "gated", ]
   expect_true(g$feature_pending)
   expect_true(is.na(g$uuid_feature))
@@ -2232,6 +2474,41 @@ test_that("C.3: curation always wins - a row gated by an existing feature_alias 
   i <- out$clean[out$clean$source_ref == "inferred", ]
   expect_false(i$feature_pending)
   expect_identical(i$uuid_feature, "f-0007")
+})
+
+test_that("C.3: an event with ZERO resolved rows is skipped by Layer 3 - a merely PARSED (but unresolved) site prefix is not a site set", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  # C.3 pins Resolved = !is.na(uuid_feature) after Layers 1-2, and C.1's iff
+  # gate skips the event when that set is empty. The hazard this catches is an
+  # implementation that builds the site set from RECOGNISED PARSES instead:
+  # 'T S88' parses to site T but resolves to nothing (no T.S88 feature), so a
+  # parse-derived set is {T} and 'S02' would be auto-assigned to T.S02.
+  no_resolved <- mk_event(mk_rows(
+    mk_row(source_ref = "parse_only", feature_raw = "T S88",
+           lab_sample_id = "XX9999977001", sample_datetime_raw = "22 Jun 2025 09:00"),
+    mk_row(source_ref = "candidate", feature_raw = "S02",
+           lab_sample_id = "XX9999977002", sample_datetime_raw = "22 Jun 2025 09:00")
+  ))
+  out_none <- reconcile_event(no_resolved, con)
+  po <- out_none$clean[out_none$clean$source_ref == "parse_only", ]
+  expect_true(po$feature_pending)          # precondition: zero resolved rows
+  c1 <- out_none$clean[out_none$clean$source_ref == "candidate", ]
+  expect_true(c1$feature_pending)
+  expect_true(is.na(c1$uuid_feature))
+
+  # POSITIVE CONTROL (same test): the identical candidate row in an event that
+  # DOES have a resolved T row resolves - so the negative above is the empty
+  # resolved set, not a disabled Layer 3.
+  with_resolved <- mk_event(mk_rows(
+    mk_row(source_ref = "root", feature_raw = "T.S01",
+           lab_sample_id = "XX9999977003", sample_datetime_raw = "22 Jun 2025 09:00"),
+    mk_row(source_ref = "candidate", feature_raw = "S02",
+           lab_sample_id = "XX9999977004", sample_datetime_raw = "22 Jun 2025 09:00")
+  ))
+  out_some <- reconcile_event(with_resolved, con)
+  c2 <- out_some$clean[out_some$clean$source_ref == "candidate", ]
+  expect_false(c2$feature_pending)
+  expect_identical(c2$uuid_feature, "f-0002")
 })
 
 # ---- C.4: provenance ---------------------------------------------------------
@@ -2246,6 +2523,20 @@ test_that("C.4: a plain Layer-2 structural resolution writes a 'structural_parse
   # reconcile is read-only (A32): no change_log row exists yet.
   mid <- DBI::dbGetQuery(con, "SELECT count(*) AS n FROM change_log")$n
   expect_equal(mid, before)
+
+  # C.4, POSITIVE half: confidence rides on the CLEAN ROW's own `confidence`
+  # field (R/ir.R:17,26 declares it "double"). Asserting only that change_log
+  # has no `confidence` column pinned the negative half alone - it was equally
+  # satisfied by an implementation that carried no confidence anywhere.
+  # PROVISIONAL ORACLE (C.4): the plan pins WHERE confidence rides, not what
+  # a structural resolution's value is; Phase 6 pins the value against real
+  # output. Until then: present, non-NA, and a valid probability.
+  r1 <- out$clean[out$clean$source_ref == "r1", ]
+  expect_false(r1$feature_pending)                  # positive control: resolved
+  expect_true("confidence" %in% names(out$clean))
+  expect_false(is.na(r1$confidence))
+  expect_true(is.numeric(r1$confidence))
+  expect_true(r1$confidence > 0 && r1$confidence <= 1)
 
   commit_event(event, out, con)
   log <- DBI::dbGetQuery(con,
