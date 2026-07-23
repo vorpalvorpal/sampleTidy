@@ -372,6 +372,31 @@
   event_samples <- dplyr::bind_rows(samples_list)
   event_samples <- if (nrow(event_samples) == 0) ir_samples() else dplyr::distinct(event_samples)
 
+  # An event that assembled results but NO sample metadata is a structurally
+  # incomplete delivery - e.g. an ESdat Chemistry2e with no companion Sample2e -
+  # not a resolvable naming problem. `.st_join_samples_onto_results()` returns
+  # early in that case, so every result row keeps `feature_raw = NA`, is held at
+  # reconcile (A44) and reaches review as a bare `feature_raw=NA` item with
+  # nothing an operator can act on. Name the cause here, while the work order and
+  # filenames are still in scope. Warn only: the rows' fate is unchanged.
+  # The `all(is.na(feature_raw))` clause is load-bearing, not belt-and-braces:
+  # plenty of adapters carry the point name on the result rows themselves and
+  # emit no separate samples IR at all. Those events are complete. Only an event
+  # that has neither source of a point name is broken.
+  if (nrow(final_results) > 0 && nrow(event_samples) == 0 &&
+      all(is.na(final_results$feature_raw))) {
+    wo_label <- if (orphan) "<no work order>" else work_order
+    cli::cli_warn(
+      c(
+        "{wo_label}: assembled {nrow(final_results)} result row{?s} with no sample
+         metadata; no sampling-point names are available.",
+        i = "Every row will be held for review with {.field feature_raw} unset.",
+        i = "File{?s}: {.file {file_summary$filename[!is.na(file_summary$filename)]}}"
+      ),
+      class = "sampletidy_no_sample_metadata"
+    )
+  }
+
   final_results <- .st_join_samples_onto_results(final_results, event_samples)
 
   # --- R-7.5 files/report/event assembly ---------------------------------
