@@ -631,6 +631,136 @@ test_that("R-12.7: files_by_state reports the run's real terminal state (committ
   )
 })
 
+# ---- R-15.36: non-tabular lab deliverables retained and WO-linked (F.17) --
+#
+# Remediates a REALISED loss, not a hypothetical: the COA/COC/QC/QCI PDFs and
+# XTAB.XLS of ES2600185/ES2610538/ES2612444/ES2614070/ES2617126 were
+# quarantined `unclaimed`, given no `asset` row, and are absent from the
+# archive entirely - harmless while `remove_ingested` defaulted FALSE, now
+# load-bearing because it defaults TRUE (A13) and deletes sources with no
+# safety net for a file nothing ever claimed. Five conjuncts, all asserted,
+# because each cheaper subset already passes while the defect is live: an
+# `asset` row can exist unattached; an archive copy can exist unattached; a
+# report can look clean while the row still sits quarantined.
+
+test_that("R-15.36: a work order's non-tabular deliverable (a COA PDF) gets an asset row, a byte-identical archive copy, is reachable from its work order, is removed only after that, and the run reports zero quarantined for it", {
+  setup <- ingest_test_setup()
+  withr::local_options(list("sampletidy.remove_ingested" = TRUE))
+
+  input_dir <- withr::local_tempdir()
+  esdat_dir <- testthat::test_path("fixtures", "esdat")
+  wo_files <- list.files(esdat_dir, pattern = "ES2617126", full.names = TRUE)
+  expect_true(length(wo_files) == 3,
+              info = "ES2617126 esdat fixture triple (Chemistry2e/Sample2e/Header.XML) must exist")
+  for (f in wo_files) file.copy(f, file.path(input_dir, basename(f)))
+
+  # The non-tabular sibling this criterion is about - modelled on the real
+  # loss (COA/COC/QC/QCI PDFs + XTAB.XLS of the five named work orders, all
+  # quarantined then deleted). No adapter claims a PDF today (F.17), so
+  # pre-fix this sits `quarantined`/`unclaimed` with no `asset` row.
+  coa_path <- file.path(input_dir, "SITEA_Rain_ES2617126_0_COA.pdf")
+  coa_bytes <- charToRaw(paste(
+    c("%PDF-1.4 fake Certificate of Analysis for work order ES2617126",
+      sprintf("line %02d: non-trivial filler so this is not a degenerate file", 1:20)),
+    collapse = "\n"
+  ))
+  writeBin(coa_bytes, coa_path)
+
+  # Prove the identity check can produce a POSITIVE before trusting any
+  # negative result from it (CONTRACT A5: xxHash128 via hash_file(), a
+  # 32-char hex digest - NOT SHA-256/64 chars; a length-mismatched digest
+  # comparison silently and permanently fails, which already produced a
+  # wrong "0 of 1,272 recoverable" conclusion elsewhere in this project).
+  # Two copies of the SAME bytes must hash equal; different bytes must not.
+  coa_copy_for_positive_control <- withr::local_tempfile()
+  writeBin(coa_bytes, coa_copy_for_positive_control)
+  expect_identical(nchar(hash_file(coa_path)), 32L)
+  expect_identical(hash_file(coa_path), hash_file(coa_copy_for_positive_control))
+  different_bytes_path <- withr::local_tempfile()
+  writeBin(charToRaw("definitely different bytes, not a COA"), different_bytes_path)
+  expect_false(identical(hash_file(coa_path), hash_file(different_bytes_path)))
+
+  # Preserve the pre-ingest hash/bytes - conjunct (4) below deletes the
+  # source file itself.
+  coa_hash <- hash_file(coa_path)
+  coa_bytes_preserved <- readBin(coa_path, "raw", n = file.size(coa_path))
+
+  report <- ingest_dir(input_dir, db = setup$db_path)
+
+  con <- DBI::dbConnect(duckdb::duckdb(), setup$db_path, read_only = TRUE)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  # (1) an `asset` row exists for the PDF's OWN content hash - not merely for
+  # its tabular siblings.
+  asset_row <- DBI::dbGetQuery(con, "SELECT * FROM asset WHERE hash = ?", params = list(coa_hash))
+  expect_equal(nrow(asset_row), 1,
+               info = "R-15.36 conjunct 1: the COA PDF must get its own asset row")
+
+  # (2) the archived copy is byte-identical to the source. New-ingest code
+  # writes only the nested layout <archive_dir>/<uuid>/<filename> (F.18 owns
+  # reading the legacy flat layout, not writing this one). Guarded against a
+  # missing/absent asset row (conjunct 1 above may already have failed) so
+  # this reports as a clean, informative failure rather than an unguarded
+  # subscript-out-of-bounds R error masking the real red reason.
+  asset_uuid <- if (nrow(asset_row) == 1) asset_row$uuid[[1]] else NA_character_
+  asset_filename <- if (nrow(asset_row) == 1) asset_row$filename[[1]] else NA_character_
+  archived_path <- if (!is.na(asset_uuid) && !is.na(asset_filename)) {
+    file.path(setup$archive_dir, asset_uuid, asset_filename)
+  } else {
+    NA_character_
+  }
+  archive_copy_present <- !is.na(archived_path) && utils::file_test("-f", archived_path)
+  expect_true(archive_copy_present,
+              info = "R-15.36 conjunct 2: archived copy must exist as a regular file")
+  if (archive_copy_present) {
+    archived_bytes <- readBin(archived_path, "raw", n = file.size(archived_path))
+    expect_identical(archived_bytes, coa_bytes_preserved)
+    expect_identical(hash_file(archived_path), coa_hash)
+  }
+
+  # (3) the row is REACHABLE from its work order - a bare asset-row count
+  # would pass while the PDF sat unclaimed/unattached. `archive_file()`
+  # already resolves an event's project via `event$work_order` ->
+  # `project.name`, so "reachable from the work order" means this asset's
+  # `uuid_project` resolves to the project row named for ES2617126, exactly
+  # like every tabular asset of the same event already does.
+  linked <- DBI::dbGetQuery(
+    con,
+    "SELECT a.hash FROM asset a JOIN project p ON a.uuid_project = p.uuid
+     WHERE p.name = 'ES2617126' AND a.hash = ?",
+    params = list(coa_hash)
+  )
+  expect_equal(nrow(linked), 1,
+               info = "R-15.36 conjunct 3: the asset row must be reachable from work order ES2617126, not merely exist")
+
+  # (4) a remove_ingested pass deletes the source - but only after (1)-(3)
+  # above are already true, i.e. only once a verified, WO-linked copy
+  # exists (the same guard .ig_remove_verified() already enforces for
+  # tabular assets, reused here rather than re-derived).
+  expect_false(file.exists(coa_path),
+               info = "R-15.36 conjunct 4: remove_ingested = TRUE must delete the now-archived+linked source")
+
+  # (5) the run reports ZERO quarantined files for this event - a test that
+  # stopped at (1)-(4) would still pass while the PDF's ingest_file row sat
+  # quarantined/unclaimed beside a stray retained-but-unclaimed copy. This
+  # does NOT collide with A10 (ACIRL dust sheets route to `ignored`, not
+  # `quarantined`) - adjudicated already, not re-derived here.
+  quarantined_n <- if ("quarantined" %in% names(report$files_by_state)) {
+    unname(report$files_by_state[["quarantined"]])
+  } else {
+    0L
+  }
+  expect_equal(quarantined_n, 0L,
+               info = "R-15.36 conjunct 5: the run must report zero quarantined files for this event")
+
+  states <- ingest_file_states(setup$db_path)
+  # NA-safe filter (A43): hash is never NA for a routed file, but match the
+  # project's established idiom rather than a bare `==`.
+  coa_state <- states[!is.na(states$hash) & states$hash == coa_hash, ]
+  expect_equal(nrow(coa_state), 1)
+  expect_false(identical(coa_state$state[[1]], "quarantined"))
+})
+
 test_that("R-12.7: files_by_state shows 'needs_review' for a needs_review-only event, not 'claimed'", {
   setup <- ingest_test_setup()
   input_dir <- build_e2e_input_dir()
