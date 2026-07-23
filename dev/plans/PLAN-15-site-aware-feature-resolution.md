@@ -5,6 +5,7 @@ Supersedes the reconcile feature-key behaviour probed in the input/ dry-run
 (scratchpad/{analyze_review,investigate_names,investigate_alias_key,collision_test,
 site_point_meta}.R; migrated dry-run DB /private/tmp/claude-501/qc-dryrun/).
 
+<!-- block: B-15.problem -->
 ## Problem (evidence-based)
 
 Dry-run of all 265 input files against a migrated copy of the live registry, with
@@ -21,6 +22,7 @@ points that fail to resolve because of a **key-normalisation mismatch**:
 So reconcile cannot resolve ~62% of the alias registry; every such point is flagged
 for review on every ingest, and no candidate suggestion is ever attached (0/127).
 
+<!-- block: B-15.collision-test -->
 ### Why "just strip in the migration" is WRONG (collision test)
 
 Stripping fuses **genuinely-distinct points that share letters once punctuation is
@@ -35,6 +37,7 @@ water body), NOT data errors for `B.S01`/`B.S03`. Stripping — or "adding the d
 (`BS1`→`B.S1`) — would mix two catchments' data. Only **preserving punctuation
 exactly** keeps them apart, which is what migration 001 already does.
 
+<!-- block: B-15.real-model -->
 ### The real model (user's reframe, confirmed)
 
 The string is `(site, point)`; the dot is just a separator. The registry currently
@@ -44,10 +47,12 @@ hard-code it. Every feature name is `SITE.POINT` and `name` prefix == `site` for
 894 of 894; no *registry* name has 2+ delimiters (an incoming raw may, and must then
 go to review); `BH` must win longest-prefix over `B`.
 
+<!-- block: B-15.design -->
 ## Design — a layered resolver (replaces the single strip-key lookup)
 
 Resolution order for each incoming `feature_raw`, per row, within an event/WO:
 
+<!-- block: B-15.layer1 -->
 ### Layer 1 — exact curated alias (AUTHORITATIVE)
 - Key = the migration's punctuation-PRESERVING normaliser (tolower + trim, keep
   punctuation) — NOT the stripping `.rc_key`.
@@ -65,6 +70,7 @@ Resolution order for each incoming `feature_raw`, per row, within an event/WO:
     rule above is unchanged; only the illustration was falsified. Do NOT re-cite
     `b.s01` or `k.e02` as ambiguity examples; read the live registry for a current one.
 
+<!-- block: B-15.layer2 -->
 ### Layer 2 — structural (site, point) parse (FALLBACK, un-aliased names only)
 > **Superseded in detail by "Work B — PINNED SPEC" below.** Where this summary and
 > that spec disagree, the spec wins. Corrections it makes: the site set comes from
@@ -81,6 +87,7 @@ Resolution order for each incoming `feature_raw`, per row, within an event/WO:
   >1 → review (carry the structural parse as a suggested candidate). Never fabricate
   a point that doesn't exist in that site.
 
+<!-- block: B-15.layer3 -->
 ### Layer 3 — WO single-site disambiguation (the refinement)
 - After layers 1-2, compute the set of sites of all RESOLVED rows in the event/WO.
 - **iff exactly one site S** across all resolved rows: for each still-unresolved row
@@ -93,6 +100,7 @@ Resolution order for each incoming `feature_raw`, per row, within an event/WO:
   a genuinely mixed-site WO whose resolved rows happen to be single-site could
   mis-assign a stray row — rare under the gate, reversible via provenance.
 
+<!-- block: B-15.crosscutting -->
 ## Cross-cutting
 - Provenance + reversibility: every non-exact-curated resolution writes `change_log`
   with a reason (`wo_site_inferred` / `structural_parse`) and confidence.
@@ -101,6 +109,51 @@ Resolution order for each incoming `feature_raw`, per row, within an event/WO:
 - Do NOT change the global `.rc_key` (shared by method keys + intra-event dedup).
   Introduce a dedicated feature-alias normaliser; leave method/dedup untouched.
 
+<!-- block: B-15.seam-table -->
+## Seam table (producer → consumer, authored 2026-07-24)
+
+Every producer→consumer boundary this plan crosses, with the fields that must survive
+the handoff. A dropped field here is a contract violation prose will not catch; the
+shapes below are the ones no criterion names, which is why they are enumerated rather
+than left to "think of edge cases".
+
+| id | producer → consumer | fields that must survive |
+|---|---|---|
+| S-15.1 | `.rc_resolve_features` → Layer-2 structural resolve | `alias_key` (from `.rc_feature_key`, punctuation-preserving), `feature_raw`, `sample_date`, the registry `feature` frame (`name`, `site`, `date_start`, `date_end`). Entry gate is `.rc_alias_rows_exist(key, registry)` **FALSE** — date-blind and `auto_assign`-blind (B.4, E.3) |
+| S-15.2 | Layer-2 hit → clean row | `uuid_feature` **and** `uuid_feature_alias`, the latter being the target's `kind='self'` alias uuid found by read-only lookup. `sample.uuid_feature_alias` is NOT NULL and `.rc_batch_duplicate` gates on it, so a hit with no self alias must go to REVIEW, never commit with NA (B.6) |
+| S-15.3 | Layers 1–2 → Layer-3 `.rc_wo_site` | the event's resolved-site set, computed from `!is.na(uuid_feature)` **after** layers 1–2 and **regardless of how each row resolved** — one curated cross-site alias makes the event multi-site and disables Layer 3 (C.5, fail closed) |
+| S-15.4 | Layer-3 → commit | `confidence` on the existing clean-row field (`R/ir.R:17,26`); reconcile is read-only (A32) so the `change_log` provenance row is written at commit step 1b (`commit.R:684`) |
+| S-15.5 | registry load (`reconcile.R:28`, `SELECT *`) → resolver | `date_start` / `date_end` **may be absent columns**, not columns of NA, against a pre-003 DB. The resolver treats absent as all-NULL (unbounded) and must not error (E.1) |
+| S-15.6 | `.rc_feature_review` → `review_queue.payload` | `subkind` over the FULL value set `{ambiguous, structural, suggestion, expired_alias, self_precedence_note}` with a **total order** and an explicit **blocking / non-blocking** discriminator. `self_precedence_note` is the first non-blocking kind the feature resolver emits (E.7/R2); a queue reader that cannot tell a note from a blocker will treat a note as work |
+| S-15.7 | `.ct_materialise_feature_aliases` → `feature_alias` | `date_start` = `min(sample_date)` over the whole `alias_key` group, **not** `rows_k[[1]]`. The existing-dangling branch (`commit.R:131-139`) updates only `n_seen`/`last_seen` and must NOT touch either bound (E.4) |
+| S-15.8 | `add_feature()` → `feature` + `feature_alias` | the `kind='self'` alias in the SAME transaction, with its own `change_log` provenance row. Without it a post-001 feature is unreachable by its own name and 003 has nothing to flip (F.9) |
+| S-15.9 | migration 003 → `feature_alias` | plain `ALTER TABLE … ADD COLUMN` only. `DROP TABLE feature_alias` is REFUSED — it is the FK parent of `sample` — so the TEMP-copy rebuild pattern is impossible, not merely unnecessary (E.1) |
+
+### Degenerate shapes every seam above must survive
+
+These are the *shapes*, not the values; each must appear in at least one test.
+
+- **Empty event** — zero rows reach the resolver.
+- **Single-row event** — the site set has one member; Layer 3's "single site" must not
+  be satisfied vacuously by an event that resolved nothing.
+- **Zero-resolved event** — every row unresolved, so the resolved-site set is EMPTY.
+  Layer 3 must not fire on an empty set.
+- **Mixed-site event** and its pair, the **single-site event carrying the identical
+  unresolved raw** (C.5's positive control — both in one test).
+- **Work order split across two batches** — `.st_group_events` sees one event per WO
+  *present in this batch*, so the same raw must not resolve differently per batching (C.1).
+- **`sample_date` is NA** — no narrowing, unchanged behaviour (E.6).
+- **`feature_raw` is NA** — the ESdat Sample2e join gap, 16 grouped items live; must not
+  reach a structural parse at all.
+- **Pre-003 database** — `date_start`/`date_end` columns absent entirely (S-15.5).
+- **Feature with no `self` alias** — S-15.2 sends it to review; 003 must not assume one.
+- **Contradictory bound** — `date_start > date_end` on one arm; the liveness predicate
+  must empty the set rather than resolve arbitrarily.
+- **Point present in one site and absent in the other** — fixture F4, the "assume S → no
+  hit → suggest" case against `TH.MW02A`'s "assume S → exact hit → resolve".
+- **Direct (empty) boundary** — `BS01`, which must NEVER auto-resolve (B.2).
+
+<!-- block: B-15.workbreakdown -->
 ## Work breakdown (one body of work, TDD; tests before impl per phase)
 
 - **A. Layer-1 punctuation-preserving alias key + ambiguous-candidate surfacing.**
@@ -120,12 +173,14 @@ Resolution order for each incoming `feature_raw`, per row, within an event/WO:
 
 ---
 
+<!-- block: B-15.workB -->
 ## Work B — Layer-2 structural (site, point) resolver (PINNED SPEC)
 
 Rewritten 2026-07-23 from the cold plan review; every rule below is pinned because a
 test writer would otherwise have to guess it. Adjudication record:
 `dev/tdd-run/p15-bc-plan-adjudication.md`.
 
+<!-- block: B-15.B1 -->
 ### B.1 Site registry
 - Site set = `SELECT DISTINCT site FROM feature` where `site` is non-NULL and
   non-blank. **From the COLUMN, never from a `feature.name` prefix parse** — this
@@ -136,6 +191,7 @@ test writer would otherwise have to guess it. Adjudication record:
   set from the fixture DB. (Live today: B 452 / K 396 / L 34 / BH 12, and
   `name` prefix == `site` for 894 of 894 — but that is context, not a test constant.)
 
+<!-- block: B-15.B2 -->
 ### B.2 Boundaries and parsing
 - Input = `.rc_feature_key(feature_raw)` (the Layer-1 punctuation-preserving key).
 - Boundary set = `.` and ` ` (space) **only**. `-` and `_` are NOT boundaries (60 and
@@ -152,6 +208,7 @@ test writer would otherwise have to guess it. Adjudication record:
   *(This supersedes the original bullet's `BS01 → B.S01` criterion, which was
   self-contradictory against the collision oracle.)*
 
+<!-- block: B-15.B3 -->
 ### B.3 Point canonicalisation
 - Canonical point = **uppercase, then drop leading zeros within each maximal digit
   run**. NOT zero-padding: digit width is not uniform, so no fixed pad works —
@@ -168,6 +225,7 @@ test writer would otherwise have to guess it. Adjudication record:
   alone 360/360). A future `K.G001` alongside `K.G01` would break it, and the test
   must fail loudly if so.
 
+<!-- block: B-15.B4 -->
 ### B.4 When Layer 2 runs (gating)
 - Layer 2 runs **only when the key reaches ZERO `feature_alias` rows**. Any key
   reaching ≥1 alias row counts as ALIASED and is left to Layer 1 / review, regardless
@@ -193,6 +251,7 @@ test writer would otherwise have to guess it. Adjudication record:
   **The same measurement would commit twice.** Promotion stays with
   `confirm_feature_aliases()`, which already re-points and merges collisions.
 
+<!-- block: B-15.B5 -->
 ### B.5 Liveness
 - Before accepting a hit, Layer 2 applies an **unconditional** live-at-`sample_date`
   filter (`date_end` NA or `>= sample_date`). If the filter empties the set → review.
@@ -201,6 +260,7 @@ test writer would otherwise have to guess it. Adjudication record:
   is unique by construction, so reusing it would be a no-op and would resolve to a
   defunct feature. Fixture `f-0006 T.S06` (`date_end 2020-06-30`) is the ready-made case.
 
+<!-- block: B-15.B6 -->
 ### B.6 The alias side of a structural hit
 A Layer-2 hit yields a `uuid_feature` but no `uuid_feature_alias`, and that gap is
 not cosmetic — `sample.uuid_feature_alias` is `NOT NULL`, `.rc_batch_duplicate()`
@@ -217,23 +277,34 @@ keys off the alias.
   within-batch duplicate guard (two identical `T S01` rows in one batch must not both
   commit).
 
+<!-- block: B-15.B7 -->
 ### B.7 Acceptance criteria (each must be able to FAIL)
 The original "unknown site → review" and "non-existent point in site → review, not
 fabricated" are **vacuous** — every unresolved raw already emits `unknown_feature` and
 creates nothing, so a no-op implementation passes both. Replace with:
+
+### R-15.1 Negative case paired with positive control T S01
 - Every negative case is paired with the positive control `T S01 → T.S01` **in the
   same test**, so a disabled resolver fails.
+
+### R-15.2 Review payload carries structural suggestion token
 - The review payload must carry a structural suggestion token
   (`subkind=structural,site=…,point=…`). `.rc_feature_review` emits only
   `subkind=ambiguous` today (reconcile.R:590-596), so this cannot pass on current code.
+
+### R-15.3 Feature table count unchanged, nothing fabricated
 - `count(*) FROM feature` unchanged (nothing fabricated).
+
+### R-15.4 BS01 direct boundary must not auto-resolve
 - `BS01` must NOT auto-resolve to `T.S01`-equivalent (the B.2 direct-boundary rule),
   asserted against the fixture collision oracle (F2).
 
 ---
 
+<!-- block: B-15.workC -->
 ## Work C — Layer-3 WO single-site disambiguation (PINNED SPEC)
 
+<!-- block: B-15.C1 -->
 ### C.1 What "the event/WO" means
 - The site set is computed over **the current event only**, never re-queried from the
   DB. `reconcile_event()` sees one event = all files of a work order *present in this
@@ -245,6 +316,7 @@ creates nothing, so a no-op implementation passes both. Replace with:
   its "single site" is meaningless.
 - The provenance row records the site set used, so a differing later run is diagnosable.
 
+<!-- block: B-15.C2 -->
 ### C.2 Which rows Layer 3 may retry
 - Only rows with **no recognised site**, or an ambiguous one.
 - **Layer 3 NEVER applies to a row that yielded a recognised site prefix**, even if
@@ -256,12 +328,14 @@ creates nothing, so a no-op implementation passes both. Replace with:
 - Layer 3 reuses Layer 2's canonical point **unchanged**, substituting only the site.
   It never re-parses the raw and never overrides a Layer-2 auto-resolve.
 
+<!-- block: B-15.C3 -->
 ### C.3 The `iff` gate, operationally
 - Resolved = `!is.na(uuid_feature)` after Layers 1-2 (`.rc_wo_site`, reconcile.R:552,
   the `resolved <- uuid_feature[!is.na(uuid_feature)]` line at :554).
 - A resolved feature with NA or blank `site` makes the event **ineligible** (fail closed).
 - Curation always wins: a Layer-1 curated alias is never overridden.
 
+<!-- block: B-15.C4 -->
 ### C.4 Provenance
 - Reconcile is read-only (reconcile.R:4-6, CONTRACT A32) and **cannot** write
   `change_log`. The resolution reason rides on the clean row; **COMMIT** writes the row
@@ -274,15 +348,20 @@ creates nothing, so a no-op implementation passes both. Replace with:
   declares `confidence = "double"`). `change_log` has NO `confidence` column — do not
   invent one, and do not smuggle it into `reason`.
 
+<!-- block: B-15.C5 -->
 ### C.5 Acceptance criteria (each must be able to FAIL)
 The original "MIXED-site WO → heuristic does NOT fire" and "curated BS1 inside an
 all-B WO still → BH.S01" are both **vacuous** on today's code, and the second is
 self-defeating: `BS1`→BH.S01 makes that event's resolved-site set `{B, BH}`, i.e.
 multi-site, so Layer 3 never fires and the test cannot distinguish "curation wins"
 from "Layer 3 disabled". Replace with:
+
+### R-15.5 Positive control across single- and mixed-site events
 - **Positive control on the same fixture:** the identical unresolved raw resolves in
   the single-site event and stays in review in the mixed-site event, asserted across
   two events **in one test**.
+
+### R-15.6 Curated cross-site alias suppresses Layer 3
 - Pin explicitly whether one curated cross-site alias suppresses Layer 3 for the whole
   event. **Ruling: it does** — the site set is computed from resolved rows regardless
   of how they resolved, so a curated `BS1`→BH.S01 inside an otherwise-all-B WO makes
@@ -290,6 +369,7 @@ from "Layer 3 disabled". Replace with:
 
 ---
 
+<!-- block: B-15.fixtures -->
 ## Fixture work (`tests/testthat/helper-db.R`) — prerequisite for B and C
 
 - **F1 (BLOCKING).** helper-db.R:232-239 seeds all 7 features with `site='TestSite'`
@@ -317,6 +397,7 @@ from "Layer 3 disabled". Replace with:
 - **F7.** No new row needed for B.5: `f-0006 T.S06` (`date_end 2020-06-30`,
   helper-db.R:238) plus a 2025 raw `T S06` is the ready-made defunct-feature case.
 
+<!-- block: B-15.scope -->
 ### Scope basis for B and C (reassessed 2026-07-23, post-Work-A)
 
 Work A's dry-run gate was re-measured and the 43 `unknown_feature` residual fully
@@ -369,12 +450,14 @@ target zero of the residual) is unaffected either way.
 
 ---
 
+<!-- block: B-15.workE -->
 ## Work E — time-bounded aliases (PINNED SPEC)
 
 Added 2026-07-23 on Robin's direction. *(Labelled E, not D: a "Part D" already exists
 above as the provenance/plumbing item folded into A-C. Robin's "part D" request refers
 to this work; the letter is the only difference.)*
 
+<!-- block: B-15.E0 -->
 ### E.0 Why
 Some aliases are ongoing; others record a **particular historical anomaly** and must
 apply only within the period that anomaly was live. Today an alias is unconditional,
@@ -383,6 +466,7 @@ alias rows in the live registry have a key that IS another feature's real name (
 `scratchpad/alias_window_report.txt`); today every one of them is permanently
 ambiguous.
 
+<!-- block: B-15.E1 -->
 ### E.1 Schema (migration `003-alias-date-bounds.R`)
 - `feature_alias` gains `date_start DATE` and `date_end DATE`, both NULLABLE.
   **DATE, not TIMESTAMP** — `feature.date_start`/`date_end` are DATE (verified,
@@ -415,6 +499,7 @@ ambiguous.
   column of NAs. PINNED: the resolver treats absent columns as all-NULL (unbounded),
   i.e. exactly today's behaviour — it must not error. A criterion covers this.
 
+<!-- block: B-15.E2 -->
 ### E.2 Resolution semantics
 - An alias is **live at `sample_date`** iff
   `(date_start IS NULL OR date_start <= sample_date)` AND
@@ -489,6 +574,7 @@ ambiguous.
 - When `sample_date` is NA, the date filter is skipped (no basis to narrow) and the
   row is treated exactly as today.
 
+<!-- block: B-15.E3 -->
 ### E.3 Interaction with Work B — REQUIRED, do not skip
 B.4 gates Layer 2 on "the key reaches ZERO `feature_alias` rows". Under E that
 sentence is ambiguous, and the two readings differ materially. **PINNED: a key that
@@ -543,6 +629,7 @@ live one, goes to REVIEW — it does NOT fall through to Layer 2.**
   payload is `subkind=ambiguous` with the expired ones listed in an `expired=` clause.
   Ambiguity is the actionable fact; expiry is context.
 
+<!-- block: B-15.E4 -->
 ### E.4 New-alias creation
 - Every newly-created alias (the pending/dangling alias `commit` materialises in
   `.ct_materialise_feature_aliases`) sets `date_start` = **`min(sample_date)` over the
@@ -567,6 +654,7 @@ live one, goes to REVIEW — it does NOT fall through to Layer 2.**
   and allow a bounds-only call in which `uuid_feature` is omitted. A criterion covers
   set, clear, and leave-alone.
 
+<!-- block: B-15.E5 -->
 ### E.5 The curated bounds (data, applied by migration 003)
 
 > **RESTATED 2026-07-23 UNDER R1/R5 — read
@@ -823,6 +911,7 @@ an earlier draft of this paragraph claimed they did — corrected here:
   B.TS40→B.TS39 changeover date later surfaces, only this literal changes; no test or
   code should need to move with it.
 
+<!-- block: B-15.E6 -->
 ### E.6 Acceptance criteria (each must be able to FAIL)
 **Ordering: E depends on B.** The E.3 criterion is vacuous until Layer 2 exists, so
 Work E lands after Work B, and the E.3 test carries a positive control (below).
@@ -856,10 +945,15 @@ Work E lands after Work B, and the E.3 test carries a positive control (below).
 > **(iii) The `self`-alias abort criterion CANNOT FAIL on any existing seed.** See its
 > own bullet below.
 
+### R-15.7 Expired date_end alias does not resolve later row
 - An alias with `date_end` in the past does NOT resolve a later-dated row — paired in
   the same test with the identical row dated *before* the bound, which DOES resolve.
   (Without the pair, a resolver that is simply broken passes.)
+
+### R-15.8 date_start bound blocks rows before start date
 - Ditto `date_start`: a row dated before the start does not resolve; one after does.
+
+### R-15.9 Bounded two-arm key resolves outside the bound
 - **E.2 `auto_assign`:** a bounded two-arm key resolves to its surviving arm outside
   the bound. Concretely, post-003 `b.ts18` at a 2026 date resolves to B.TS18. Without
   the 17-row flip this fails — which is the point; it is the only criterion that
@@ -869,23 +963,33 @@ Work E lands after Work B, and the E.3 test carries a positive control (below).
   that `b.s01` and `k.e02` at a date INSIDE their historical arm's bound RESOLVE to
   B.S01 / K.E02 and emit exactly one E.7 note each** — this is the only criterion that
   catches 003 regressing a human confirmation.
+
+### R-15.10 Universal self-alias flip resolves own name
 - **E.2 R1, universal self flip (NEW, must be able to FAIL):** a seed feature whose
   `self` arm is `auto_assign = FALSE` and which is NOT one of E.5's 8 keys resolves by
   its own canonical name after 003. Without R1's table-wide rule this fails, and a
   migration that flips only E.5's arms fails it — which is the point. Pair it with the
   table-wide post-condition (zero `self` arms not TRUE), because the post-condition
   alone is satisfied by a seed that never had a FALSE self arm to begin with.
+
+### R-15.11 Feature-side liveness excludes defunct feature
 - **E.2 feature-side liveness:** a key with one live alias arm pointing at a *defunct*
   feature goes to review, not to the defunct feature. Build it on the `T.REUSED`
   fixture (fa-0007→f-0006, `date_end 2020-06-30`; fa-0008→f-0007 live) by bounding the
   fa-0008 arm and dating the row 2025 — today that silently resolves to f-0006.
+
+### R-15.12 Pending alias exempt from date bounds, no double-commit
 - **E.2 pending exemption:** a dangling alias whose bounds would exclude the row is
   still found by the natural-key lookup, and re-ingesting the same measurement commits
   it ONCE. Assert the `analysis` row count, not just the absence of an error.
+
+### R-15.13 NULL date bounds regression guard
 - **REGRESSION GUARD, not an acceptance criterion:** NULL/NULL alias behaves exactly as
   today. Name the cases: `T.AMBIG2` ambiguity, `T.REUSED` narrowing, the `bs03alt` hit,
   plus a direct assertion that a NULL/NULL alias resolves at dates far either side of
   any bound.
+
+### R-15.14 Pre-003 database regression guard
 - **REGRESSION GUARD, not an acceptance criterion — E.1 pre-003 DB:** the resolver run
   against a seed WITHOUT the two columns behaves exactly as today and does not error.
 - *(Relabelled 2026-07-23, cold audit finding 18. Both of the above assert that
@@ -893,20 +997,30 @@ Work E lands after Work B, and the E.3 test carries a positive control (below).
   blast-radius guards and are necessary, but they must not be counted toward "each
   criterion must be able to fail" — no acceptance gate may rest on them, and a
   reviewer scoring E must not treat them as evidence that E works.)*
+
+### R-15.15 Expired-only alias goes to review, not structural
 - E.3: a key whose only alias is expired lands in review with `subkind=expired_alias`
   and does NOT get structurally resolved — asserted against a raw that WOULD parse
   structurally. **Paired positive control in the same test:** an identical raw with NO
   alias row at all DOES structurally resolve, so the test fails if Layer 2 is simply
   disabled rather than correctly gated.
+
+### R-15.16 Expired-alias payload emission at count boundaries
 - E.3 payload: a key with exactly ONE expired candidate still emits
   `subkind=expired_alias` (guards the `length(sugg) > 1` gate); a key with 2 live + 1
   expired emits `subkind=ambiguous` with an `expired=` clause.
+
+### R-15.17 New pending alias date_start is min sample_date
 - A newly-created pending alias has `date_start` = `min(sample_date)` over its group —
   asserted with the group presented in BOTH file orders, yielding the same value — and
   `date_end` NULL. Re-ingesting does not change it.
+
+### R-15.18 confirm_feature_aliases sets, clears, leaves bounds
 - `confirm_feature_aliases()`: set both bounds, clear a bound, and leave a bound
   untouched are three distinguishable outcomes; a bounds-only call needs no
   `uuid_feature`.
+
+### R-15.19 Migration 003 produces correct date bounds and flips
 - Migration 003 on **the named post-001 003 seed** (box (i) above — NOT the live
   registry, NOT `helper-migration-db.R`) produces ~~**8 non-NULL `date_end` values over
   the 9 itemised rows** (`b.s22`→B.S06 stays NULL)~~ **SEVEN non-NULL `date_end` values
@@ -926,6 +1040,12 @@ Work E lands after Work B, and the E.3 test carries a positive control (below).
   `(uuid, alias_key, uuid_feature, kind, auto_assign, n_seen)`. `mig001_counts_checksum()`
   covers feature/sample/analysis/lab_method only (001:57-84) and would not notice 003
   damaging the one table it modifies.
+
+<!-- R-15.20 is DELIBERATELY UNASSIGNED. The criterion below is withdrawn (struck
+     through) and must not be declared: it cannot fail on any existing seed — 0 of 895
+     live features and 0 of 13 fixture features lack a self alias — so declaring it
+     would be a permanent coverage failure against a test that proves nothing. The
+     numbering gap is intentional; do not renumber to close it. -->
 - ~~Migration 003 aborts if any feature lacks a `self` alias (E.3 precondition).~~
   **THIS CRITERION CANNOT FAIL AS WRITTEN — cold audit 2026-07-23, finding 2.**
   Measured: **0 of 895** live features and **0 of 13** fixture features lack a `self`
@@ -939,6 +1059,8 @@ Work E lands after Work B, and the E.3 test carries a positive control (below).
   the healthy seed. Without (b) a migration that always aborts passes; without (a) a
   migration that never checks passes. See also F.9, which is why the precondition is
   not an invariant.
+
+### R-15.21 sample_date NA yields unchanged behavior
 - `sample_date` NA → no narrowing, unchanged behaviour. Pin this as a **unit test on
   `.rc_feature_candidates(feature_raw, NA, registry)`**: ~~`.rc_parse_dates`
   (reconcile.R:615-640)~~ **there is NO `.rc_parse_dates` — corrected 2026-07-23 (cold
@@ -946,6 +1068,7 @@ Work E lands after Work B, and the E.3 test carries a positive control (below).
   which drops unparseable rows before commit, so an end-to-end test of this criterion
   passes regardless of the implementation.
 
+<!-- block: B-15.E7 -->
 ### E.7 Self-precedence, and the note that records it (R2 — Robin, 2026-07-23)
 Source: `dev/plans/RULINGS-2026-07-23-alias-self-precedence.md`, R2. R1 makes every
 `self` arm `auto_assign = TRUE`; **E.7 is what stops that turning into a review-queue
@@ -1011,6 +1134,7 @@ the same test:** a key reaching two live NON-self arms still goes to review and 
 commit, so the test fails if self-precedence was implemented as "always take the first
 candidate".
 
+<!-- block: B-15.E8 -->
 ### E.8 Merge the two duplicate identity arms (R3 — Robin, 2026-07-23)
 Source: `dev/plans/RULINGS-2026-07-23-alias-self-precedence.md`, R3.
 
@@ -1047,6 +1171,7 @@ each of `(b.s01, B.S01)` and `(k.e02, K.E02)`, that row has `kind = 'self'`,
 feature is UNCHANGED across the merge (assert it before and after — a merge that orphans
 samples otherwise passes); and reconciling the raw `"B.S01"` still resolves to B.S01.
 
+<!-- block: B-15.workF -->
 ## Work F — Work A remediation (from the Phase-5 cold audit, 2026-07-23)
 
 **SEQUENCING (Robin, 2026-07-23): F.1, F.2 and F.3 are FOLDED INTO THE B/C
@@ -1173,6 +1298,7 @@ and every mixed-key mutation was killed by existing tests — but found that ado
 `tolower(trimws())` silently dropped two hygiene properties `.rc_key` had. **Two
 mutations survived the entire suite**, which is the six-times-repeated failure mode.
 
+<!-- block: B-15.F1 -->
 ### F.1 Punctuation-only raw is no longer held (BLOCKING — data corruption)
 `.rc_feature_key` guards `is.na(x) | k == ""` (reconcile.R:83) but not "no alphanumeric
 character". `feature_raw = "."` or `"-"` therefore yields key `"."`, survives the A44
@@ -1181,6 +1307,7 @@ guard, and `commit_event()` materialises `feature_alias(alias_key = '.', kind =
 **Fix:** extend the guard to `!grepl("[[:alnum:]]", k)` → NA. **Test:** a `"."` raw is
 held, and NO alias/sample row is written — assert the row counts, not just the status.
 
+<!-- block: B-15.F2 -->
 ### F.2 Non-ASCII whitespace survives the trim (BLOCKING — duplicate samples)
 `trimws()` does not strip NBSP (` `), `\v` or `\f`. `.rc_feature_key("T.S01 ")`
 = `"t.s01 "`, which does not match `t.s01`, so commit creates a second alias **and a
@@ -1190,6 +1317,7 @@ dry run (all 43 residual raws are clean ASCII) — latent, not active. **Fix:** 
 trim plus `normalise_lab_text()`, matching what `.rc_key` already did. **Test:** the NBSP
 variant resolves to the SAME feature as the clean string, with no new alias row.
 
+<!-- block: B-15.F3 -->
 ### F.3 The migration-parity oracle is a tautology (BLOCKING — false-green gate)
 `test-reconcile.R:851` re-declares `mig_normalize <- function(x) tolower(trimws(x))`
 locally and compares `.rc_feature_key` against it — so it asserts a function equals its
@@ -1221,6 +1349,8 @@ the plan chose, and whoever writes the test first will be tempted to "fix" it by
 reverting F.2.
 
 **RESPECIFIED. F.3 is two assertions, not one:**
+
+### R-15.22 Alias-key parity over the stored domain
 1. **Parity over the stored `alias_key` domain.** Assert `.rc_feature_key(k) == k` for
    **every** `alias_key` actually stored in `feature_alias` — i.e. against real
    `.mig001_normalize` output read from the DB, not against a locally re-declared copy.
@@ -1230,6 +1360,8 @@ reverting F.2.
    `dev/migrations/001-alias-indirection.R` (the pattern already exists at
    `test-migration-001.R:42`), and keep the ASCII discriminating inputs `"B.  S01"` and
    `"B.S01\t"`, on which the two functions do agree.
+
+### R-15.23 Explicit NBSP divergence assertion
 2. **An EXPLICIT divergence assertion for the Unicode-trim direction.** Assert that the
    two functions **differ** on the NBSP-prefixed/suffixed input, and that
    `.rc_feature_key` is the one that folds it to the clean key. Written as an
@@ -1238,6 +1370,7 @@ reverting F.2.
    **Do NOT write F.3 as unconditional equality over arbitrary inputs** — that
    assertion is false by design as of F.2.
 
+<!-- block: B-15.F4 -->
 ### F.4 The collision oracle is a tautology (SHOULD-FIX — false-green gate)
 `test-reconcile.R:856-862` asserts only that `.rc_feature_key(c("BS1","B.S1"))` has two
 distinct values — a restatement of the function definition. The real hazard is at
@@ -1256,9 +1389,13 @@ tautology than the one it replaces, not a fix.
 
 **RESTATED as two separate, positively-specified assertions — both required, in the
 same test:**
+
+### R-15.24 TS1 resolves positively to the TH feature
 1. `.rc_feature_candidates("TS1", …)` resolves to **the TH feature** (`TH.S01`) — the
    positive control, which fails if the curated alias path is broken or the fixture is
    missing;
+
+### R-15.25 TS01 returns zero candidates
 2. `.rc_feature_candidates("TS01", …)` returns **ZERO candidates** — asserted as an
    empty result, and **never as "not equal to TS1's answer"**. This is the assertion
    that kills the longest-match mutation: `TS01` must not reach `T.S01`, must not reach
@@ -1267,6 +1404,7 @@ same test:**
 Assert the identity of each result. Any oracle phrased as a *comparison between* the
 two results is admissible only as an extra, never as the criterion.
 
+<!-- block: B-15.F5 -->
 ### F.5 Review payload is order-dependent (SHOULD-FIX)
 `.rc_feature_review` reads `cand <- cand_list[[g[[1]]]]` (**reconcile.R:580**) — the
 first row of the group. Two rows sharing a key with different sample dates give
@@ -1287,6 +1425,7 @@ must make both halves agree on what "the group's value" means — the union for 
 matching `struct`'s existing across-the-group behaviour — rather than fixing `cand`
 alone and leaving two conventions in one function.
 
+### R-15.26 Review payload order-independence for candidates
 **Acceptance (must be able to FAIL):** build one group of two rows sharing an
 `alias_key` with different sample dates, where only the LATER row's date narrows the
 candidate set to empty. Assert the emitted payload carries **both** candidates, and
@@ -1295,6 +1434,7 @@ today's code the new-first ordering emits no `candidates=` clause at all, so the
 fails before the fix — which is the point. A test that presents the rows in only one
 order passes against the current implementation and tests nothing.
 
+<!-- block: B-15.F6 -->
 ### F.6 Single-candidate suggestions are discarded — RULING REQUIRED, now made
 `if (length(sugg) > 1)` (reconcile.R:461) drops a lone `auto_assign=FALSE` candidate, so
 fixture `T.BORE` yields suggestion `f-0003` but an empty payload — the "suggestion
@@ -1302,6 +1442,8 @@ mechanism inert" failure the Cross-cutting section exists to fix. Mutating `>1` 
 **survives the entire suite**. **PINNED:** emit the single candidate as
 `subkind=suggestion` (distinct from `subkind=ambiguous`, which requires ≥2 — one
 candidate is not an ambiguity). This composes with E.3's `subkind=expired_alias`, which
+
+### R-15.27 Single-candidate suggestion emits subkind=suggestion
 likewise must emit at count 1. One test per branch: 0 → bare, 1 → `suggestion`,
 ≥2 → `ambiguous`.
 
@@ -1319,6 +1461,7 @@ for all of them the suggestion payload is the operator's only signal.
 which is a single-suggestion case. This is a latent-correctness fix, not a residual fix.
 `subkind` is write-only — nothing in `R/` parses it — so extending the vocabulary is free.
 
+<!-- block: B-15.F7 -->
 ### F.7 Documentation drift (MINOR, but a trap for the Work B implementer)
 - **STILL LIVE (re-verified 2026-07-23, cold audit finding 19).** The
   `.rc_resolve_existing_pending` roxygen at **reconcile.R:759** says the pending lookup
@@ -1342,14 +1485,19 @@ which is a single-suggestion case. This is a latent-correctness fix, not a resid
 **Acceptance (must be able to FAIL).** Added 2026-07-23 (cold audit, finding 19): F.7
 carried no acceptance line while six other F items did, so there was nothing to stop it
 being marked done on inspection. A documentation defect still needs a falsifiable gate:
+
+### R-15.28 Roxygen no longer cites stripping .rc_key
 - assert the `.rc_resolve_existing_pending` roxygen contains **no** occurrence of
   `.rc_key(feature_raw)` and **does** name `.rc_feature_key` / `alias_key` — a
   grep-style assertion over the source file, which fails against today's source;
+
+### R-15.29 Three-key comment names all three normalisers
 - assert the three-key comment exists and names all three of `.rc_feature_key`,
   `.rc_key` and `.st_normalise_key`. A test that merely checks *a* comment is present
   passes against a comment naming two of them.
 Both are cheap and both fail on current source, which is the bar.
 
+<!-- block: B-15.F8 -->
 ### F.8 Pre-Work-A pending aliases have no upgrade path (NOTE — not currently triggerable)
 A DB committed under the old key holds `alias_key = 'bs01'` where reconcile now computes
 `'b.s01'`; the lookup misses, a new alias is created, and `.rc_find_existing` then
@@ -1357,6 +1505,7 @@ double-commits. **Verified not reachable today: both the post-001 snapshot and t
 dry-run DB hold ZERO dangling aliases.** Record the precondition — "no pending aliases
 exist" — and re-check it before any live commit, or write a migration.
 
+<!-- block: B-15.F9 -->
 ### F.9 `add_feature()` leaves a post-001 feature unreachable by its own name (SHOULD-FIX)
 **⚠ SEQUENCING, pinned 2026-07-23 (cold audit, finding 8): F.9 MUST LAND BEFORE
 MIGRATION 003.** Not a preference — a hard dependency, and it is also more than the
@@ -1391,11 +1540,13 @@ carries `cutover_add_bl05_self_alias()`, which closes this for B.L05 **only**, a
 `dev/cutover/verify.R` V02 asserts the general invariant at cutover time — which
 detects a recurrence but does not prevent one.
 
+### R-15.30 add_feature() creates self-alias, resolves by name
 Acceptance (must be able to FAIL): create a feature via `add_feature()`, then reconcile
 a row carrying exactly that feature's canonical name, and assert it RESOLVES rather than
 queueing as `unknown_feature`. A test that only counts `feature_alias` rows passes
 against a wrong implementation that writes an alias of the wrong `kind`.
 
+<!-- block: B-15.F10 -->
 ### F.10 Work-order-level re-ingest guard (APPROVED — Robin, 2026-07-23)
 **Why this exists:** the legacy corpus cannot be matched by the reuse path (see the
 cutover runbook F2 — `already_present` is 0 of 6,725 rows), and Robin's ruling that
@@ -1429,6 +1580,7 @@ sequencing table at the head of Work F):
    file, under a different name, carrying rows that do NOT match existing samples** —
    which is precisely the re-download case that motivated it.
 
+### R-15.31 Higher-revision file for loaded WO commits
 **Paired acceptance criterion (must be able to FAIL), in addition to the one below:**
 ingest a work order, then ingest a **higher-revision** file for that same work order,
 and assert it **COMMITS** (the supersede runs; assert the superseded rows' end state,
@@ -1443,11 +1595,13 @@ makes a work-order-granularity guard correct rather than too coarse; **re-verify
 before relying on it**, because a partially-loaded work order would be silently blocked
 by this guard.
 
+### R-15.32 Re-download of loaded WO blocked, routed to review
 Acceptance (must be able to FAIL): ingest a work order, then ingest a *differently named
 file* carrying the same work order, and assert zero new `sample`/`analysis` rows plus a
 review item. A test that re-ingests the identical path may pass via hash dedup instead
 and would not exercise the guard at all.
 
+<!-- block: B-15.F11 -->
 ### F.11 Drop `sample.date` (APPROVED — Robin, 2026-07-23; `date_start` NOT approved)
 Robin: *"The date columns probably shouldn't exist at all. They were always just copies
 of datetime with the time removed."*
@@ -1526,11 +1680,13 @@ row (all 15,111 non-NULL values are 13:00 or 14:00), which has already produced 
 off-by-one in curated date literals once. It also eliminates cause 1 of runbook F2 —
 though **not** cause 2, so it does not remove the need for F.10.
 
+### R-15.33 Reuse-match on legacy-convention date matches
 Acceptance (must be able to FAIL): a reuse-match test seeded with a legacy-convention
 row (`date` at 14:00, `datetime` at the real instant) that asserts an incoming row for
 the same local date MATCHES. Against today's code that test fails, which is the point —
 if it passes before the change, it is not testing the right thing.
 
+<!-- block: B-15.F16 -->
 ### F.16 Reporting-limit residue after the 2026-07-23 `rl_low` correction (RESOLVED 2026-07-23)
 **The convention (Robin, 2026-07-23):** *"Where a value is BDL its value is set
 as the reporting limit and then quantified is set to FALSE."* ~~So for every
@@ -1678,6 +1834,7 @@ collapsing NA → FALSE). Fixing it exposed a genuine defect in
 **re-committed** any re-ingested qualitative observation. 23 of the 315 rows
 record that no sample was taken, which is why TRUE was the dangerous option.
 
+<!-- block: B-15.F13 -->
 ### F.13 `time_known` flag on `sample` (FILED FOR LATER — Robin, 2026-07-23)
 Robin: *"Where time is unknown set it to 10am (since that is a best guess). Your
 no time col is a good idea, file that for later."*
@@ -1699,6 +1856,7 @@ migration route. Adding an explicit boolean stops it recurring:
 This also unblocks F.11 — with `time_known` recorded, `sample.date` carries no
 information `datetime` + the flag does not, and can finally be dropped.
 
+<!-- block: B-15.F14 -->
 ### F.14 `confirm_analyte_methods()` fails on any method that has analyses (DEFECT)
 Found 2026-07-23 confirming the ALS SAR method (12 analyses): it aborts with
 `Constraint Error: ... still referenced by a foreign key in a different table`.
@@ -1716,12 +1874,14 @@ reattach loop through `db_update()`, tagged with 002's exact reason suffixes so
 `.mig002_torn_guard()` can still detect a torn run. Verified after: 12 of 12
 analyses reattached, zero orphans.
 
+### R-15.34 confirm_analyte_methods succeeds with dependent analyses
 Fix: fold that loop into `confirm_analyte_methods()` itself. Acceptance (must be
 able to FAIL): confirm a method **with** dependent analyses and assert both that
 `lab_method.uuid_analyte` moved AND that every dependent analysis still points
 at the same `lab_method`. A test using a zero-referenced method passes against
 today's broken code.
 
+<!-- block: B-15.F15 -->
 ### F.15 `review_queue` items have no close path (DEFECT — found 2026-07-23)
 After `confirm_feature_aliases()` and `confirm_analyte_methods()` resolved every
 pending alias and method (`pending_features()` 0, `pending_analytes()` 0), the
@@ -1763,6 +1923,7 @@ either way: **nothing anywhere writes `review_queue.status`** — `R/mutate.R:58
 which option is chosen. Until the linkage is ruled, the acceptance criterion above
 cannot be written, because "its alias" has no definition.
 
+<!-- block: B-15.F12 -->
 ### F.12 Migration 001 broke the reporting views (DEFECT — found 2026-07-23)
 Two separate problems, both introduced by 001's view rebuild and both invisible
 until something tried to *read* the views.
@@ -1805,10 +1966,12 @@ reasons, then pin instead that **F.12's restored projection derives its date fro
 what must not happen is F.12 restoring a raw `sample.date` projection and F.11
 discovering it afterwards. Recorded in the sequencing table at the head of Work F.
 
+### R-15.35 v_measurement_epa returns nonzero, correct rows
 Acceptance (must be able to FAIL): assert `v_measurement_epa` returns a row count
 **> 0** *and* equal to an independently computed base-table query for the same
 filter — a bare `>= 0` assertion is exactly the gate that let this through.
 
+<!-- block: B-15.F17 -->
 ### F.17 Retain the non-tabular lab deliverables (APPROVED — Robin, 2026-07-23)
 Every PDF and `.XLS` sibling of an ingested work order is currently
 `quarantined` with reason `unclaimed`, gets **no `asset` row**, and is therefore
@@ -1853,6 +2016,7 @@ Scope otherwise to be fleshed out at implementation; the shape is roughly:
   parsed"; `quarantined` currently conflates "we could not read this" with
   "we do not parse this kind of file".
 
+### R-15.36 Non-tabular deliverables retained and WO-linked
 Acceptance (must be able to FAIL): ingest a work order whose directory contains
 a COA PDF; assert the PDF has an `asset` row AND a byte-identical archive copy
 AND **that the row is reachable from the work order** AND that a subsequent
@@ -1861,6 +2025,7 @@ AND **that the row is reachable from the work order** AND that a subsequent
 would pass while the PDF still sat unclaimed, and one that stops at the archive
 copy would pass while the file was retained but unattached.
 
+<!-- block: B-15.F18 -->
 ### F.18 Legacy `asset` rows with no retained bytes (RESOLVED 2026-07-23)
 **1,272 of 2,556 `asset` rows have no archive copy on disk**, and a sample of 40
 of their filenames could not be found anywhere under the `assets/` tree. These
@@ -1963,6 +2128,7 @@ state 1,464 rows). There is no `bytes_not_retained` state to implement and no 25
 recovery to attempt. **Nothing in F.18 is outstanding except the
 `change_log.source_hash` mixed-algorithm finding recorded above.**
 
+<!-- block: B-15.F19 -->
 ### F.19 `confirm_feature_aliases()` mislabels every confirmation as a transcription error (DEFECT — R4, Robin, 2026-07-23)
 **⚠ URGENT. Not "urgent" as emphasis — urgent because the defect is actively producing
 bad rows.** More input files are arriving, every ambiguous key they carry generates a
@@ -1999,6 +2165,7 @@ duplicate arms of E.8 came to exist and to be labelled `transcription_error` wit
    `descriptive` all already exist in the vocabulary and are all more common in the
    registry than `transcription_error` is.
 
+### R-15.37 confirm_feature_aliases avoids duplicate identity arm
 Acceptance (must be able to FAIL): confirm a pending alias whose key IS the target
 feature's lower-cased name and assert that (a) NO new `feature_alias` row is created —
 assert the table row count, not the resolution outcome — and (b) the existing `self` arm
@@ -2007,6 +2174,7 @@ NOT the target's name and assert it is NOT labelled `transcription_error` by def
 Without the second half an implementation that hard-codes `kind = 'self'` for everything
 passes; without the first half the duplicate-minting behaviour survives untouched.
 
+<!-- block: B-15.registry-data -->
 ## Registry data changes ~~pending~~ **APPLIED at the live cutover (2026-07-23) — RECORD, not a work list**
 
 **RETITLED 2026-07-23 (cold audit, finding 16). This section is a RECORD of changes
@@ -2055,6 +2223,7 @@ ops tables are not unbuilt work: `ensure_schema()` creates all four idempotently
 Snapshot destination (Robin, 2026-07-23): `…/Sharepoint/waste_data - Environmental
 monitoring/data/backups`, date-only names, same-day overwrite accepted.
 
+<!-- block: B-15.D1 -->
 ### D.1 New feature B.L05 (Robin, 2026-07-23)
 | field | value |
 |---|---|
@@ -2080,6 +2249,7 @@ Evidence it is NOT B.L01: work order ES2515987 contains `B.L01 (Trade Waste Dam)
 **Historical rows stay on B.L01** (Robin's ruling). B.L05 applies to new data only. Do
 NOT write a migration to repoint history.
 
+<!-- block: B-15.D2 -->
 ### D.2 Alias curation, applied after migration 001 creates `feature_alias`
 | alias_key | → feature | kind | note |
 |---|---|---|---|
@@ -2090,6 +2260,7 @@ Together these clear all 15 `descriptive` residual items (6 work orders + 9 work
 `Dis Lawson` and `T/W Pump` also appear in the corpus and are UNRULED — do not alias them
 on a guess.
 
+<!-- block: B-15.D3 -->
 ### D.3 The 16 orphaned Chemistry2e files — RETAIN as assets, do NOT delete (Robin, 2026-07-23)
 16 ESdat `Chemistry2e` files have no companion `Sample2e` anywhere in the corpus, so
 every one of their 3449 rows carries `feature_raw = NA` and is held at reconcile. They
@@ -2110,6 +2281,7 @@ work order — so it is being established by matching date + analyte + value. Ex
 the ~1264 field-sample rows to match; the other 2185 are lab batch QC (`QC-*` SampleCodes)
 which is never committed as a sample. **Do not treat a ~63% non-match as data loss.**
 
+<!-- block: B-15.D4 -->
 ### D.4 Two live-data defects surfaced by the D.3 verification (Robin, 2026-07-23)
 
 Both independently confirmed by the orchestrator against the authoritative DB. Not
@@ -2152,11 +2324,13 @@ size, all three work orders), so hash dedup absorbs the duplicates and there is 
 revision conflict. The chemistry was never the problem — both pH values were always in
 the file; the old loader dropped one.
 
+<!-- block: B-15.verification -->
 ## Verification
 - Re-run the input/ dry-run (scratchpad/input_dryrun2.R) after each phase; track the
   `unknown_feature` count down and confirm ZERO cross-site mis-merges (assert BS1/BS3
   still resolve to BH.*). Full `testthat` suite green throughout.
 
+<!-- block: B-15.out-of-scope -->
 ## OUT OF SCOPE (separate follow-ups, noted for the record)
 - `unknown_analyte` ×14 = all "Sodium Adsorption Ratio" (computed ratio not in the
   analyte registry) — a registry-gap decision, not name resolution.
