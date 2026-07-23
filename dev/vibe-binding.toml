@@ -148,6 +148,10 @@ subjects = [
   "tests/testthat/test-ir.R",
   "tests/testthat/test-migration-001.R",
   "tests/testthat/test-migration-002.R",
+  # PLAN-15, written in Phase 4 of this run. Listed ahead of their existence so the
+  # binding does not silently omit them the first time the gate arms on their unit.
+  "tests/testthat/test-migration-003.R",
+  "tests/testthat/test-migration-004.R",
   "tests/testthat/test-mutate.R",
   "tests/testthat/test-pending.R",
   "tests/testthat/test-reconcile.R",

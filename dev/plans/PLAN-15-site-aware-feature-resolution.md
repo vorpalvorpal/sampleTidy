@@ -1966,6 +1966,19 @@ reasons, then pin instead that **F.12's restored projection derives its date fro
 what must not happen is F.12 restoring a raw `sample.date` projection and F.11
 discovering it afterwards. Recorded in the sequencing table at the head of Work F.
 
+**CHOSEN 2026-07-24 (orchestrator ruling, recorded because the plan left it open):
+the DECOUPLED option.** F.12's restored projections derive the date from `datetime`
+and never select `sample.date`. F.12 therefore does NOT wait on F.11 — which is
+blocked on F.13, filed for later by Robin, and out of this track. A broken reporting
+view should not be held hostage to a deferred schema change. Built as
+`dev/migrations/004-view-repair.R` (manifest units `P15-T-mig-views` / `P15-mig-views`);
+**do not edit 001**.
+
+Correction to this section's own rationale, carried from the Phase-3 adjudication:
+it cites "the six `date`-referencing views". There is **ONE**. Every non-internal
+view's SQL was inspected and only `v_feature_dates` references a date token. Build
+against that measurement, not the sentence.
+
 ### R-15.35 v_measurement_epa returns nonzero, correct rows
 Acceptance (must be able to FAIL): assert `v_measurement_epa` returns a row count
 **> 0** *and* equal to an independently computed base-table query for the same
