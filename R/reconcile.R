@@ -57,14 +57,30 @@
 #' separator (`B.S01`, `K.E02`); stripping the separator fuses genuinely distinct
 #' cross-site codes (`BS1`->BH.S01 vs `B.S1`->B.S01), so reconcile must look
 #' features up with the SAME punctuation-preserving normaliser the migration used.
-#' A NA input, or one that folds to the empty string (blank/whitespace-only),
-#' returns NA (A44 guard). This is deliberately NOT `.rc_key`, which stays the
-#' folded key for lab-method matching and intra-event dedup.
+#' A NA input, one that folds to the empty string, or one carrying NO
+#' alphanumeric character at all returns NA (A44 guard). This is deliberately
+#' NOT `.rc_key`, which stays the folded key for lab-method matching and
+#' intra-event dedup.
+#'
+#' PLAN-15 F.1: the guard covers PUNCTUATION-ONLY input too. A `feature_raw` of
+#' `"."` used to fold to the key `"."`, survive the A44 guard and make commit
+#' materialise `feature_alias(alias_key = '.', kind = 'pending')` plus a sample
+#' against it. `.rc_key` held these (it strips non-alphanumerics, so `"."`
+#' folded to `""`); adopting tolower+trim silently dropped that property.
+#'
+#' PLAN-15 F.2: the trim is UNICODE-AWARE (`[\h\v]`, so NBSP / vertical tab /
+#' form feed are stripped too) and the input first goes through
+#' `normalise_lab_text()`, matching the hygiene `.rc_key` already had.
+#' `trimws()` alone leaves a trailing NBSP in place, so `"T.S01 "` keyed
+#' apart from `"t.s01"` and commit created a SECOND alias - and a second sample
+#' for a point that already exists. Internal whitespace is NOT squished: the
+#' migration's `.mig001_normalize` does not squish either, and the stored
+#' `alias_key` is the contract.
 #' @keywords internal
 #' @noRd
 .rc_feature_key <- function(x) {
-  k <- tolower(trimws(x))
-  k[is.na(x) | k == ""] <- NA_character_
+  k <- trimws(tolower(normalise_lab_text(x)), whitespace = "[\\h\\v]")
+  k[is.na(x) | is.na(k) | !grepl("[[:alnum:]]", k)] <- NA_character_
   k
 }
 
@@ -201,6 +217,171 @@
   unique(cand$uuid_feature)
 }
 
+# ---- PLAN-15 B/C: layered site-aware resolution ----------------------------
+#
+# Layer 1 (Work A, above) is the exact curated alias lookup and is
+# AUTHORITATIVE. What follows is the FALLBACK for names Layer 1 cannot reach:
+#
+#  - Layer 2 (Work B): parse the raw as `(site, point)` and match it against
+#    the feature table's own `(site, point)` decomposition. Runs ONLY for a key
+#    that reaches ZERO `feature_alias` rows (B.4), only across a dot/space
+#    boundary (B.2), and only onto a feature live at `sample_date` (B.5).
+#  - Layer 3 (Work C): when every row this event resolved sits in ONE site S,
+#    retry the still-unresolved, site-less rows assuming S (C.1-C.3).
+#
+# Both are deterministic re-derivable rules, never curation: a hit rides the
+# target's existing SELF alias (B.6) and commit registers no new alias.
+
+#' The site set (B.1): `DISTINCT feature.site`, longest `nchar` FIRST so a
+#' prefix-extending site wins the match (live: `BH` before `B`).
+#'
+#' Read from the `site` COLUMN, NEVER from a `feature.name` prefix parse. The
+#' two agree for 894 of 894 live features, which is exactly what makes a
+#' prefix parse look correct while being wrong: a feature whose name prefix
+#' disagrees with its site would be silently re-sited by one.
+#' @return character vector of sites, possibly empty.
+#' @keywords internal
+#' @noRd
+.rc_site_registry <- function(registry) {
+  feat <- registry$feature
+  if (is.null(feat) || nrow(feat) == 0 || !("site" %in% names(feat))) return(character(0))
+  s <- feat$site
+  s <- trimws(s[!is.na(s)])
+  s <- unique(s[s != ""])
+  if (length(s) == 0) return(character(0))
+  s[order(-nchar(s), s)]
+}
+
+#' Canonical form of a POINT within its site (B.3): uppercase, then drop
+#' leading zeros within each maximal digit run (`S01` -> `S1`, `MW02A` ->
+#' `MW2A`).
+#'
+#' NOT zero-padding: digit width is not uniform across the registry - `B.G###`
+#' is 3-wide, `L.G##` 2-wide, and `K.G` carries BOTH (`K.G01`..`K.G025` 2-wide,
+#' `K.G026`+ 3-wide) - so no fixed pad width reaches every point. The
+#' lookbehind keeps the rule to the START of a run: `MW102` must stay `MW102`,
+#' not become `MW12`.
+#' @keywords internal
+#' @noRd
+.rc_canonical_point <- function(x) {
+  gsub("(?<![0-9])0+(?=[0-9])", "", toupper(x), perl = TRUE)
+}
+
+#' Does ANY `feature_alias` row carry this `alias_key` (B.4/E.3 gate)?
+#'
+#' Ignores `uuid_feature` (so a DANGLING alias counts), `auto_assign` (so a
+#' curator's parked ambiguity counts) and any date bound. This is deliberately
+#' NOT `.rc_feature_suggestions()`, which excludes dangling rows and so
+#' contradicts the gate's own "regardless of whether the alias is dangling".
+#' A key reaching an alias row is Layer 1's business - or a human's - and must
+#' never fall through to a structural parse.
+#' @keywords internal
+#' @noRd
+.rc_alias_rows_exist <- function(key, registry) {
+  if (length(key) != 1 || is.na(key)) return(FALSE)
+  fa <- registry$feature_alias
+  if (is.null(fa) || nrow(fa) == 0) return(FALSE)
+  any(!is.na(fa$alias_key) & fa$alias_key == key)
+}
+
+#' The registry side of the structural index (B.3): one `SITE|POINT` key per
+#' feature whose `name` starts with its own `site` followed by exactly one
+#' separator. A feature whose name prefix != its `site` is EXCLUDED - there is
+#' no `feature.point` column, so its point cannot be derived without guessing
+#' which of the two fields to believe.
+#' @return `list(key, uuid_feature)`, parallel character vectors.
+#' @keywords internal
+#' @noRd
+.rc_structural_index <- function(registry) {
+  empty <- list(key = character(0), uuid_feature = character(0))
+  feat <- registry$feature
+  if (is.null(feat) || nrow(feat) == 0) return(empty)
+  keep <- which(!is.na(feat$site) & trimws(feat$site) != "" & !is.na(feat$name))
+  if (length(keep) == 0) return(empty)
+
+  site <- feat$site[keep]
+  name <- feat$name[keep]
+  ns <- nchar(site)
+  ok <- substr(name, 1L, ns) == site &
+    nchar(name) > ns + 1L &
+    substr(name, ns + 1L, ns + 1L) %in% c(".", " ")
+  if (!any(ok)) return(empty)
+
+  site <- site[ok]; name <- name[ok]; ns <- ns[ok]
+  point <- substr(name, ns + 2L, nchar(name))
+  list(
+    key = paste(toupper(site), .rc_canonical_point(point), sep = "|"),
+    uuid_feature = feat$uuid[keep][ok]
+  )
+}
+
+#' Split one feature key into `(site, point)` (B.2).
+#'
+#' The site is the LONGEST recognised prefix. The character right after it
+#' decides the boundary: `.`/` ` is a real boundary; anything else is a DIRECT
+#' (empty) boundary, which is suggestion-only and NEVER auto-resolves - `bs1`
+#' is a curated alias of BH.S01 while no `bs01` alias exists, so a
+#' longest-match parse of `BS01` would auto-resolve into the OPPOSITE
+#' catchment. A residual point still containing a separator is unparseable
+#' (`point = NA`): we split at the FIRST boundary only and never re-split.
+#' @return NULL when no site is recognised, else
+#'   `list(site, point, boundary)`; `point` is NA when unparseable.
+#' @keywords internal
+#' @noRd
+.rc_parse_structural <- function(key, sites) {
+  if (length(key) != 1 || is.na(key) || length(sites) == 0) return(NULL)
+  kl <- tolower(key)
+  for (s in sites) {
+    sl <- tolower(s)
+    if (nchar(kl) <= nchar(sl) || substr(kl, 1L, nchar(sl)) != sl) next
+    rest <- substr(key, nchar(sl) + 1L, nchar(key))
+    boundary <- substr(rest, 1L, 1L) %in% c(".", " ")
+    point <- if (boundary) substr(rest, 2L, nchar(rest)) else rest
+    if (nchar(point) == 0 || grepl("[. ]", point)) {
+      return(list(site = s, point = NA_character_, boundary = boundary))
+    }
+    return(list(site = s, point = .rc_canonical_point(point), boundary = boundary))
+  }
+  NULL
+}
+
+#' The unique feature at `(site, point)`, live at `sample_date` (B.3/B.5).
+#'
+#' The live filter is UNCONDITIONAL - deliberately not `.rc_narrow_live()`,
+#' which only narrows when the candidate set spans >1 feature. A structural hit
+#' is unique by construction, so reusing that helper would be a no-op and would
+#' resolve onto a decommissioned feature.
+#' @return `uuid_feature`, or NA when there is no unique live hit.
+#' @keywords internal
+#' @noRd
+.rc_structural_hit <- function(site, point, index, sample_date, registry) {
+  if (is.na(site) || is.na(point)) return(NA_character_)
+  u <- unique(index$uuid_feature[index$key == paste(toupper(site), point, sep = "|")])
+  if (length(u) != 1) return(NA_character_)
+  if (!is.na(sample_date)) {
+    feat <- registry$feature
+    de <- feat$date_end[match(u, feat$uuid)]
+    if (!is.na(de) && as.Date(de) < as.Date(sample_date)) return(NA_character_)
+  }
+  u
+}
+
+#' The target feature's SELF alias (B.6). `sample.uuid_feature_alias` is NOT
+#' NULL and the within-batch duplicate guard keys off it, so a structural hit
+#' with no alias to ride must go to REVIEW rather than commit a NA alias.
+#' Reconcile is read-only (A32): it never creates the alias itself, and commit
+#' deliberately does not materialise a `kind = 'structural'` one either.
+#' @keywords internal
+#' @noRd
+.rc_self_alias <- function(uuid_feature, registry) {
+  fa <- registry$feature_alias
+  if (is.null(fa) || nrow(fa) == 0 || is.na(uuid_feature)) return(NA_character_)
+  hit <- fa[!is.na(fa$uuid_feature) & fa$uuid_feature == uuid_feature &
+              !is.na(fa$kind) & fa$kind == "self", , drop = FALSE]
+  if (nrow(hit) == 0) return(NA_character_)
+  hit$uuid[[1]]
+}
+
 # ---- R-8.2/R-11.5: feature resolution (conveyor) ---------------------------
 
 #' Resolve `feature_raw` for every row (R-11.5 conveyor). EVERY row is kept and
@@ -217,13 +398,14 @@
 #' @return `list(kept, review)`.
 #' @keywords internal
 #' @noRd
-.rc_resolve_features <- function(rows, registry, work_order) {
+.rc_resolve_features <- function(rows, registry, work_order, orphan = FALSE) {
   n <- nrow(rows)
   if (n == 0) {
     rows$uuid_feature <- character(0)
     rows$uuid_feature_alias <- character(0)
     rows$feature_pending <- logical(0)
     rows$alias_key <- character(0)
+    rows$feature_resolution <- character(0)
     return(list(kept = rows, review = .rc_proto_review()))
   }
 
@@ -242,8 +424,21 @@
   alias_key <- .rc_feature_key(rows$feature_raw)
   cand_list <- vector("list", n)
 
+  # PLAN-15 B/C state, per row: the structural parse, the review-payload
+  # suggestion token it yields, and the provenance reason a non-curated
+  # resolution carries to COMMIT (reconcile itself writes nothing - A32).
+  sites <- .rc_site_registry(registry)
+  index <- .rc_structural_index(registry)
+  parsed_site <- rep(NA_character_, n)   # the site Layer 2 RECOGNISED, if any
+  struct <- rep(NA_character_, n)
+  resolution <- rep(NA_character_, n)
+  feat_name <- function(u) {
+    nm <- registry$feature$name[match(u, registry$feature$uuid)]
+    if (length(nm) == 0 || is.na(nm)) u else nm
+  }
+
   for (i in seq_len(n)) {
-    if (is.na(alias_key[[i]])) {          # NA/blank feature_raw -> held (A44)
+    if (is.na(alias_key[[i]])) {          # NA/blank/punctuation-only -> held (A44/F.1)
       status[[i]] <- "held"
       pending[[i]] <- TRUE
       next
@@ -254,14 +449,67 @@
       uuid_feature[[i]] <- distinct_feat
       uuid_alias[[i]] <- cand$uuid_alias[[1]]
       status[[i]] <- "hit"
-    } else {
-      status[[i]] <- "pending"           # unknown (0) or ambiguous (>1)
-      pending[[i]] <- TRUE
-      # PLAN-15 A: surface EVERY distinct candidate the key reaches (incl. the
-      # all-`auto_assign=FALSE` ambiguous case the auto path drops) so review
-      # carries a real suggestion instead of a blank unknown.
-      sugg <- .rc_feature_suggestions(rows$feature_raw[[i]], row_dates[[i]], registry)
-      if (length(sugg) > 1) cand_list[[i]] <- sugg
+      next
+    }
+
+    status[[i]] <- "pending"             # unknown (0) or ambiguous (>1)
+    pending[[i]] <- TRUE
+    # PLAN-15 A: surface EVERY distinct candidate the key reaches (incl. the
+    # all-`auto_assign=FALSE` ambiguous case the auto path drops) so review
+    # carries a real suggestion instead of a blank unknown.
+    sugg <- .rc_feature_suggestions(rows$feature_raw[[i]], row_dates[[i]], registry)
+    if (length(sugg) > 1) cand_list[[i]] <- sugg
+
+    # ---- Layer 2 (B): structural (site, point) --------------------------
+    p <- .rc_parse_structural(alias_key[[i]], sites)
+    if (is.null(p)) next
+    parsed_site[[i]] <- p$site
+    if (is.na(p$point)) next
+    struct[[i]] <- paste0("site=", p$site, ",point=", p$point)
+    # B.4 gate: any alias row at all (live, expired or dangling) keeps this
+    # key with Layer 1 / the operator. B.2: a direct boundary suggests only.
+    if (!p$boundary || .rc_alias_rows_exist(alias_key[[i]], registry)) next
+    hit <- .rc_structural_hit(p$site, p$point, index, row_dates[[i]], registry)
+    if (is.na(hit)) next
+    self <- .rc_self_alias(hit, registry)
+    if (is.na(self)) next               # B.6: never commit with a NA alias
+    uuid_feature[[i]] <- hit
+    uuid_alias[[i]] <- self
+    pending[[i]] <- FALSE
+    status[[i]] <- "hit"
+    resolution[[i]] <- paste0("structural_parse: ", rows$feature_raw[[i]],
+                              " -> ", feat_name(hit))
+  }
+
+  # ---- Layer 3 (C): WO single-site disambiguation ------------------------
+  l3 <- .rc_wo_site(uuid_feature, registry, work_order, orphan)
+  if (!is.na(l3)) {
+    for (i in which(status == "pending")) {
+      if (is.na(alias_key[[i]])) next
+      # C.2: a row that yielded a RECOGNISED site is never re-sited, even
+      # when its point missed - that is the cross-site merge this guards.
+      if (!is.na(parsed_site[[i]])) next
+      # C.2: the "strip a leading recognised site token" clause is STRUCK -
+      # Layer 3 only ever sees rows that recognised NO site - so the candidate
+      # point is the whole canonicalised raw, and one still carrying a
+      # separator is not retried.
+      point <- .rc_canonical_point(alias_key[[i]])
+      if (grepl("[. ]", point)) next
+      # C.1: on a miss the row keeps S as its SUGGESTED site.
+      struct[[i]] <- paste0("site=", l3, ",point=", point)
+      # B.4/C.3: curation (including a dangling pending alias) always wins -
+      # suggest, never resolve.
+      if (.rc_alias_rows_exist(alias_key[[i]], registry)) next
+      hit <- .rc_structural_hit(l3, point, index, row_dates[[i]], registry)
+      if (is.na(hit)) next
+      self <- .rc_self_alias(hit, registry)
+      if (is.na(self)) next
+      uuid_feature[[i]] <- hit
+      uuid_alias[[i]] <- self
+      pending[[i]] <- FALSE
+      status[[i]] <- "hit"
+      resolution[[i]] <- paste0("wo_site_inferred: ", rows$feature_raw[[i]],
+                                " -> ", feat_name(hit), " (sites={", l3, "})")
     }
   }
 
@@ -269,13 +517,47 @@
   rows$uuid_feature_alias <- uuid_alias
   rows$feature_pending <- pending
   rows$alias_key <- alias_key
+  # Rides to COMMIT, which writes the `change_log` provenance row (C.4).
+  rows$feature_resolution <- resolution
+  # C.4: confidence rides on the clean row's OWN field (change_log has no
+  # confidence column). A re-derived resolution is never as good as curation.
+  if ("confidence" %in% names(rows)) {
+    for (i in which(!is.na(resolution))) {
+      cap <- if (startsWith(resolution[[i]], "wo_site_inferred")) 0.8 else 0.9
+      c0 <- rows$confidence[[i]]
+      rows$confidence[[i]] <- if (is.na(c0)) cap else min(c0, cap)
+    }
+  }
 
   # kept = hits + committable-pending; held rows flow to review only.
   keep <- status %in% c("hit", "pending")
   kept <- rows[keep, , drop = FALSE]
 
-  review <- .rc_feature_review(rows, status, cand_list, work_order)
+  review <- .rc_feature_review(rows, status, cand_list, struct, work_order)
   list(kept = kept, review = review)
+}
+
+#' The single site every RESOLVED row of this event sits in (C.1/C.3), or NA
+#' when Layer 3 must not fire.
+#'
+#' Fails closed: skipped for an orphan event or a NA work order (an orphan is a
+#' bag of unattributed files, so its "single site" is meaningless), when no row
+#' resolved at all, when the resolved rows span >1 site, and when ANY resolved
+#' feature has a NA/blank site. "Resolved" means `uuid_feature` is set after
+#' Layers 1-2 - never a merely PARSED site, and never re-queried from the DB
+#' for this work order (a WO split across two runs would otherwise resolve the
+#' same raw differently per batching, and commit it twice).
+#' @keywords internal
+#' @noRd
+.rc_wo_site <- function(uuid_feature, registry, work_order, orphan) {
+  if (isTRUE(orphan) || length(work_order) != 1 || is.na(work_order)) return(NA_character_)
+  resolved <- uuid_feature[!is.na(uuid_feature)]
+  if (length(resolved) == 0) return(NA_character_)
+  s <- registry$feature$site[match(resolved, registry$feature$uuid)]
+  if (any(is.na(s)) || any(trimws(s) == "")) return(NA_character_)
+  s <- unique(trimws(s))
+  if (length(s) != 1) return(NA_character_)
+  s
 }
 
 #' Grouped `unknown_feature` review items (one per normalised feature_raw; the
@@ -283,7 +565,7 @@
 #' first of the group (seam S-4). Covers both committable-pending and held rows.
 #' @keywords internal
 #' @noRd
-.rc_feature_review <- function(rows, status, cand_list, work_order) {
+.rc_feature_review <- function(rows, status, cand_list, struct, work_order) {
   idx <- which(status %in% c("pending", "held"))
   if (length(idx) == 0) return(.rc_proto_review())
 
@@ -296,12 +578,19 @@
     refs <- rows$source_ref[g]
     fr <- rows$feature_raw[[g[[1]]]]
     cand <- cand_list[[g[[1]]]]
+    st <- struct[g]
+    st <- if (any(!is.na(st))) st[!is.na(st)][[1]] else NA_character_
     base <- paste0(
       paste(refs, collapse = ","), ",feature_raw=", fr,
       ",work_order=", work_order, ",n_rows=", length(g)
     )
+    # Precedence: an ambiguity is the actionable fact and wins the `subkind`;
+    # a structural parse (PLAN-15 B.7 - including the direct-boundary and
+    # assumed-site cases, which suggest but never resolve) is the fallback.
     payload <- if (!is.null(cand)) {
       paste0(base, ",subkind=ambiguous,candidates=", paste(cand, collapse = "|"))
+    } else if (!is.na(st)) {
+      paste0(base, ",subkind=structural,", st)
     } else {
       base
     }
@@ -1027,7 +1316,7 @@ reconcile_event <- function(event, con) {
   active <- qc$kept
 
   # R-11.5 (feature conveyor)
-  feat <- .rc_resolve_features(active, registry, event$work_order)
+  feat <- .rc_resolve_features(active, registry, event$work_order, isTRUE(event$orphan))
   add_review(feat$review)
   active <- feat$kept
 

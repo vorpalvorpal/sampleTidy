@@ -847,6 +847,33 @@ row (`date` at 14:00, `datetime` at the real instant) that asserts an incoming r
 the same local date MATCHES. Against today's code that test fails, which is the point —
 if it passes before the change, it is not testing the right thing.
 
+### F.12 Migration 001 broke the reporting views (DEFECT — found 2026-07-23)
+Two separate problems, both introduced by 001's view rebuild and both invisible
+until something tried to *read* the views.
+
+**(a) `v_measurement_epa` returns ZERO rows.** 001 rebuilt it filtering
+`fm.variant = 'epa'` — lowercase — while `feature_mask.variant` stores `'EPA'`.
+Measured on the post-001 rehearsal DB: `v_measurement` 95,739 rows,
+`v_measurement_epa` **0**. It does not error; it silently returns nothing, which
+is the worst available failure mode for a regulatory report. Check the other
+masked variants (`_old`, `_long`, `_gas_report`) for the same case mismatch.
+
+**(b) The rebuilt views are GUTTED.** Pre-001 `v_measurement` had 21 columns
+including `date`, `datetime`, `analyte_name`, `analyte_units`, `site`,
+`feature_flow`, `lon`/`lat` and the RL columns. Post-001 it has **five**:
+`uuid_analysis, uuid_sample, uuid_feature, feature_name, value`. The rebuild
+preserved the join topology (correctly rerouting through `feature_alias`) but
+dropped most of the projection. Any consumer that selected a dropped column now
+errors, and any consumer that only counted rows sees nothing wrong.
+
+001 is pinned and already applied — do **not** edit it. This is a follow-up
+migration that restores the projections and fixes the variant case. Fold it into
+the F.11 work, since F.11 has to rebuild the six `date`-referencing views anyway.
+
+Acceptance (must be able to FAIL): assert `v_measurement_epa` returns a row count
+**> 0** *and* equal to an independently computed base-table query for the same
+filter — a bare `>= 0` assertion is exactly the gate that let this through.
+
 ## Registry data changes pending the live cutover
 
 **The authoritative DB is not yet on the package schema.** `/Users/rjs/OneDrive - Blue

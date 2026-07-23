@@ -269,6 +269,49 @@
   review
 }
 
+#' Write a `change_log` provenance row for every NON-CURATED feature
+#' resolution (PLAN-15 C.4).
+#'
+#' Reconcile is read-only (A32) and cannot write `change_log`, so the reason
+#' rides on the clean row's `feature_resolution` field and the row is written
+#' here, mirroring `.fa_merge_samples`: `action = 'provenance'`, `tbl =
+#' 'sample'`, `field = 'uuid_feature_alias'`, `new` = the alias the row landed
+#' on, `reason` = `structural_parse: ...` / `wo_site_inferred: ...`. A Layer-1
+#' curated alias hit carries no reason and logs nothing - only a rule-derived
+#' resolution needs to be auditable and reversible.
+#'
+#' `change_log` has NO `confidence` column: confidence rides on the clean row's
+#' own `confidence` field and is deliberately NOT smuggled into `reason`.
+#' One row per distinct (sample, alias, reason) - several analyses of one
+#' sample share a single resolution event.
+#' @keywords internal
+#' @noRd
+.ct_record_resolution_provenance <- function(con, clean, actor) {
+  if (nrow(clean) == 0 || !("feature_resolution" %in% names(clean))) {
+    return(invisible(NULL))
+  }
+  idx <- which(!is.na(clean$feature_resolution))
+  if (length(idx) == 0) {
+    return(invisible(NULL))
+  }
+  has_sample <- "uuid_sample" %in% names(clean)
+  seen <- character(0)
+  for (i in idx) {
+    uuid_sample <- if (has_sample) clean$uuid_sample[[i]] else NA_character_
+    alias <- clean$uuid_feature_alias[[i]]
+    key <- paste(uuid_sample, alias, clean$feature_resolution[[i]], sep = "||")
+    if (key %in% seen) next
+    seen <- c(seen, key)
+    .st_write_change_log(
+      con, at = Sys.time(), actor = actor, action = "provenance", tbl = "sample",
+      uuid_row = uuid_sample, field = "uuid_feature_alias",
+      old = NA_character_, new = alias,
+      reason = clean$feature_resolution[[i]], source_hash = clean$source_hash[[i]]
+    )
+  }
+  invisible(NULL)
+}
+
 # ---- step 2: samples ----------------------------------------------------------
 
 #' Per-row feature keys for sample resolution (R-11.2 re-key)
@@ -686,6 +729,9 @@ commit_event <- function(event, resolved, con) {
       review <- .ct_rewrite_review_payloads(review, clean)
 
       clean$uuid_sample <- .ct_resolve_samples(con, clean, uuid_project, reason)
+      # PLAN-15 C.4: provenance for every structural / WO-site-inferred
+      # resolution, written once the sample uuid it attaches to exists.
+      .ct_record_resolution_provenance(con, clean, .ct_actor)
     }
     .ct_commit_analyses(con, clean, .ct_actor, reason)
 
