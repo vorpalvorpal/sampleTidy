@@ -881,22 +881,46 @@ canonical ALS reporting limits confirm the reading (benzene 0.001 mg/L = 1 µg/L
 xylene 0.002 = 2, TPH-C6-C9 0.020 = 20, TRH-C11-C16 0.100 = 100). Corrected by
 `/1000` through `db_update()`, each with `change_log` provenance.
 
-**Still open, deliberately not touched — these are NOT a unit slip:**
+**What `rl_low` actually holds — established by source tracing, 2026-07-23.**
+It is the **method LOR**, not the per-result reporting limit. The ALS ENMRG
+layout has a literal `LOR` column (column 4 of the analyte block) carrying the
+method's nominal limit, while each sample's own cell carries that result's
+reported limit (`"<0.10"`). When a lab raises the limit for one sample —
+dilution, matrix interference — the two legitimately differ.
 
-| Symptom | Rows | Origin |
-|---|---|---|
-| `quantified = FALSE` but `value <> rl_low` | 232 | 231 legacy, **1 ours** |
-| `quantified = TRUE` but `rl_low > value` — a measurement below its own RL | 355 | all legacy |
+So under Robin's convention (BDL ⇒ `value` = the reporting limit), **`value` is
+the effective limit for that result and `rl_low` is the method's nominal one.**
+`value <> rl_low` on a BDL row is therefore NOT automatically an error — it is
+the signature of a raised reporting limit. That reclassifies the residue:
 
-Their ratios are messy and non-decimal (208.333, 0.1, 50, 0.5, 100, 0.2, 250,
-0.833…), so no single conversion explains them; they need per-analyte source
-tracing against the original lab reports. Do **not** "fix" them by forcing
-`value = rl_low` — that would fabricate reporting limits.
+| Symptom | Rows | Origin | Verdict |
+|---|---|---|---|
+| BDL, `value > rl_low` — raised reporting limit | 110 | 109 legacy, 1 ours | **Legitimate. Not a defect.** |
+| BDL, `value < rl_low` — reported below the method's own LOR | 122 | all legacy | **Suspect.** |
+| `quantified = TRUE` but `rl_low > value` | 355 | all legacy | **Suspect.** |
 
-**The one row that is ours** — Fe(III), `value` 0.1, `rl_low` 0.05,
-`quantified = FALSE` — is the important one, because it means an adapter can
-emit a BDL row whose value is not its RL. Trace it to its source file and
-decide whether the adapter took the value and the RL from different columns.
+**The one row that is ours is CORRECT and needs no fix.** Traced in full:
+analysis `9b2a834c…`, Fe(III) on B.MW02, work order ES2610538, source
+`ES2610538_0_ENMRG.CSV` (sha256 `d836009f…`, the same hash recorded on the
+`change_log` row). Line 52 of that file reads
+
+```
+"Ferric Iron",,mg/L,0.05,,"<0.10","<0.05","<0.05",----,----,----,----
+```
+
+LOR `0.05`; B.MW02 is the first sample column and its result is `<0.10` — the
+only raised limit in the entire file. We stored `value = 0.10`, `rl_low = 0.05`,
+`quantified = FALSE`, which is faithful to both quantities. **The ingestion is
+right; the earlier "adapter took them from different columns" suspicion was
+wrong — it takes them from different columns because they ARE different
+quantities.**
+
+The 122 + 355 suspect rows are a different shape: e.g. every `EP075(SIM)A:
+Phenolic Compounds` result at `value` 0.0048 against an `rl_low` of 1 — a
+reported result 208× *below* its own stated LOR. Ratios are non-decimal
+(208.333, 50, 100, 250…), so no single conversion explains them; they need
+per-analyte source tracing against the original lab reports. Do **not** "fix"
+them by forcing `value = rl_low` — that would fabricate reporting limits.
 
 **Also confirmed 2026-07-23:** `rl_high` is NULL for **all 97,118** rows, so
 nothing reads it and R-11.16/F4's write path has never been exercised against
