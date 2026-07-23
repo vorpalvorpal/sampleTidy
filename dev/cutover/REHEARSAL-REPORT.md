@@ -52,7 +52,7 @@ R 4.4.3, duckdb 1.4.1, macOS 25.5.0.
 | 8a2. Same-day re-snapshot overwrite | PASS | 0.09 s |
 | 8b. `prune_snapshots()` safety | PASS | 0.20 s |
 | 9. Retire stale file to `old/` | PASS | 0.60 s |
-| 8-real. Snapshot into the **real** SharePoint folder | **NOT EXECUTED** — see Deviation D3 | — |
+| 8-real. Snapshot into the **real** SharePoint folder | **PASS** — see dedicated section | 0.08 s write, 90 s settle |
 | Extra. Re-ingest investigation (deliverable d) | **BLOCKING DEFECT FOUND** | ~40 s |
 
 **Total for steps 1–9: 9.2 s.** Every file operation is an APFS clone
@@ -355,18 +355,8 @@ Correct on all three counts: the aged `2026-01-05` was pruned; the last snapshot
 of each aged month (`2026-01-19`, `2026-02-11`) survived; and neither
 `qs_archive/` nor `.DS_Store` was touched.
 
-**Real-folder configuration verified read-only** (see Deviation D3 for why the
-write was not performed):
-
-```
-st_config("snapshot_dir") = /Users/rjs/Library/CloudStorage/OneDrive-BlueMountains
-                            CityCouncil/Sharepoint/waste_data - Environmental
-                            monitoring/data/backups
-dir.exists:  TRUE
-writable:    TRUE
-contents:    .DS_Store | qs_archive
-free space:  24Gi avail on /dev/disk3s1
-```
+**The real-folder test was subsequently executed** — see the dedicated section
+"Step 8 against the REAL SharePoint folder" below.
 
 ### 9. Retiring the stale pre-cutover file
 
@@ -505,7 +495,283 @@ in RUNBOOK finding F2. I have not invented a fix.
 
 ---
 
-## Deviations from the written runbook
+## Step 8 against the REAL SharePoint folder
+
+Executed 2026-07-23 13:49–13:56 under Robin's explicit permission for a
+rehearsal file to be written to SharePoint. Target:
+
+```
+/Users/rjs/Library/CloudStorage/OneDrive-BlueMountainsCityCouncil/Sharepoint/waste_data - Environmental monitoring/data/backups
+   exists TRUE, writable TRUE, 20 GiB free on /dev/disk3s1
+   contents on entry:  .DS_Store | qs_archive
+```
+
+Logs: `logs/rehearse-part6-real.log`, `logs/rehearse-part6-fix.log`.
+
+Because `snapshot_db()` hard-codes the name `monitoring_<date>.duckdb`
+(`R/snapshot.R:21`) and this task may not edit `R/`, the test ran in two parts:
+**6A** the real `snapshot_db()` verbatim into a clearly-named subdirectory
+`data/backups/REHEARSAL-DELETE-ME/`, and **6B** the identical
+`CHECKPOINT → copy-to-.tmp → file.rename()` sequence replicated inline, writing
+`REHEARSAL-DELETE-ME_monitoring_2026-07-23.duckdb` directly into
+`data/backups/` so the top-level directory-listing question was answered at the
+exact real destination. At no point did a file named `monitoring_2026-07-23.duckdb`
+exist at the top level of `data/backups/`.
+
+### 1. The `snapshot_db()` sequence completes
+
+```
+snapshot_db() -> …/data/backups/REHEARSAL-DELETE-ME/monitoring_2026-07-23.duckdb
+  0.08 s, 61,353,984 bytes
+IMMEDIATE listing of the subdir:  "monitoring_2026-07-23.duckdb"
+.tmp residue in subdir: 0
+```
+
+CHECKPOINT, copy-to-`.tmp` and `file.rename()` all completed. 0.08 s for
+61 MB — an APFS clone, not a byte copy.
+
+### 2. `.tmp` residue and conflict files — NONE
+
+Immediately after both writes, `ls -la@` of the real folder:
+
+```
+.DS_Store
+qs_archive/
+REHEARSAL-DELETE-ME/                                (dir, 13:49)
+REHEARSAL-DELETE-ME_monitoring_2026-07-23.duckdb    61353984  13:49
+```
+
+After a **90 s settle**, re-listed at t+30 / t+60 / t+90:
+
+```
+t+30s: .DS_Store | qs_archive | REHEARSAL-DELETE-ME | REHEARSAL-DELETE-ME_monitoring_2026-07-23.duckdb
+t+60s: (identical)
+t+90s: (identical)
+```
+
+No new entries appeared at any point. Conflict scan
+(`conflict`, `(1)`, `~$`, `.tmp`, `-<machine>-<date>`) → **(NONE)**.
+Recursive `.tmp` scan → **0**. The only extended attribute on either file is
+`com.apple.provenance`; no `com.apple.fileprovider.*` sync-state attribute and
+no `.DS_Store` churn.
+
+**Caveat, stated rather than glossed:** 90 s is enough to catch an eager sync
+artefact, not a slow server-side one. OneDrive may still generate a versioning
+or conflict record *server-side* on subsequent syncs; that is invisible from the
+local filesystem and I did not check the SharePoint web UI.
+
+### 3. Byte integrity and read-back
+
+```
+live sha256    : 73cd0087b0984744b38ff3a1d03d313764b01b46a88041ec5047888d660a124a
+snapshot sha256: 73cd0087b0984744b38ff3a1d03d313764b01b46a88041ec5047888d660a124a   MATCH
+rehearsal file : 73cd0087b0984744b38ff3a1d03d313764b01b46a88041ec5047888d660a124a   MATCH
+```
+
+Re-opened read-only from the OneDrive folder:
+
+```
+          table  live snapshot   ok
+1       feature   895      895 TRUE
+2 feature_alias  1992     1992 TRUE
+3        sample 15113    15113 TRUE
+4      analysis 95739    95739 TRUE
+5    lab_method   361      361 TRUE
+6       analyte   246      246 TRUE
+7         asset  2546     2546 TRUE
+8    change_log    64       64 TRUE
+all row counts match: TRUE
+```
+
+And again **after the 90 s settle**: SHA-256 unchanged, `feature` = 895, first
+4,096 bytes readable. Valid DuckDB, stable.
+
+### 4. Same-day re-snapshot against the real folder
+
+```
+re-snapshot 0.13 s -> same path
+same path: TRUE
+inode before: 108637438   after: 108637447    (destination replaced)
+mtime  before: 13:49:26   after: 13:49:27
+file count still 1: TRUE
+```
+
+The second same-day snapshot **overwrote in place**. No `(1)` suffix, no
+conflict copy, no proliferation. A dedicated rename-onto-existing test confirmed
+the semantics:
+
+```
+dest inode before = 108647797, after = 108647812, == .tmp inode 108647812: TRUE
+```
+
+i.e. the destination is atomically **replaced** by the `.tmp` inode; a reader
+holding the old file keeps reading the old inode until it closes. That is the
+property DESIGN §9.1 wants and it holds on the OneDrive mount.
+
+### 5. `prune_snapshots()` — dry behaviour only, nothing deleted
+
+`prune_snapshots()` can only ever remove files matching the anchored,
+non-recursive pattern `^monitoring_\d{4}-\d{2}-\d{2}\.duckdb$`. Enumerated
+against the real folder:
+
+```
+prune_snapshots() matches: (NONE)
+neighbours NOT matched: .DS_Store, qs_archive, REHEARSAL-DELETE-ME,
+                        REHEARSAL-DELETE-ME_monitoring_2026-07-23.duckdb
+```
+
+A prune of the real folder is therefore a **provable no-op**. **I did not call
+it** — Robin asked for dry behaviour only. The behavioural test (aged dailies
+pruned, each month's last kept, `qs_archive/` and `.DS_Store` untouched) stands
+from the simulated folder.
+
+### 6. Dehydration, and whether `file.rename()` degrades to copy+delete
+
+**Not dehydrated.** Both landed files report allocated blocks equal to their
+logical size, and no dataless flag:
+
+```
+REHEARSAL-DELETE-ME_monitoring_2026-07-23.duckdb
+  dev=16777231 inode=108637449 size=61353984 blocks=119832 links=1 flags=-
+  allocated (blocks*512) = 61,353,984  vs logical 61,353,984  -> fully materialised: TRUE
+  xattrs: com.apple.provenance
+```
+
+A Files-On-Demand placeholder reports the logical size with ~0 blocks and a
+dataless/`UF_` flag; neither file shows that, before or after the settle.
+
+**`file.rename()` is a true atomic rename, not copy+delete:**
+
+```
+  .tmp   dev=16777231 inode=108647797
+  rename ok=TRUE (0.0003 s for a 61 MB file)
+  final  dev=16777231 inode=108647797
+  INODE PRESERVED: TRUE      same device: TRUE      .tmp gone: TRUE
+```
+
+The inode survives and the call takes 0.3 ms. A copy+delete degradation would
+change the inode and cost real I/O. The `CloudStorage` mount is device
+`16777231` — the same device as `/System/Volumes/Data`, i.e. it is a normal
+APFS directory that the File Provider daemon watches, not a separate volume.
+**That is why the rename is atomic, and it is a load-bearing precondition: if
+OneDrive is ever reconfigured so the synced tree lands on a different volume,
+`file.rename()` would fail (`EXDEV`) and `snapshot_db()` would abort at its
+"Failed to finalize snapshot" branch.**
+
+### Cleanup — the folder is exactly as it was found
+
+```
+================ CLEANUP ================
+  removed REHEARSAL-DELETE-ME_monitoring_2026-07-23.duckdb : TRUE
+  removed REHEARSAL-DELETE-ME_renametest.duckdb : TRUE
+  subdir contents: monitoring_2026-07-23.duckdb
+  subdir removed: TRUE
+  stray REHEARSAL/.tmp entries remaining: (NONE)
+
+FINAL state of the real backups dir:
+drwx------   4 rjs  staff   128 23 Jul 13:52 .
+-rw-r--r--@  1 rjs  staff  6148 23 Jul 13:06 .DS_Store
+drwx------  13 rjs  staff   416 17 Jul 22:53 qs_archive
+
+qs_archive intact: TRUE with 11 entries
+.DS_Store intact: TRUE
+```
+
+Re-checked at t+30 / t+60 / t+90 / t+120 s after the deletions — `backups/`
+stayed `.DS_Store | qs_archive`, and `data/` stayed
+`.DS_Store | backups | before_mask | monitoring.duckdb | old`. A final recursive
+scan of the whole `data/` tree for `REHEARSAL`, `.tmp`, `conflict` or `(n)`
+artefacts returned **(NONE)**.
+
+**No `.tmp` and no conflict file remains. Nothing was deleted that I did not
+create. `qs_archive/` (11 entries) and `.DS_Store` are untouched.**
+
+The authoritative DB is likewise untouched:
+
+```
+dev=16777231 inode=106169187 size=51654656 blocks=100888 links=1 flags=-
+sha256 9902effecc2b39dc37cd8c796fbac3df5850663b6ebb940a9719dd3c6ea7867d
+```
+
+— same inode and same digest as recorded at the start of the rehearsal.
+
+### Two methodology errors in the first attempt, found and corrected
+
+Reported because they materially affect what the first run's output means:
+
+1. **The "INODE PRESERVED: TRUE" line in the first run was a FALSE POSITIVE.**
+   `system2("stat", c("-f", "dev=%d inode=%i size=%z …", path))` passes the
+   format string unquoted, so the shell split it and `stat` returned only
+   `dev=16777231`. The comparison `sub(".*inode=", "", x)` then compared
+   `"dev=16777231"` with itself and trivially matched. Redone with **one format
+   token per `stat` call**; the result above (inode `108647797` on both sides) is
+   the real measurement.
+2. **The first script's cleanup never ran.** It registered cleanup via
+   `on.exit()` at script top level, which does not fire under `Rscript` — so the
+   rehearsal files sat in SharePoint for ~3 minutes longer than intended before
+   the follow-up script removed them explicitly. No harm (they were
+   unambiguously named and are now gone), but `on.exit()` at top level is not a
+   cleanup mechanism, and the runbook's own steps must not rely on it.
+
+---
+
+## Impact of dropping `sample.date` / `sample.date_start`
+
+Robin has ruled that `sample.date` and `sample.date_start` are to be dropped as
+redundant artefacts (the Sydney calendar date of `datetime` equals that of
+`date` in 15,107 of 15,111 rows). **That workstream is not mine and I have not
+started it.** This is the handover list of everything in my deliverables — and,
+because they are load-bearing, in the package — that asserts on those columns.
+
+### In `dev/cutover/verify.R` (mine — must be revisited)
+
+| Check | Line | Current assertion | Needs |
+|---|---|---|---|
+| `V13a` | `verify.R:323` | `SELECT uuid, CAST(date AS DATE) AS d, datetime …` then `d == "2025-05-28"` **and** `datetime` date part `== "2025-05-29"` | Drop the `date` half. The `datetime` half already asserts the correct local date and is the half that survives. |
+| `V13b` | `verify.R:336` | `… WHERE uuid IN (…5 uuids…) AND CAST(date AS DATE) = DATE '2025-05-28'` → expect 5 | Re-express against `datetime` at Sydney-local granularity: the five rows share local date **2025-05-29**, so the literal changes from `2025-05-28` to `2025-05-29`. **Do not just delete this check** — it is the one that proves the correction landed on the right rows. |
+
+No other check touches `date`/`date_start`. `V01.sample` is a row count;
+`V03`/`V04` are join-integrity; `V12`/`V14` are method/provenance.
+
+### In `dev/cutover/registry-changes.R` (mine — must be revisited)
+
+`.cx_es2517594_date` writes **four** fields per sample: `date`, `date_start`,
+`datetime`, `datetime_start`. After the drop it writes only `datetime` /
+`datetime_start` (`2025-05-29 02:50:00` and `03:10:00` UTC — unchanged values;
+those are already correct in the constant). The long comment block above it
+documents the AEST-midnight-as-naive-UTC storage convention and would become
+historical rather than operative. `verify.R`'s `V14d` counts
+`field IN ('date','datetime')` change_log rows and expects `>= 4`; after the drop
+a fresh run produces 2 per sample, not 4, so the threshold must drop to `>= 2`
+(or the check re-scoped to `datetime` only). **On an already-cut-over DB the
+historical rows remain, so this check keeps passing — which would hide the
+change.**
+
+### In `dev/cutover/RUNBOOK.md` (mine — editorial)
+
+- Step 6's table, row D.4b ("date corrected from 2025-09-08 … to 2025-05-28").
+- Finding **F2**'s statement of cause (already re-written by the coordinator to
+  reflect the `datetime`-is-not-to-be-touched ruling).
+
+### In `R/` and `dev/migrations/` (NOT mine — flagging because they are load-bearing)
+
+These are the reason the drop is a real migration and not a column deletion:
+
+| File | Line | Use |
+|---|---|---|
+| `R/commit.R` | 374, 382 | `.ct_find_or_create_sample()` matches on `CAST(date AS DATE) = ?` — **the sample-reuse key**. |
+| `R/commit.R` | 415 | writes `date = midnight`, `date_start = NA` on every new sample. |
+| `R/commit.R` | 70 | `date_start`/`date_end` on the project row (different table — unaffected). |
+| `R/reconcile.R` | 1025 | `.rc_find_existing()` matches on `CAST(s.date AS DATE) = ?` — **the idempotency key**. |
+| `R/feature-alias.R` | 172, 175 | `.fa_find_collisions()` defines a collision as same-feature-same-`CAST(date AS DATE)` — the D5/C14 merge rule. |
+| `dev/migrations/001-alias-indirection.R` | 63 | `mig001_counts_checksum()` selects `uuid, "date"` from `sample` — the checksum's shape changes, so the 001 marker's meaning changes. |
+| `dev/migrations/001-alias-indirection.R` | 428–439, 513 | the rebuilt `sample` DDL declares `date`/`date_start`; `v_feature_dates` is `MIN(s.date)`/`MAX(s.date)`. |
+| view `v_feature_dates` | — | must be redefined on `datetime`. |
+
+Note the interaction with the standing policy: `R/commit.R:374/382` and
+`R/reconcile.R:1025` are exactly the two predicates behind finding **F2**.
+Whoever does the drop is touching the same code path as whoever builds the
+work-order-level ingest guard — they should be sequenced, not run in parallel.
 
 **D1 — step 6 aborted on the first attempt (fixed, re-rehearsed clean).**
 `cutover_curate_aliases()` resolved its target feature unconditionally, so the
@@ -524,24 +790,19 @@ alias, which post-001 leaves the new feature unreachable by its own name
 (894 self vs 895 features). The general fix belongs in `add_feature()` and is
 flagged, not patched.
 
-**D3 — the real-SharePoint snapshot write was NOT executed.** The runbook's
-step 8 requires a snapshot into the actual OneDrive-synced `data/backups/`, and
-the coordinator asked for it explicitly. **The permission layer denied writing
-into the SharePoint tree**, and I did not work around it: writing a 61 MB
-rehearsal-content file into a live synced production folder is exactly the kind
-of side effect that should require the operator's own consent. What I could
-verify without writing: the destination resolves from `st_config()`, exists, is
-writable, has 24 GiB free, and contains only `.DS_Store` and `qs_archive/`. The
-full round-trip (checkpoint → `.tmp` → atomic rename → re-open read-only →
-row-count compare → prune) was exercised end-to-end against a simulated folder
-on the same filesystem and OS.
-**Residual risk:** OneDrive's own behaviour on the `file.rename()` — placeholder
-dehydration, or sync-in-progress locking the destination — is the one thing a
-simulated folder cannot reproduce, and it is precisely the behaviour that
-motivated DESIGN §9.1. **The operator must run `cutover_verify_snapshot()`
-against the real folder as step 8 and confirm it before declaring cutover
-complete.** Expected output is the 8-row `live == snapshot` tibble shown above
-plus `snapshot round-trip OK`.
+**D3 — the real-SharePoint snapshot write was initially declined, then executed
+on Robin's explicit permission.** On the first pass the permission layer denied
+writing into the SharePoint tree and I did not work around it. Robin then gave
+specific permission for a rehearsal file, and the full test was run against the
+real folder — see "Step 8 against the REAL SharePoint folder" above. Result:
+**the residual risk did not materialise.** `file.rename()` is a true atomic
+rename on the CloudStorage mount (inode preserved, 0.3 ms), nothing was
+dehydrated, no `.tmp` or conflict file appeared within a 90 s settle, the
+same-day re-snapshot overwrote in place, byte integrity held, and the folder was
+restored exactly as found. Two methodology errors in the first attempt (a
+false-positive inode comparison and a cleanup that never fired) are documented
+in that section. The one thing still unverified is OneDrive's **server-side**
+versioning/conflict behaviour, which is not visible from the local filesystem.
 
 **D4 — migration 003 was not rehearsed** because it does not exist. Step 5c ran
 as an explicit placeholder and `cutover_verify()` ran with `require_003 = FALSE`.
@@ -600,6 +861,17 @@ which was read but never written.
 6. **Migration 003 does not exist.** Deferring it is safe (review, never a wrong
    feature) but leaves the 17 E.5 alias arms parked and most of the review burden
    in place.
+7. **`snapshot_db()`'s atomicity depends on the synced tree being on the same
+   APFS volume** (`/dev/disk3s1`, device `16777231`) as the `.tmp` it renames
+   from. It is today. If OneDrive is ever moved to a different volume,
+   `file.rename()` returns `EXDEV`/FALSE and `snapshot_db()` aborts at
+   "Failed to finalize snapshot" — which is the safe direction, but worth a
+   pre-flight assertion if the sync location is ever changed.
+8. **Whoever drops `sample.date`/`date_start` and whoever builds the
+   work-order-level ingest guard are touching the same two predicates**
+   (`R/commit.R:374/382`, `R/reconcile.R:1025`). Sequence them; see the
+   "Impact of dropping `sample.date` / `sample.date_start`" section for the
+   full dependency list.
 7. **Incidental, unrelated to cutover:** `~/.Renviron` stores an
    `ANTHROPIC_API_KEY` and three other API keys in plaintext. Noticed while
    verifying `SAMPLETIDY_SNAPSHOT_DIR`; flagged, not touched.
