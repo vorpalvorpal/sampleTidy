@@ -12,7 +12,10 @@ cases <- tibble::tribble(
   "BDL",               NA_real_,   FALSE,       NA_real_, NA_real_, NA_character_,     NA_character_,
   "NS",                NA_real_,   NA,          NA_real_, NA_real_, NA_character_,     "no_sample",
   "----",              NA_real_,   NA,          NA_real_, NA_real_, NA_character_,     "not_computable",
-  "Clear, low flow",   NA_real_,   TRUE,        NA_real_, NA_real_, "Clear, low flow", NA_character_,
+  # quantified NA, not TRUE, for text: changed 2026-07-23 (Robin) - see
+  # PLAN-CHANGE-REQUESTS.md. A qualitative observation is not a measurement,
+  # so no detection state is true of it.
+  "Clear, low flow",   NA_real_,   NA,          NA_real_, NA_real_, "Clear, low flow", NA_character_,
   "",                  NA_real_,   NA,          NA_real_, NA_real_, NA_character_,     "empty"
 )
 
@@ -59,4 +62,48 @@ test_that("R-2.3: parse_value() is vectorised and returns one row per input, in 
   expect_equal(nrow(result), 3)
   expect_equal(result$value_num, c(2.3, 0.01, NA_real_))
   expect_equal(result$skip_reason, c(NA_character_, NA_character_, "no_sample"))
+})
+
+# ---- quantified is a tri-state, and NA is meaningful ------------------------
+# Ruled by Robin 2026-07-23: `quantified` describes a MEASUREMENT. A qualitative
+# observation is not one, so it must be NA - neither TRUE nor FALSE. TRUE is the
+# dangerous error: in the live registry 23 of the 315 text rows record that no
+# sample was taken ("Could not find due to long grass"), and marking those
+# quantified asserts an observation that never happened.
+
+test_that("R-2.3: a text result is quantified = NA, not TRUE", {
+  for (txt in c("Cloudy", "Dry", "Low flow Clear", "Non Discharge",
+                "Could not find due to long grass", "Decomissioned")) {
+    result <- parse_value(txt)
+    expect_true(is.na(result$quantified[[1]]),
+                info = paste("text result should be NA-quantified:", txt))
+    expect_equal(result$value_chr[[1]], txt)
+    expect_true(is.na(result$value_num[[1]]))
+  }
+})
+
+test_that("R-2.3: among COMMITTED rows, quantified IS NA iff value_chr IS NOT NA", {
+  # Scope matters: skipped inputs ("NS", "----", "") are NA on BOTH columns and
+  # never reach the database, so the equivalence is asserted over the rows that
+  # actually get committed. Skips are included here to prove they are excluded
+  # by skip_reason and not by luck.
+  inputs <- c("2.3", "<0.01", ">2000", "BDL", "1,320", "  2.3  ",
+              "Cloudy", "Dry", "Clear, low flow", "Non Discharge",
+              "NS", "----", "")
+  result <- parse_value(inputs)
+  kept <- result[is.na(result$skip_reason), ]
+
+  expect_identical(is.na(kept$quantified), !is.na(kept$value_chr))
+
+  # Not vacuous: both sides of the equivalence must be exercised, and the
+  # skipped rows must really have been removed.
+  expect_gt(sum(is.na(kept$quantified)), 0)
+  expect_gt(sum(!is.na(kept$quantified)), 0)
+  expect_equal(nrow(kept), length(inputs) - 3L)
+})
+
+test_that("R-2.3: a numeric result is still quantified = TRUE (no over-correction)", {
+  result <- parse_value(c("2.3", "1,320", "0"))
+  expect_true(all(result$quantified))
+  expect_true(all(is.na(result$value_chr)))
 })

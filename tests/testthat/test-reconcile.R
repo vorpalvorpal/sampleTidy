@@ -339,7 +339,7 @@ test_that("R-8.4: a BDL row keeps quantified FALSE with a converted rl", {
   expect_equal(row$rl_converted, 200, tolerance = 1e-9)
 })
 
-test_that("R-8.4: text-only results pass through unconverted with quantified TRUE", {
+test_that("R-8.4: text-only results pass through unconverted with quantified NA", {
   path <- seed_db()
   con <- seed_con(path)
   on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
@@ -353,7 +353,10 @@ test_that("R-8.4: text-only results pass through unconverted with quantified TRU
   out <- reconcile_event(event, con)
   row <- out$clean[out$clean$source_ref == "r1", ]
   expect_equal(nrow(row), 1)
-  expect_true(row$quantified)
+  # NA, not TRUE, since 2026-07-23: a qualitative observation is not a
+  # measurement, so no detection state is true of it. See PLAN-CHANGE-REQUESTS.
+  expect_true(is.na(row$quantified))
+  expect_equal(row$value_chr, "Clear, low flow")
 })
 
 # ---- R-11.16: quantified from parse_value(); write rl_high (F4) -----------
@@ -1115,7 +1118,13 @@ test_that("R-11.5a/R-11.7: a dangling FEATURE re-ingested from a different file 
     source_ref = "r1", source_hash = "different-bytes-hash-feature",
     feature_raw = "T.S09", analyte_raw = "pH Value", org = "ALS",
     method_raw = "EA005P: pH by PC Titrator", cas_number = NA_character_,
-    units_raw = "pH Unit", value_raw = "7.10 (resent)",
+    # Different BYTES, same measurement. The differing bytes are carried by
+    # source_hash above; value_raw is reformatted rather than annotated. It used
+    # to read "7.10 (resent)", which parse_value() classifies as TEXT - that
+    # only matched because text was once quantified = TRUE while carrying the
+    # adapter's numeric value_num, an incoherent pairing. Since text is now
+    # quantified = NA (2026-07-23), the fixture must be a real numeric restatement.
+    units_raw = "pH Unit", value_raw = "7.100",
     value_num = 7.10, below_detection = FALSE, rl = 0.01,
     sample_datetime_raw = "10 May 2025 08:00"
   ))
@@ -1136,7 +1145,9 @@ test_that("R-11.5a/R-11.7: a dangling ANALYTE re-ingested from a different file 
     source_ref = "r1", source_hash = "different-bytes-hash-analyte",
     feature_raw = "T.S01", analyte_raw = "SULPHATE",
     method_raw = "ea045: sulphate by ic", org = "ALS", cas_number = NA_character_,
-    units_raw = "mg/L", value_raw = "12.0 (resent)",
+    # Reformatted numeric restatement, not an annotated string - see the note in
+    # the feature-side test above.
+    units_raw = "mg/L", value_raw = "12.00",
     value_num = 12, below_detection = FALSE, rl = 0.5,
     sample_datetime_raw = "12 May 2025 08:15"
   ))
@@ -2636,4 +2647,31 @@ test_that("C.5: one curated cross-site alias suppresses Layer 3 for the WHOLE ev
   c2 <- out_x$clean[out_x$clean$source_ref == "candidate", ]
   expect_true(c2$feature_pending)
   expect_true(is.na(c2$uuid_feature))
+})
+
+test_that("A14/R-8.7: a re-ingested TEXT result matches as already_present and does NOT commit twice (quantified NA compares equal to NA)", {
+  # Regression guard for the 2026-07-23 tri-state change. `quantified` is NA for
+  # every text result; if .rc_values_equal() treats NA as unmatchable, the same
+  # qualitative observation is re-committed on every re-ingest. Both the equal
+  # case and the genuinely-different case are asserted, so the test cannot pass
+  # by making everything match.
+  expect_true(.rc_values_equal(
+    inc_value = NA_real_, inc_chr = "Cloudy", inc_quant = NA,
+    exist_value = NA_real_, exist_chr = "Cloudy", exist_quant = NA))
+
+  expect_false(.rc_values_equal(
+    inc_value = NA_real_, inc_chr = "Cloudy", inc_quant = NA,
+    exist_value = NA_real_, exist_chr = "Clear", exist_quant = NA))
+
+  # NA on one side only is a real difference, not a match
+  expect_false(.rc_values_equal(
+    inc_value = NA_real_, inc_chr = "Cloudy", inc_quant = NA,
+    exist_value = 7.1, exist_chr = NA_character_, exist_quant = TRUE))
+  expect_false(.rc_values_equal(
+    inc_value = 7.1, inc_chr = NA_character_, inc_quant = TRUE,
+    exist_value = NA_real_, exist_chr = "Cloudy", exist_quant = NA))
+
+  # numeric behaviour is unchanged
+  expect_true(.rc_values_equal(7.1, NA_character_, TRUE, 7.1, NA_character_, TRUE))
+  expect_false(.rc_values_equal(7.1, NA_character_, TRUE, 7.1, NA_character_, FALSE))
 })

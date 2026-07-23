@@ -315,7 +315,11 @@ test_that("R-10.6: NAMESPACE exports equal the CONTRACT-pinned public API exactl
     "ir_results", "ir_samples", "st_config", "with_db_write", "ensure_schema",
     "correct_value", "add_feature", "add_analyte", "add_project",
     "db_append", "db_update", "db_delete", "review_queue",
-    "snapshot_db", "prune_snapshots"
+    "snapshot_db", "prune_snapshots",
+    # PLAN-15 curation API, added 2026-07-23. The pin is a deliberate gate on
+    # the public surface, so new exports belong here explicitly.
+    "pending_features", "pending_analytes",
+    "confirm_feature_aliases", "confirm_analyte_methods"
   )
   actual <- getNamespaceExports("sampleTidy")
   expect_setequal(actual, pinned)

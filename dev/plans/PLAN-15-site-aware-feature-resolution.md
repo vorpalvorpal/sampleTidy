@@ -868,7 +868,7 @@ row (`date` at 14:00, `datetime` at the real instant) that asserts an incoming r
 the same local date MATCHES. Against today's code that test fails, which is the point —
 if it passes before the change, it is not testing the right thing.
 
-### F.16 Reporting-limit residue after the 2026-07-23 `rl_low` correction (OPEN)
+### F.16 Reporting-limit residue after the 2026-07-23 `rl_low` correction (RESOLVED 2026-07-23)
 **The convention (Robin, 2026-07-23):** *"Where a value is BDL its value is set
 as the reporting limit and then quantified is set to FALSE."* So for every
 `quantified = FALSE` row, `value == rl_low` must hold. That is now a testable
@@ -922,16 +922,53 @@ reported result 208× *below* its own stated LOR. Ratios are non-decimal
 per-analyte source tracing against the original lab reports. Do **not** "fix"
 them by forcing `value = rl_low` — that would fabricate reporting limits.
 
+**RESOLVED 2026-07-23 — the diagnosis above was WRONG and the 477 rows are fixed.**
+A sub-agent EDA (`dev/EDA-rl-quantified-2026-07-23.md`), independently verified,
+established that all 477 are **one bug**: `rl_low` held the method LOR in
+**µg/L** while `value` was correctly converted to **mg/L**.
+
+* `analysis.rl_low / lab_method.rl_low` = **exactly 1000** on 440 rows and
+  **100** on 4 CFU rows. The non-suspect population sits at **1.00** (67,452 rows).
+* The "208× below its own LOR" anchor example **collapses**: those are ALS's
+  `<4.8 µg/L` cells on leachate, i.e. a 4.8× *raised* limit. 208.333 is just
+  `1/0.0048`, an artefact of comparing µg/L to mg/L. The "non-decimal ratios that
+  no conversion explains" were never real.
+* A1 and A2 are the same phenomenon, split only by whether the source cell was
+  `<x` or a bare number.
+* **Why the 3,190-row fix missed them:** its predicate required
+  `old_rl == 1000 * value` exactly, which only ever matches a non-detect reported
+  AT the nominal LOR. It structurally cannot catch a raised limit (A1) or a real
+  detection (A2). A worked lesson in a gate that looks total and is not.
+
+Applied through `db_update()` (477 change_log rows): `rl_low = lab_method.rl_low`
+where a reference existed — the divisor is **100, not 1000, for the CFU rows**, so
+a blanket `/1000` would have been wrong — and `/1000` for the 33 rows with no
+`lab_method` reference, all mg/L phenols/TRH carrying `rl_low = 1`. Zero
+contradictory rows remain.
+
+**Correction to the sub-agent's report:** it called these "not legacy" from sample
+dates running to 2026-03. Sample date is not write time. **0 of 477 have
+`change_log` provenance**, so none were written by sampleTidy; the legacy system
+was ingesting until the cutover. This is legacy repair, not an active adapter bug.
+
+**Still open (deliberately not widened):** 28 further rows carry the same
+ratio-100/1000 signature but are not internally contradictory (`value > rl_low`
+already holds), so they were left alone rather than swept in. They are very
+probably the same bug and worth a ruling.
+
 **Also confirmed 2026-07-23:** `rl_high` is NULL for **all 97,118** rows, so
 nothing reads it and R-11.16/F4's write path has never been exercised against
 real data.
 
-**Related `quantified` note:** `R/commit.R:509` computes
-`isTRUE(clean$quantified[[i]])`, which maps NA to FALSE — so sampleTidy can
-never write `quantified = NA`, and an unknown detection state is silently
-recorded as below-detection. The legacy corpus holds 315 NA rows, so the
-tri-state is real in the data and the write path collapses it. Decide whether
-that coercion is intended.
+**Related `quantified` note — RESOLVED 2026-07-23, see PLAN-CHANGE-REQUESTS.md.**
+Ruled by Robin: `quantified` is NA for every text result, because a qualitative
+observation is not a measurement. The live data was already correct (all 315 NA;
+**zero** rows with `value_chr` set and `quantified` non-NULL) — only the write
+path was wrong, in `R/values.R` (text → TRUE) and `R/commit.R` (`isTRUE()`
+collapsing NA → FALSE). Fixing it exposed a genuine defect in
+`.rc_values_equal()`, which treated NA as unmatchable and so would have
+**re-committed** any re-ingested qualitative observation. 23 of the 315 rows
+record that no sample was taken, which is why TRUE was the dangerous option.
 
 ### F.13 `time_known` flag on `sample` (FILED FOR LATER — Robin, 2026-07-23)
 Robin: *"Where time is unknown set it to 10am (since that is a best guess). Your
@@ -1070,7 +1107,7 @@ AND **that the row is reachable from the work order** AND that a subsequent
 would pass while the PDF still sat unclaimed, and one that stops at the archive
 copy would pass while the file was retained but unattached.
 
-### F.18 Legacy `asset` rows with no retained bytes (OPEN — found 2026-07-23)
+### F.18 Legacy `asset` rows with no retained bytes (RESOLVED 2026-07-23)
 **1,272 of 2,556 `asset` rows have no archive copy on disk**, and a sample of 40
 of their filenames could not be found anywhere under the `assets/` tree. These
 are legacy rows migrated in with the pre-package data; the 1,258 legacy rows
@@ -1096,7 +1133,46 @@ area is not necessarily the same bytes. Also relevant to F.17: **744 of the 1,27
 are PDFs**, the very class F.17 is about, which suggests the old system never
 retained them reliably either.
 
-Needs a decision, now better informed: attempt the 254-row hash-verified
+**RESOLVED 2026-07-23. The recovery-by-hash plan above could not be executed,
+and the reason is the durable finding: `asset.hash` is NOT a content digest for
+legacy rows.**
+
+* 2,407 legacy rows store a **32-char** hash; only the **26** rows sampleTidy
+  wrote itself store SHA-256. `hash_file()` computes SHA-256, so the first
+  recovery pass compared SHA-256 against MD5-length values and returned "0 of
+  1,272 recoverable" — an artefact of a test that could not pass.
+* MD5 does not explain them either: **0 of 120** non-empty archive copies
+  reproduce their stored 32-char hash. The archive is healthy (3 zero-byte files
+  of 1,284), so this is the hash column, not the bytes.
+* What the value actually is remains **unknown**. 151 of 156 duplicate-hash
+  groups share a work order, which looked like the answer, but the converse fails
+  outright: **0 of 356** multi-file work orders have all their rows on one hash.
+  Recorded as unexplained rather than guessed at.
+* **Lesson, now 9×: always run a POSITIVE CONTROL before trusting a negative
+  result.** Verifying 60 rows that *do* have copies is what exposed both wrong
+  algorithms. Without it, 1,272 rows would have been deleted on the strength of a
+  check that was structurally incapable of passing.
+
+**What was done.** 1,272 rows with no file were deleted (`db_delete`, all logged,
+backed up to `dev/asset-rows-deleted-2026-07-23.csv`), then **180 were restored**:
+153 whose file was found elsewhere in the SharePoint tree and matched by FILENAME
+ONLY (Robin authorised name-only matching), and **27 that had their bytes all
+along under the OLD FLAT layout** `<archive_dir>/<uuid>` — the deletion test only
+looked for the nested `<archive_dir>/<uuid>/<filename>`. Those 27 are the
+extensionless-file shape already recorded in PLAN-CHANGE-REQUESTS.md (33
+extensionless files vs 1,565 directories) and routed to R-12.17; **any future
+code that asks "is this asset retained?" must check BOTH layouts.** Their files
+were migrated to the nested layout, md5-verified unchanged.
+
+**8 rows were deliberately NOT restored**: their same-named candidates differ in
+content (e.g. `ES2602084_COC.pdf` at 549,541 vs 550,073 bytes), and picking one
+would put arbitrary bytes behind an evidence record. Listed in the backup CSV.
+
+Final state: **1,464 asset rows, every one with its file, none flat.** The 1,092
+rows whose bytes exist nowhere are gone from the registry rather than silently
+overstating what is retained.
+
+Superseded decision list: attempt the 254-row hash-verified
 recovery, and mark the remainder (and any candidate that fails its hash check) as
 `bytes_not_retained` so the registry stops claiming a copy exists.
 

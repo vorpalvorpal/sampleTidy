@@ -60,7 +60,15 @@ parse_value <- function(value_raw) {
 
   quantified <- rep(NA, n)
   quantified[is_below | is_above | is_bdl_word] <- FALSE
-  quantified[is_plain_numeric | is_text] <- TRUE
+  # Text results stay NA. `quantified` is a statement about a MEASUREMENT -
+  # whether the analyte was detected above the reporting limit - and a
+  # qualitative observation ("Cloudy", "Dry", "Could not find due to long
+  # grass") is not a measurement at all, so neither TRUE nor FALSE is true of
+  # it. TRUE would be the worse error: 23 of the 315 such rows in the live
+  # registry record that NO SAMPLE WAS TAKEN, and marking those quantified
+  # asserts an observation that never happened. Ruled by Robin 2026-07-23.
+  # The invariant this establishes: quantified IS NULL <=> value_chr IS NOT NULL.
+  quantified[is_plain_numeric] <- TRUE
 
   rl_low <- rep(NA_real_, n)
   rl_low[is_below] <- marker_val[is_below]

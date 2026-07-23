@@ -664,3 +664,52 @@ event" is unsatisfiable with one file per uuid.
 bases of the same analyte; and `B.TS39`'s cypher holds `B.S39`, `B.E39`, `B.39`,
 `B.TS40` — the plan-11 alias problem in miniature, with `B.E39` appearing in the
 report itself as a live mis-transcription.
+
+---
+
+## R-2.3 / R-8.4 / R-11.16 — `quantified` is a tri-state; text results are NA, not TRUE (Robin, 2026-07-23)
+
+**Pinned behaviour changed.** PLAN-02's R-2.3 table pinned
+`parse_value("Clear, low flow") -> quantified = TRUE`. It is now **NA**.
+
+**Why.** `quantified` states whether an analyte was detected above the reporting
+limit — a claim about a *measurement*. A qualitative observation is not a
+measurement, so neither TRUE nor FALSE is true of it. TRUE is the more dangerous
+error: of the 315 text-valued rows in the live registry, **23 record that no
+sample was taken at all** (`No sample due to snakes and over grown grass`,
+`Could not find due to long grass`, `Decomissioned`, `No Access`), and marking
+those quantified asserts an observation that never happened. A further 50 record
+a non-event (`Dry`, `No flow`, `Non Discharge`).
+
+**The live data was already correct** — all 315 rows are NULL, and there are
+**zero** rows with `value_chr` set and `quantified` non-NULL. No migration is
+needed. Only the write path was wrong, in two places:
+
+| Site | Was | Now |
+|---|---|---|
+| `R/values.R` | `quantified[is_plain_numeric \| is_text] <- TRUE` | `quantified[is_plain_numeric] <- TRUE` |
+| `R/commit.R` | `isTRUE(clean$quantified[[i]])` — maps NA to **FALSE** | NA is preserved |
+
+The `commit.R` half is the worse of the two: it silently recorded an unknown or
+non-measurement state as *below detection*.
+
+**Consequential fix in `R/reconcile.R` — this one was a real defect, not a test
+update.** `.rc_values_equal()` began `if (is.na(inc_quant) || is.na(exist_quant))
+return(FALSE)`. With text now NA on both sides, two identical qualitative results
+could never compare equal, so a re-ingested observation would never be recognised
+as `already_present` and **would commit a second time**. NA now compares equal to
+NA; an NA/non-NA mismatch is still a difference.
+
+**Invariant established, and asserted in the tests:** among committed rows,
+`quantified IS NULL` ⟺ `value_chr IS NOT NULL`.
+
+**Two fixtures in `test-reconcile.R` were incoherent and had to change.** The
+already_present tests used `value_raw = "7.10 (resent)"` with `value_num = 7.10`
+— a string `parse_value()` classifies as TEXT, paired with a numeric value. They
+passed only because text used to be quantified TRUE while carrying the adapter's
+number. Replaced with genuine numeric restatements (`"7.100"`, `"12.00"`), which
+preserves the "different bytes, same measurement" intent — the differing bytes
+were always carried by `source_hash`, not by the value string.
+
+Mutation-checked both ways: reverting `values.R` kills 9 assertions; reverting
+`commit.R` kills 2.
