@@ -194,6 +194,13 @@ test_that("R-8.2: a NA feature_raw is unknown (never a phantom hit into clean) -
   in_skipped <- "r1" %in% out$skipped$source_ref
   in_clean <- "r1" %in% out$clean$source_ref
   expect_equal(sum(in_review, in_skipped, in_clean), 1) # exactly one disposition
+
+  # Phase-5 audit C4: disposition alone is asserted only above - an
+  # implementation that parses the A44 NA sentinel and emits a structural
+  # suggestion for it (rather than treating it as unresolvable) would still
+  # pass every assertion above. `feature_raw = NA` must never reach a
+  # structural parse.
+  expect_false(grepl("subkind=structural", out$review$payload[[1]], fixed = TRUE))
 })
 
 # ---- R-8.3: analyte / method resolution ----------------------------------
@@ -838,28 +845,19 @@ test_that("R-11.3: .rc_key maps NA and blank names to NA (A44 guard, amended hal
 # are unreachable. This is a DIFFERENT function from `.rc_key` (which strips all
 # punctuation and is shared by method keys + intra-event dedup - must not change).
 
+# Phase-5 audit C1/C2: the F.3/F.4 tautologies formerly here (one comparing
+# `.rc_feature_key` against a locally-redefined copy of its own
+# implementation; one asserting only "two distinct values", a restatement of
+# the function definition) are DELETED - PLAN-15 F.3(a) calls the first a
+# BLOCKING false-green gate, and both are fully superseded by the real
+# collision-oracle assertions at R-15.24/R-15.25 (`:1838,1841`) below.
+
 test_that("PLAN-15 A: .rc_feature_key case-folds + trims but PRESERVES internal punctuation", {
   expect_equal(.rc_feature_key("B.S01"), "b.s01")
   expect_equal(.rc_feature_key(" B.S01 "), "b.s01")   # trims outer whitespace
   expect_equal(.rc_feature_key("b.s01"), "b.s01")     # already-normalised is stable
   expect_equal(.rc_feature_key("K.E02"), "k.e02")
   expect_equal(.rc_feature_key("BH.MW02A"), "bh.mw02a")
-})
-
-test_that("PLAN-15 A: .rc_feature_key reproduces the migration's stored key exactly (tolower+trim)", {
-  # The oracle: identical to what migration-001 writes into feature_alias.alias_key.
-  mig_normalize <- function(x) tolower(trimws(x))
-  names <- c("B.S01", "BS1", "B.S1", "BH.S01", "Old Landfill Bore", "GR-PM01", "K E02")
-  expect_equal(.rc_feature_key(names), mig_normalize(names))
-})
-
-test_that("PLAN-15 A: .rc_feature_key does NOT fuse distinct-punctuation codes (collision oracle: BS1 != B.S1)", {
-  # These strip to the SAME key under `.rc_key` (a real cross-site false merge:
-  # BS1 -> BH.S01 'Upstream'; B.S1 -> B.S01 'Downstream Cripple Creek') - the
-  # punctuation-preserving key MUST keep them apart.
-  expect_equal(length(unique(.rc_key(c("BS1", "B.S1")))), 1L)          # .rc_key fuses them
-  expect_equal(length(unique(.rc_feature_key(c("BS1", "B.S1")))), 2L)  # feature key keeps them apart
-  expect_equal(length(unique(.rc_feature_key(c("BS3", "B.S3")))), 2L)
 })
 
 test_that("PLAN-15 A: .rc_feature_key maps NA and blank/whitespace names to NA (A44 guard)", {
@@ -2535,6 +2533,25 @@ test_that("C.3: an event with ZERO resolved rows is skipped by Layer 3 - a merel
   expect_identical(c2$uuid_feature, "f-0002")
 })
 
+# Phase-5 audit C3: the seam table's degenerate list opens with "Empty event
+# - zero rows reach the resolver" and nothing drove it. Measured: it
+# currently returns clean=0 review=0 skipped=0 without error - a missing
+# REGRESSION GUARD, not a live crash. The hazard it guards is Layer 3's
+# `iff exactly one site` gate over a zero-length vector (the classic
+# `length(unique(x)) == 1` trap over an empty candidate set).
+test_that("C.3: an EMPTY event (zero rows reach the resolver) is handled without error - clean/review/skipped all zero-row", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  empty_event <- mk_event(mk_row(source_ref = "unused")[0, ])
+  expect_equal(nrow(empty_event$results), 0) # precondition: genuinely zero rows
+
+  out <- NULL
+  expect_no_error(out <- reconcile_event(empty_event, con))
+  expect_equal(nrow(out$clean), 0)
+  expect_equal(nrow(out$review), 0)
+  expect_equal(nrow(out$skipped), 0)
+})
+
 # ---- C.4: provenance ---------------------------------------------------------
 
 test_that("C.4: a plain Layer-2 structural resolution writes a 'structural_parse:' change_log provenance row at COMMIT (reconcile stays read-only)", {
@@ -3212,15 +3229,21 @@ test_that("R-15.16: payload emission at expired-candidate count boundaries - exa
   ))
   out <- reconcile_event(event, con)
 
+  # Phase-5 audit B2: `grepl("one_expired", ...)` also matches the SIBLING
+  # row "two_live_one_expired" in this same event (a substring collision -
+  # `grepl("one_expired", "two_live_one_expired", fixed = TRUE)` is TRUE),
+  # so `rv_a` always held 2 rows and `expect_equal(nrow(rv_a), 1)` could
+  # never pass. Exact match, both here and below (converted together since
+  # both filters are in this one test, testing for one specific row each).
   rv_a <- out$review[out$review$kind == "unknown_feature" &
-                        grepl("one_expired", out$review$source_ref, fixed = TRUE), ]
+                        out$review$source_ref == "one_expired", ]
   expect_equal(nrow(rv_a), 1)
   expect_true(grepl("subkind=expired_alias", rv_a$payload[[1]], fixed = TRUE))
   expect_true(grepl("expired=f-0002@2018-01-01..2019-12-31", rv_a$payload[[1]], fixed = TRUE))
   expect_false(grepl("subkind=ambiguous", rv_a$payload[[1]], fixed = TRUE))
 
   rv_b <- out$review[out$review$kind == "unknown_feature" &
-                        grepl("two_live_one_expired", out$review$source_ref, fixed = TRUE), ]
+                        out$review$source_ref == "two_live_one_expired", ]
   expect_equal(nrow(rv_b), 1)
   expect_true(grepl("subkind=ambiguous", rv_b$payload[[1]], fixed = TRUE))
   expect_true(grepl("expired=f-0002@2018-01-01..2019-12-31", rv_b$payload[[1]], fixed = TRUE))
@@ -3237,7 +3260,7 @@ test_that("R-15.16: payload emission at expired-candidate count boundaries - exa
 # filed in the handoff report). Named "E.7:" per this file's existing
 # convention for un-numbered plan-block criteria (cf. "B.4:", "PLAN-15 A:").
 
-test_that("E.7: a key reaching a live SELF arm plus one live NON-self arm resolves via the self arm, commits a real sample/analysis row (assert row COUNTS, not merely the absence of a review item), and records exactly ONE non-blocking review row naming the shadowed feature and carrying an EXPLICIT boolean blocking flag - paired in the same test with a key reaching two live NON-self arms, which still goes to review and does NOT commit", {
+test_that("R-15.45 (E.7): a key reaching a live SELF arm plus one live NON-self arm resolves via the self arm, commits a real sample/analysis row (assert row COUNTS, not merely the absence of a review item), and records exactly ONE non-blocking review row naming the shadowed feature and carrying an EXPLICIT boolean blocking flag - paired in the same test with a key reaching two live NON-self arms, which still goes to review and does NOT commit", {
   path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
   # f-0002's OWN self-alias (fa-0002, unbounded) shares its key 't.s02' with
   # a NEW curated historical arm pointing at a DIFFERENT feature (f-0003),

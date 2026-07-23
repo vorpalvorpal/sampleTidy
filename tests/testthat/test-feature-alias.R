@@ -650,16 +650,159 @@ test_that("R-15.37: confirming an identity-mapped pending alias (alias_key == lo
   after_self <- feature_alias_row(con, "fa-9601")
   expect_identical(after_self$confirmed_by[[1]], "alice")
 
-  # (c) a genuine NON-identity alias (key != lower(feature.name)) must not
-  # be defaulted to transcription_error by the same call path.
+  # (c) a genuine NON-identity alias (key != lower(feature.name)) requires
+  # an explicit `kind` argument (PCR-5/F.19, ruled 2026-07-24): passing one
+  # round-trips onto the row, AND omitting it on this non-identity branch is
+  # a mandatory error - no default. Phase-5 audit C5: a bare negative
+  # (`expect_false(kind == "transcription_error")`) is satisfied by ANY
+  # OTHER silently-invented kind, so both halves are asserted for real.
   DBI::dbExecute(con, "INSERT INTO feature_alias
     (uuid, uuid_feature, name, alias_key, kind, n_seen, auto_assign,
      first_seen, last_seen, confirmed_by) VALUES
     ('fa-9603', NULL, 'ZIDENTMISPELL', 'zidentmispell', 'pending', 0, FALSE,
      TIMESTAMP '2025-09-01 08:00:00', TIMESTAMP '2025-09-01 08:00:00', NULL)")
-  confirm_feature_aliases("fa-9603", "f-9601", confirmed_by = "alice")
+  confirm_feature_aliases("fa-9603", "f-9601", confirmed_by = "alice", kind = "historical_code")
   non_identity <- feature_alias_row(con, "fa-9603")
-  expect_false(identical(non_identity$kind[[1]], "transcription_error"))
+  expect_identical(non_identity$kind[[1]], "historical_code") # round-tripped, not invented
+
+  DBI::dbExecute(con, "INSERT INTO feature_alias
+    (uuid, uuid_feature, name, alias_key, kind, n_seen, auto_assign,
+     first_seen, last_seen, confirmed_by) VALUES
+    ('fa-9604', NULL, 'ZIDENTMISPELL2', 'zidentmispell2', 'pending', 0, FALSE,
+     TIMESTAMP '2025-09-01 08:00:00', TIMESTAMP '2025-09-01 08:00:00', NULL)")
+  expect_error(
+    confirm_feature_aliases("fa-9604", "f-9601", confirmed_by = "alice"),
+    class = "sampletidy_error"
+  )
+})
+
+# ======================================================================
+# PLAN-15 E.8 / R-15.44 - merge the two duplicate identity arms (R3).
+#
+# TARGET FUNCTION CONTRACT (unwritten - Phase 6). PLAN-CHANGE REQUEST FILED
+# (Phase-5 delta B6, see this unit's report): the plan pins E.8's ACCEPTANCE
+# in full but names no entry-point function/signature for it - unlike
+# migration 003 (which carries an explicit "TARGET FILE CONTRACT" comment at
+# the top of test-migration-003.R), E.8 has none. This test's best reading,
+# mirroring `confirm_feature_aliases()`'s own `db = st_config("live_db")`
+# convention in this SAME file/module (F.19 precedes E.8 and both touch
+# R/feature-alias.R):
+#
+#   merge_identity_aliases(db = st_config("live_db"), actor, dry_run = FALSE)
+#     -> tibble(alias_key, uuid_winner, uuid_loser, n_repointed)
+#   PINNED by the orchestrator 2026-07-24 in PLAN-15 B-15.E8 - this is no longer
+#   a guess. `actor` is MANDATORY (no default): the op DELETEs registry rows and
+#   repoints `sample`, and every change_log row it writes needs an honest actor.
+#   For every (alias_key, uuid_feature) pair holding BOTH a `kind = 'self'`
+#   row and a distinct non-self row sharing `alias_key == lower(feature.name)`
+#   (an identity duplicate - E.8's own definition): carries `confirmed_by`
+#   and `auto_assign = TRUE` onto the surviving self row, repoints every
+#   `sample.uuid_feature_alias` reference from the deleted row onto the
+#   survivor, then deletes the duplicate - one `with_db_write()` transaction,
+#   `change_log` provenance on both writes. Phase 6 may need to add exactly
+#   this symbol, or the orchestrator may rename/reshape it before it lands -
+#   re-check against the real implementation before trusting this as final.
+# ======================================================================
+
+#' A local, FK-constrained fixture reproducing E.8's duplicate-identity shape
+#' (mirrors `fa_fk_setup()`'s own idiom, not a reuse of it - that helper's
+#' analyte/lab_method/analysis chain has no feature/feature_alias/sample
+#' tables at all): one feature carrying BOTH a `self` arm (auto_assign
+#' FALSE, unconfirmed - the real pre-003 registry shape) and a
+#' `transcription_error` duplicate of the SAME alias_key (auto_assign TRUE,
+#' confirmed_by = 'R. Shannon' - E.8's own worked example, `b.s01`/`k.e02`),
+#' with a `sample` row hanging off the DUPLICATE arm specifically - the only
+#' way (d)'s "sample count unchanged across the merge" assertion below can
+#' fail, since a merge that deletes the duplicate WITHOUT repointing first
+#' orphans that sample (or, with the FK below, aborts outright).
+#' Cleanup (tempdir, option) bound to the CALLING TEST's frame, not this
+#' helper's own frame (the withr wrong-frame trap, language-footguns.md).
+fa_e8_setup <- function() {
+  env <- parent.frame()
+  dir <- withr::local_tempdir(.local_envir = env)
+  path <- file.path(dir, "e8-seed.duckdb")
+  withr::local_options(list("sampletidy.live_db" = path), .local_envir = env)
+
+  {
+    con <- DBI::dbConnect(duckdb::duckdb(), path, read_only = FALSE)
+    on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+    ensure_schema(con) # review_queue/change_log/schema_version - reused, not re-derived
+
+    DBI::dbExecute(con, "CREATE TABLE feature (
+      uuid VARCHAR PRIMARY KEY, name VARCHAR, site VARCHAR,
+      lon DOUBLE NOT NULL, lat DOUBLE NOT NULL)")
+    DBI::dbExecute(con, "CREATE TABLE feature_alias (
+      uuid VARCHAR PRIMARY KEY, uuid_feature VARCHAR REFERENCES feature(uuid),
+      name VARCHAR NOT NULL, alias_key VARCHAR NOT NULL, kind VARCHAR,
+      n_seen INTEGER DEFAULT 0, auto_assign BOOLEAN DEFAULT TRUE,
+      first_seen TIMESTAMP, last_seen TIMESTAMP, confirmed_by VARCHAR,
+      date_start DATE, date_end DATE, comments VARCHAR)")
+    DBI::dbExecute(con, "CREATE TABLE \"sample\" (
+      uuid VARCHAR PRIMARY KEY,
+      uuid_feature_alias VARCHAR NOT NULL REFERENCES feature_alias(uuid),
+      date TIMESTAMP, datetime TIMESTAMP, organisation VARCHAR)")
+
+    DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, lon, lat) VALUES
+      ('f-e8-01', 'Z.E8DUP01', 'Z', 150.8801, -33.8801)")
+
+    DBI::dbExecute(con, "INSERT INTO feature_alias
+      (uuid, uuid_feature, name, alias_key, kind, n_seen, auto_assign, first_seen, last_seen, confirmed_by) VALUES
+      ('fa-e8-self', 'f-e8-01', 'Z.E8DUP01', 'z.e8dup01', 'self', 3, FALSE,
+       TIMESTAMP '2020-01-01 00:00:00', TIMESTAMP '2020-01-01 00:00:00', NULL)")
+    DBI::dbExecute(con, "INSERT INTO feature_alias
+      (uuid, uuid_feature, name, alias_key, kind, n_seen, auto_assign, first_seen, last_seen, confirmed_by) VALUES
+      ('fa-e8-dup', 'f-e8-01', 'Z.E8DUP01', 'z.e8dup01', 'transcription_error', 1, TRUE,
+       TIMESTAMP '2026-07-23 00:00:00', TIMESTAMP '2026-07-23 00:00:00', 'R. Shannon')")
+
+    DBI::dbExecute(con, "INSERT INTO \"sample\"
+      (uuid, uuid_feature_alias, date, datetime, organisation) VALUES
+      ('s-e8-01', 'fa-e8-dup', TIMESTAMP '2026-06-01 00:00:00', TIMESTAMP '2026-06-01 09:00:00', 'ALS')")
+  }
+
+  list(path = path, con = seed_con(path))
+}
+
+test_that("R-15.44 (E.8): merges a duplicate identity arm into its self arm, deletes the duplicate, repoints its sample, and leaves the feature's sample count unchanged across the merge", {
+  setup <- fa_e8_setup()
+  con <- setup$con
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  before_n <- DBI::dbGetQuery(con,
+    "SELECT count(*) AS n FROM \"sample\" s JOIN feature_alias fa ON fa.uuid = s.uuid_feature_alias
+     WHERE fa.uuid_feature = 'f-e8-01'")$n
+  expect_equal(before_n, 1) # positive control: the sample is reachable before the merge
+
+  merge_identity_aliases(actor = "phase5-e8-test")
+
+  # (a) exactly ONE feature_alias row for the key afterwards.
+  after_rows <- DBI::dbGetQuery(con, "SELECT * FROM feature_alias WHERE alias_key = 'z.e8dup01'")
+  expect_equal(nrow(after_rows), 1)
+
+  # (b) that row is kind = 'self', auto_assign = TRUE, confirmed_by preserved
+  # - and it is the SELF row that survives, never the duplicate.
+  expect_identical(after_rows$kind[[1]], "self")
+  expect_true(after_rows$auto_assign[[1]])
+  expect_identical(after_rows$confirmed_by[[1]], "R. Shannon")
+  expect_identical(after_rows$uuid[[1]], "fa-e8-self")
+
+  # (c) the raw name still resolves - a real seam test through the actual
+  # resolver, not a raw flag check.
+  registry <- .rc_load_registry(con)
+  cand <- .rc_feature_candidates("Z.E8DUP01", as.Date("2026-07-24"), registry)
+  expect_equal(nrow(cand), 1L)
+  expect_identical(cand$uuid_feature, "f-e8-01")
+
+  # (d) THE ONE THAT MATTERS: the sample count attached to the feature is
+  # UNCHANGED across the merge, asserted before AND after - a merge that
+  # deletes a row a `sample` still points at orphans data, and nothing else
+  # in this suite would go red on that.
+  after_n <- DBI::dbGetQuery(con,
+    "SELECT count(*) AS n FROM \"sample\" s JOIN feature_alias fa ON fa.uuid = s.uuid_feature_alias
+     WHERE fa.uuid_feature = 'f-e8-01'")$n
+  expect_equal(after_n, before_n)
+  repointed <- DBI::dbGetQuery(con, "SELECT uuid_feature_alias FROM \"sample\" WHERE uuid = 's-e8-01'")$uuid_feature_alias
+  expect_identical(repointed, "fa-e8-self") # repoint landed on the survivor, not orphaned
 })
 
 # ======================================================================
@@ -667,14 +810,10 @@ test_that("R-15.37: confirming an identity-mapped pending alias (alias_key == lo
 # date_end bound arguments: set, clear (explicit sentinel), leave-alone, and
 # a bounds-only call with uuid_feature omitted.
 #
-# PROVISIONAL API CHOICE (see accompanying plan-change request): the plan
-# pins the argument names (`date_start`/`date_end`) and requires "an
-# explicit clear sentinel distinct from leave-alone" but not the concrete
-# sentinel scheme. Best reading adopted here: the default (omitted) value
-# NULL means leave-alone; an explicit `as.Date(NA)` means clear; a real
-# `Date` means set. Phase 6 must re-check the landed implementation actually
-# adopts this scheme (or the orchestrator's adjudicated alternative) before
-# trusting these as the final oracle for argument names/sentinel values.
+# PCR-4 (RULED 2026-07-24, Phase-5 audit): the bounds sentinel scheme is now
+# PINNED IN THE PLAN exactly as encoded below, no longer provisional -
+# `NULL` (default/omitted) means leave-alone; an explicit `as.Date(NA)`
+# means clear; a real `Date` means set.
 # ======================================================================
 
 test_that("R-15.18 (E.4): confirm_feature_aliases() SETS date_start on an unbounded alias, round-tripped as a real DATE (never POSIXct) via the driver", {

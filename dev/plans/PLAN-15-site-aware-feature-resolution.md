@@ -322,9 +322,23 @@ creates nothing, so a no-op implementation passes both. Replace with:
 - **Layer 3 NEVER applies to a row that yielded a recognised site prefix**, even if
   its point missed. Without this guard, `K.S01` (no such feature) inside an all-B WO
   gets re-sited to `B.S01` — a cross-site merge.
-- Candidate point = the canonicalised raw with a leading *recognised* site token
-  removed if present, else the whole canonicalised raw. A candidate still containing a
-  separator is not retried.
+- ~~Candidate point = the canonicalised raw with a leading *recognised* site token
+  removed if present, else the whole canonicalised raw.~~ **THE "REMOVED IF PRESENT"
+  CLAUSE IS STRUCK — orchestrator ruling, re-affirmed and RECORDED 2026-07-24.**
+  Candidate point = **the whole canonicalised raw**, always. A candidate still
+  containing a separator is not retried.
+  **Why the struck clause described an impossible case:** it contradicts the bullet
+  directly above it. Layer 3 only ever sees rows that yielded NO recognised site, so
+  there is never a recognised site token present to remove. `.rc_parse_structural()`
+  (`R/reconcile.R:333`) returns `NULL` the moment no site prefix matches, which is
+  exactly the path that reaches Layer 3.
+  **Provenance of this ruling, and why it is being recorded now.** The Phase-5 audit
+  (PCR-1) found the ruling existed ONLY inside a test comment
+  (`tests/testthat/test-reconcile.R:2347-2350`) — a grep of `dev/plans/` and
+  `dev/tdd-run/` for it returned zero hits. The landed code and the green test agreed
+  with each other and disagreed with this plan, so the PLAN was the stale artefact. It
+  is written down here so that a later reader "fixing" the code to match the plan does
+  not break a correct, passing test. Do not re-introduce the clause.
 - Layer 3 reuses Layer 2's canonical point **unchanged**, substituting only the site.
   It never re-parses the raw and never overrides a Layer-2 auto-resolve.
 
@@ -653,6 +667,18 @@ live one, goes to REVIEW — it does NOT fall through to Layer 2.**
   `date_end` arguments with an explicit clear sentinel distinct from "leave alone",
   and allow a bounds-only call in which `uuid_feature` is omitted. A criterion covers
   set, clear, and leave-alone.
+- **THE SENTINEL SCHEME, PINNED 2026-07-24** *(Phase-5 audit PCR-4: four Phase-4 tests
+  had already encoded a scheme, which meant an API contract was being set by a test
+  rather than by the plan. The reading is right, so I am ratifying it here rather than
+  changing it — but it is the PLAN that pins it now.)*
+  * `date_start = NULL` / `date_end = NULL` (the **default**) — leave the stored bound
+    alone. This is what every existing caller gets for free, so no call site changes.
+  * `as.Date(NA)` — **clear** the bound to NULL.
+  * a real `Date` — set it.
+  Chosen because `NA` on `uuid_feature` is already spoken for as "reject"
+  (`feature-alias.R:82-87`), so reusing bare `NA` for "clear" would collide; `NULL` is
+  unambiguously distinct and is also the natural default. Argument order and defaults
+  must keep every existing positional call valid.
 
 <!-- block: B-15.E5 -->
 ### E.5 The curated bounds (data, applied by migration 003)
@@ -1181,6 +1207,13 @@ exists in three kinds: **`unknown_unit`** (`reconcile.R:861`), **`value_conflict
 (`reconcile.R:1180`, `assemble.R:179`) and **`batch_duplicate`** (`reconcile.R:1243`).
 E.7 is a new *kind*, not a new *architecture*.
 
+### R-15.45
+*(ID declared 2026-07-24 — Phase-5 audit PCR-3. E.7's acceptance IS tested
+(`tests/testthat/test-reconcile.R:3240`) but under the bare name `"E.7: …"`, so with no
+declared ID the bijection lint counted it as neither covered nor uncovered — invisible
+either way. The Phase-4 writer filed this; it is recorded here so it is not lost.
+The test must be retitled to carry `R-15.45`.)*
+
 Acceptance (must be able to FAIL): a key whose `self` arm and one live historical arm
 are BOTH `auto_assign = TRUE`, reconciled at a date inside the historical arm's bound,
 must (a) resolve to the self feature, (b) produce a committed `sample`/`analysis` row —
@@ -1223,6 +1256,39 @@ duplicate and E.8 has to be run again. E.8 also removes the `(alias_key, target
 feature.name)` two-row collision documented in E.5's "Row identity for the UPDATEs";
 003 must nonetheless keep its `kind`-qualified key rather than relying on E.8 having
 run.
+
+**THE ENTRY POINT, PINNED 2026-07-24.** *(The Phase-5 delta writer had to invent a symbol
+because this section pinned the acceptance and never named the function. Ruled here so it
+is not invented twice differently.)*
+
+```r
+merge_identity_aliases(db = st_config("live_db"), actor, dry_run = FALSE)
+```
+
+- **Lives in `R/feature-alias.R`, exported** — the manifest assigns `B-15.E8` to
+  `P15-feature-alias`, and this is a registry operation a curator runs, not a schema
+  migration. It is NOT a `dev/migrations/00N-*.R` script: 003 and 004 are already claimed,
+  and E.8 must land BEFORE 003, which the numbering could not express.
+- **`db = st_config("live_db")`** matches `confirm_feature_aliases()`'s own signature
+  (`R/feature-alias.R:38`).
+- **`actor` is MANDATORY, no default** — same reasoning as the F.19 `kind` ruling: this
+  DELETEs registry rows and repoints `sample` references, and every `change_log` row it
+  writes needs an honest actor. Do not default it.
+- **`dry_run = FALSE`** mirrors `mig001_run`/`mig003_run`. This is a destructive one-time
+  operation on the authoritative file; a rehearsal must be possible without one.
+- **Returns an itemised tibble** — one row per merged key, with `alias_key`, `uuid_winner`,
+  `uuid_loser`, `n_repointed` — reusing `.fa_merge_samples()`'s existing
+  winner/loser vocabulary (`R/feature-alias.R:191`) rather than inventing a third. E.1's "explicit, itemised, auditable" principle
+  applies here for the same reason it applies to 003, and the acceptance below asserts a
+  sample count that the return value should make checkable without re-querying.
+- Named for what it does — collapse a redundant *identity* alias into the feature's `self`
+  arm. Not "arms" (plan jargon, absent from the codebase vocabulary) and not
+  "self_aliases" (the row being removed is `kind = 'transcription_error'`, not `self`).
+
+### R-15.44
+*(ID declared 2026-07-24 — Phase-5 audit PCR-2. E.8's acceptance existed as prose with
+no `### R-15.<n>` heading, so `criterion-lint.py` could not see it and its total absence
+from the suite read as clean. `grep -c 'E\.8' tests/testthat/test-feature-alias.R` = 0.)*
 
 Acceptance (must be able to FAIL): after E.8, `feature_alias` holds exactly ONE row for
 each of `(b.s01, B.S01)` and `(k.e02, K.E02)`, that row has `kind = 'self'`,
@@ -2376,6 +2442,33 @@ duplicate arms of E.8 came to exist and to be labelled `transcription_error` wit
    not invent a relationship it was never told. `historical_code`, `mask_long` and
    `descriptive` all already exist in the vocabulary and are all more common in the
    registry than `transcription_error` is.
+
+> **RULED 2026-07-24 — WHAT "LABEL IT HONESTLY" MEANS MECHANICALLY** *(Phase-5 audit
+> PCR-5. Requirement 2 said what NOT to do and never said what to do, so R-15.37's third
+> half could only assert a negative — `expect_false(kind == "transcription_error")` —
+> which an implementation satisfies by swapping one invented default for another.)*
+>
+> `confirm_feature_aliases()` gains an explicit **`kind` argument**, and for the
+> **non-identity branch it is MANDATORY**: if the confirmation is not an identity mapping
+> and `kind` is not supplied, the function **errors** (class `sampletidy_error`) rather
+> than defaulting to anything. There is no default for that branch — a default is exactly
+> the "invent a relationship it was never told" behaviour the requirement forbids.
+>
+> The identity branch does not take one: it is `self` by construction, and passing a
+> `kind` alongside an identity confirmation is an error too, not a silent override.
+>
+> The supplied value must be one of the existing vocabulary
+> (`self`, `historical_code`, `mask_long`, `descriptive`, `transcription_error`) —
+> validated, so a typo fails loudly instead of entering the registry.
+>
+> **This changes how the function is called interactively.** Confirming a non-identity
+> alias now requires naming the relationship. That is the point: the caller is the only
+> party that knows it, and the two mislabelled rows E.8 has to clean up exist precisely
+> because the function guessed instead of asking.
+>
+> R-15.37's third half must therefore assert the POSITIVE — pass `kind =
+> "historical_code"`, assert it round-trips — **and** that omitting `kind` on a
+> non-identity confirmation errors. Not a bare negative.
 
 ### R-15.37 confirm_feature_aliases avoids duplicate identity arm
 Acceptance (must be able to FAIL): confirm a pending alias whose key IS the target

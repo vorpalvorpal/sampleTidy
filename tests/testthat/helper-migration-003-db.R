@@ -120,6 +120,24 @@
     uuid_root VARCHAR, name VARCHAR, type VARCHAR)"
 )
 
+# Phase-5 audit B4: a `sample` table with a REAL FK onto `feature_alias`,
+# absent from this seed entirely until now (`grep -cE 'REFERENCES|FOREIGN
+# KEY'` = 0). Seam S-15.9 - the seam this unit owns - is "plain `ALTER TABLE
+# ... ADD COLUMN` only; `DROP TABLE feature_alias` is REFUSED (FK parent of
+# `sample`), so the TEMP-copy rebuild is impossible." Without this table the
+# forbidden rebuild SUCCEEDS against this fixture and every test here still
+# passes, while a 003 built that way detaches `sample` on the live registry
+# (the same false-green class as B-15.F14). `"sample"` is a DuckDB reserved
+# word - quoted everywhere it appears.
+.st_mig003_sample_ddl <- "
+  CREATE TABLE \"sample\" (
+    uuid VARCHAR PRIMARY KEY,
+    uuid_feature_alias VARCHAR NOT NULL REFERENCES feature_alias(uuid),
+    date TIMESTAMP,
+    datetime TIMESTAMP,
+    organisation VARCHAR
+  )"
+
 #' Create a throwaway, POST-001/PRE-003 seed DuckDB for
 #' dev/migrations/003-alias-date-bounds.R's own tests.
 #'
@@ -134,9 +152,19 @@ seed_migration_003_db <- function(dir = NULL) {
   con <- DBI::dbConnect(duckdb::duckdb(), path, read_only = FALSE)
   on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
 
+  # Phase-5 audit B3: `ensure_schema()` FIRST, exactly as `seed_db()` does
+  # (helper-db.R:232) - this seed had no `change_log` table at all
+  # (`db_update()` ABORTS with "Table with name change_log does not exist"
+  # against it), which pressures a Phase-6 worker into a raw `dbExecute()`
+  # UPDATE that silently drops the mandated provenance row, unnoticed by any
+  # test on this seed. Also brings in `review_queue`/`schema_version` for
+  # free, ops-tables-only (A50), never touching the core DDL below.
+  ensure_schema(con)
+
   DBI::dbExecute(con, .st_mig003_feature_ddl)
   DBI::dbExecute(con, .st_mig003_feature_alias_ddl)
   for (ddl in .st_mig003_empty_ddl) DBI::dbExecute(con, ddl)
+  DBI::dbExecute(con, .st_mig003_sample_ddl)
 
   DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, lon, lat) VALUES
     ('mf-src01', 'T.SRC01', 'T', 150.3001, -33.3001),
@@ -213,6 +241,15 @@ seed_migration_003_db <- function(dir = NULL) {
     (uuid, uuid_feature, name, alias_key, kind, n_seen, auto_assign, first_seen, last_seen, confirmed_by) VALUES
     ('ma-src01-dup', 'mf-src01', 'T.SRC01', 't.src01', 'transcription_error', 1, TRUE, TIMESTAMP '2026-07-23 00:00:00', TIMESTAMP '2026-07-23 00:00:00', 'R. Shannon'),
     ('ma-src07-dup', 'mf-src07', 'T.SRC07', 't.src07', 'transcription_error', 1, TRUE, TIMESTAMP '2026-07-23 00:00:00', TIMESTAMP '2026-07-23 00:00:00', 'R. Shannon')")
+
+  # B4: at least one `sample` row, FK-pointing at a seeded alias (the
+  # control alias ma-ctrl01-self, untouched by anything the migration or the
+  # bounds application does) - so a forbidden TEMP-copy rebuild that
+  # regenerates/reorders `feature_alias.uuid` is provably wrong against
+  # R-15.19's setequal()/count assertion, never merely unexercised.
+  DBI::dbExecute(con, "INSERT INTO \"sample\"
+    (uuid, uuid_feature_alias, date, datetime, organisation) VALUES
+    ('s-mig003-01', 'ma-ctrl01-self', TIMESTAMP '2025-06-01 00:00:00', TIMESTAMP '2025-06-01 09:00:00', 'ALS')")
 
   path
 }

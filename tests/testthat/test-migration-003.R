@@ -174,14 +174,34 @@ test_that("R-15.19: migration 003 adds date bounds, writes exactly the itemised 
   fields <- DBI::dbListFields(con, "feature_alias")
   expect_true(all(c("date_start", "date_end") %in% fields))
 
+  # B3: at least one `change_log` provenance row per bounded alias, captured
+  # around the ONE call that owns the mandated backfill provenance (PLAN-15
+  # E.1: "each with a change_log provenance row", via db_update() like
+  # migration 002) - not conflated with mig003_run()'s own R1 flip above.
+  log_before <- DBI::dbGetQuery(con, "SELECT count(*) AS n FROM change_log WHERE tbl = 'feature_alias'")$n
+
   # ---- The itemised-bounds mechanism itself, exercised with THIS seed's
   # own fixture-scoped bounds table (mirrors E.5's shape/counts exactly). ----
   mig$.mig003_apply_bounds(con, .mig003_fixture_bounds())
 
   fa_after <- DBI::dbGetQuery(con, "SELECT * FROM feature_alias ORDER BY uuid")
 
+  log_after <- DBI::dbGetQuery(con, "SELECT count(*) AS n FROM change_log WHERE tbl = 'feature_alias'")$n
+  bounds_for_log <- .mig003_fixture_bounds()
+  n_bounded_for_log <- sum(!is.na(bounds_for_log$date_start) | !is.na(bounds_for_log$date_end))
+  expect_gte(log_after - log_before, n_bounded_for_log)
+
   # Row counts unchanged: only ALTER/UPDATE, never INSERT/DELETE.
   expect_equal(nrow(fa_after), n_rows_before)
+
+  # B4 (S-15.9): the SET of feature_alias.uuid is IDENTICAL before and after
+  # mig003_run()'s ALTER TABLE step - a rebuild (the forbidden `DROP TABLE
+  # feature_alias` + TEMP-copy path, refused live because `feature_alias` is
+  # the FK parent of `sample` - seeded onto this fixture specifically so that
+  # refusal is real here too) regenerates or reorders uuids; plain
+  # `ALTER TABLE ... ADD COLUMN` never does.
+  expect_equal(length(fa_after$uuid), length(fa_before$uuid))
+  expect_true(setequal(fa_after$uuid, fa_before$uuid))
 
   # Exact per-row values for each of the 9 itemised rows - keyed by their
   # own known uuid (independent of whatever WHERE-clause the real
@@ -199,9 +219,17 @@ test_that("R-15.19: migration 003 adds date bounds, writes exactly the itemised 
   expect_equal(sum(!is.na(got$date_start)), 3L)
 
   # Every OTHER row in the seed stays NULL/NULL - asserted as a count of the
-  # COMPLEMENT (never a hard-coded total; PLAN-15 E.6 box (ii)).
+  # COMPLEMENT (never a hard-coded total; PLAN-15 E.6 box (ii)). The
+  # complement is of "rows that got at least one bound" (7 non-NULL
+  # date_end + the 2 rule-2 rows that get neither = 9 itemised rows, but
+  # rows 6/7 (t.src06/t.src07, rule-2 "stays open") are NA on BOTH bounds by
+  # construction - so a CORRECT migration leaves nrow - 7 rows null-on-both,
+  # never nrow - 9 (Phase-5 audit B1: a hard-coded `- 9L` here can never
+  # pass). Derived from the fixture itself, not a second hard-coded literal.
+  bounds_fx <- .mig003_fixture_bounds()
+  n_bounded <- sum(!is.na(bounds_fx$date_start) | !is.na(bounds_fx$date_end))
   n_null_both <- sum(is.na(fa_after$date_start) & is.na(fa_after$date_end))
-  expect_equal(n_null_both, nrow(fa_after) - 9L)
+  expect_equal(n_null_both, nrow(fa_after) - n_bounded)
 
   # auto_assign TRUE on every arm of the 9 curated keys afterwards (self +
   # curated + the 2 already-true duplicates, all sharing one of the 9
@@ -224,4 +252,75 @@ test_that("R-15.19: migration 003 adds date bounds, writes exactly the itemised 
     digest::digest(ctrl_after[order(ctrl_after$uuid), ], algo = "sha1"),
     digest::digest(ctrl_before[order(ctrl_before$uuid), ], algo = "sha1")
   )
+})
+
+# ---- E.5 / B7: .mig003_apply_bounds()'s row-identity abort ----------------
+# PLAN-15 E.5 pins that `.mig003_apply_bounds()` THROWS when its own
+# `(alias_key, kind != 'self', target name)` key does not resolve to
+# EXACTLY one row - the only thing between a mis-keyed UPDATE and the live
+# registry. Phase-5 audit B7: nothing exercised this abort at all.
+
+bounds_row <- function(alias_key, target_name, date_start = NA, date_end = NA) {
+  data.frame(
+    alias_key = alias_key, target_name = target_name,
+    date_start = as.Date(date_start), date_end = as.Date(date_end),
+    stringsAsFactors = FALSE
+  )
+}
+
+#' Snapshot of every bounds-relevant field, keyed by uuid - so "the DB is
+#' UNCHANGED" is checked over the FULL state (an abort that already wrote
+#' some rows before throwing is the failure mode worth catching), not merely
+#' a row count.
+.mig003_bounds_snapshot <- function(con) {
+  DBI::dbGetQuery(con, "SELECT uuid, date_start, date_end, auto_assign FROM feature_alias ORDER BY uuid")
+}
+
+test_that("E.5: .mig003_apply_bounds() aborts (catchable error) and writes NOTHING when a bounds row's target name matches NO feature", {
+  mig <- .mig003_load()
+  path <- seed_migration_003_db()
+  con <- migration_003_con(path)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  # .mig003_apply_bounds() operates on a post-ALTER schema (mirrors R-15.19's
+  # own call order).
+  snap_dir <- withr::local_tempdir()
+  mig$mig003_run(db = path, snapshot_dir = snap_dir)
+
+  before <- .mig003_bounds_snapshot(con)
+
+  # 'T.NONEXISTENT99' names no feature at all in this seed - zero matching
+  # rows, not exactly one.
+  bad_bounds <- bounds_row("t.src01", "T.NONEXISTENT99", date_end = "2024-01-01")
+  expect_error(mig$.mig003_apply_bounds(con, bad_bounds))
+
+  after <- .mig003_bounds_snapshot(con)
+  expect_equal(after, before)
+})
+
+test_that("E.5: .mig003_apply_bounds() aborts (catchable error) and writes NOTHING when a bounds row's (alias_key, kind != 'self', target name) key matches TWO rows", {
+  mig <- .mig003_load()
+  path <- seed_migration_003_db()
+  con <- migration_003_con(path)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  snap_dir <- withr::local_tempdir()
+  mig$mig003_run(db = path, snapshot_dir = snap_dir)
+
+  # Manufacture a genuine 2-row collision: a SECOND non-self arm sharing
+  # 't.src02' AND pointing at the same target feature (mf-tgt02 / T.TGT02)
+  # as the seed's own curated 'ma-src02-cur' row - so the (alias_key,
+  # kind != 'self', target name) key now resolves to TWO rows, not one.
+  DBI::dbExecute(con, "INSERT INTO feature_alias
+    (uuid, uuid_feature, name, alias_key, kind, n_seen, auto_assign, first_seen, last_seen) VALUES
+    ('ma-src02-collision', 'mf-tgt02', 'T.SRC02', 't.src02', 'descriptive', 1, FALSE,
+     TIMESTAMP '2020-06-01 00:00:00', TIMESTAMP '2020-06-01 00:00:00')")
+
+  before <- .mig003_bounds_snapshot(con)
+
+  bad_bounds <- bounds_row("t.src02", "T.TGT02", date_end = "2021-06-15")
+  expect_error(mig$.mig003_apply_bounds(con, bad_bounds))
+
+  after <- .mig003_bounds_snapshot(con)
+  expect_equal(after, before)
 })

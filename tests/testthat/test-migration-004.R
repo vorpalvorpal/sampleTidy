@@ -33,7 +33,16 @@
 .mig004_load <- function() {
   env <- new.env(parent = globalenv())
   path <- testthat::test_path("..", "..", "dev", "migrations", "004-view-repair.R")
-  skip_if_not(file.exists(path), "dev/migrations/004-view-repair.R not yet written (expected pre-Phase-6)")
+  if (!file.exists(path)) {
+    # Phase-5 audit B5: a `skip_if_not()` here made this ENTIRE file produce
+    # zero results (R-15.35 green-by-skip forever if 004 is never written) -
+    # the sibling test-migration-003.R got this right at `.mig003_load()`. A
+    # clean, single, named ERROR (never `testthat::fail()`, which records a
+    # failure but does not halt execution, so the next line would throw a
+    # SECOND redundant condition for the same missing-file cause) - the
+    # correct TDD-red state, showing up as exactly one red result per test.
+    stop(sprintf("migration file not found (expected TDD-red until Phase 6): %s", path))
+  }
   sys.source(path, envir = env)
   env
 }
