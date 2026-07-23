@@ -2602,7 +2602,7 @@ test_that("C.4: a Layer-3 WO-inferred resolution writes a 'wo_site_inferred: <ra
 
 # ---- C.5: acceptance criteria (positive control across two events) ---------
 
-test_that("C.5: the SAME unresolved raw resolves in a single-site event and stays in review in a mixed-site event (positive control across two events, one test)", {
+test_that("R-15.5/C.5: the SAME unresolved raw resolves in a single-site event and stays in review in a mixed-site event (positive control across two events, one test)", {
   path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
 
   single_site_event <- mk_event(mk_rows(
@@ -2630,7 +2630,7 @@ test_that("C.5: the SAME unresolved raw resolves in a single-site event and stay
   expect_true(is.na(c2$uuid_feature))
 })
 
-test_that("C.5: one curated cross-site alias suppresses Layer 3 for the WHOLE event, even inside an otherwise-all-T WO (ruling: it does)", {
+test_that("R-15.6/C.5: one curated cross-site alias suppresses Layer 3 for the WHOLE event, even inside an otherwise-all-T WO (ruling: it does)", {
   path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
 
   all_t_event <- mk_event(mk_rows(
