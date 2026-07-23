@@ -2688,3 +2688,281 @@ test_that("A14/R-8.7: a re-ingested TEXT result matches as already_present and d
   expect_true(.rc_values_equal(7.1, NA_character_, TRUE, 7.1, NA_character_, TRUE))
   expect_false(.rc_values_equal(7.1, NA_character_, TRUE, 7.1, NA_character_, FALSE))
 })
+
+# ---- PLAN-15 Work E (E.1/E.2): alias-level date bounds ---------------------
+#
+# `feature_alias.date_start`/`date_end` exist in the DDL above (post-003
+# shape) but nothing in R/reconcile.R reads them yet - migration 003 itself
+# is not written. These tests fail RED until that reading is implemented.
+# DATE granularity only - every bound literal below is `DATE 'YYYY-MM-DD'`,
+# never TIMESTAMP, and every comparison date is `as.Date(...)`, never a
+# POSIXct - converting a DATE bound through POSIXct is the tz hazard E.5
+# documents and this project has already been bitten by (footguns: General).
+
+test_that("R-15.7: an expired date_end alias does not resolve a later-dated row, paired in the same test with the identical row dated inside the bound, which DOES resolve", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  DBI::dbExecute(con, "INSERT INTO feature_alias
+    (uuid, uuid_feature, name, alias_key, kind, auto_assign, first_seen, last_seen, date_start, date_end) VALUES
+    ('fa-e07', 'f-0002', 'T.EXPIRED07', 't.expired07', 'historical_code', TRUE,
+     TIMESTAMP '2018-01-01 00:00:00', TIMESTAMP '2020-12-31 00:00:00', NULL, DATE '2020-12-31')")
+  registry <- .rc_load_registry(con)
+
+  # AFTER date_end: the bound has expired - must NOT resolve.
+  cand_after <- .rc_feature_candidates("T.EXPIRED07", as.Date("2025-05-20"), registry)
+  expect_equal(nrow(cand_after), 0)
+
+  # PAIRED positive control (same test): the identical row dated INSIDE the
+  # bound DOES resolve - without this pair a resolver that is simply broken
+  # (never resolves anything) would also pass the assertion above.
+  cand_inside <- .rc_feature_candidates("T.EXPIRED07", as.Date("2019-06-01"), registry)
+  expect_equal(nrow(cand_inside), 1)
+  expect_identical(cand_inside$uuid_feature[[1]], "f-0002")
+})
+
+test_that("R-15.8: a date_start bound blocks a row dated before the start date, paired in the same test with the identical row dated after the start, which DOES resolve", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  DBI::dbExecute(con, "INSERT INTO feature_alias
+    (uuid, uuid_feature, name, alias_key, kind, auto_assign, first_seen, last_seen, date_start, date_end) VALUES
+    ('fa-e08', 'f-0002', 'T.STARTED08', 't.started08', 'historical_code', TRUE,
+     TIMESTAMP '2024-01-01 00:00:00', TIMESTAMP '2025-01-01 00:00:00', DATE '2024-01-01', NULL)")
+  registry <- .rc_load_registry(con)
+
+  # BEFORE date_start: not yet valid - must NOT resolve.
+  cand_before <- .rc_feature_candidates("T.STARTED08", as.Date("2023-06-01"), registry)
+  expect_equal(nrow(cand_before), 0)
+
+  # PAIRED positive control (same test): dated AFTER date_start DOES resolve.
+  cand_after <- .rc_feature_candidates("T.STARTED08", as.Date("2024-06-01"), registry)
+  expect_equal(nrow(cand_after), 1)
+  expect_identical(cand_after$uuid_feature[[1]], "f-0002")
+})
+
+test_that("R-15.9: a bounded two-arm key resolves via self-precedence to its own feature inside the historical arm's bound (R1/R2), with exactly one self_precedence_note, paired with the trivial resolve outside the bound", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  # T.S01's self-alias (fa-0001, unbounded, kind='self') shares its alias_key
+  # with a NEW curated historical arm pointing at a DIFFERENT feature
+  # (f-0002) - E.0's "an alias key IS another feature's real name" shape.
+  # Bounded 2015-01-01..2019-12-31 (E.5-style curated historical window).
+  DBI::dbExecute(con, "INSERT INTO feature_alias
+    (uuid, uuid_feature, name, alias_key, kind, auto_assign, first_seen, last_seen, date_start, date_end) VALUES
+    ('fa-e09', 'f-0002', 'T.S01', 't.s01', 'historical_code', TRUE,
+     TIMESTAMP '2015-01-01 00:00:00', TIMESTAMP '2019-12-31 00:00:00',
+     DATE '2015-01-01', DATE '2019-12-31')")
+
+  event <- mk_event(mk_rows(
+    # INSIDE the historical arm's bound: both fa-0001 (self -> f-0001) and
+    # fa-e09 (historical -> f-0002) are alias-live. R1/R1a: the self arm is
+    # unbounded, so it WINS over the shadowed historical arm; the row
+    # resolves (not review) and a non-blocking self_precedence_note is
+    # emitted (R2) recording that the override happened.
+    mk_row(source_ref = "inside_bound", feature_raw = "T.S01",
+           lab_sample_id = "XX9999900001", sample_datetime_raw = "01 Jun 2017 09:00"),
+    # OUTSIDE the historical arm's bound (same test): fa-e09 has expired, so
+    # only the self arm survives - a plain, non-precedence hit. Proves the
+    # inside-bound resolve above is self-PRECEDENCE, not merely "date bounds
+    # are ignored so it always resolves to f-0001 anyway".
+    mk_row(source_ref = "outside_bound", feature_raw = "T.S01",
+           lab_sample_id = "XX9999900002", sample_datetime_raw = "01 Jun 2025 09:00")
+  ))
+  out <- reconcile_event(event, con)
+
+  inside <- out$clean[out$clean$source_ref == "inside_bound", ]
+  expect_false(inside$feature_pending)
+  expect_identical(inside$uuid_feature, "f-0001")   # self wins, never f-0002
+
+  # S-15.6 pins `self_precedence_note` as the literal subkind token for this
+  # non-blocking override annotation. Not asserting a specific `kind` column
+  # value - the seam table pins the subkind grammar, not the top-level kind,
+  # and this row is a HIT (not pending/held), a different case than every
+  # existing `.rc_feature_review` payload today.
+  note <- out$review[grepl("inside_bound", out$review$source_ref, fixed = TRUE) &
+                        grepl("subkind=self_precedence_note", out$review$payload, fixed = TRUE), ]
+  expect_equal(nrow(note), 1)
+
+  outside <- out$clean[out$clean$source_ref == "outside_bound", ]
+  expect_false(outside$feature_pending)
+  expect_identical(outside$uuid_feature, "f-0001")
+})
+
+test_that("R-15.11: a key with one alias-live arm pointing at a DEFUNCT feature goes to review, not to the defunct feature - alias-side and feature-side liveness are separate filters, both apply", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  # Bound the LIVE arm (fa-0008 'T.REUSED' -> f-0007) so it expires before
+  # the row's date. That leaves fa-0007 (-> f-0006, FEATURE-side defunct,
+  # date_end 2020-06-30) as the ONLY alias-live arm at 2025-05-20.
+  # `.rc_narrow_live()` only narrows when >1 distinct feature survives
+  # (reconcile.R:190) - after alias-side filtering there is exactly ONE
+  # alias-live candidate, so that guard is NOT the mechanism here (criterion
+  # #5). Feature-side liveness must still apply UNCONDITIONALLY and exclude
+  # f-0006 - the net candidate set is EMPTY, not a silent resolve to the
+  # defunct feature.
+  DBI::dbExecute(con, "UPDATE feature_alias SET date_end = DATE '2024-06-30' WHERE uuid = 'fa-0008'")
+  registry <- .rc_load_registry(con)
+
+  cand <- .rc_feature_candidates("T.REUSED", as.Date("2025-05-20"), registry)
+  expect_equal(nrow(cand), 0)
+})
+
+test_that("R-15.12: a dangling pending alias whose bounds would exclude the row is still found by the natural-key lookup (bounds are exempt), and re-ingesting the same measurement commits it ONCE", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  # A dangling ('pending') alias carrying a bound that EXCLUDES the row's
+  # 2025 sample date (2020-01-01..2020-06-30). The R-11.5a natural-key lookup
+  # (.rc_resolve_existing_pending, reconcile.R:764) must ignore this entirely
+  # - it is keyed on alias_key only, never on date - or the second ingest
+  # would materialise a SECOND alias for the same key and commit twice.
+  DBI::dbExecute(con, "INSERT INTO feature_alias
+    (uuid, uuid_feature, name, alias_key, kind, auto_assign, first_seen, last_seen, date_start, date_end) VALUES
+    ('fa-e12', NULL, 'T.PEND12', 't.pend12', 'pending', FALSE,
+     TIMESTAMP '2025-05-10 08:00:00', TIMESTAMP '2025-05-10 08:00:00',
+     DATE '2020-01-01', DATE '2020-06-30')")
+  DBI::dbExecute(con, "INSERT INTO \"sample\"
+    (uuid, uuid_feature_alias, uuid_project, date, datetime, organisation) VALUES
+    ('s-e12', 'fa-e12', 'p-0001', TIMESTAMP '2025-05-20 00:00:00',
+     TIMESTAMP '2025-05-19 23:00:00', 'ALS')")
+  DBI::dbExecute(con, "INSERT INTO analysis (uuid, uuid_sample, uuid_lab, value, quantified, rl_low) VALUES
+    ('an-e12', 's-e12', 'lm-0001', 7.20, TRUE, 0.01)")
+
+  event <- mk_event(mk_row(
+    source_ref = "r1", source_hash = "different-bytes-hash-r1512",
+    feature_raw = "T.PEND12", analyte_raw = "pH Value", org = "ALS",
+    method_raw = "EA005P: pH by PC Titrator", cas_number = NA_character_,
+    units_raw = "pH Unit", value_raw = "7.200",
+    value_num = 7.20, below_detection = FALSE, rl = 0.01,
+    sample_datetime_raw = "20 May 2025 09:00"
+  ))
+  out <- reconcile_event(event, con)
+  hit <- out$skipped[out$skipped$source_ref == "r1", ]
+  expect_equal(nrow(hit), 1)
+  expect_identical(hit$reason, "already_present")
+  expect_false("r1" %in% out$clean$source_ref)
+
+  commit_event(event, out, con)
+  # The oracle counted on the MEASUREMENT, not just "no error" (brief #req).
+  n_meas <- DBI::dbGetQuery(con, paste(
+    "SELECT count(*) AS n FROM analysis a",
+    "JOIN \"sample\" s ON s.uuid = a.uuid_sample",
+    "WHERE CAST(s.date AS DATE) = DATE '2025-05-20' AND a.uuid_lab = 'lm-0001'"))$n
+  expect_equal(n_meas, 1)
+})
+
+test_that("R-15.13: NULL/NULL alias bounds behave exactly as today (regression guard) - T.AMBIG2 ambiguity, T.REUSED narrowing, bs03alt hit, and a direct alias resolving at dates far either side of any curated bound", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  registry <- .rc_load_registry(con)
+
+  cand_ambig <- .rc_feature_candidates("T.AMBIG2", as.Date("2025-05-20"), registry)
+  expect_setequal(unique(cand_ambig$uuid_feature), c("f-0004", "f-0005"))
+
+  cand_reused <- .rc_feature_candidates("T.REUSED", as.Date("2025-05-20"), registry)
+  expect_equal(length(unique(cand_reused$uuid_feature)), 1)
+  expect_identical(unique(cand_reused$uuid_feature), "f-0007")
+
+  cand_hit <- .rc_feature_candidates("bs03alt", as.Date("2025-05-20"), registry)
+  expect_equal(length(unique(cand_hit$uuid_feature)), 1)
+  expect_identical(unique(cand_hit$uuid_feature), "f-0003")
+
+  # A NULL/NULL alias (self, fa-0001) resolves at dates FAR either side of
+  # any curated bound in this seed - NULL means unbounded on that side,
+  # always, unconditionally.
+  cand_far_past <- .rc_feature_candidates("T.S01", as.Date("1900-01-01"), registry)
+  expect_equal(nrow(cand_far_past), 1)
+  expect_identical(cand_far_past$uuid_feature[[1]], "f-0001")
+
+  cand_far_future <- .rc_feature_candidates("T.S01", as.Date("2100-01-01"), registry)
+  expect_equal(nrow(cand_far_future), 1)
+  expect_identical(cand_far_future$uuid_feature[[1]], "f-0001")
+})
+
+#' A throwaway pre-003 seed: `feature_alias` in its ORIGINAL (001) shape,
+#' with NO `date_start`/`date_end` columns at all - not columns of NA. Frame
+#' threaded to the caller per the withr wrong-frame trap (footguns: R).
+seed_pre003_con <- function(dir = NULL) {
+  if (is.null(dir)) dir <- withr::local_tempdir(.local_envir = parent.frame())
+  path <- file.path(dir, "pre003.duckdb")
+  con <- DBI::dbConnect(duckdb::duckdb(), path, read_only = FALSE)
+  DBI::dbExecute(con, "CREATE TABLE feature (
+    uuid VARCHAR PRIMARY KEY, name VARCHAR, site VARCHAR, flow VARCHAR, matrix VARCHAR,
+    geom_wkt VARCHAR, virtual BOOLEAN, date_start DATE, date_end DATE,
+    lon DOUBLE NOT NULL, lat DOUBLE NOT NULL)")
+  # PRE-003 shape (001:368-381) - NO date_start/date_end columns. This is the
+  # genuine "absent column" case E.1/S-15.5 pins: fa$date_start must read
+  # back NULL (not a column of NA) against a DB that never ran migration 003.
+  DBI::dbExecute(con, "CREATE TABLE feature_alias (
+    uuid VARCHAR PRIMARY KEY, uuid_feature VARCHAR, name VARCHAR NOT NULL,
+    alias_key VARCHAR NOT NULL, kind VARCHAR, n_seen INTEGER DEFAULT 0,
+    auto_assign BOOLEAN DEFAULT TRUE, first_seen TIMESTAMP, last_seen TIMESTAMP,
+    confirmed_by VARCHAR, comments VARCHAR)")
+  DBI::dbExecute(con, "CREATE TABLE feature_mask (uuid_feature VARCHAR, variant VARCHAR, name VARCHAR)")
+  DBI::dbExecute(con, "CREATE TABLE analyte (uuid VARCHAR PRIMARY KEY, name VARCHAR, units VARCHAR,
+    conversion_constant DOUBLE, type VARCHAR, CAS VARCHAR)")
+  DBI::dbExecute(con, "CREATE TABLE lab_method (uuid VARCHAR PRIMARY KEY, uuid_analyte VARCHAR,
+    name VARCHAR, method VARCHAR, organisation VARCHAR, rl_low DOUBLE, rl_high DOUBLE,
+    reported_as VARCHAR, api VARCHAR, uuid_project VARCHAR, uuid_feature VARCHAR,
+    comments VARCHAR, units VARCHAR, conversion_constant DOUBLE)")
+  DBI::dbExecute(con, "CREATE TABLE project (uuid VARCHAR PRIMARY KEY, uuid_parent VARCHAR,
+    uuid_root VARCHAR, uuid_project VARCHAR, name VARCHAR, type VARCHAR, purpose VARCHAR,
+    date_start TIMESTAMP, date_end TIMESTAMP, regulated_by VARCHAR, cypher VARCHAR,
+    site VARCHAR, value VARCHAR)")
+
+  DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix, lon, lat) VALUES
+    ('f-pre003-01', 'P.S01', 'P', 'surface', 'water', 150.9001, -33.9001)")
+  DBI::dbExecute(con, "INSERT INTO feature_alias
+    (uuid, uuid_feature, name, alias_key, kind, auto_assign, first_seen, last_seen) VALUES
+    ('fa-pre003-01', 'f-pre003-01', 'P.S01', 'p.s01', 'self', TRUE,
+     TIMESTAMP '2025-01-01 00:00:00', TIMESTAMP '2025-01-01 00:00:00')")
+  con
+}
+
+test_that("R-15.14: the resolver against a pre-003 DB (date_start/date_end columns ABSENT, not a column of NA) behaves exactly as today and does not error (regression guard)", {
+  con <- seed_pre003_con()
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  registry <- .rc_load_registry(con)
+
+  # Criterion #4: absent columns, never a column of NA.
+  expect_null(registry$feature_alias$date_start)
+  expect_null(registry$feature_alias$date_end)
+
+  cand <- .rc_feature_candidates("P.S01", as.Date("2025-05-20"), registry)
+  expect_equal(nrow(cand), 1)
+  expect_identical(cand$uuid_feature[[1]], "f-pre003-01")
+})
+
+test_that("R-15.21: sample_date NA yields unchanged behaviour on .rc_feature_candidates - no narrowing at either alias-side or feature-side liveness", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  DBI::dbExecute(con, "INSERT INTO feature_alias
+    (uuid, uuid_feature, name, alias_key, kind, auto_assign, first_seen, last_seen, date_start, date_end) VALUES
+    ('fa-e21a', 'f-0004', 'T.NA21', 't.na21', 'historical_code', TRUE,
+     TIMESTAMP '2018-01-01 00:00:00', TIMESTAMP '2019-12-31 00:00:00', NULL, DATE '2020-01-01'),
+    ('fa-e21b', 'f-0005', 'T.NA21', 't.na21', 'descriptive', TRUE,
+     TIMESTAMP '2025-01-01 00:00:00', TIMESTAMP '2025-05-01 00:00:00', NULL, NULL)")
+  registry <- .rc_load_registry(con)
+
+  # NA sample_date: no basis to narrow either arm - both candidates survive,
+  # exactly as today (E.6/R-15.21).
+  cand_na <- .rc_feature_candidates("T.NA21", as.Date(NA), registry)
+  expect_setequal(unique(cand_na$uuid_feature), c("f-0004", "f-0005"))
+
+  # PAIRED contrast (same test, real date well after fa-e21a's expiry): the
+  # bound DOES apply, narrowing to the single surviving arm - proving the NA
+  # case above is "no narrowing", not "the bound mechanism never works".
+  cand_real <- .rc_feature_candidates("T.NA21", as.Date("2025-05-20"), registry)
+  expect_equal(length(unique(cand_real$uuid_feature)), 1)
+  expect_identical(unique(cand_real$uuid_feature), "f-0005")
+})
+
+test_that("PLAN-15 E.2 shape: a contradictory alias bound (date_start > date_end) empties the candidate set at every date, rather than resolving arbitrarily", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  DBI::dbExecute(con, "INSERT INTO feature_alias
+    (uuid, uuid_feature, name, alias_key, kind, auto_assign, first_seen, last_seen, date_start, date_end) VALUES
+    ('fa-e-contra', 'f-0003', 'T.CONTRA', 't.contra', 'historical_code', TRUE,
+     TIMESTAMP '2025-01-01 00:00:00', TIMESTAMP '2025-01-01 00:00:00',
+     DATE '2025-01-01', DATE '2020-01-01')")
+  registry <- .rc_load_registry(con)
+
+  # date_start (2025-01-01) > date_end (2020-01-01): no date satisfies BOTH
+  # halves of the liveness predicate, so the arm must NEVER be live - not
+  # "live before 2020" and not "live after 2025" (a naive single-sided check
+  # would wrongly pass one of these), and not "always live" (a naive OR
+  # would wrongly pass all three).
+  expect_equal(nrow(.rc_feature_candidates("T.CONTRA", as.Date("2019-06-01"), registry)), 0)
+  expect_equal(nrow(.rc_feature_candidates("T.CONTRA", as.Date("2022-06-01"), registry)), 0)
+  expect_equal(nrow(.rc_feature_candidates("T.CONTRA", as.Date("2026-06-01"), registry)), 0)
+})

@@ -657,6 +657,43 @@ live one, goes to REVIEW — it does NOT fall through to Layer 2.**
 <!-- block: B-15.E5 -->
 ### E.5 The curated bounds (data, applied by migration 003)
 
+> **ADJUDICATED 2026-07-24 — E.5 AND E.6 CONTRADICTED EACH OTHER, AND THE FIX IS A
+> STRUCTURAL ONE. Read this before writing `003-alias-date-bounds.R`.**
+>
+> E.5 itemises the bounds against LIVE alias keys (`b.s01`, `k.e02`, …) while E.6
+> mandates that every 003 test run on a FIXTURE-named seed (`T.*`/`TH.*`). Those cannot
+> both hold: a migration that hardcodes the live keys is a NO-OP on any fixture, so a
+> test against it would pass while asserting nothing about the bounds logic. A Phase-4
+> writer hit this head-on; it is a Phase-2 defect of mine, not a writer's confusion.
+>
+> **PINNED: split 003 into an entry point and an injectable applier.**
+> * `mig003_run(db, snapshot_dir, dry_run = FALSE, .now = NULL)` — the production entry
+>   point, signature identical to `mig001_run` (`001:280`). It owns the table-wide R1
+>   self-arm flip and calls the applier with the REAL E.5 bounds table.
+> * `.mig003_apply_bounds(con, bounds)` — takes the bounds as an ARGUMENT. Tests call it
+>   directly with a fixture-scoped table, which is what makes the bounds logic testable
+>   at all.
+>
+> **This leaves one real gap, and it must be closed separately: the live bounds TABLE
+> itself is then never exercised by any test.** Injection tests the mechanism, not the
+> nine curated rows. Close it by asserting the table AS DATA — a test over the constant
+> that `mig003_run` passes, with no database involved, checking every invariant that can
+> be checked without the live registry:
+> * exactly the curated rows E.5 lists, no more;
+> * every `alias_key` equals `tolower()` of itself (a mixed-case key silently matches
+>   nothing);
+> * every rule-1 (one-off) row has `date_start == date_end` — R5's whole point, since a
+>   `date_end`-only bound is live back to the beginning of time and B.TS41's single
+>   sample would otherwise shadow 24 years of B.S01;
+> * no row has `date_start > date_end`;
+> * the two corrected proxy dates are present and are **2026-05-25** (`k.e02`→K.S06) and
+>   **2026-05-04** (`b.s04`→B.S01) — NOT the plan's original literals and NOT the cold
+>   audit's day-late replacements.
+>
+> Without that second test the injection split converts an untestable migration into a
+> tested mechanism carrying untested data, which is a quieter failure than the one it
+> replaces.
+
 > **RESTATED 2026-07-23 UNDER R1/R5 — read
 > `dev/plans/RULINGS-2026-07-23-alias-self-precedence.md` before implementing this
 > section.** Two things changed. **(a) The date bounds no longer decide whether
@@ -1070,6 +1107,28 @@ Work E lands after Work B, and the E.3 test carries a positive control (below).
 
 <!-- block: B-15.E7 -->
 ### E.7 Self-precedence, and the note that records it (R2 — Robin, 2026-07-23)
+
+> **PINNED 2026-07-24 — where the `self_precedence_note` discriminator LIVES.** A
+> Phase-4 writer found this unpinned here and in the rulings document, and asserted on
+> the payload string rather than inventing a new review `kind`. That reading is correct
+> and is now the rule:
+>
+> * `kind` stays `unknown_feature` — the existing top-level review kinds are not
+>   extended. A new `kind` would be seen by every existing `review_queue` consumer as a
+>   new class of work.
+> * The discriminator is `subkind=self_precedence_note` **in the payload**, alongside
+>   the shadowed candidates, matching the `subkind=` convention `.rc_feature_review`
+>   already emits (`ambiguous`, `structural`).
+> * **AND the payload carries an explicit blocking flag** — a boolean, not an implied
+>   property of the subkind value. This is the FIRST non-blocking review row the feature
+>   resolver has ever emitted, and if "is this a note?" can only be answered by knowing
+>   which subkinds happen to be notes, every reader has to hardcode that set and the
+>   next subkind added silently reads as work. The flag is what makes the note safe;
+>   the subkind is only what names it.
+>
+> Both belong to the single `subkind` precedence table owned by the `P15-review-payload`
+> unit — do not start a second one.
+
 Source: `dev/plans/RULINGS-2026-07-23-alias-self-precedence.md`, R2. R1 makes every
 `self` arm `auto_assign = TRUE`; **E.7 is what stops that turning into a review-queue
 flood**, and it is a prerequisite of R1 being safe, not a nicety on top of it.
