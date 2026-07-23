@@ -607,6 +607,275 @@ test_that("R-11.11: vectorised over uuid_lab/uuid_analyte - one call confirms tw
 # Meta: source-level authority-rule guard (B-11-the-api-is-the)
 # ======================================================================
 
+# ======================================================================
+# PLAN-15 F.19 / R-15.37 - confirm_feature_aliases() no longer mislabels
+# every confirmation as a transcription error (RULINGS-2026-07-23 R4).
+# ======================================================================
+
+test_that("R-15.37: confirming an identity-mapped pending alias (alias_key == lower(feature.name)) flips the EXISTING self arm rather than minting a duplicate row, and the self arm carries confirmed_by; a genuine non-identity alias is NOT defaulted to transcription_error", {
+  setup <- fa_setup()
+  con <- setup$con
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  # fa-9601 is the feature's own pre-existing 'self' arm (alias_key ==
+  # lower(f-9601.name)); fa-9602 is a SEPARATE pending row that arrived
+  # later carrying the identical key - the exact shape the b.s01/k.e02
+  # duplicates came from (RULINGS R3/R4).
+  DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix, lon, lat) VALUES
+    ('f-9601', 'Z.IDENT01', 'Z', 'surface', 'water', 150.9601, -33.9601)")
+  DBI::dbExecute(con, "INSERT INTO feature_alias
+    (uuid, uuid_feature, name, alias_key, kind, n_seen, auto_assign,
+     first_seen, last_seen, confirmed_by) VALUES
+    ('fa-9601', 'f-9601', 'Z.IDENT01', 'z.ident01', 'self', 0, TRUE,
+     TIMESTAMP '2025-01-01 00:00:00', TIMESTAMP '2025-01-01 00:00:00', NULL)")
+  DBI::dbExecute(con, "INSERT INTO feature_alias
+    (uuid, uuid_feature, name, alias_key, kind, n_seen, auto_assign,
+     first_seen, last_seen, confirmed_by) VALUES
+    ('fa-9602', NULL, 'Z.IDENT01', 'z.ident01', 'pending', 0, FALSE,
+     TIMESTAMP '2025-09-01 08:00:00', TIMESTAMP '2025-09-01 08:00:00', NULL)")
+
+  before_count <- count_rows(con, "feature_alias")
+  before_self <- feature_alias_row(con, "fa-9601")
+  expect_true(is.na(before_self$confirmed_by[[1]]))
+
+  confirm_feature_aliases("fa-9602", "f-9601", confirmed_by = "alice")
+
+  # (a) no new feature_alias row minted for the identity confirmation -
+  # assert the table row count, not the resolution outcome.
+  after_count <- count_rows(con, "feature_alias")
+  expect_equal(after_count, before_count)
+
+  # (b) the EXISTING self arm (fa-9601), not the just-confirmed pending row,
+  # carries the confirmed_by - proof the flip landed on the self arm.
+  after_self <- feature_alias_row(con, "fa-9601")
+  expect_identical(after_self$confirmed_by[[1]], "alice")
+
+  # (c) a genuine NON-identity alias (key != lower(feature.name)) must not
+  # be defaulted to transcription_error by the same call path.
+  DBI::dbExecute(con, "INSERT INTO feature_alias
+    (uuid, uuid_feature, name, alias_key, kind, n_seen, auto_assign,
+     first_seen, last_seen, confirmed_by) VALUES
+    ('fa-9603', NULL, 'ZIDENTMISPELL', 'zidentmispell', 'pending', 0, FALSE,
+     TIMESTAMP '2025-09-01 08:00:00', TIMESTAMP '2025-09-01 08:00:00', NULL)")
+  confirm_feature_aliases("fa-9603", "f-9601", confirmed_by = "alice")
+  non_identity <- feature_alias_row(con, "fa-9603")
+  expect_false(identical(non_identity$kind[[1]], "transcription_error"))
+})
+
+# ======================================================================
+# PLAN-15 E.4 / R-15.18 - confirm_feature_aliases() gains date_start /
+# date_end bound arguments: set, clear (explicit sentinel), leave-alone, and
+# a bounds-only call with uuid_feature omitted.
+#
+# PROVISIONAL API CHOICE (see accompanying plan-change request): the plan
+# pins the argument names (`date_start`/`date_end`) and requires "an
+# explicit clear sentinel distinct from leave-alone" but not the concrete
+# sentinel scheme. Best reading adopted here: the default (omitted) value
+# NULL means leave-alone; an explicit `as.Date(NA)` means clear; a real
+# `Date` means set. Phase 6 must re-check the landed implementation actually
+# adopts this scheme (or the orchestrator's adjudicated alternative) before
+# trusting these as the final oracle for argument names/sentinel values.
+# ======================================================================
+
+test_that("R-15.18 (E.4): confirm_feature_aliases() SETS date_start on an unbounded alias, round-tripped as a real DATE (never POSIXct) via the driver", {
+  setup <- fa_setup()
+  con <- setup$con
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  DBI::dbExecute(con, "INSERT INTO feature_alias
+    (uuid, uuid_feature, name, alias_key, kind, n_seen, auto_assign,
+     first_seen, last_seen, confirmed_by) VALUES
+    ('fa-9501', NULL, 'Z.SET01', 'z.set01', 'pending', 0, FALSE,
+     TIMESTAMP '2025-09-01 08:00:00', TIMESTAMP '2025-09-01 08:00:00', NULL)")
+
+  before <- feature_alias_row(con, "fa-9501")
+  expect_true(is.na(before$date_start[[1]]))
+
+  confirm_feature_aliases(
+    "fa-9501", "f-0002", confirmed_by = "alice",
+    date_start = as.Date("2025-09-01")
+  )
+
+  after <- feature_alias_row(con, "fa-9501")
+  expect_s3_class(after$date_start[[1]], "Date") # DATE, never POSIXct/TIMESTAMP
+  expect_equal(after$date_start[[1]], as.Date("2025-09-01"))
+})
+
+test_that("R-15.18 (E.4): confirm_feature_aliases() CLEARS an existing date_end via the explicit clear sentinel (as.Date(NA)), distinct from the leave-alone default", {
+  setup <- fa_setup()
+  con <- setup$con
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  DBI::dbExecute(con, "INSERT INTO feature_alias
+    (uuid, uuid_feature, name, alias_key, kind, n_seen, auto_assign,
+     first_seen, last_seen, confirmed_by, date_start, date_end) VALUES
+    ('fa-9502', 'f-0002', 'Z.CLEAR01', 'z.clear01', 'historical_code', 0, TRUE,
+     TIMESTAMP '2025-01-01 00:00:00', TIMESTAMP '2025-01-01 00:00:00', NULL,
+     DATE '2025-01-01', DATE '2025-06-30')")
+
+  before <- feature_alias_row(con, "fa-9502")
+  expect_equal(before$date_end[[1]], as.Date("2025-06-30"))
+
+  confirm_feature_aliases(
+    "fa-9502", "f-0002", confirmed_by = "alice",
+    date_end = as.Date(NA)
+  )
+
+  after <- feature_alias_row(con, "fa-9502")
+  expect_true(is.na(after$date_end[[1]]))
+  expect_equal(after$date_start[[1]], as.Date("2025-01-01")) # untouched by clearing date_end
+})
+
+test_that("R-15.18 (E.4): confirm_feature_aliases() LEAVES an existing date_start bound untouched when explicitly passed the leave-alone default (NULL) - a re-confirm must not silently wipe a bound", {
+  setup <- fa_setup()
+  con <- setup$con
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  DBI::dbExecute(con, "INSERT INTO feature_alias
+    (uuid, uuid_feature, name, alias_key, kind, n_seen, auto_assign,
+     first_seen, last_seen, confirmed_by, date_start) VALUES
+    ('fa-9503', 'f-0002', 'Z.LEAVE01', 'z.leave01', 'historical_code', 0, TRUE,
+     TIMESTAMP '2025-01-01 00:00:00', TIMESTAMP '2025-01-01 00:00:00', NULL,
+     DATE '2024-01-01')")
+
+  before <- feature_alias_row(con, "fa-9503")
+  expect_equal(before$date_start[[1]], as.Date("2024-01-01"))
+
+  confirm_feature_aliases(
+    "fa-9503", "f-0002", confirmed_by = "alice",
+    date_start = NULL
+  )
+
+  after <- feature_alias_row(con, "fa-9503")
+  expect_equal(after$date_start[[1]], as.Date("2024-01-01")) # unchanged
+  expect_identical(after$confirmed_by[[1]], "alice") # the rest of confirmation still happened
+})
+
+test_that("R-15.18 (E.4): a bounds-only call works with uuid_feature OMITTED - widens an existing alias's date_start without re-picking a feature, leaving uuid_feature untouched", {
+  setup <- fa_setup()
+  con <- setup$con
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  DBI::dbExecute(con, "INSERT INTO feature_alias
+    (uuid, uuid_feature, name, alias_key, kind, n_seen, auto_assign,
+     first_seen, last_seen, confirmed_by, date_start) VALUES
+    ('fa-9504', 'f-0003', 'Z.BOUNDSONLY01', 'z.boundsonly01', 'historical_code', 0, TRUE,
+     TIMESTAMP '2025-01-01 00:00:00', TIMESTAMP '2025-01-01 00:00:00', 'prior_op',
+     DATE '2025-05-01')")
+
+  before <- feature_alias_row(con, "fa-9504")
+  expect_identical(before$uuid_feature[[1]], "f-0003")
+
+  expect_no_error(
+    confirm_feature_aliases(
+      "fa-9504", confirmed_by = "alice", date_start = as.Date("2024-01-01")
+    )
+  )
+
+  after <- feature_alias_row(con, "fa-9504")
+  expect_identical(after$uuid_feature[[1]], "f-0003") # untouched - no feature re-pick
+  expect_equal(after$date_start[[1]], as.Date("2024-01-01")) # bound widened
+})
+
+# ======================================================================
+# PLAN-15 F.14 / R-15.34 - confirm_analyte_methods() must succeed on a
+# method that HAS dependent analyses (today it fails on any such method:
+# duckdb 1.4.1 refuses an UPDATE of a chained-FK table's own outgoing-FK
+# column - lab_method.uuid_analyte - while any analysis row still
+# references it; see .mig002_detach_reason's own comment in
+# dev/migrations/002-registry-remediation.R for the reference detach ->
+# repoint -> reattach pattern the fix is expected to reuse).
+#
+# NOTE: helper-db.R's shared `seed_db()`/`fa_setup()` DDL declares NO
+# foreign keys at all (verified: no REFERENCES/FOREIGN KEY anywhere in
+# .st_test_core_ddl), so it CANNOT reproduce this defect - any test built on
+# it would pass today regardless of the bug (false green). This test
+# instead builds its own minimal, self-contained FK-constrained DB (the
+# smallest two-hop chain that reproduces it: analyte <- lab_method <-
+# analysis, mirroring the live shape at
+# dev/migrations/001-alias-indirection.R:456-499), reusing `ensure_schema()`
+# for the ops tables rather than re-deriving them. Empirically verified
+# (scratch repro) that duckdb 1.4.1 raises "Constraint Error: ... still
+# referenced by a foreign key in a different table" on this exact shape,
+# even wrapped in one transaction.
+# ======================================================================
+
+#' Build a minimal, self-contained FK-constrained DB reproducing the real
+#' analyte <- lab_method <- analysis foreign-key chain (R-15.34 / F.14).
+#' Cleanup (tempdir, option) bound to the CALLING TEST's frame, not this
+#' helper's own frame (the withr wrong-frame trap, language-footguns.md).
+fa_fk_setup <- function() {
+  env <- parent.frame()
+  dir <- withr::local_tempdir(.local_envir = env)
+  path <- file.path(dir, "fk-seed.duckdb")
+  withr::local_options(list("sampletidy.live_db" = path), .local_envir = env)
+
+  # ---- seed, then close the seeding connection (mirrors seed_db()'s own
+  # on.exit-scoped-to-itself pattern in helper-db.R) ----
+  {
+    con <- DBI::dbConnect(duckdb::duckdb(), path, read_only = FALSE)
+    on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+    ensure_schema(con) # review_queue/change_log/schema_version - reused, not re-derived
+
+    DBI::dbExecute(con, "CREATE TABLE analyte (
+      uuid VARCHAR PRIMARY KEY, name VARCHAR, units VARCHAR,
+      conversion_constant DOUBLE, type VARCHAR, CAS VARCHAR)")
+    DBI::dbExecute(con, "CREATE TABLE lab_method (
+      uuid VARCHAR PRIMARY KEY,
+      uuid_analyte VARCHAR REFERENCES analyte(uuid),
+      name VARCHAR, method VARCHAR, organisation VARCHAR,
+      rl_low DOUBLE, rl_high DOUBLE, reported_as VARCHAR, api VARCHAR,
+      uuid_project VARCHAR, uuid_feature VARCHAR, comments VARCHAR,
+      units VARCHAR, conversion_constant DOUBLE)")
+    DBI::dbExecute(con, "CREATE TABLE analysis (
+      uuid VARCHAR PRIMARY KEY, uuid_sample VARCHAR,
+      uuid_lab VARCHAR REFERENCES lab_method(uuid),
+      value DOUBLE, value_chr VARCHAR, quantified BOOLEAN,
+      rl_low DOUBLE, rl_high DOUBLE, purpose VARCHAR, comments VARCHAR)")
+
+    # a-9401/lm-9401: same units on both sides (identity conversion, keeps
+    # this test scoped to the FK/repoint behaviour, not unit conversion
+    # math - that is already covered by R-11.11's own tests). lm-9401 is
+    # DANGLING (uuid_analyte NULL) with TWO dependent analyses, so both the
+    # FK-chain defect and the "every dependent analysis still points at the
+    # same lab_method" assertion are exercised.
+    DBI::dbExecute(con, "INSERT INTO analyte (uuid, name, units, type, CAS) VALUES
+      ('a-9401', 'FK Analyte', 'mg/L', 'anion', NULL)")
+    DBI::dbExecute(con, "INSERT INTO lab_method
+      (uuid, uuid_analyte, name, method, organisation, rl_low, units) VALUES
+      ('lm-9401', NULL, 'FK Method', 'M-FK', 'ALS', 0.1, 'mg/L')")
+    DBI::dbExecute(con, "INSERT INTO analysis
+      (uuid, uuid_sample, uuid_lab, value, quantified, rl_low) VALUES
+      ('an-9401', 's-9401-nofk', 'lm-9401', 5, TRUE, 0.1),
+      ('an-9402', 's-9402-nofk', 'lm-9401', 6, TRUE, 0.1)")
+  }
+
+  list(path = path, con = seed_con(path))
+}
+
+test_that("R-15.34: confirm_analyte_methods() succeeds on a method WITH dependent analyses (real FK chain: analyte <- lab_method <- analysis) - lab_method.uuid_analyte moves AND every dependent analysis still points at the same lab_method", {
+  setup <- fa_fk_setup()
+  con <- setup$con
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  before_lab <- DBI::dbGetQuery(con, "SELECT uuid_analyte FROM lab_method WHERE uuid = 'lm-9401'")
+  expect_true(is.na(before_lab$uuid_analyte[[1]]))
+  before_deps <- DBI::dbGetQuery(con, "SELECT uuid FROM analysis WHERE uuid_lab = 'lm-9401'")
+  expect_equal(nrow(before_deps), 2) # a method WITH dependent analyses, not the zero-referenced case
+
+  expect_no_error(
+    confirm_analyte_methods("lm-9401", "a-9401", confirmed_by = "alice")
+  )
+
+  after_lab <- DBI::dbGetQuery(con, "SELECT uuid_analyte FROM lab_method WHERE uuid = 'lm-9401'")
+  expect_identical(after_lab$uuid_analyte[[1]], "a-9401") # moved
+
+  after_deps <- DBI::dbGetQuery(con, "SELECT uuid, uuid_lab FROM analysis WHERE uuid IN ('an-9401', 'an-9402') ORDER BY uuid")
+  expect_equal(nrow(after_deps), 2) # neither orphaned nor deleted
+  expect_true(all(after_deps$uuid_lab == "lm-9401")) # every dependent analysis still points at the SAME lab_method
+})
+
 test_that("R-11.10/R-11.11 (A55, source meta-test): confirmed_by carries NO default value in either function's signature - comment/string-stripped, with a decoy that must NOT trip the guard", {
   # Comment/string-aware: a raw line-grep would false-positive on the decoy
   # comment below (which mentions a defaulted confirmed_by in prose) - strip

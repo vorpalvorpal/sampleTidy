@@ -1881,6 +1881,36 @@ able to FAIL): confirm a method **with** dependent analyses and assert both that
 at the same `lab_method`. A test using a zero-referenced method passes against
 today's broken code.
 
+**ADJUDICATED 2026-07-24 — the fix CANNOT honour this file's one-transaction
+contract, and that is a deliberate, guarded exception.** `R/feature-alias.R:13-14`
+documents that both `confirm_*` functions "open exactly one mutation-layer
+transaction per call ... an error on item N rolls back items 1..N-1 too". A Phase-4
+writer reproduced (twice, on a purpose-built FK-constrained DuckDB) that the chained-FK
+constraint fires **even inside a single transaction**, so the detach → repoint →
+reattach steps must be separately committed statements. That is corroborated by
+precedent rather than taken on report: migration 002 already does exactly this
+non-transactionally, and `.mig002_torn_guard()` (`002:119`) exists *because* the
+pattern cannot be atomic.
+
+RULING: the has-dependents path adopts 002's loop verbatim, tagged with 002's reason
+suffixes, and gains a torn-state guard modelled on `.mig002_torn_guard()` so a run
+interrupted mid-repoint ABORTS LOUDLY on re-entry instead of silently "succeeding".
+The one-transaction contract in `feature-alias.R` gains an explicit documented
+exception for this path only. The alternative — leaving `confirm_analyte_methods()`
+broken for every method that has analyses — is the status quo defect this item exists
+to remove, and the guard is what preserves the safety the contract was protecting.
+
+**FIXTURE GAP, recorded for the implementer:** `tests/testthat/helper-db.R` declares
+**zero** `REFERENCES` clauses — the shared test DDL has no foreign keys at all
+(verified: `grep -c REFERENCES` is 0). A test for this item built on the shared
+fixture therefore FALSE-GREENS, because the constraint that defines the defect does
+not exist there. The Phase-4 test carries its own local FK-constrained database for
+this reason. Do not "simplify" it back onto the shared fixture.
+
+The wider gap — that the shared fixture cannot catch ANY foreign-key defect — is a
+real test-suite fidelity limit, not specific to this item. It is out of scope here and
+is recorded in run-state for Phase 5 rather than fixed under a single unit.
+
 <!-- block: B-15.F15 -->
 ### F.15 `review_queue` items have no close path (DEFECT — found 2026-07-23)
 After `confirm_feature_aliases()` and `confirm_analyte_methods()` resolved every
