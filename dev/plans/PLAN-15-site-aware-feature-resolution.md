@@ -868,6 +868,47 @@ row (`date` at 14:00, `datetime` at the real instant) that asserts an incoming r
 the same local date MATCHES. Against today's code that test fails, which is the point —
 if it passes before the change, it is not testing the right thing.
 
+### F.16 Reporting-limit residue after the 2026-07-23 `rl_low` correction (OPEN)
+**The convention (Robin, 2026-07-23):** *"Where a value is BDL its value is set
+as the reporting limit and then quantified is set to FALSE."* So for every
+`quantified = FALSE` row, `value == rl_low` must hold. That is now a testable
+invariant and should become an assertion, not folklore.
+
+**Fixed 2026-07-23:** 3,190 rows carried `rl_low` exactly 1000× `value` — the RL
+left in µg/L while the value was converted to mg/L. All 3,190 were legacy (none
+written by sampleTidy), all on `mg/L` analytes, and all on organics whose
+canonical ALS reporting limits confirm the reading (benzene 0.001 mg/L = 1 µg/L,
+xylene 0.002 = 2, TPH-C6-C9 0.020 = 20, TRH-C11-C16 0.100 = 100). Corrected by
+`/1000` through `db_update()`, each with `change_log` provenance.
+
+**Still open, deliberately not touched — these are NOT a unit slip:**
+
+| Symptom | Rows | Origin |
+|---|---|---|
+| `quantified = FALSE` but `value <> rl_low` | 232 | 231 legacy, **1 ours** |
+| `quantified = TRUE` but `rl_low > value` — a measurement below its own RL | 355 | all legacy |
+
+Their ratios are messy and non-decimal (208.333, 0.1, 50, 0.5, 100, 0.2, 250,
+0.833…), so no single conversion explains them; they need per-analyte source
+tracing against the original lab reports. Do **not** "fix" them by forcing
+`value = rl_low` — that would fabricate reporting limits.
+
+**The one row that is ours** — Fe(III), `value` 0.1, `rl_low` 0.05,
+`quantified = FALSE` — is the important one, because it means an adapter can
+emit a BDL row whose value is not its RL. Trace it to its source file and
+decide whether the adapter took the value and the RL from different columns.
+
+**Also confirmed 2026-07-23:** `rl_high` is NULL for **all 97,118** rows, so
+nothing reads it and R-11.16/F4's write path has never been exercised against
+real data.
+
+**Related `quantified` note:** `R/commit.R:509` computes
+`isTRUE(clean$quantified[[i]])`, which maps NA to FALSE — so sampleTidy can
+never write `quantified = NA`, and an unknown detection state is silently
+recorded as below-detection. The legacy corpus holds 315 NA rows, so the
+tri-state is real in the data and the write path collapses it. Decide whether
+that coercion is intended.
+
 ### F.13 `time_known` flag on `sample` (FILED FOR LATER — Robin, 2026-07-23)
 Robin: *"Where time is unknown set it to 10am (since that is a best guess). Your
 no time col is a good idea, file that for later."*
