@@ -640,6 +640,11 @@ IMPLEMENTATION PASS**, not queued behind it. They live in the same function
 (`.rc_feature_key`) that Work B builds on, and until F.3 lands the key has no
 real test guarding it at all.
 
+**F.9, F.10 and F.11 were added 2026-07-23 and are all APPROVED by Robin.** F.10
+(work-order re-ingest guard) and F.11 (drop `sample.date`) both touch `R/reconcile.R`
+and `R/commit.R`, which the Work B/C implementation pass is editing — so they are
+QUEUED behind it to avoid a write conflict, not deferred on merit.
+
 **F.4–F.8 ARE DEFERRED TO POST-CUTOVER (Robin, 2026-07-23).** They are NOT
 abandoned — they are follow-up work, to be picked up once the migrated DB is in
 service. The deferral is safe on measured evidence, not optimism: F.6's exposure
@@ -750,6 +755,97 @@ A DB committed under the old key holds `alias_key = 'bs01'` where reconcile now 
 double-commits. **Verified not reachable today: both the post-001 snapshot and the
 dry-run DB hold ZERO dangling aliases.** Record the precondition — "no pending aliases
 exist" — and re-check it before any live commit, or write a migration.
+
+### F.9 `add_feature()` leaves a post-001 feature unreachable by its own name (SHOULD-FIX)
+**Robin, 2026-07-23: build this as a follow-up.** `add_feature()` inserts a `feature`
+row and nothing else. Post-migration-001, `sample.uuid_feature_alias` is the ONLY path
+from a sample to a feature, and 001 gave every then-existing feature a `kind = 'self'`
+alias. A feature created *after* 001 has none — so `.rc_feature_candidates()` finds
+zero candidates for the feature's own canonical name, and every future row for it lands
+in review as `unknown_feature`, **forever and silently**. The failure is invisible at
+creation time: `add_feature()` returns success and the row is really there.
+
+Fix: `add_feature()` must create the `self` alias in the same transaction as the
+`feature` row, with `change_log` provenance for both. The invariant to assert is
+`count(feature_alias WHERE kind='self') == count(feature)`.
+
+Interim controls already in place, do not mistake them for the fix: `registry-changes.R`
+carries `cutover_add_bl05_self_alias()`, which closes this for B.L05 **only**, and
+`dev/cutover/verify.R` V02 asserts the general invariant at cutover time — which
+detects a recurrence but does not prevent one.
+
+Acceptance (must be able to FAIL): create a feature via `add_feature()`, then reconcile
+a row carrying exactly that feature's canonical name, and assert it RESOLVES rather than
+queueing as `unknown_feature`. A test that only counts `feature_alias` rows passes
+against a wrong implementation that writes an alias of the wrong `kind`.
+
+### F.10 Work-order-level re-ingest guard (APPROVED — Robin, 2026-07-23)
+**Why this exists:** the legacy corpus cannot be matched by the reuse path (see the
+cutover runbook F2 — `already_present` is 0 of 6,725 rows), and Robin's ruling that
+`sample.datetime` must not be touched forecloses the migration that would have restored
+idempotency. So "never re-ingest a work order that is already in the DB" is a standing
+policy, and policy enforced by operator discipline is exactly what failed when correct,
+well-intentioned re-downloads were staged into `assets/input`.
+
+Build: before commit, a file whose work order already has `sample` rows is **routed to
+review, not committed**. It must be a positive check against the DB, not a filename or
+`ingest_file` check — the re-download case had new filenames for already-present data.
+
+Measured 2026-07-23 (copy of the authoritative DB): of the 104 work orders of record in
+`assets/input`, **96 already have `sample` rows, 8 do not, and NONE is partially
+loaded** — every work order is wholly present or wholly absent. That last fact is what
+makes a work-order-granularity guard correct rather than too coarse; **re-verify it
+before relying on it**, because a partially-loaded work order would be silently blocked
+by this guard.
+
+Acceptance (must be able to FAIL): ingest a work order, then ingest a *differently named
+file* carrying the same work order, and assert zero new `sample`/`analysis` rows plus a
+review item. A test that re-ingests the identical path may pass via hash dedup instead
+and would not exercise the guard at all.
+
+### F.11 Drop `sample.date` (APPROVED — Robin, 2026-07-23; `date_start` NOT approved)
+Robin: *"The date columns probably shouldn't exist at all. They were always just copies
+of datetime with the time removed."*
+
+**Premise verified for `date`, 2026-07-23.** Reading both columns as UTC-naive and
+taking the Sydney calendar date, `date` and `datetime` agree on **15,107 of 15,111**
+rows. The 4 exceptions are data errors, not semantics — two are exactly one month apart
+(`2022-10-18` vs `2022-11-18`; `2022-10-11` vs `2022-11-11`, i.e. a month typo) and two
+are one day apart. Resolve those 4 explicitly rather than letting the drop silently pick
+a winner.
+
+**Premise NOT verified for `date_start`. Do not drop it in the same pass.**
+`date_start` vs `datetime_start` **disagree on 223 of 15,066** rows, and 45 rows have a
+NULL `date_start` with a non-NULL `datetime_start`. Something other than
+time-truncation is going on; it needs its own investigation first.
+
+**"Nothing relies on them" is not correct** — this is the part that makes it real work,
+and it must not be done as a bare `ALTER TABLE ... DROP COLUMN`:
+
+| Consumer | What it does with `sample.date` |
+|---|---|
+| `R/reconcile.R:1017` | `.rc_find_existing()` reuse match — `CAST(s.date AS DATE) = ?` |
+| `R/commit.R:331,339` | `.ct_find_or_create_sample()` reuse match — both branches |
+| `R/feature-alias.R:116,125,159` | `(feature, date)` collision detection and the D5 merge rule |
+| `R/assemble.R:151` | the A45 identity key `(feature, date, analyte, method)` |
+| 6 DB views | `v_feature_dates`, `v_measurement`, `v_measurement_epa`, `v_measurement_gas_report`, `v_measurement_long`, `v_measurement_old` |
+
+Each consumer must first be switched to the Sydney calendar date **derived from
+`datetime`**, and the six views rebuilt, before the column is dropped. Note DuckDB will
+generally refuse to drop a column a view depends on, so a bare drop fails loudly rather
+than silently — but the R-side consumers have no such protection and would simply error
+at runtime.
+
+**Worth doing for its own sake:** this removes the day-early landmine permanently.
+`CAST(date AS DATE)` is one day earlier than the true local date for **every** legacy
+row (all 15,111 non-NULL values are 13:00 or 14:00), which has already produced an
+off-by-one in curated date literals once. It also eliminates cause 1 of runbook F2 —
+though **not** cause 2, so it does not remove the need for F.10.
+
+Acceptance (must be able to FAIL): a reuse-match test seeded with a legacy-convention
+row (`date` at 14:00, `datetime` at the real instant) that asserts an incoming row for
+the same local date MATCHES. Against today's code that test fails, which is the point —
+if it passes before the change, it is not testing the right thing.
 
 ## Registry data changes pending the live cutover
 
