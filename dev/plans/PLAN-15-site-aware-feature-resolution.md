@@ -1253,7 +1253,8 @@ that cannot be made correct without rework:
 | **F.5 → F.6 → E.3, in ONE pass** | all three change `.rc_feature_review`'s payload, and E.3/F.6 each add a `subkind` value. Done separately they collide; done together they need one precedence table (below). |
 | **F.11 → F.12** | F.12(b) restores a projection *including* `date` — the very dependency F.11 exists to remove. Landing F.12 first re-creates F.11's own blocker. See F.12. |
 | **F.10's supersede exemption → F.10** | F.10 as written blocks the A12 revision-supersede and `already_present` paths. The exemptions must be pinned BEFORE the guard is built, or the guard ships breaking them. See F.10. |
-| **F.15's linkage decision → F.15** | `review_queue` has no column linking an item to the alias it raised, so F.15 is not implementable until that schema decision is made. See F.15. |
+| ~~**F.15's linkage decision → F.15**~~ **SETTLED 2026-07-24** | Was: `review_queue` has no column linking an item to the alias it raised. **Robin ruled option (a): a `uuid_target` column** — design pinned in F.15 (D1–D6), acceptance is R-15.38…R-15.43. F.15 is unblocked. |
+| **F.15's migration 5 → F.15's close path** | The `uuid_target` column must exist before anything reads or writes it. It is an `.st_schema_migrations` DDL entry (auto-applied by `ensure_schema()`), **not** a `dev/migrations/00N-*.R` script — those are one-off data remediations; this is plain schema. See F.15 D1. |
 | **F.19 → E.8 → migration 003** | *(added 2026-07-23, R3/R4.)* Until `confirm_feature_aliases()` stops minting duplicate identity arms (F.19), E.8's cleanup is not durable — the next confirmation re-creates the problem. E.8 in turn removes the two-row `(alias_key, target feature.name)` collision 003's UPDATE keying has to work around. See F.19, E.8. |
 | **E.7 → R1's flip (migration 003)** | *(added 2026-07-23, R1/R2.)* R1 turns every `self` arm on, which makes keys with a live historical arm reach TWO candidates. Without E.7's self-precedence they go PENDING (`reconcile.R:455`) — R1 landed without E.7 is a review-queue regression, not a fix. See E.7. |
 | **F.19 and E.8 → the NEXT INGEST of the incoming files** | *(added 2026-07-23, Robin.)* Not a build dependency — a **calendar** one. More input files are arriving. Every ambiguous key in them generates a pending alias, and every confirmation of one writes another mislabelled (and possibly duplicate) row. Ingesting first means cleaning up more later. |
@@ -1985,8 +1986,24 @@ resolves it succeeds, in the same transaction. Acceptance (must be able to FAIL)
 open an item, confirm its alias, assert the item is no longer `open` **and** that
 an unrelated open item is untouched.
 
+> **RULING — Robin, 2026-07-24: option (a), a `uuid_target` column. F.15 IS UNBLOCKED.**
+> The full design is pinned in "THE PINNED DESIGN" below, and F.15's acceptance is now
+> writable as R-15.38 … R-15.43. The ⛔ block that follows is kept as the *record of why*
+> the ruling was needed — it is history, not a live blocker.
+>
+> One correction to the ⛔ text below, found while pinning the design: it says the alias
+> uuid "does not yet exist" when the review item is written. True at *reconcile* time, but
+> **commit already resolves it** — `.ct_rewrite_review_payloads()` (`R/commit.R:243`,
+> called at `R/commit.R:737`) builds `amap`, a `source_ref` → freshly-created
+> `feature_alias.uuid` map, and appends an `,alias_uuid=<uuid>` token to the payload
+> *before* `.ct_commit_review()` inserts the row (`R/commit.R:749`). So the linkage is
+> already computed at exactly the right moment; option (a) moves it out of free text and
+> into a column. That is why (a) is cheap and why (b) was never really "no migration" —
+> the payload grammar is **already** load-bearing here.
+
 **⛔ NOT IMPLEMENTABLE AS SPECIFIED — cold audit 2026-07-23, finding 20. A PREREQUISITE
-DECISION IS MISSING.** "Close **the originating** review item" presumes the code can
+DECISION IS MISSING.** *(Superseded by the ruling above; retained as rationale.)*
+"Close **the originating** review item" presumes the code can
 identify which item a given `feature_alias` raised. It cannot: **`review_queue` has no
 column linking an item to the `feature_alias` it raised**, and — this is the part that
 makes it a schema problem rather than a query problem — **it cannot acquire one at
@@ -2009,8 +2026,101 @@ The options, needing a ruling:
 Note the second half of the same defect is independent of the linkage and is real
 either way: **nothing anywhere writes `review_queue.status`** — `R/mutate.R:583` exposes
 `review_queue(con, status)` as a READER only. A writer has to be built regardless of
-which option is chosen. Until the linkage is ruled, the acceptance criterion above
-cannot be written, because "its alias" has no definition.
+which option is chosen.
+
+#### THE PINNED DESIGN (ruling (a), 2026-07-24)
+
+**D1 — the column.** A new `.st_schema_migrations` entry, `version = 5L`, whose entire
+DDL is `ALTER TABLE review_queue ADD COLUMN IF NOT EXISTS uuid_target VARCHAR`.
+**Do NOT retro-edit the `version = 3L` CREATE TABLE** (`R/db-schema.R:41`): a database
+already at version ≥ 3 never re-runs it, so editing it makes fresh and existing
+databases diverge. Nullable, no FK — `review_queue` is an ops table, and a FK here would
+make it block deletes on the registry it only observes.
+
+`uuid_target` is **generic**: `kind` is what says which table it points at. The mapping,
+which is part of this contract:
+
+| `kind` | `uuid_target` points at |
+|---|---|
+| `unknown_feature` (and any pending-alias kind) | `feature_alias.uuid` |
+| `value_conflict` | the losing `analysis.uuid` |
+| `units_drift` | `lab_method.uuid` |
+| `unknown_unit` | `analysis.uuid` |
+| anything else / not yet linked | `NULL` |
+
+Only the first row is **built** under F.15. The other three are the pinned meaning for
+when those call sites are back-filled; back-filling them is explicitly **out of scope**
+here, and leaving them `NULL` is correct, not a defect.
+
+**D2 — the write path (commit).** `.ct_rewrite_review_payloads()` already computes
+`amap`. Extend it to set a `uuid_target` column on the returned `review` tibble from the
+same map, and have `.ct_commit_review()` (`R/commit.R:638`) carry that column into the
+INSERT. **Keep writing the `,alias_uuid=` payload token** — it is the only linkage
+pre-migration rows will ever have, and dropping it would strand them.
+
+**D3 — the centralised writer.** `review_queue_add()` (`R/db-schema.R:292`) gains an
+optional `uuid_target = NA_character_` parameter, so the one sanctioned INSERT path can
+express the linkage. Its existing callers pass nothing and keep working.
+
+**D4 — the close path.** A new writer in `R/db-schema.R`, symmetric with
+`review_queue_add()` and for the same reason (so `review_queue` UPDATEs never scatter as
+raw SQL):
+
+```r
+review_queue_close(con, uuid_target, resolution, resolved_by)
+#   UPDATE review_queue
+#      SET status = 'resolved', resolution = ?, resolved_by = ?, resolved_at = ?
+#    WHERE uuid_target = ? AND status = 'open'
+#   returns the number of rows closed, invisibly
+```
+
+The terminal status is pinned as **`'resolved'`** — nothing writes `status` today so
+there is no precedent to honour, and `'resolved'` is the value the existing
+`resolution` / `resolved_by` / `resolved_at` columns were named for.
+
+**D5 — the call site.** `.fa_confirm_one_alias()` (`R/feature-alias.R:77`), immediately
+after its `db_update(con, "feature_alias", uuid_alias, ...)` (`R/feature-alias.R:138`)
+succeeds and inside the same transaction, calls
+`review_queue_close(con, uuid_target = uuid_alias, resolution = "confirmed", resolved_by = confirmed_by)`.
+
+**D6 — the NULL trap.** A `NULL`/`NA` target must close **nothing**. SQL makes
+`WHERE uuid_target = NULL` never true, so the danger is entirely on the R side: a target
+of `NA_character_` interpolated as the literal string `"NA"` would match nothing today
+but would match a row the moment anything ever wrote `"NA"`. `review_queue_close()` must
+return early on a missing/`NA` target rather than rely on SQL's NULL semantics to save it.
+
+**Acceptance (each must be able to FAIL):**
+
+### R-15.38
+- `ensure_schema()` on a pre-version-5 database adds `uuid_target` to `review_queue`;
+  rows that existed before read `NA`; a second `ensure_schema()` is a no-op (version 5
+  is recorded once in `schema_version`, and the ALTER is not re-attempted).
+
+### R-15.39
+- Committing an event with a pending feature writes a `review_queue` row whose
+  `uuid_target` **equals the `feature_alias.uuid` created by that same commit** — not
+  merely non-`NA`. A review row that is not a pending-feature row has `uuid_target` `NA`.
+
+### R-15.40
+- `review_queue_close()` closes exactly the matching open rows: `status` becomes
+  `'resolved'` and `resolution` / `resolved_by` / `resolved_at` are populated; **an
+  unrelated open item with a different `uuid_target` is untouched**; and a second
+  identical call closes **zero** rows (idempotent, because the first left none `open`).
+
+### R-15.41
+- `review_queue_close()` with a `NA`/missing target, or a target matching no row, closes
+  **zero** rows and does not error. A row with `uuid_target IS NULL` is never closed by
+  any call. (D6.)
+
+### R-15.42
+- End-to-end, the original F.15 acceptance: open an item, confirm its alias via
+  `confirm_feature_aliases()`, assert the item is no longer `open` **and** that an
+  unrelated open item is untouched.
+
+### R-15.43
+- A confirmation that **aborts** leaves the review item `open` — the close is inside the
+  confirmation's transaction, so there is no state where the alias is unconfirmed but its
+  review item is closed.
 
 <!-- block: B-15.F12 -->
 ### F.12 Migration 001 broke the reporting views (DEFECT — found 2026-07-23)
