@@ -233,7 +233,7 @@
 #' * an `asset` row exists for that hash;
 #' * the archive copy exists on disk as a REGULAR FILE (not merely its uuid
 #'   directory);
-#' * re-hashing the archived bytes reproduces the same SHA-256; and
+#' * re-hashing the archived bytes reproduces the same xxHash128; and
 #' * the source file still exists.
 #'
 #' The content check is not redundant with the existence check: the archive

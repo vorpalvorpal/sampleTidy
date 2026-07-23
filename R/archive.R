@@ -29,7 +29,7 @@
 #'
 #' @param con an open read-write DBI connection.
 #' @param path path to the source file to archive.
-#' @param hash the file's SHA-256 content hash (R-1.2 `hash_file()`).
+#' @param hash the file's xxHash128 content hash (R-1.2 `hash_file()`).
 #' @param event minimally `list(work_order = <work order id>)`.
 #' @return the asset row's uuid (new or reused), visibly.
 #' @keywords internal
