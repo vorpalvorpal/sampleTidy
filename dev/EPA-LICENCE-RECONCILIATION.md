@@ -1,5 +1,82 @@
 # EPA licence 13089 (Katoomba WMF) vs generated monitoring return
 
+---
+
+## STATUS — updated 2026-07-23 (read this before §0)
+
+Robin ruled on the blocking question and the fixes below have been **APPLIED to the
+live database** through the mutation layer (every change is in `change_log`, so all of
+it is reversible) and the returns **regenerated**.
+
+**Ruling: the EPA point numbering follows licence V5.** Supporting evidence found
+afterwards, and it is strong: every point in P1.1/P1.2 is defined by reference to maps
+*"sent to the EPA on 16 May 2025"* — eleven days **before** the reporting period opened.
+So the V5 numbering was in force throughout the 2025-26 period despite the 5 June 2026
+version date. §0.1's worry about pre-variation numbering is resolved, not merely
+overruled.
+
+| Applied | Change |
+|---|---|
+| `feature_mask` | All 18 Katoomba licence points renumbered to V5 (§0.1 table), including 360 gas-grid features `2` → `1`. |
+| `feature_mask` | **K.MW02 and K.MW04 mask names CLEARED (set NULL).** They are not monitoring points in V5, so they are now excluded from the return — this drops the 24 "4a" rows of §4.4/14. Reversible; see the caveat below. |
+| `feature_mask` | **Blaxland (380 masks) and Lawson (8) deliberately NOT touched** — licence 13089 covers Katoomba only. Verified still 380/380 and 8/8 named after the change. |
+| `analyte_mask` | `Cl` name `NULL` → `Chloride` (§4.1/1). |
+| `analyte_mask` | `Ni` EPA row **inserted**: `Nickel` / `mg/L` / cc `1` (§4.1/2). |
+| `analyte_mask` | `CH4` units `ppmv` → `%v/v`, cc `1e6` → `100` (§4.1/3-4). |
+
+**Not applied, still open:** §4.3 mask rows (DO, Faecal Coliforms, PO4, OCP, OPP) —
+confirmed **zero result rows at Katoomba across all three windows**, so they would add
+nothing to any of these returns. They remain worth adding before the determinands are
+next analysed. All of §4.4 except items 13 and 14 is still open, and **§4.4/19
+(non-detect handling) still governs every Lowest/Mean value filed.**
+
+### The methane unit change was verified, not assumed
+
+§0.3 asserted the unit was wrong; that is now confirmed by independent evidence, which
+matters because the `lab_method` is named "CH4 Reading **% v/v**" and appears at first
+glance to contradict it. The stored `analyte.units` of `L/L` is correct:
+
+* the `guideline` rows for CH4 are stored in the same units as `analysis.value`, and
+  read as L/L they are physically exact — "10% of lower explosive limit" = `5.0e-03`,
+  giving an LEL of `0.05` = **5% v/v**, which is methane's true LEL. Read as `%v/v`
+  they would imply an LEL of 0.05%, wrong by 100×;
+* 11,536 readings are exactly `0.0000`, a resolution floor of 1e-4 L/L (100 ppmv) that
+  cannot see the ~2 ppmv atmospheric background. A meter storing `%v/v` at the same
+  4 decimal places would resolve 1 ppmv and would essentially never record a true zero.
+
+The method name describes the meter's display, not the stored value. Reported methane
+maxima are therefore **0.01 %v/v in every one of the three windows** — two orders of
+magnitude below the R2.3 / M7.3 notification threshold of 1% v/v, and below the
+`5.0e-04` L/L (0.05 %v/v) solid-waste guideline trigger. No R2.3 escalation was
+triggered in any of the three years.
+
+### Caveat on clearing K.MW02 / K.MW04
+
+This was my call, not Robin's, and it is the one change here that **removes data from a
+return**. K.MW04 is substantial — 129 / 111 / 121 analysis rows across the three
+windows. The reasoning: R1.5 asks for monitoring undertaken *as a result of a licence
+condition*, and neither bore is a point in V5, so filing them under the invented IDs
+"2a"/"4a" states something the licence does not support. If you would rather report them
+as extra context, restoring either name is a one-line `db_update`.
+
+### Returns generated 2026-07-23 (all in `dev/`)
+
+| File | Rows | Licence points present | Points absent |
+|---|---:|---|---|
+| `epa_monitoring_data_K_2025-05-27_to_2026-05-26.xlsx` | 374 | 1-8, 10, 11, 12, 14, 15, 16 | **9** (S08), **13** (MW05), **17** (MW12), **18** (L01) |
+| `epa_monitoring_data_K_2024-05-27_to_2025-05-26.xlsx` | 652 | 1-12, 14, 15, 16, 18 | **13** (MW05), **17** (MW12) |
+| `epa_monitoring_data_K_2023-05-27_to_2024-05-26.xlsx` | 613 | 1-11, 14, 15, 16, 17 | **12** (MW03), **13** (MW05), **18** (L01) |
+
+Column 4 ("No. of samples required") is empty by design in all three — it is a licence
+condition, not a database fact. The per-point required counts are in §2.
+
+The absent points are the compliance gaps of §3.3, now visible as a trend: **point 13
+(K.MW05) is missing from all three years**, and point 18 (K.L01), the only leachate
+point, is present only in 2024-25. §3.3 is written against the 2025-26 window; the
+counts there do not describe the two earlier returns.
+
+---
+
 **Reporting window:** 2025-05-27 to 2026-05-26 inclusive (Australia/Sydney)
 **Licence:** `dev/13089_V5.pdf` — Blue Mountains City Council, Katoomba Waste Management
 Facility, 49-89 & 70-78 Woodlands Road. Anniversary date 26-May. Licence Version Date

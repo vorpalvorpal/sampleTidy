@@ -81,8 +81,10 @@
 #    convention (R/commit.R `.ct_commit_analyses`, D7/A63: the constant is a
 #    multiplier onto the stored value).  In scope for Katoomba this bites
 #    exactly once and it matters: Methane is stored as L/L and reported to the
-#    EPA as ppmv with a constant of 1e6.  Every constant actually applied is
-#    printed in the console report.
+#    EPA as %v/v with a constant of 100, because licence 13089 M2.2 specifies
+#    "percent by volume" and the R2.3 / M7.3 action threshold is "1% methane
+#    (v/v)".  (It was masked as ppmv with a constant of 1e6 until 2026-07-23.)
+#    Every constant actually applied is printed in the console report.
 #
 # J. UNIT MISMATCH GUARD.  If the stored units differ from the EPA units but
 #    the conversion constant is 1, the numbers cannot be right.  Those rows are
@@ -131,10 +133,23 @@
 #    placeholder - for him to fill in by hand.  Column order and header text are
 #    exactly the template's.
 #
-# N. EPA POINT 2 IS AN AGGREGATE.  360 Katoomba gas features (K.G01 ... K.G364)
-#    all carry the EPA mask name "2", so they are pooled into a single reported
-#    row per pollutant.  That is what the mask says; it is called out here
-#    because it is easy to mistake for a bug.
+# N. EPA POINT 1 IS AN AGGREGATE.  360 Katoomba gas features (K.G01 ... K.G364)
+#    all carry the EPA mask name "1", so they are pooled into a single reported
+#    row per pollutant.  That is what the mask says, and it matches licence
+#    13089 P1.1, which defines point 1 as "landfill gas monitoring locations
+#    conducted in a grid pattern over the landfill footprint" - one point, many
+#    locations.  It is called out because it is easy to mistake for a bug.
+#    NOTE the reported count is location-samples, not monitoring events; M2.2
+#    says "Quarterly", which plainly means four EVENTS.  See section 4.4 of
+#    dev/EPA-LICENCE-RECONCILIATION.md - still Robin's call.
+#
+# O. EPA POINT NUMBERING.  The Katoomba `feature_mask` rows were realigned to
+#    licence 13089 V5 (dev/13089_V5.pdf, conditions P1.1 and P1.2) on
+#    2026-07-23; before that they carried a different, undocumented scheme
+#    (E01=1, gas=2, E02=14, MW01=1a ...).  K.MW02 and K.MW04 are NOT monitoring
+#    points in V5, so their mask names were cleared and they no longer appear
+#    in the return.  Blaxland and Lawson masks were deliberately NOT touched -
+#    licence 13089 covers Katoomba only.
 #
 # =============================================================================
 
