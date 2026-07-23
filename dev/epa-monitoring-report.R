@@ -108,7 +108,8 @@
 #          still counts as "collected and analysed"; a pollutant with no detects
 #          at all gets a count but blank statistics.
 #      "half"    - non-detects contribute `value / 2` (the conventional
-#          half-the-reporting-limit substitution).
+#          half-the-reporting-limit substitution).  NOTE this has no basis in
+#          licence 13089 - see assumption P.
 #
 #    Substituting `analysis.rl_low` is deliberately NOT offered: in the
 #    rehearsal data `rl_low` is unit-inconsistent with `value` for 127 of the
@@ -151,11 +152,44 @@
 #    in the return.  Blaxland and Lawson masks were deliberately NOT touched -
 #    licence 13089 covers Katoomba only.
 #
+# P. BELOW-DETECTION VALUES ARE MARKED, NOT CHANGED.  sampleTidy's storage
+#    convention is that a below-detection result carries the reporting limit in
+#    `analysis.value` with `quantified = FALSE`.  Under the default
+#    `nondetect="as_stored"` those limits therefore flow straight into
+#    Lowest/Mean/Highest, and the filed table cannot distinguish "measured at
+#    0.1" from "never detected, limit of reporting 0.1" - the template has eight
+#    numeric columns and no way to write "<0.1".
+#
+#    Licence 13089's Dictionary is the only place the licence states a
+#    convention for non-detects.  In the definition of 3DGM: "Where one or more
+#    of the samples is zero or below the detection limit for the analysis, then
+#    1 or the detection limit respectively should be used in place of those
+#    samples."  That is precisely `as_stored`, which is why it is the default.
+#    Note the wording sits in the 3DGM definition, so it strictly governs the
+#    L2.4 concentration limits at points 2 and 3 rather than the R1.5 return -
+#    but it is the licence's own convention and the most defensible one here.
+#    It also gives no support at all to the "half" substitution.
+#
+#    So the numbers are left exactly as they are and the AMBIGUITY IS MARKED
+#    INSTEAD: any Lowest / Mean / Highest cell that is a reporting limit rather
+#    than a measurement is written in GREY ITALICS, and a note at the foot of
+#    the sheet explains the convention.  The rule per cell is:
+#      Lowest / Highest - grey italic when EVERY result attaining that extreme
+#          is below detection.  If a genuine detection ties the extreme, the
+#          number IS a measurement and is left in normal type.
+#      Mean             - grey italic only when EVERY contributing result for
+#          that point x pollutant is below detection.  A mean mixing detects
+#          and non-detects is left in normal type; it is a real quantity, just
+#          a partly-substituted one.
+#    Under nondetect="drop" non-detects contribute nothing, so nothing is ever
+#    marked.  The workbook is written with openxlsx2.
+#
 # =============================================================================
 
 suppressPackageStartupMessages({
   library(DBI)
   library(duckdb)
+  library(openxlsx2)
 })
 
 # ------------------------------------------------------------------ TUNABLES
@@ -412,7 +446,10 @@ if (nrow(mismatched) && identical(TUNABLES$unit_mismatch, "exclude")) {
 
 rows$reported <- rows$value * rows$cc
 
-is_nd <- !is.na(rows$quantified) & !rows$quantified
+# Carried as a COLUMN so it survives split()/aggregation - the per-cell marking
+# in assumption P needs to know which individual results were non-detects.
+rows$is_nd <- !is.na(rows$quantified) & !rows$quantified
+is_nd <- rows$is_nd
 
 rows$stat_value <- rows$reported
 if (identical(TUNABLES$nondetect, "drop")) {
@@ -425,8 +462,12 @@ if (identical(TUNABLES$nondetect, "drop")) {
 
 key <- paste(rows$epa_point, rows$pollutant, sep = "\r")
 agg <- do.call(rbind, lapply(split(seq_len(nrow(rows)), key), function(ix) {
-  d <- rows[ix, , drop = FALSE]
-  v <- d$stat_value[!is.na(d$stat_value)]
+  d    <- rows[ix, , drop = FALSE]
+  keep <- !is.na(d$stat_value)
+  v    <- d$stat_value[keep]
+  nd   <- d$is_nd[keep]          # aligned with v, so v == lo indexes nd correctly
+  lo   <- if (length(v)) min(v)  else NA_real_
+  hi   <- if (length(v)) max(v)  else NA_real_
   data.frame(
     epa_point   = d$epa_point[[1]],
     pollutant   = d$pollutant[[1]],
@@ -434,9 +475,14 @@ agg <- do.call(rbind, lapply(split(seq_len(nrow(rows)), key), function(ix) {
     n_samples   = length(unique(d$uuid_sample)),
     n_results   = nrow(d),
     n_nondetect = sum(!is.na(d$quantified) & !d$quantified),
-    lowest      = if (length(v)) min(v)  else NA_real_,
+    lowest      = lo,
     mean        = if (length(v)) mean(v) else NA_real_,
-    highest     = if (length(v)) max(v)  else NA_real_,
+    highest     = hi,
+    # Assumption P.  A tie between a detect and a non-detect at the extreme
+    # leaves the cell unmarked: the number is a real measurement.
+    lowest_nd   = length(v) > 0 && all(nd[v == lo]),
+    mean_nd     = length(v) > 0 && all(nd),
+    highest_nd  = length(v) > 0 && all(nd[v == hi]),
     stringsAsFactors = FALSE
   )
 }))
@@ -444,7 +490,9 @@ if (is.null(agg)) {
   agg <- data.frame(epa_point = character(), pollutant = character(),
                     epa_units = character(), n_samples = integer(),
                     n_results = integer(), n_nondetect = integer(),
-                    lowest = numeric(), mean = numeric(), highest = numeric())
+                    lowest = numeric(), mean = numeric(), highest = numeric(),
+                    lowest_nd = logical(), mean_nd = logical(),
+                    highest_nd = logical())
 }
 rownames(agg) <- NULL
 
@@ -562,17 +610,80 @@ out <- data.frame(
 )
 names(out) <- headers
 
-wb <- openxlsx::createWorkbook()
-openxlsx::addWorksheet(wb, "Sheet1")
-openxlsx::writeData(wb, "Sheet1", out, colNames = TRUE, keepNA = FALSE)
-openxlsx::addStyle(wb, "Sheet1",
-                   openxlsx::createStyle(textDecoration = "bold", wrapText = TRUE,
-                                         valign = "top"),
-                   rows = 1, cols = 1:8, gridExpand = TRUE)
-openxlsx::setColWidths(wb, "Sheet1", cols = 1:8,
-                       widths = c(12, 42, 26, 16, 20, 16, 16, 16))
-openxlsx::freezePane(wb, "Sheet1", firstRow = TRUE)
-openxlsx::saveWorkbook(wb, out_path, overwrite = TRUE)
+FONT  <- "Calibri"     # not the openxlsx2 default (Aptos Narrow), which older
+FSIZE <- "11"          # Excel installations do not have
+GREY  <- wb_color(hex = "FF808080")
+
+# Data rows start at sheet row 2 (row 1 is the header).  Columns F, G, H are
+# Lowest, Mean, Highest.
+DATA_ROW1 <- 2L
+LAST_ROW  <- nrow(out) + DATA_ROW1 - 1L
+NOTE_ROW  <- LAST_ROW + 2L
+
+wb <- wb_workbook()
+wb$add_worksheet("Sheet1")
+wb$set_base_font(font_size = FSIZE, font_name = FONT)
+# na = NULL writes GENUINELY EMPTY cells.  The openxlsx2 default writes the
+# #N/A error literal, which would violate assumption M.
+wb$add_data(x = out, col_names = TRUE, na = NULL)
+wb$add_font(dims = "A1:H1", bold = "1", name = FONT, size = FSIZE)
+wb$add_cell_style(dims = "A1:H1", wrap_text = "1", vertical = "top")
+wb$set_col_widths(cols = 1:8, widths = c(12, 42, 26, 16, 20, 16, 16, 16))
+wb$freeze_pane(first_row = TRUE)
+
+# --- assumption P: mark reporting limits, do not change them ----------------
+mark_nd <- function(col_letter, flags) {
+  idx <- which(flags)
+  if (!length(idx)) return(0L)
+  # Chunked: one dims string with several hundred scattered refs is accepted
+  # but needlessly large.
+  for (chunk in split(idx, ceiling(seq_along(idx) / 200))) {
+    wb$add_font(dims = paste0(col_letter, chunk + DATA_ROW1 - 1L, collapse = ","),
+                italic = "1", color = GREY, name = FONT, size = FSIZE)
+  }
+  length(idx)
+}
+n_marked <- c(
+  Lowest  = mark_nd("F", agg$lowest_nd),
+  Mean    = mark_nd("G", agg$mean_nd),
+  Highest = mark_nd("H", agg$highest_nd)
+)
+
+# --- footnote ---------------------------------------------------------------
+
+# Not every below-detection result is a reporting limit: a field instrument may
+# record a true zero (in scope for Katoomba this is methane, and only methane).
+# The sentence is emitted only when such results are actually present, so the
+# note stays true for any site/window.
+zero_nd <- unique(rows$pollutant[rows$is_nd & !is.na(rows$value) & rows$value == 0])
+zero_sentence <- if (length(zero_nd)) {
+  paste0(" The exception is ", paste(sort(zero_nd), collapse = ", "),
+         ", which the field instrument records as zero when none is detected.")
+} else ""
+
+NOTE <- c(
+  paste0(
+    "Note on values below the analytical detection limit. Where a result was ",
+    "below the detection limit for the analysis, the figure shown is that ",
+    "detection limit rather than a measured concentration, in accordance with ",
+    "the convention stated in the licence Dictionary.", zero_sentence,
+    " Such figures are shown in grey italics."
+  ),
+  paste0(
+    "A Lowest or Highest value in grey italics was attained only by ",
+    "below-detection results. A Mean in grey italics indicates that every ",
+    "result for that monitoring point and pollutant was below detection. ",
+    "Figures in normal type are measured values."
+  )
+)
+for (i in seq_along(NOTE)) {
+  wb$add_data(x = NOTE[[i]], dims = paste0("A", NOTE_ROW + i - 1L),
+              col_names = FALSE)
+  wb$add_font(dims = paste0("A", NOTE_ROW + i - 1L),
+              italic = "1", color = GREY, name = FONT, size = FSIZE)
+}
+
+wb$save(out_path)
 
 hr("WRITTEN")
 say(out_path)
@@ -580,6 +691,13 @@ say("Template untouched: ", template)
 say("")
 say("Column 4 \"", headers[[4]], "\" is EMPTY BY DESIGN - licence condition,")
 say("not held in the database. Robin fills it in by hand.")
+say("")
+say("Reporting-limit cells marked grey italic (assumption P):")
+say(sprintf("  Lowest  %4d of %d", n_marked[["Lowest"]],  nrow(agg)))
+say(sprintf("  Mean    %4d of %d   (all results below detection)",
+            n_marked[["Mean"]], nrow(agg)))
+say(sprintf("  Highest %4d of %d", n_marked[["Highest"]], nrow(agg)))
+say("Footnote explaining the convention written at row ", NOTE_ROW, ".")
 
 # Show a couple of EPA points so the result is inspectable from the console.
 PEEK_POINTS <- strsplit(TUNABLES$peek %||% "1,2", ",")[[1]]
