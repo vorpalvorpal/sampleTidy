@@ -229,14 +229,28 @@ seed_db <- function(dir = NULL) {
   #  - f-0006/f-0007: the reused-key pair where f-0006 is defunct
   #    (date_end 2020-06-30, long before any fixture sample date) and
   #    f-0007 is still live - the date_end narrowing auto-resolve case.
+  # PLAN-15 F1 (BLOCKING): `site` is now the NAME PREFIX ('T'), not the old
+  # 'TestSite' literal - the live invariant is name-prefix == site for every
+  # feature (PLAN-15 B.1/B.3), and Work B reads the site SET from this COLUMN.
+  # Leaving it as 'TestSite' would make the fixture's site set {"TestSite"}
+  # and no Work-B structural test could ever produce a real hit.
+  # f-0008/f-0009 add a prefix-EXTENDING second site 'TH' (so longest-match
+  # must beat 'T' - mirrors the live BH-before-B case). f-0010/f-0011 are the
+  # F3 digit-width pair (T.G### 3-wide vs TH.G## 2-wide). f-0012 is the F6
+  # structural target for the dangling-alias/idempotency fixture below.
   DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix, date_end, lon, lat) VALUES
-    ('f-0001', 'T.S01', 'TestSite', 'surface', 'water', NULL, 150.0001, -33.0001),
-    ('f-0002', 'T.S02', 'TestSite', 'surface', 'water', NULL, 150.0002, -33.0002),
-    ('f-0003', 'T.MW01', 'TestSite', NULL, 'groundwater', NULL, 150.0003, -33.0003),
-    ('f-0004', 'T.S04', 'TestSite', 'surface', 'water', NULL, 150.0004, -33.0004),
-    ('f-0005', 'T.S05', 'TestSite', 'surface', 'water', NULL, 150.0005, -33.0005),
-    ('f-0006', 'T.S06', 'TestSite', 'surface', 'water', DATE '2020-06-30', 150.0006, -33.0006),
-    ('f-0007', 'T.S07', 'TestSite', 'surface', 'water', NULL, 150.0007, -33.0007)")
+    ('f-0001', 'T.S01', 'T', 'surface', 'water', NULL, 150.0001, -33.0001),
+    ('f-0002', 'T.S02', 'T', 'surface', 'water', NULL, 150.0002, -33.0002),
+    ('f-0003', 'T.MW01', 'T', NULL, 'groundwater', NULL, 150.0003, -33.0003),
+    ('f-0004', 'T.S04', 'T', 'surface', 'water', NULL, 150.0004, -33.0004),
+    ('f-0005', 'T.S05', 'T', 'surface', 'water', NULL, 150.0005, -33.0005),
+    ('f-0006', 'T.S06', 'T', 'surface', 'water', DATE '2020-06-30', 150.0006, -33.0006),
+    ('f-0007', 'T.S07', 'T', 'surface', 'water', NULL, 150.0007, -33.0007),
+    ('f-0008', 'TH.S01', 'TH', 'surface', 'water', NULL, 150.1008, -33.1008),
+    ('f-0009', 'TH.MW02A', 'TH', NULL, 'groundwater', NULL, 150.1009, -33.1009),
+    ('f-0010', 'T.G001', 'T', 'surface', 'water', NULL, 150.1010, -33.1010),
+    ('f-0011', 'TH.G01', 'TH', 'surface', 'water', NULL, 150.1011, -33.1011),
+    ('f-0012', 'T.S08', 'T', 'surface', 'water', NULL, 150.1012, -33.1012)")
 
   # feature_alias. Every feature gets a self-alias (fa-0001..fa-0003,
   # fa-0011..fa-0014; kind = 'self'), uniform with no special case for
@@ -294,7 +308,35 @@ seed_db <- function(dir = NULL) {
     ('fa-0015', 'f-0004', 'T.DUAL', 't.dual', 'descriptive', 0, FALSE,
      TIMESTAMP '2025-01-01 00:00:00', TIMESTAMP '2025-05-01 00:00:00', NULL),
     ('fa-0016', 'f-0005', 'T.DUAL', 't.dual', 'descriptive', 0, FALSE,
-     TIMESTAMP '2025-01-01 00:00:00', TIMESTAMP '2025-05-01 00:00:00', NULL)")
+     TIMESTAMP '2025-01-01 00:00:00', TIMESTAMP '2025-05-01 00:00:00', NULL),
+    -- PLAN-15 F1: self-aliases for the new TH-site / digit-width / F6-target
+    -- features above, uniform with every other feature (no special case).
+    ('fa-0017', 'f-0008', 'TH.S01', 'th.s01', 'self', 0, TRUE,
+     TIMESTAMP '2025-01-01 00:00:00', TIMESTAMP '2025-01-01 00:00:00', NULL),
+    ('fa-0018', 'f-0009', 'TH.MW02A', 'th.mw02a', 'self', 0, TRUE,
+     TIMESTAMP '2025-01-01 00:00:00', TIMESTAMP '2025-01-01 00:00:00', NULL),
+    ('fa-0019', 'f-0010', 'T.G001', 't.g001', 'self', 0, TRUE,
+     TIMESTAMP '2025-01-01 00:00:00', TIMESTAMP '2025-01-01 00:00:00', NULL),
+    ('fa-0020', 'f-0011', 'TH.G01', 'th.g01', 'self', 0, TRUE,
+     TIMESTAMP '2025-01-01 00:00:00', TIMESTAMP '2025-01-01 00:00:00', NULL),
+    ('fa-0021', 'f-0012', 'T.S08', 't.s08', 'self', 0, TRUE,
+     TIMESTAMP '2025-01-01 00:00:00', TIMESTAMP '2025-01-01 00:00:00', NULL),
+    -- PLAN-15 F2: collision oracle mirroring bs1 -> BH.S01 - a curated,
+    -- auto_assign=TRUE historical_code alias for a DIRECT (unboundaried)
+    -- code, pointing at the OTHER site. Makes B.2's direct-boundary rule
+    -- (TS01 must NOT auto-resolve to T.S01) falsifiable: a naive
+    -- longest-match parse of 'TS01' would land on the OPPOSITE catchment
+    -- from where 'TS1' is actually curated.
+    ('fa-0022', 'f-0008', 'TS1', 'ts1', 'historical_code', 0, TRUE,
+     TIMESTAMP '2020-01-01 00:00:00', TIMESTAMP '2025-01-01 00:00:00', NULL),
+    -- PLAN-15 F6: a DANGLING alias whose key ('t s08') is structurally
+    -- parseable (site T, point S08 -> T.S08 = f-0012 above) but already
+    -- reaches an existing feature_alias row - B.4's gate must stop Layer
+    -- 2/3 from resolving it. s-0005/an-0005 below is the pre-committed
+    -- measurement under this alias, making the would-be double-commit
+    -- idempotency failure demonstrable if the gate is skipped.
+    ('fa-0023', NULL, 'T S08', 't s08', 'pending', 0, FALSE,
+     TIMESTAMP '2025-05-10 08:00:00', TIMESTAMP '2025-05-10 08:00:00', NULL)")
 
   # feature_mask (f-0001/long is an alias; f-0002/epa and f-0003/long both
   # resolve the string "AMBIG" - the deliberate ambiguity fixture). Untouched
@@ -351,9 +393,14 @@ seed_db <- function(dir = NULL) {
     ('lm-0011', 'a-0005', 'Standing water level', 'field', 'ACIRL', NULL, 'm', NULL),
     ('lm-0012', 'a-0002', 'Fluoride as F', 'EK040P: Fluoride by PC Titrator', 'ALS', 0.1, 'mg/L', 2.0)")
 
-  # project
+  # project. p-0003 is the PLAN-15 F5 second work order/project, used by
+  # Work C tests that need a WO distinct from p-0001's own committed history
+  # (a WO "split across two runs" fixture). NB: p-0002 is deliberately NOT
+  # seeded here - test-reconcile.R's own R-8.7 "no recorded revision" test
+  # inserts a test-local 'p-0002'/'CD2222222' row itself.
   DBI::dbExecute(con, "INSERT INTO project (uuid, name, type) VALUES
-    ('p-0001', 'XX1234567', 'Work order')")
+    ('p-0001', 'XX1234567', 'Work order'),
+    ('p-0003', 'YY9876543', 'Work order')")
 
   # Pre-existing sample + analysis: the "old pipeline already committed this"
   # rows for three-way reconciliation tests. s-0001 / an-0001 is the
@@ -395,7 +442,12 @@ seed_db <- function(dir = NULL) {
     ('s-0003', 'fa-0010', 'p-0001', TIMESTAMP '2025-05-10 00:00:00',
      TIMESTAMP '2025-05-09 22:00:00', 'ALS'),
     ('s-0004', 'fa-0001', 'p-0001', TIMESTAMP '2025-05-12 00:00:00',
-     TIMESTAMP '2025-05-11 22:15:00', 'ALS')")
+     TIMESTAMP '2025-05-11 22:15:00', 'ALS'),
+    -- PLAN-15 F6: the pre-committed measurement under the dangling alias
+    -- fa-0023 ('T S08') - 15 May 2025 09:15 Sydney -> 14 May 2025 23:15 UTC
+    -- (same AEST-minus-10h convention as s-0001..s-0004 above).
+    ('s-0005', 'fa-0023', 'p-0001', TIMESTAMP '2025-05-15 00:00:00',
+     TIMESTAMP '2025-05-14 23:15:00', 'ALS')")
 
   # No units column on `analysis` (D7 reversed / A63) - each row's units are
   # those of its uuid_lab (an-0002 -> lm-0008 'µS/cm', an-0003 -> lm-0001
@@ -405,7 +457,10 @@ seed_db <- function(dir = NULL) {
     ('an-0001', 's-0001', 'lm-0002', 100, FALSE, 100),
     ('an-0002', 's-0002', 'lm-0008', 965, TRUE, 1),
     ('an-0003', 's-0003', 'lm-0001', 7.10, TRUE, 0.01),
-    ('an-0004', 's-0004', 'lm-0009', 12, TRUE, 0.5)")
+    ('an-0004', 's-0004', 'lm-0009', 12, TRUE, 0.5),
+    -- PLAN-15 F6: pH 7.05 at s-0005/fa-0023 (lm-0001 'pH Value', ALS) -
+    -- the idempotency oracle a re-ingested identical 'T S08' row must match.
+    ('an-0005', 's-0005', 'lm-0001', 7.05, TRUE, 0.01)")
 
   # ingest_file seed row for the supersede test.
   DBI::dbExecute(con, "INSERT INTO ingest_file (hash, work_order, revision, state) VALUES

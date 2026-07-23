@@ -130,8 +130,11 @@ test_that("R-11.12: pending backlog counts reconcile with review_queue() open-it
 
   # Real writer (db-schema.R) + real reader (mutate.R) - a genuine seam, not a
   # hand-rolled stand-in for another module's output. One review item per
-  # dangling row already in the seed fixture.
+  # dangling row already in the seed fixture. PLAN-15 F6 adds a SECOND
+  # dangling alias (fa-0023, 'T S08') alongside the original fa-0010, so this
+  # needs two unknown_feature items to keep the counts reconciling.
   review_queue_add(con, kind = "unknown_feature", payload = "alias=fa-0010")
+  review_queue_add(con, kind = "unknown_feature", payload = "alias=fa-0023")
   review_queue_add(con, kind = "unknown_analyte", payload = "lab_method=lm-0008")
   review_queue_add(con, kind = "unknown_analyte", payload = "lab_method=lm-0009")
   # A different-kind open item must not be swept into either count - proves
