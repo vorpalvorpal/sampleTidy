@@ -250,7 +250,7 @@ test_that("R-9.2: provenance chain - every committed analysis has a change_log i
   commit_event(event, resolved, con)
 
   new_analysis <- DBI::dbGetQuery(con,
-    "SELECT uuid FROM analysis WHERE uuid NOT IN ('an-0001','an-0002','an-0003','an-0004')")
+    "SELECT uuid FROM analysis WHERE uuid NOT IN ('an-0001','an-0002','an-0003','an-0004','an-0005')")
   expect_equal(nrow(new_analysis), 1)
   log_row <- DBI::dbGetQuery(con, sprintf(
     "SELECT * FROM change_log WHERE uuid_row = '%s' AND action = 'insert'", new_analysis$uuid[[1]]))
@@ -407,7 +407,7 @@ test_that("R-11.8: a file with a resolved row and an unknown-feature row commits
   expect_equal(count_rows(con, "analysis") - before_analysis, 2)
 
   new_analyses <- DBI::dbGetQuery(con,
-    "SELECT uuid FROM analysis WHERE uuid NOT IN ('an-0001','an-0002','an-0003','an-0004')")
+    "SELECT uuid FROM analysis WHERE uuid NOT IN ('an-0001','an-0002','an-0003','an-0004','an-0005')")
   expect_equal(nrow(new_analyses), 2)
 
   # the dangling row's analysis is invisible to a feature-joined view; the
@@ -418,7 +418,7 @@ test_that("R-11.8: a file with a resolved row and an unknown-feature row commits
     JOIN "sample" s ON s.uuid = a.uuid_sample
     JOIN feature_alias fa ON fa.uuid = s.uuid_feature_alias
     JOIN feature f ON f.uuid = fa.uuid_feature
-    WHERE a.uuid NOT IN (\'an-0001\',\'an-0002\',\'an-0003\',\'an-0004\')
+    WHERE a.uuid NOT IN (\'an-0001\',\'an-0002\',\'an-0003\',\'an-0004\',\'an-0005\')
   ')
   expect_equal(nrow(visible), 1)
 
@@ -698,7 +698,7 @@ test_that("R-11.16: a '>2000' row commits quantified = FALSE (from parse_value, 
   commit_event(mk_commit_event(files), mk_resolved(clean = clean), con)
 
   new_row <- DBI::dbGetQuery(con,
-    "SELECT quantified, rl_high FROM analysis WHERE uuid NOT IN ('an-0001','an-0002','an-0003','an-0004')")
+    "SELECT quantified, rl_high FROM analysis WHERE uuid NOT IN ('an-0001','an-0002','an-0003','an-0004','an-0005')")
   expect_equal(nrow(new_row), 1)
   expect_false(new_row$quantified[[1]])
   expect_equal(new_row$rl_high[[1]], 2000)
@@ -719,7 +719,7 @@ test_that("R-11.16: a literal 'BDL' row commits quantified = FALSE independent o
   commit_event(mk_commit_event(files), mk_resolved(clean = clean), con)
 
   new_row <- DBI::dbGetQuery(con,
-    "SELECT quantified FROM analysis WHERE uuid NOT IN ('an-0001','an-0002','an-0003','an-0004')")
+    "SELECT quantified FROM analysis WHERE uuid NOT IN ('an-0001','an-0002','an-0003','an-0004','an-0005')")
   expect_equal(nrow(new_row), 1)
   expect_false(new_row$quantified[[1]])
 })
@@ -739,7 +739,7 @@ test_that("R-11.16: a '<0.01' row keeps rl_low = 0.01 (existing pin) and commits
   commit_event(mk_commit_event(files), mk_resolved(clean = clean), con)
 
   new_row <- DBI::dbGetQuery(con,
-    "SELECT quantified, rl_low FROM analysis WHERE uuid NOT IN ('an-0001','an-0002','an-0003','an-0004')")
+    "SELECT quantified, rl_low FROM analysis WHERE uuid NOT IN ('an-0001','an-0002','an-0003','an-0004','an-0005')")
   expect_equal(nrow(new_row), 1)
   expect_false(new_row$quantified[[1]])
   expect_equal(new_row$rl_low[[1]], 0.01)
@@ -762,7 +762,7 @@ test_that("R-11.16: a plain-numeric row commits quantified = TRUE regardless of 
   commit_event(mk_commit_event(files), mk_resolved(clean = clean), con)
 
   new_row <- DBI::dbGetQuery(con,
-    "SELECT quantified FROM analysis WHERE uuid NOT IN ('an-0001','an-0002','an-0003','an-0004')")
+    "SELECT quantified FROM analysis WHERE uuid NOT IN ('an-0001','an-0002','an-0003','an-0004','an-0005')")
   expect_equal(nrow(new_row), 1)
   expect_true(new_row$quantified[[1]])
 })
@@ -814,7 +814,7 @@ test_that("R-11.18/A62: an incoming NA datetime reuses an existing date-only sam
   expect_equal(count_rows(con, "sample"), before_sample)
 
   linked <- DBI::dbGetQuery(con,
-    "SELECT uuid_sample FROM analysis WHERE uuid NOT IN ('an-0001','an-0002','an-0003','an-0004')")
+    "SELECT uuid_sample FROM analysis WHERE uuid NOT IN ('an-0001','an-0002','an-0003','an-0004','an-0005')")
   expect_equal(nrow(linked), 1)
   expect_identical(linked$uuid_sample[[1]], "s-r1118-a")
 })
@@ -836,7 +836,7 @@ test_that("R-11.18/A62: a non-NA incoming datetime still reuses an existing NA-d
   expect_equal(count_rows(con, "sample"), before_sample)
 
   linked <- DBI::dbGetQuery(con,
-    "SELECT uuid_sample FROM analysis WHERE uuid NOT IN ('an-0001','an-0002','an-0003','an-0004')")
+    "SELECT uuid_sample FROM analysis WHERE uuid NOT IN ('an-0001','an-0002','an-0003','an-0004','an-0005')")
   expect_equal(nrow(linked), 1)
   expect_identical(linked$uuid_sample[[1]], "s-r1118-b")
 })
@@ -858,7 +858,7 @@ test_that("R-11.18/A62: an incoming datetime equal to an existing sample's datet
   expect_equal(count_rows(con, "sample"), before_sample)
 
   linked <- DBI::dbGetQuery(con,
-    "SELECT uuid_sample FROM analysis WHERE uuid NOT IN ('an-0001','an-0002','an-0003','an-0004')")
+    "SELECT uuid_sample FROM analysis WHERE uuid NOT IN ('an-0001','an-0002','an-0003','an-0004','an-0005')")
   expect_equal(nrow(linked), 1)
   expect_identical(linked$uuid_sample[[1]], "s-r1118-c")
 })
