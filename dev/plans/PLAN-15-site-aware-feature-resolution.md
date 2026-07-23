@@ -341,6 +341,125 @@ historical_code→K.S06 n_seen=1). A `self` > `historical_code` precedence rule 
 clear both, but that is a curation-semantics decision (it cuts against the standing
 "old ≠ misspelling" rule) and is deferred pending a user ruling.
 - **D. Provenance/confidence + review-candidate plumbing** (folded into A-C).
+- **E. Time-bounded aliases** (`feature_alias.date_start` / `date_end`) — specified below.
+
+---
+
+## Work E — time-bounded aliases (PINNED SPEC)
+
+Added 2026-07-23 on Robin's direction. *(Labelled E, not D: a "Part D" already exists
+above as the provenance/plumbing item folded into A-C. Robin's "part D" request refers
+to this work; the letter is the only difference.)*
+
+### E.0 Why
+Some aliases are ongoing; others record a **particular historical anomaly** and must
+apply only within the period that anomaly was live. Today an alias is unconditional,
+so a one-off mislabelling from 2021 keeps hijacking a string forever. Evidence: 9
+alias rows in the live registry have a key that IS another feature's real name (see
+`scratchpad/alias_window_report.txt`); today every one of them is permanently
+ambiguous.
+
+### E.1 Schema (migration `003-alias-date-bounds.R`)
+- `feature_alias` gains `date_start TIMESTAMP` and `date_end TIMESTAMP`, both
+  NULLABLE, mirroring the shape `feature` already uses.
+- NULL means unbounded on that side. `date_start IS NULL AND date_end IS NULL` is the
+  default and preserves exactly today's behaviour.
+- Backfill: all existing rows get NULL/NULL, then the curated bounds in E.5 are
+  applied as an explicit, itemised UPDATE list (auditable, each with a `change_log`
+  provenance row).
+- These are **distinct from the existing `first_seen` / `last_seen` columns**, which
+  record when ingest last *observed* the string. `date_start`/`date_end` record when
+  the alias is *valid*. Do not conflate them; do not derive one from the other.
+- Migration 003 must follow the TEMP-copy rebuild pattern established in 001 — a
+  `CREATE … REFERENCES; DROP; ALTER RENAME` sequence corrupts duckdb 1.4.1's
+  FK-catalog metadata (reproduced and fixed during PLAN-14; see run-state).
+
+### E.2 Resolution semantics
+- An alias is **live at `sample_date`** iff
+  `(date_start IS NULL OR date_start <= sample_date)` AND
+  `(date_end IS NULL OR date_end >= sample_date)`.
+- Alias candidate lookup (`.rc_feature_candidates`, `.rc_feature_suggestions`) filters
+  to live aliases before the `auto_assign` filter and before counting candidates.
+- This is a filter on the ALIAS, and is separate from and additional to the existing
+  `.rc_narrow_live()` filter on the FEATURE's `date_end`. Both apply.
+- When `sample_date` is NA, the date filter is skipped (no basis to narrow) and the
+  row is treated exactly as today.
+
+### E.3 Interaction with Work B — REQUIRED, do not skip
+B.4 gates Layer 2 on "the key reaches ZERO `feature_alias` rows". Under E that
+sentence is ambiguous, and the two readings differ materially. **PINNED: a key that
+reaches ≥1 alias row which is EXPIRED (or not yet started) at `sample_date`, and no
+live one, goes to REVIEW — it does NOT fall through to Layer 2.**
+- Rationale: closing an alias is a deliberate curation act. Letting the string then
+  fall through to a structural parse would auto-resolve, by a *different* mechanism,
+  a mapping a human had just switched off — the bound would be silently defeated
+  rather than enforced. Fail closed.
+- NOTE this is a rare path, not the common one. A key that is also a feature's own
+  name always retains its (unbounded) `self` alias, so closing the *other* alias
+  leaves exactly one live candidate and the row resolves cleanly — that is the whole
+  point of E.5. The expired-only case arises only for a key with no self alias.
+- Robin will notice and initiate any review of a recurring closed-off mislabelling
+  manually; the system is NOT required to detect or alert on that. This ruling is
+  about not auto-resolving, not about raising an alarm.
+- So B.4's gate reads in full: Layer 2 runs only when the key reaches **no
+  `feature_alias` row at all**, live, expired, or dangling.
+- Review payload for the expired case carries `subkind=expired_alias` plus the expired
+  candidates and their bounds — an operator-facing annotation explaining why the row
+  was withheld, not a notification mechanism.
+
+### E.4 New-alias creation
+- Every newly-created alias (the pending/dangling alias `commit` materialises in
+  `.ct_materialise_feature_aliases`) sets `date_start` = the sample date of the row
+  that created it; `date_end` stays NULL.
+- Rationale: a newly-sighted variant is valid from when it was first seen, not
+  retroactively. This must not disturb the R-11.8 pending-alias behaviour otherwise.
+- `confirm_feature_aliases()` must be able to set and clear both bounds.
+
+### E.5 The curated bounds (data, applied by migration 003)
+Robin's rulings on the 9 collision-class rows. **Rule 1** = one-off mislabelling
+(`n_seen == 1` or the target has exactly 1 sample) → close it at the sample date.
+**Rule 2** = a recurring issue Robin wants to review every time → leave open.
+**Rule 3** = the same-named point is decommissioned → close at the last sample date.
+
+| alias_key | resolves_to | rule | `date_end` | status |
+|---|---|---|---|---|
+| `b.s01` | B.TS41 | 1 | 2026-01-20 | SETTLED (target has 1 sample) |
+| `b.ts02` | B.TS27 | 1 | 2021-11-11 | SETTLED (target has 1 sample) |
+| `b.ts41` | B.TMW15 | 1 | 2024-04-07 | SETTLED (target has 1 sample) |
+| `b.s22` | B.S06 | 2 | NULL (stays open) | SETTLED |
+| `b.s04` | B.S01 | 1 | ⚠ OPEN | target has 184 samples 2002-11-30→2026-03-15; "the sample date" undetermined |
+| `b.s22` | B.TS18 | 1 | ⚠ OPEN | target has 6 samples 2020-05-18→2021-11-11 |
+| `k.e02` | K.S06 | 1 | ⚠ OPEN | target has 23 samples 2020-08-10→2025-09-03 |
+| `b.ts18` | B.S30 | 3 | ⚠ OPEN | whose last sample? B.TS18 ended 2021-11-11; B.S30 ran 2022-03-01→2023-09-12 |
+| `b.ts40` | B.TS39 | 3 | ⚠ OPEN | whose last sample? B.TS40 ended 2024-04-07; B.TS39 ran 2022-09-26→2025-05-28 |
+
+**Why 5 are OPEN.** Per-alias usage is unrecoverable: migration 001 repoints every
+sample to its *self* alias, and the raw feature string was never retained on `sample`.
+So for `n_seen == 1` against a many-sampled target we know the mislabelling happened
+once but not *when*. And for rule 3 the two candidate dates belong to different
+features. Note `b.ts18`/`b.ts40` look like **renames** rather than mislabellings —
+B.TS18's samples stop 2021-11-11 and B.S30's start 2022-03-01, with no overlap — in
+which case they need a `date_start` on the alias, not a `date_end`, or the alias can
+never match a single target sample.
+
+**These 5 values are the ONLY thing blocked.** E.1-E.4 are date-agnostic and are built
+now; migration 003 ships with the 4 settled rows and gains the rest once Robin rules.
+An implementer must NOT invent values for the open rows.
+
+### E.6 Acceptance criteria (each must be able to FAIL)
+- An alias with `date_end` in the past does NOT resolve a later-dated row — paired in
+  the same test with the identical row dated *before* the bound, which DOES resolve.
+  (Without the pair, a resolver that is simply broken passes.)
+- Ditto `date_start`: a row dated before the start does not resolve; one after does.
+- NULL/NULL alias behaves exactly as today (regression guard over the existing suite).
+- E.3: a key whose only alias is expired lands in review with `subkind=expired_alias`
+  and does NOT get structurally resolved — asserted against a raw that WOULD parse
+  structurally, so the test fails if the fall-through is left in.
+- A newly-created pending alias has `date_start` = the creating row's sample date and
+  `date_end` NULL.
+- Migration 003 on a pre-003 seed produces the 4 settled bounds and leaves every other
+  alias NULL/NULL; row counts and checksums otherwise unchanged.
+- `sample_date` NA → no narrowing, unchanged behaviour.
 
 ## Verification
 - Re-run the input/ dry-run (scratchpad/input_dryrun2.R) after each phase; track the
