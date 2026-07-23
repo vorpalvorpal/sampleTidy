@@ -757,6 +757,26 @@ Together these clear all 15 `descriptive` residual items (6 work orders + 9 work
 `Dis Lawson` and `T/W Pump` also appear in the corpus and are UNRULED — do not alias them
 on a guess.
 
+### D.3 The 16 orphaned Chemistry2e files — RETAIN as assets, do NOT delete (Robin, 2026-07-23)
+16 ESdat `Chemistry2e` files have no companion `Sample2e` anywhere in the corpus, so
+every one of their 3449 rows carries `feature_raw = NA` and is held at reconcile. They
+are leftovers of the older WEM.input system, which left behind files it could not parse.
+
+**Robin's ruling: do not delete them.** Work out each file's work order and register it
+in the `asset` table, so the source document is retained as a saved asset rather than
+discarded. Queued for the real DB migration — not part of the PLAN-15 code work.
+
+Work orders: ES2413933, ES2417442, ES2422258, ES2515449, ES2515450, ES2515987, ES2516159,
+ES2517594, ES2519217, ES2520710, ES2606533, ES2606534, ES2606550, ES2607370, ES2607372,
+ES2608966.
+
+PRECONDITION, being verified before anything is retired: that the underlying analytical
+results are already present in the authoritative DB by another route. This could NOT be
+checked the obvious way — the legacy schema has no `ingest_file` and `sample` carries no
+work order — so it is being established by matching date + analyte + value. Expect only
+the ~1264 field-sample rows to match; the other 2185 are lab batch QC (`QC-*` SampleCodes)
+which is never committed as a sample. **Do not treat a ~63% non-match as data loss.**
+
 ## Verification
 - Re-run the input/ dry-run (scratchpad/input_dryrun2.R) after each phase; track the
   `unknown_feature` count down and confirm ZERO cross-site mis-merges (assert BS1/BS3
