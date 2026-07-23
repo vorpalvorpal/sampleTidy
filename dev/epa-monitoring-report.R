@@ -125,14 +125,39 @@
 #    computed over ALL contributing results, so a doubly-measured sample carries
 #    twice the weight in the mean.  The discrepancy is reported.
 #
-# M. COLUMNS LEFT BLANK FOR MANUAL COMPLETION.  "No. of samples required" is a
-#    licence condition and is NOT in the database - verified: no table or column
-#    anywhere in the schema records a required sampling frequency, count or
-#    quota (`guideline` holds ANZECC concentration trigger values, which are a
-#    different thing entirely).  Per Robin's instruction the column is emitted
-#    with its header intact and GENUINELY EMPTY cells - not 0, not "NA", not a
-#    placeholder - for him to fill in by hand.  Column order and header text are
-#    exactly the template's.
+# M. "No. of samples required" COMES FROM THE LICENCE, NOT THE DATABASE.  No
+#    table or column anywhere in the schema records a required sampling
+#    frequency, count or quota (`guideline` holds ANZECC concentration trigger
+#    values, which are a different thing entirely).  The counts are therefore
+#    transcribed from licence 13089 conditions M2.2 and M2.3 into the
+#    `LICENCE_REQUIREMENTS` table below, keyed by (EPA point, pollutant).
+#    "Quarterly" -> 4 and "Yearly" -> 1 over a 12-month reporting period.
+#
+#    THREE CASES DELIBERATELY LEAVE THE CELL EMPTY:
+#      1. Points 2 and 3 (E01/E02).  M2.4(a) "Special Frequency 1" means
+#         "within the first 24 hours of discharge" - one sample set per
+#         DISCHARGE EVENT.  The required number is the number of discharge
+#         events in the period, which the database does not record.  Writing
+#         4 or 1 here would be a false statement.
+#      2. Any (point, pollutant) the licence does not require.  Roughly half
+#         the rows in the return are extra data, not licence requirements.
+#      3. Pollutants with no licence line item at all.
+#    Empty cells are GENUINELY EMPTY - not 0, not "NA", not a placeholder.
+#
+#    GROUP LINE ITEMS.  The licence names one determinand where the mask has
+#    many: "Organochlorine pesticides" / "Organophosphate pesticides" cover ~24
+#    congeners, and "Total petroleum hydrocarbons" covers the TPH and TRH
+#    fraction rows.  The group's frequency is applied to EVERY member row,
+#    because each congener is analysed as part of that annual suite and leaving
+#    them blank would read as "nothing required".  It is a judgement call and
+#    the console report lists exactly which rows were filled this way.
+#    >>> Robin to confirm. <<<
+#
+#    Column order and header text are exactly the template's.  A row that the
+#    licence requires but which was NEVER SAMPLED has no row in this return at
+#    all (there is no data to aggregate), so the filed table understates the
+#    gaps - see section 3.3 of dev/EPA-LICENCE-RECONCILIATION.md for the
+#    required-but-absent pairs.
 #
 # N. EPA POINT 1 IS AN AGGREGATE.  360 Katoomba gas features (K.G01 ... K.G364)
 #    all carry the EPA mask name "1", so they are pooled into a single reported
@@ -502,6 +527,91 @@ sfx_part <- sub("^[0-9]+", "", agg$epa_point)
 agg <- agg[order(num_part, sfx_part, agg$pollutant), , drop = FALSE]
 rownames(agg) <- NULL
 
+# ------------------------------------------------- LICENCE REQUIRED COUNTS (M)
+# Transcribed from licence 13089 (dev/13089_V5.pdf) conditions M2.2 and M2.3.
+# Quarterly -> 4, Yearly -> 1 over a 12-month reporting period.
+
+QUARTERLY <- 4L
+YEARLY    <- 1L
+
+PT_GAS        <- "1"
+PT_DISCHARGE  <- c("2", "3")                                    # E01, E02
+PT_SURFACE    <- c("4", "5", "6", "7", "8", "9", "10")
+PT_GROUND     <- c("11", "12", "13", "14", "15", "16", "17")
+PT_LEACHATE   <- "18"
+
+# Licence line items that the mask expands into many rows (assumption M).
+OCP_CONGENERS <- c("4,4'-DDD", "4,4'-DDE", "4,4'-DDT", "Aldrin", "Dieldrin",
+                   "Endosulfan i", "Endosulfan ii", "Endosulfan sulfate",
+                   "Endrin", "Heptachlor", "Heptachlor epoxide", "Methoxychlor",
+                   "alpha-BHC", "beta-BHC", "gamma-BHC (lindane)")
+OPP_CONGENERS <- c("Chlorpyrifos", "Diazinon", "Dimethoate", "Ethion",
+                   "Malathion", "Methyl Azinphos", "Methyl Chlorpyrifos",
+                   "Methyl Parathion", "Parathion")
+# TPH/TRH fraction rows, matched by prefix so a new fraction is picked up.
+HYDROCARBON_RX <- "^(Total Petroleum Hydrocarbons|Total Recoverable Hydrocarbons)"
+GROUPED <- c(OCP_CONGENERS, OPP_CONGENERS)
+
+.req <- function(points, pollutants, n) {
+  expand.grid(epa_point = points, pollutant = pollutants, required = as.integer(n),
+              stringsAsFactors = FALSE, KEEP.OUT.ATTRS = FALSE)
+}
+
+hydro_rows <- grep(HYDROCARBON_RX, unique(agg$pollutant), value = TRUE)
+
+LICENCE_REQUIREMENTS <- rbind(
+  # ---- M2.2 air, POINT 1
+  .req(PT_GAS, "Methane", QUARTERLY),
+
+  # ---- M2.3 groundwater quarterly, POINTS 11-17
+  .req(PT_GROUND,
+       c("Alkalinity (as calcium carbonate)", "Calcium", "Chloride", "Fluoride",
+         "Magnesium", "Nitrate (as N)", "Nitrite (as N)", "Phosphorus (total)",
+         "Sodium", "Sulfate"),
+       QUARTERLY),
+
+  # ---- M2.3 groundwater + leachate yearly, POINTS 11-18
+  .req(c(PT_GROUND, PT_LEACHATE),
+       c("Aluminium", "Arsenic", "Barium", "Benzene", "Cadmium",
+         "Chromium (hexavalent)", "Chromium (total)", "Cobalt", "Copper",
+         "Ethyl benzene", "Lead", "Manganese", "Mercury", "Nickel",
+         "Polycyclic Aromatic Hydrocarbons", "Toluene", "Total Phenolics",
+         "Xylene", "Zinc",
+         OCP_CONGENERS, OPP_CONGENERS, hydro_rows),
+       YEARLY),
+
+  # ---- M2.3 Standing Water Level, POINTS 11-18, quarterly
+  .req(c(PT_GROUND, PT_LEACHATE), "Standing water level", QUARTERLY),
+
+  # ---- M2.3 groundwater + surface water quarterly, POINTS 4-17
+  .req(c(PT_SURFACE, PT_GROUND),
+       c("Conductivity", "pH", "Ammonia (as N)", "Potassium",
+         "Total Dissolved Solids", "Total Organic Carbon"),
+       QUARTERLY),
+
+  # ---- M2.3 leachate yearly, POINT 18
+  .req(PT_LEACHATE,
+       c("Alkalinity (as calcium carbonate)", "Biochemical oxygen demand",
+         "Calcium", "Chloride", "Fluoride", "Magnesium", "Nitrate (as N)",
+         "Nitrite (as N)", "Ammonia (as N)", "Phosphorus (total)", "Potassium",
+         "Sodium", "Sulfate", "Total Dissolved Solids", "Total Organic Carbon",
+         "Total Suspended Solids"),
+       YEARLY)
+)
+# A (point, pollutant) appearing in two conditions keeps the HIGHER count.
+LICENCE_REQUIREMENTS <- do.call(rbind, lapply(
+  split(LICENCE_REQUIREMENTS, paste(LICENCE_REQUIREMENTS$epa_point,
+                                    LICENCE_REQUIREMENTS$pollutant, sep = "\r")),
+  function(d) d[which.max(d$required), , drop = FALSE]))
+
+agg$required <- LICENCE_REQUIREMENTS$required[
+  match(paste(agg$epa_point, agg$pollutant, sep = "\r"),
+        paste(LICENCE_REQUIREMENTS$epa_point, LICENCE_REQUIREMENTS$pollutant,
+              sep = "\r"))]
+
+# Points 2 and 3: per discharge event, number unknown - must stay empty (M).
+agg$required[agg$epa_point %in% PT_DISCHARGE] <- NA_integer_
+
 # --------------------------------------------------------- UNIT PRESENTATION
 
 unmapped_units <- character()
@@ -573,6 +683,39 @@ if (length(unmapped_units)) {
   say("  ", paste(unmapped_units, collapse = ", "))
 }
 
+hr("LICENCE REQUIRED COUNTS (column 4)")
+say(sprintf("  rows with a required count : %d of %d", sum(!is.na(agg$required)),
+            nrow(agg)))
+say(sprintf("  rows left EMPTY            : %d", sum(is.na(agg$required))))
+say(sprintf("    - points 2/3, per discharge event (M2.4a) : %d",
+            sum(agg$epa_point %in% PT_DISCHARGE)))
+say(sprintf("    - not a licence requirement at that point : %d",
+            sum(is.na(agg$required) & !agg$epa_point %in% PT_DISCHARGE)))
+grouped_filled <- agg[!is.na(agg$required) &
+                        (agg$pollutant %in% GROUPED |
+                           grepl(HYDROCARBON_RX, agg$pollutant)), ]
+say(sprintf("  filled from a GROUP line item (judgement call, see M) : %d",
+            nrow(grouped_filled)))
+if (nrow(grouped_filled)) {
+  say("    pollutants: ",
+      paste(sort(unique(grouped_filled$pollutant)), collapse = ", "))
+}
+short <- agg[!is.na(agg$required) & agg$n_samples < agg$required, ]
+say(sprintf("  SHORT of the required frequency : %d of %d rows with a count",
+            nrow(short), sum(!is.na(agg$required))))
+if (nrow(short)) {
+  s <- short[order(short$required - short$n_samples, decreasing = TRUE), ]
+  say("    worst shortfalls:")
+  for (i in seq_len(min(6, nrow(s)))) {
+    say(sprintf("      pt %-3s %-34s %d of %d", s$epa_point[i],
+                substr(s$pollutant[i], 1, 34), s$n_samples[i], s$required[i]))
+  }
+}
+if (PT_GAS %in% agg$epa_point) {
+  say("  NOTE point 1: 'collected' counts grid LOCATION-SAMPLES, the licence's")
+  say("  'Quarterly' means monitoring EVENTS. The two are not comparable.")
+}
+
 hr("IN SCOPE FOR KATOOMBA IN THIS WINDOW")
 say(sprintf("  EPA points  : %d  -> %s", length(unique(agg$epa_point)),
             paste(unique(agg$epa_point), collapse = ", ")))
@@ -601,7 +744,7 @@ out <- data.frame(
   a = agg$epa_point,
   b = agg$pollutant,
   c = agg$unit_out,
-  d = rep(NA_real_, nrow(agg)),   # No. of samples required - blank by design (M)
+  d = agg$required,               # from the licence, not the DB - see (M)
   e = agg$n_samples,
   f = agg$lowest,
   g = agg$mean,
@@ -674,8 +817,20 @@ NOTE <- c(
     "below-detection results. A Mean in grey italics indicates that every ",
     "result for that monitoring point and pollutant was below detection. ",
     "Figures in normal type are measured values."
+  ),
+  paste0(
+    "No. of samples required is taken from licence conditions M2.2 and M2.3 ",
+    "(Quarterly = 4, Yearly = 1). It is left blank where the licence sets no ",
+    "requirement for that pollutant at that point, and for points 2 and 3, ",
+    "where condition M2.4(a) Special Frequency 1 requires sampling within the ",
+    "first 24 hours of each discharge rather than a fixed number of samples."
+  ),
+  if (PT_GAS %in% agg$epa_point) paste0(
+    "At point 1 the number of samples collected counts individual grid ",
+    "locations. The quarterly requirement refers to monitoring events."
   )
 )
+NOTE <- Filter(Negate(is.null), NOTE)
 for (i in seq_along(NOTE)) {
   wb$add_data(x = NOTE[[i]], dims = paste0("A", NOTE_ROW + i - 1L),
               col_names = FALSE)
@@ -689,8 +844,9 @@ hr("WRITTEN")
 say(out_path)
 say("Template untouched: ", template)
 say("")
-say("Column 4 \"", headers[[4]], "\" is EMPTY BY DESIGN - licence condition,")
-say("not held in the database. Robin fills it in by hand.")
+say("Column 4 \"", headers[[4]], "\" is transcribed from licence conditions")
+say("M2.2/M2.3 - it is not in the database. See assumption M for the three")
+say("cases that deliberately stay empty.")
 say("")
 say("Reporting-limit cells marked grey italic (assumption P):")
 say(sprintf("  Lowest  %4d of %d", n_marked[["Lowest"]],  nrow(agg)))

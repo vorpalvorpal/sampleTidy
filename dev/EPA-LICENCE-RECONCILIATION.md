@@ -59,13 +59,56 @@ condition*, and neither bore is a point in V5, so filing them under the invented
 "2a"/"4a" states something the licence does not support. If you would rather report them
 as extra context, restoring either name is a one-line `db_update`.
 
+### Later on 2026-07-23 — K.L04 joins point 18, and column 4 is now filled
+
+**K.L04 now carries EPA point 18 alongside K.L01** (Robin: they are the same
+licence monitoring point and differ only for internal purposes). This overturns
+§3.3(a)'s caution about relabelling and materially changes the returns — point 18
+gains 27 / 46 / 26 rows across the three years, where §3.3 recorded it as entirely
+unsampled in 2025-26.
+
+One thing to keep an eye on: the `long` masks still describe these as different
+things — K.L01 "Leachate dam", K.L04 "Cutoff wall discharge into leachate dam".
+The same reasoning would extend to K.L03 ("Cell B discharge point into leachate
+dam") and K.L05 ("Sump discharge into leachate dam", 43 rows in 2024-25), which
+were **not** changed. Worth settling all four together.
+
+**Column 4, "No. of samples required", is now populated** from licence conditions
+M2.2/M2.3 (Quarterly = 4, Yearly = 1), resolving §4.4/15 for points 2 and 3. It is
+left deliberately empty in three cases: points 2 and 3 (M2.4(a) Special Frequency 1
+is per discharge event, and the event count is not in the database); any
+(point, pollutant) the licence does not require; and pollutants with no licence
+line item. Roughly half of every return is extra data rather than a licence
+requirement, so empty cells are the norm, not an omission.
+
+Two judgement calls inside that, both reported on the console at every run:
+
+* **Group line items are expanded.** "Organochlorine pesticides",
+  "Organophosphate pesticides" and "Total petroleum hydrocarbons" are single
+  licence lines covering ~24 congeners and 12 TPH/TRH fractions. Each member row
+  gets the group's frequency, because leaving them blank would read as "nothing
+  required". Confirmed to fire only at points 11-18: in 2023-24 and 2024-25 those
+  suites ran at points 11, 14, 15, 16 and 18, while the same congeners at points
+  4, 5, 6, 7 and 10 are correctly left empty — which is §3.3(b)'s "annual organics
+  suite went to the wrong location", now visible in the return itself.
+* **Point 1 counts location-samples, not events** (§4.4/16 is still open). The
+  required count is 4 monitoring events; the collected count is the number of grid
+  locations. A footnote says so, but the two numbers are not comparable.
+
+**Rows required but never sampled still do not appear at all**, because there is
+no data to aggregate — so the filed table understates the gaps. §3.3 remains the
+place where those are enumerated.
+
 ### Returns generated 2026-07-23 (all in `dev/`)
 
-| File | Rows | Licence points present | Points absent |
-|---|---:|---|---|
-| `epa_monitoring_data_K_2025-05-27_to_2026-05-26.xlsx` | 374 | 1-8, 10, 11, 12, 14, 15, 16 | **9** (S08), **13** (MW05), **17** (MW12), **18** (L01) |
-| `epa_monitoring_data_K_2024-05-27_to_2025-05-26.xlsx` | 652 | 1-12, 14, 15, 16, 18 | **13** (MW05), **17** (MW12) |
-| `epa_monitoring_data_K_2023-05-27_to_2024-05-26.xlsx` | 613 | 1-11, 14, 15, 16, 17 | **12** (MW03), **13** (MW05), **18** (L01) |
+| File | Rows | Required counts filled | Licence points present | Points absent |
+|---|---:|---:|---|---|
+| `epa_monitoring_data_K_2025-05-27_to_2026-05-26.xlsx` | 401 | 196 | 1-8, 10, 11, 12, 14, 15, 16, 18 | **9** (S08), **13** (MW05), **17** (MW12) |
+| `epa_monitoring_data_K_2024-05-27_to_2025-05-26.xlsx` | 652 | 324 | 1-12, 14, 15, 16, 18 | **13** (MW05), **17** (MW12) |
+| `epa_monitoring_data_K_2023-05-27_to_2024-05-26.xlsx` | 639 | 333 | 1-11, 14, 15, 16, 17, 18 | **12** (MW03), **13** (MW05) |
+
+Point 13 (K.MW05) is still absent from all three years. Point 18 is now present in
+all three following the K.L04 mapping.
 
 Column 4 ("No. of samples required") is empty by design in all three — it is a licence
 condition, not a database fact. The per-point required counts are in §2.
