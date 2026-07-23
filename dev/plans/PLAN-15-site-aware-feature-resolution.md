@@ -635,6 +635,11 @@ Work E lands after Work B, and the E.3 test carries a positive control (below).
 
 ## Work F — Work A remediation (from the Phase-5 cold audit, 2026-07-23)
 
+**SEQUENCING (Robin, 2026-07-23): F.1, F.2 and F.3 are FOLDED INTO THE B/C
+IMPLEMENTATION PASS**, not queued behind it. They live in the same function
+(`.rc_feature_key`) that Work B builds on, and until F.3 lands the key has no
+real test guarding it at all. F.4–F.8 stay separate.
+
 Work A shipped without a TDD audit. The audit confirmed its central claim empirically —
 `.rc_feature_key` reproduces `.mig001_normalize` on **1989/1989** stored `alias_key`s,
 and every mixed-key mutation was killed by existing tests — but found that adopting
@@ -690,6 +695,20 @@ mechanism inert" failure the Cross-cutting section exists to fix. Mutating `>1` 
 candidate is not an ambiguity). This composes with E.3's `subkind=expired_alias`, which
 likewise must emit at count 1. One test per branch: 0 → bare, 1 → `suggestion`,
 ≥2 → `ambiguous`.
+
+**Measured exposure** (post-001 snapshot). The single-suggestion case arises almost
+entirely through `.rc_narrow_live` collapsing an ambiguous key to one LIVE candidate:
+**5 keys today** — `g182`, `g183`, `g184`, `g185`, `upstream` — each reach 2 distinct
+features of which one is defunct, so at any date past that feature's `date_end` the
+suggestion set is exactly 1 and is currently thrown away. That is the highest-confidence
+case the mechanism produces, and it is the one case it drops. The other shape (>1 alias
+row all pointing at ONE feature) has **0 instances** — that path is empty today.
+After 003's 17-row flip, ~338 multi-target keys remain `auto_assign = FALSE` and parked;
+for all of them the suggestion payload is the operator's only signal.
+**No current dry-run residual item is affected** — the 43 `unknown_feature` items are 16
+`feature_raw=NA` + 12 ambiguous-with-candidates + 15 descriptive-with-no-alias, none of
+which is a single-suggestion case. This is a latent-correctness fix, not a residual fix.
+`subkind` is write-only — nothing in `R/` parses it — so extending the vocabulary is free.
 
 ### F.7 Documentation drift (MINOR, but a trap for the Work B implementer)
 - reconcile.R:470 says the pending lookup keys on `.rc_key(feature_raw)`; it keys on
