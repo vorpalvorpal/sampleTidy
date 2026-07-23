@@ -638,7 +638,29 @@ Work E lands after Work B, and the E.3 test carries a positive control (below).
 **SEQUENCING (Robin, 2026-07-23): F.1, F.2 and F.3 are FOLDED INTO THE B/C
 IMPLEMENTATION PASS**, not queued behind it. They live in the same function
 (`.rc_feature_key`) that Work B builds on, and until F.3 lands the key has no
-real test guarding it at all. F.4–F.8 stay separate.
+real test guarding it at all.
+
+**F.4–F.8 ARE DEFERRED TO POST-CUTOVER (Robin, 2026-07-23).** They are NOT
+abandoned — they are follow-up work, to be picked up once the migrated DB is in
+service. The deferral is safe on measured evidence, not optimism: F.6's exposure
+is 5 alias keys (`g182`, `g183`, `g184`, `g185`, `upstream`), it affects **zero**
+current dry-run residual items, and nothing in `R/` parses `subkind` today — so it
+is latent correctness, not review-queue reduction. F.4/F.5/F.7 are test-quality and
+documentation defects that cannot corrupt data. F.8 is not currently triggerable.
+
+**PHASE 8 (fresh-eyes behavioural review) IS ALSO DEFERRED TO POST-CUTOVER
+(Robin, 2026-07-23)**, to get the DB into service sooner, with any resulting mess
+cleaned up afterwards. The decision was made with the risk stated and accepted.
+The compensating controls, which are therefore NON-NEGOTIABLE:
+  1. the dry-run gate must not regress (57 review items / 43 `unknown_feature` /
+     zero cross-site mis-merge);
+  2. the pre-cutover backup with recorded SHA-256;
+  3. the cutover verification battery, every check of which must be able to fail;
+  4. `change_log` provenance on every registry change, so corrections are
+     reversible.
+Rationale: code defects found later are cheap because fixing them does not cost
+the database; wrong ROWS mixed into the 15,113 retained ones are not. The controls
+above guard the rows, which is the risk Phase 8 was not the only thing protecting.
 
 Work A shipped without a TDD audit. The audit confirmed its central claim empirically —
 `.rc_feature_key` reproduces `.mig001_normalize` on **1989/1989** stored `alias_key`s,
@@ -736,10 +758,20 @@ Mountains City Council/Sharepoint/waste_data - Environmental monitoring/data/mon
 has `analysis, analyte, analyte_mask, asset, feature, feature_mask, guideline,
 lab_invoice, lab_method, project, sample` and **lacks `change_log`, `feature_alias`,
 `ingest_file`, `review_queue`**. So `add_feature()` and every other mutation-layer call
-would fail against it (they write `change_log`), and `st_config("live_db")` currently
-points at a *different* copy under `~/Library/Application Support/`. Registry changes are
-therefore recorded here as pinned data and applied at cutover through the mutation layer,
-with provenance — never hand-INSERTed into the authoritative file.
+would fail against it *today* (they write `change_log`). Registry changes are therefore
+recorded here as pinned data and applied at cutover through the mutation layer, with
+provenance — never hand-INSERTed into the authoritative file.
+
+**Not a defect (corrected 2026-07-23):** `st_config("live_db")` resolving to a local
+path under `tools::R_user_dir()` rather than the SharePoint file is **correct by
+design** — see `dev/DESIGN.md` §9.1. OneDrive does not respect DuckDB's file lock, so
+the live DB is permanently local and un-synced and SharePoint receives one-way
+checkpointed snapshots. **Nothing is ever copied back.** Cutover is a one-time
+*promotion* of the SharePoint file into the local path; afterwards the old file is
+moved to `data/old/` under a dated, self-evidently frozen name. Likewise the missing
+ops tables are not unbuilt work: `ensure_schema()` creates all four idempotently.
+Snapshot destination (Robin, 2026-07-23): `…/Sharepoint/waste_data - Environmental
+monitoring/data/backups`, date-only names, same-day overwrite accepted.
 
 ### D.1 New feature B.L05 (Robin, 2026-07-23)
 | field | value |
@@ -795,6 +827,48 @@ checked the obvious way — the legacy schema has no `ingest_file` and `sample` 
 work order — so it is being established by matching date + analyte + value. Expect only
 the ~1264 field-sample rows to match; the other 2185 are lab batch QC (`QC-*` SampleCodes)
 which is never committed as a sample. **Do not treat a ~63% non-match as data loss.**
+
+### D.4 Two live-data defects surfaced by the D.3 verification (Robin, 2026-07-23)
+
+Both independently confirmed by the orchestrator against the authoritative DB. Not
+resolver bugs — pre-existing damage from the old WEM.input loader, found only because
+the 16 files were checked rather than deleted. **This is the concrete payoff of D.3's
+retain-don't-delete ruling: deleting the files would have destroyed the only evidence.**
+
+**(a) ES2520710 — one pH lost, one mislabelled.** The source Chemistry2e carries TWO pH
+values per sample: lab titrator (`EA005P: pH by PC Titrator`) and client-supplied field
+pH (`EN67 - Client Supplied Data`). The DB kept only the FIELD value and labelled it with
+the LAB method.
+
+| sample | file: EA005P (lab) | file: EN67 (field) | DB stores, under EA005P |
+|---|---|---|---|
+| ES2520710001 | **6.40** | 7.41 | 7.41 |
+| ES2520710002 | **7.15** | 6.67 | 6.67 |
+
+**RULING — correct in place.** Re-attribute the two existing rows to EN67, then add the
+EA005P lab values. End state: two correctly-labelled pH values per sample, NO duplicates.
+Delete-and-re-ingest was explicitly rejected; "keep all existing rows" stands.
+**Trap:** naive re-ingestion alone would yield FOUR pH rows per sample, not two. The
+supplementary correction is mandatory — establish the observed three-way behaviour on a
+copy first (the incoming EA005P value 6.40 differs from the stored EA005P value 7.41, so
+this may present as a conflict, a supersede, or a new row).
+
+**(b) ES2517594 — impossible sampling date.** Stored as 2025-09-08 14:00 (local
+2025-09-09), but the lab analysed the samples 2025-06-12..2025-06-18 — analysis three
+months *before* sampling. True date believed to be **2025-05-29** (same day as ES2516159;
+the work-order sequence puts it there: ES2517034 = 4 Jun, ES2517702 = 11 Jun). MUST be
+confirmed from `ES2517594_0_XTAB.XLS` before any correction is written — do not guess.
+
+**Re-downloads (Robin, 2026-07-23):** complete file sets for ES2520710, ES2517594 and
+ES2608966 are now in `…/assets/input/`, including the `Sample2e.CSV` the originals
+lacked — which is what makes feature resolution and true dates recoverable. Verified:
+macOS bracket-suffixed the collisions (`…Chemistry2e[94].CSV`) but this is HARMLESS —
+`.st_esdat_parse()` dispatches on CSV *header content*, not filename, and
+`file_meta()` returns identical `work_order_guess`/`revision_guess` for bracketed and
+clean names. The old and new Chemistry2e files are **byte-identical** (same SHA, same
+size, all three work orders), so hash dedup absorbs the duplicates and there is no
+revision conflict. The chemistry was never the problem — both pH values were always in
+the file; the old loader dropped one.
 
 ## Verification
 - Re-run the input/ dry-run (scratchpad/input_dryrun2.R) after each phase; track the
