@@ -116,7 +116,10 @@
 #    471 in-scope non-detects that have one (e.g. Dieldrin value 5e-4 mg/L
 #    against rl_low 0.5 - a 1000x factor, i.e. rl_low left in ug/L).  Using it
 #    would inflate those results by three orders of magnitude.
-#    >>> Needs Robin's ruling on which of the three to file. <<<
+#
+#    RULED 2026-07-23: file "as_stored".  The licence states its own convention
+#    (Dictionary, definition of 3DGM) and it is exactly this one - see
+#    assumption P for the quotation and the caveat on its scope.
 #
 # L. "No. of samples collected and analysed" = COUNT(DISTINCT sample) for that
 #    EPA point x pollutant, not the number of result rows.  They differ where a
@@ -149,9 +152,18 @@
 #    congeners, and "Total petroleum hydrocarbons" covers the TPH and TRH
 #    fraction rows.  The group's frequency is applied to EVERY member row,
 #    because each congener is analysed as part of that annual suite and leaving
-#    them blank would read as "nothing required".  It is a judgement call and
-#    the console report lists exactly which rows were filled this way.
-#    >>> Robin to confirm. <<<
+#    them blank would read as "nothing required".  The console report lists
+#    exactly which rows were filled this way.
+#    RULED 2026-07-23 (Robin): keep the expansion, required = 1.  This is a
+#    large share of column 4 - 120 of 333 filled cells in 2023-24 and 96 of 324
+#    in 2024-25 - so it is recorded here rather than left as a silent default.
+#    (2025-26 expands nothing: the annual organics suite ran at K.S09, where the
+#    licence does not require it, instead of at the bores where it does - see
+#    section 3.3(b).  The 36 empty group rows there are a real gap, not a bug.)
+#    The rejected alternative was section 4.4/18, collapsing the congeners into
+#    the licence's own line-item names: closer to the licence and the EPA portal,
+#    but it would average Lowest/Mean/Highest across chemically unrelated
+#    congeners and discard detail the EPA currently receives.
 #
 #    Column order and header text are exactly the template's.  A row that the
 #    licence requires but which was NEVER SAMPLED has no row in this return at
@@ -176,6 +188,15 @@
 #    points in V5, so their mask names were cleared and they no longer appear
 #    in the return.  Blaxland and Lawson masks were deliberately NOT touched -
 #    licence 13089 covers Katoomba only.
+#
+#    CONFIRMED 2026-07-23 (Robin): clearing K.MW02 and K.MW04 was the right
+#    call, and K.L03 / K.L05 are to be LEFT UNMAPPED - only K.L01 and K.L04
+#    carry point 18.  Both decisions are deliberate exclusions of real data
+#    from the return, so they are stated here rather than inferred from the
+#    masks: K.MW04 in particular is an actively sampled bore (121 rows across
+#    3 samples in 2025-26, quarterly cadence) whose results are now omitted.
+#    Nothing needs re-running for either - the live masks and the three filed
+#    returns already reflect this.
 #
 # P. BELOW-DETECTION VALUES ARE MARKED, NOT CHANGED.  sampleTidy's storage
 #    convention is that a below-detection result carries the reporting limit in
@@ -666,7 +687,7 @@ say(sprintf("  non-detects with value == rl_low        : %d",
 say(sprintf("  non-detects with value != rl_low        : %d   <- rl_low unit-inconsistent",
             sum(!is.na(nd_rows$rl_low) & nd_rows$value != nd_rows$rl_low)))
 say(sprintf("  non-detects with rl_low NULL            : %d", sum(is.na(nd_rows$rl_low))))
-say("  >>> Which substitution to file is Robin's call - see assumption K. <<<")
+say("  (ruled 2026-07-23: as_stored, per the licence Dictionary - assumption P)")
 
 hr("REPEAT MEASUREMENTS (same sample, same pollutant, >1 result)")
 rep_tbl <- as.data.frame(table(paste(rows$uuid_sample, rows$pollutant, sep = "\r")))

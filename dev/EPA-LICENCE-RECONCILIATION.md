@@ -27,8 +27,10 @@ overruled.
 **Not applied, still open:** §4.3 mask rows (DO, Faecal Coliforms, PO4, OCP, OPP) —
 confirmed **zero result rows at Katoomba across all three windows**, so they would add
 nothing to any of these returns. They remain worth adding before the determinands are
-next analysed. All of §4.4 except items 13 and 14 is still open, and **§4.4/19
-(non-detect handling) still governs every Lowest/Mean value filed.**
+next analysed.
+
+**§4.4 status.** Items 13, 14, 15, 18 (in part) and 19 are **resolved**; items 16, 17 and
+the pollutant-name half of 18 remain open. See the table in §4.4 for each.
 
 ### The methane unit change was verified, not assumed
 
@@ -50,14 +52,24 @@ magnitude below the R2.3 / M7.3 notification threshold of 1% v/v, and below the
 `5.0e-04` L/L (0.05 %v/v) solid-waste guideline trigger. No R2.3 escalation was
 triggered in any of the three years.
 
-### Caveat on clearing K.MW02 / K.MW04
+### Clearing K.MW02 / K.MW04 — CONFIRMED by Robin 2026-07-23
 
-This was my call, not Robin's, and it is the one change here that **removes data from a
-return**. K.MW04 is substantial — 129 / 111 / 121 analysis rows across the three
-windows. The reasoning: R1.5 asks for monitoring undertaken *as a result of a licence
+Originally my call rather than Robin's, and the one change here that **removes data from
+a return**, so it was put back to him explicitly and confirmed. K.MW04 is substantial —
+129 / 111 / **121** analysis rows across the three windows, on a normal quarterly cadence,
+last sampled 2025-12-10. K.MW02 is effectively dormant (116 rows to Dec 2021, then three
+stray results; 2 / 1 / 0 in the three windows), so it was never material either way.
+
+The reasoning that stands: R1.5 asks for monitoring undertaken *as a result of a licence
 condition*, and neither bore is a point in V5, so filing them under the invented IDs
-"2a"/"4a" states something the licence does not support. If you would rather report them
-as extra context, restoring either name is a one-line `db_update`.
+"2a"/"4a" would state something the licence does not support.
+
+**Live consequence worth keeping in view:** K.MW04's results are now omitted from the
+return even though the bore is still actively sampled. If the V5 map (the one sent to the
+EPA on 16 May 2025) turns out to show a bore in the north-east corner under some licence
+number, the right fix is to map K.MW04 to *that* number rather than to restore "4a" —
+that cannot be settled from the licence text alone, it needs the map. Restoring either
+name remains a one-line `db_update`.
 
 ### Later on 2026-07-23 — K.L04 joins point 18, and column 4 is now filled
 
@@ -69,9 +81,16 @@ unsampled in 2025-26.
 
 One thing to keep an eye on: the `long` masks still describe these as different
 things — K.L01 "Leachate dam", K.L04 "Cutoff wall discharge into leachate dam".
-The same reasoning would extend to K.L03 ("Cell B discharge point into leachate
-dam") and K.L05 ("Sump discharge into leachate dam", 43 rows in 2024-25), which
-were **not** changed. Worth settling all four together.
+
+**K.L03 and K.L05 stay unmapped — ruled by Robin 2026-07-23.** The same
+same-monitoring-point reasoning could have extended to K.L03 ("Cell B discharge point
+into leachate dam") and K.L05 ("Sump discharge into leachate dam"); it does not.
+**Only K.L01 and K.L04 carry point 18.** K.L06 ("Leachate inspection pit upgradient of
+dams") is upgradient and so a different water body; K.L02 is the lined stormwater dam
+and out of scope on matrix. Neither was ever a candidate.
+
+The three filed returns are unaffected — K.L03 and K.L05 would have contributed 1 row
+to 2023-24, 46 to 2024-25 and **nothing at all** to 2025-26.
 
 **Column 4, "No. of samples required", is now populated** from licence conditions
 M2.2/M2.3 (Quarterly = 4, Yearly = 1), resolving §4.4/15 for points 2 and 3. It is
@@ -83,14 +102,29 @@ requirement, so empty cells are the norm, not an omission.
 
 Two judgement calls inside that, both reported on the console at every run:
 
-* **Group line items are expanded.** "Organochlorine pesticides",
-  "Organophosphate pesticides" and "Total petroleum hydrocarbons" are single
-  licence lines covering ~24 congeners and 12 TPH/TRH fractions. Each member row
-  gets the group's frequency, because leaving them blank would read as "nothing
-  required". Confirmed to fire only at points 11-18: in 2023-24 and 2024-25 those
-  suites ran at points 11, 14, 15, 16 and 18, while the same congeners at points
-  4, 5, 6, 7 and 10 are correctly left empty — which is §3.3(b)'s "annual organics
-  suite went to the wrong location", now visible in the return itself.
+* **Group line items are expanded — CONFIRMED by Robin 2026-07-23, required = 1.**
+  "Organochlorine pesticides", "Organophosphate pesticides" and "Total petroleum
+  hydrocarbons" are single licence lines covering ~24 congeners and 12 TPH/TRH
+  fractions. Each member row gets the group's frequency, because leaving them
+  blank would read as "nothing required". This carries a lot of column 4:
+
+  | Return | Required cells filled | Group-expanded | Share |
+  |---|---:|---:|---:|
+  | 2023-24 | 333 | 120 | 36% |
+  | 2024-25 | 324 | 96 | 30% |
+  | 2025-26 | 196 | **0** | — |
+
+  Expansion fires only at points 11-18: in 2023-24 and 2024-25 those suites ran at
+  points 11, 14, 15, 16 and 18, while the same congeners at points 4, 5, 6, 7 and
+  10 are correctly left empty. **2025-26 expands nothing and leaves 36 group rows
+  blank** — that is §3.3(b)'s "annual organics suite went to the wrong location"
+  (it ran at K.S09, where the licence does not require it), now visible in the
+  return itself rather than only in this document.
+
+  The rejected alternative was §4.4/18 — collapsing the congeners into the licence's
+  own line-item names. Closer to the licence and to what the EPA portal expects, but
+  it would average Lowest/Mean/Highest across chemically unrelated congeners and
+  throw away detail the EPA currently receives.
 * **Point 1 counts location-samples, not events** (§4.4/16 is still open). The
   required count is 4 monitoring events; the collected count is the number of grid
   locations. A footnote says so, but the two numbers are not comparable.
@@ -538,13 +572,14 @@ too low.
 
 | # | Item | Decision needed |
 |---|---|---|
-| 13 | **EPA Point ID scheme (§0.1)** | Renumber all 18 `feature_mask` rows to licence V5, or confirm with the EPA that the pre-variation numbering applies to a period ending 26 May 2026. Nothing else in the return is safe until this is settled. |
-| 14 | **"4a" / K.MW04, and "2a" / K.MW02** | Not EPA points in V5. Either drop the 24 "4a" rows from the return or establish which licence point (if any) they belong to. |
-| 15 | **Points 2 and 3 "No. of samples required"** | Leave blank or enter the number of discharge events. Do not enter 1 or 4. |
+| 13 | ~~**EPA Point ID scheme (§0.1)**~~ | **RESOLVED 2026-07-23** — V5 numbering applies; all 18 masks renumbered. See STATUS. |
+| 14 | ~~**"4a" / K.MW04, and "2a" / K.MW02**~~ | **RESOLVED 2026-07-23** — both mask names cleared; the bores are excluded from the return. Confirmed by Robin. K.MW04's 121 rows/yr are knowingly omitted; if the V5 map shows a north-east-corner bore, remap to that number rather than restoring "4a". |
+| 14b | ~~**K.L03 / K.L05 vs point 18**~~ | **RESOLVED 2026-07-23** — left unmapped. Only K.L01 and K.L04 carry point 18. |
+| 15 | ~~**Points 2 and 3 "No. of samples required"**~~ | **RESOLVED 2026-07-23** — left blank. M2.4(a) Special Frequency 1 is per discharge event and the event count is not in the database, so any number would be a false statement. |
 | 16 | **Point 1 sample counting** | 178 location-samples in 1 event, against "Quarterly". State whether the count is events or location-samples. |
 | 17 | **Point 18 Phosphorus (total) UOM** | Licence says "milligrams per gram"; DB says mg/L. Moot this year (no L01 data) but will bite next year. |
-| 18 | **Pollutant name alignment** | The licence names one line item where the DB masks several: "Total petroleum hydrocarbons" → 5 TPH + 7 TRH fraction rows; "Organochlorine pesticides" / "Organophosphate pesticides" → ~20 congener rows. The EPA portal expects the licence's names. Also: licence "Nitrogen (ammonia)" vs mask "Ammonia (as N)"; "Nitrate"/"Nitrite" vs "Nitrate (as N)"/"Nitrite (as N)"; "Phosphorus" vs "Phosphorus (total)"; "Standing Water Level" vs "Standing water level". |
-| 19 | **Non-detect handling (script assumption K)** | Still unruled, and ~47% of in-scope results are non-detects. It changes every Lowest/Mean value filed. |
+| 18 | **Pollutant name alignment** (partly resolved) | **Resolved for column 4:** group line items are expanded, each congener carrying the group's frequency (Robin, 2026-07-23) — collapsing the rows to the licence's names was considered and rejected, since it would average Lowest/Mean/Highest across unrelated congeners. **Still open:** the plain name mismatches, which the EPA portal may reject — licence "Nitrogen (ammonia)" vs mask "Ammonia (as N)"; "Nitrate"/"Nitrite" vs "Nitrate (as N)"/"Nitrite (as N)"; "Phosphorus" vs "Phosphorus (total)"; "Standing Water Level" vs "Standing water level". |
+| 19 | ~~**Non-detect handling (script assumption K)**~~ | **RESOLVED 2026-07-23** — the licence states its own convention. Dictionary, definition of 3DGM: *"Where one or more of the samples is zero or below the detection limit for the analysis, then 1 or the detection limit respectively should be used in place of those samples."* That is exactly `nondetect = "as_stored"`, the default, and it gives no support to the `half` substitution. The wording sits in the 3DGM definition so it strictly governs the L2.4 limits at points 2 and 3 rather than the R1.5 return, but it is the licence's own convention and the most defensible one available. Values are therefore left unchanged and the ambiguity is **marked** instead — grey italics on any Lowest/Mean/Highest cell that is a reporting limit, with a note at the foot of the sheet (assumption P). |
 
 ---
 
