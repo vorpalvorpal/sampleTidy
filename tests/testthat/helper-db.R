@@ -71,7 +71,21 @@
       first_seen TIMESTAMP,
       last_seen TIMESTAMP,
       confirmed_by VARCHAR,               -- NULL = unconfirmed guess
-      comments VARCHAR
+      comments VARCHAR,
+      -- PLAN-15 E.1 (migration 003-alias-date-bounds.R, not yet written):
+      -- DATE, not TIMESTAMP - feature.date_start/date_end are DATE and a
+      -- TIMESTAMP column here would reintroduce the tz hazard E.5 documents.
+      -- Both NULLABLE; NULL means unbounded on that side. Distinct from
+      -- first_seen/last_seen (those record when ingest last OBSERVED the
+      -- string; these record when the alias is VALID) - do not conflate.
+      -- Production adds these via plain ALTER TABLE ADD COLUMN, never a
+      -- table rebuild (DROP TABLE feature_alias is refused - FK parent of
+      -- `sample`); the two DDL sites are 001:368-381 (pre-003 shape, left
+      -- as-is - it defines the historical baseline a pre-003 DB fixture
+      -- would need) and this file (must carry the post-003 shape so any
+      -- Work-E test can run at all).
+      date_start DATE,
+      date_end DATE
     )
     -- No DB uniqueness on name/alias_key (R-11.1): the domain forbids it -
     -- the same string may legitimately map to different features at
@@ -365,6 +379,14 @@ seed_db <- function(dir = NULL) {
     ('f-0001', 'long', 'Test Surface 01'),
     ('f-0002', 'epa', 'AMBIG'),
     ('f-0003', 'long', 'AMBIG')")
+
+  # REVISED 2026-07-24 (PLAN-15 E.1): `feature_alias` gains `date_start DATE`
+  # and `date_end DATE` (both NULLABLE, unbounded on NULL) in the CREATE
+  # TABLE above. No INSERT below lists these columns explicitly, so every
+  # existing fixture row reads back NULL/NULL on both - unbounded, i.e.
+  # exactly today's behaviour, per E.1's "NULL/NULL is the default and
+  # preserves exactly today's behaviour" pin. Additive only; nothing below
+  # was reordered or rewritten to accommodate it.
 
   # analyte (canonical units deliberately differ from reported units, to
   # force conversion in reconciliation tests)
