@@ -1034,8 +1034,22 @@ forever while the data files disappear from beside them, which is exactly the
 state that invites a manual "clean up the leftovers" sweep that deletes the only
 copy of a certificate of analysis.
 
-Robin wants these retained. Scope to be fleshed out at implementation; the
-shape is roughly:
+**Requirement, restated by Robin 2026-07-23: "Each file related to a WO should
+be saved along with it."** Two obligations, and the second is the one easy to
+miss — retention alone is not enough:
+
+1. the bytes are retained (archived, hash-verified, source then removable);
+2. the retained file is **discoverably attached to its work order**, so that
+   "show me everything for WO ES2610538" returns the CSV *and* the COA, COC, QC
+   and QCI PDFs and the XTAB.XLS. An `asset` row that records bytes without
+   resolving to the work order satisfies (1) and fails the requirement.
+
+That makes the work-order linkage a first-class part of the spec, not a
+side-effect of registration — check how `asset` currently reaches an event
+before designing this, and if the association is only via the parsed data, a
+retain-only file will have nothing to hang off.
+
+Scope otherwise to be fleshed out at implementation; the shape is roughly:
 
 * register the non-tabular siblings of a committed event as `asset` rows with
   an appropriate `type` (they are evidence, not `"Chemical analysis"` data) and
@@ -1050,9 +1064,11 @@ shape is roughly:
 
 Acceptance (must be able to FAIL): ingest a work order whose directory contains
 a COA PDF; assert the PDF has an `asset` row AND a byte-identical archive copy
-AND that a subsequent `remove_ingested` pass deletes the source. Assert the run
-reports **zero** `quarantined` files for that event — a test that merely counts
-`asset` rows would pass while the PDF still sat unclaimed.
+AND **that the row is reachable from the work order** AND that a subsequent
+`remove_ingested` pass deletes the source. Assert the run reports **zero**
+`quarantined` files for that event — a test that merely counts `asset` rows
+would pass while the PDF still sat unclaimed, and one that stops at the archive
+copy would pass while the file was retained but unattached.
 
 ### F.18 Legacy `asset` rows with no retained bytes (OPEN — found 2026-07-23)
 **1,272 of 2,556 `asset` rows have no archive copy on disk**, and a sample of 40
@@ -1065,8 +1081,23 @@ absent rather than stored elsewhere.
 Nothing is at risk of deletion because of this — `.ig_remove_verified()` only
 ever considers files routed in the current run — but the `asset` table currently
 overstates what is actually retained by roughly half, and anything that trusts
-it as an evidence index is wrong. Needs a decision: locate the bytes (another
-backup? the pre-cutover SharePoint tree?), or mark the rows as
+it as an evidence index is wrong.
+
+**16 rows were repaired 2026-07-23** — bytes recovered from `input_dir` by hash,
+copied into the archive, re-hashed to confirm. Those were the D.3 rows that
+registered a hash without copying the bytes.
+
+**Partial recovery looks possible for the rest.** Widening the search from
+`assets/` to the whole SharePoint tree (15,175 files) matched **254 of the 1,272
+missing filenames**, all under old `backup/2021-10-*/R/import/www/temp`
+directories. Matching there is by *filename*, not hash, so each candidate must be
+hash-checked before it is trusted — a same-named file from the old import staging
+area is not necessarily the same bytes. Also relevant to F.17: **744 of the 1,272
+are PDFs**, the very class F.17 is about, which suggests the old system never
+retained them reliably either.
+
+Needs a decision, now better informed: attempt the 254-row hash-verified
+recovery, and mark the remainder (and any candidate that fails its hash check) as
 `bytes_not_retained` so the registry stops claiming a copy exists.
 
 ## Registry data changes pending the live cutover
