@@ -87,6 +87,10 @@ Resolution order for each incoming `feature_raw`, per row, within an event/WO:
 ## Work breakdown (one body of work, TDD; tests before impl per phase)
 
 - **A. Layer-1 punctuation-preserving alias key + ambiguous-candidate surfacing.**
+  **DONE 2026-07-23 (commit `1d9048d`).** `.rc_feature_key` added (NOT `.rc_key`);
+  `.rc_feature_candidates` + `.rc_resolve_features` folded with it; `.rc_feature_suggestions`
+  surfaces the all-`auto_assign=FALSE` ambiguous case. Fixture regenerated stripped→dotted.
+  Dry-run: unknown_feature 113→43, 12 within-site candidates, zero cross-site merge; suite 2697/0/0.
   Files: R/reconcile.R (`.rc_key` callers for features → new `.rc_feature_key`;
   `.rc_feature_candidates` drop the strip; `.rc_feature_review` emit candidates for
   the auto_assign=FALSE ambiguous case). Tests: dotted keys resolve (B.S01, K.E02,
@@ -98,10 +102,50 @@ Resolution order for each incoming `feature_raw`, per row, within an event/WO:
   parser. Tests: `B S01`/`BS01` → B.S01 (formatting variants absorbed WITHOUT an
   explicit alias); unknown site → review; non-existent point in site → review, not
   fabricated; BH beats B (longest match).
+  **Site set comes from the `feature.site` COLUMN, not a name-prefix parse** — the
+  column is authoritative and already populated (supersedes the "derive from
+  `feature.name` prefixes" wording in Layer 2 above).
 - **C. Layer-3 WO single-site disambiguation.** Tests: all-BH-resolved WO + novel
   irregular code → assumes BH (exact hit → resolve + provenance; no hit → suggest);
   MIXED-site WO → heuristic does NOT fire; curated BS1 inside an all-B WO still →
   BH.S01 (curation wins over WO context).
+
+### Scope basis for B and C (reassessed 2026-07-23, post-Work-A)
+
+Work A's dry-run gate was re-measured and the 43 `unknown_feature` residual fully
+decomposed (`scratchpad/{analyze_p15,residual_probe,residual_probe2}.R` against
+`/private/tmp/claude-501/qc-dryrun/monitoring_dryrun.duckdb`):
+
+| Group | Grouped items | Disposition |
+|---|---|---|
+| `feature_raw = NA` (ESdat Sample2e join gap) | 16 | OUT OF SCOPE (below); largest by rows |
+| Ambiguous, candidates now attached | 12 | Working as designed — operator pick |
+| Descriptive names, no candidate | 15 | Only 2 distinct strings (below) |
+
+**B and C target ZERO of this residual, and that is expected.** Work A absorbed the
+entire un-aliased-code class; no `B S01`/`BS01`-style raw survives in this corpus, and
+all 894 features are `SITE.POINT`-coded. The 15 descriptive items are 2 strings only
+("Trade Waste Dam" ×6 WOs, "Discharge Point - Lawson STP" ×9 WOs) carrying no site
+prefix and no point code — **unreachable by a structural parse or by WO site
+inference**, and a curation gap rather than a code gap: the registry already models
+this via `feature_alias.kind IN ('descriptive','mask_long')` (~40 rows registered,
+e.g. "leachate seep in wall of trade waste dam"); these 2 strings are simply not
+among them.
+
+**B and C are therefore justified as CORRECTNESS work against formatting-variant and
+site-ambiguity failure modes that HAVE surfaced in past ingestion groups** (user
+direction, 2026-07-23), not as a review-queue reduction for the 265-file corpus. A
+reviewer must NOT score them against residual-clearing; the acceptance gate is
+behavioural (the per-layer tests above) plus the blast-radius guard that the dry-run
+residual does not REGRESS (57 review items / 43 `unknown_feature` / zero cross-site
+mis-merge).
+
+**Parked, not in B/C scope:** the 12 ambiguous items are both `self` vs
+`historical_code` collisions with lopsided evidence (`b.s01`: self→B.S01 n_seen=130
+vs historical_code→B.TS41 n_seen=2; `k.e02`: self→K.E02 n_seen=20 vs
+historical_code→K.S06 n_seen=1). A `self` > `historical_code` precedence rule would
+clear both, but that is a curation-semantics decision (it cuts against the standing
+"old ≠ misspelling" rule) and is deferred pending a user ruling.
 - **D. Provenance/confidence + review-candidate plumbing** (folded into A-C).
 
 ## Verification
