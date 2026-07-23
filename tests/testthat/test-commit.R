@@ -370,6 +370,23 @@ add_second_reconciled_file <- function(setup, filename) {
   list(hash = hash2, path = path2)
 }
 
+#' Register a NEW `reconciled` ingest_file row (its own hash/filename) against
+#' the SAME `commit_test_setup()` connection, with a caller-chosen work_order
+#' and revision - PLAN-15 F.10's re-ingest-guard tests need several distinctly
+#' -named files against one (or more) work orders, some sharing revisions,
+#' some not. Parameterised (not sprintf'd) so a work_order containing a SPACE
+#' (the ACIRL false-split fixture below) round-trips safely.
+add_reconciled_file <- function(setup, filename, work_order = setup$work_order, revision = 0L) {
+  path <- file.path(dirname(setup$path), filename)
+  writeLines(paste("SampleCode,ChemCode", filename), path)
+  hash <- hash_file(path)
+  DBI::dbExecute(setup$con, "INSERT INTO ingest_file
+    (hash, filename, path_first_seen, state, work_order, revision)
+    VALUES (?, ?, ?, 'reconciled', ?, ?)",
+    params = list(hash, basename(path), path, work_order, as.integer(revision)))
+  list(hash = hash, path = path)
+}
+
 dangling_alias_row <- function(con, alias_key) {
   DBI::dbGetQuery(con, "SELECT * FROM feature_alias WHERE alias_key = ? AND uuid_feature IS NULL",
                    params = list(alias_key))
@@ -940,4 +957,255 @@ test_that("R-11.16: a qualitative text row commits quantified = NA, not FALSE (t
   # and it must be NA specifically - FALSE is the bug this guards
   expect_false(isFALSE(new_row$quantified[[1]]))
   expect_equal(new_row$value_chr[[1]], "Could not find due to long grass")
+})
+
+# ---- PLAN-15 E.4/R-15.17: new-alias date_start = min(sample_date) over the
+#      WHOLE alias_key group, order-independent; existing-dangling branch
+#      must not touch either bound -----------------------------------------
+
+test_that("R-15.17: a new pending alias's date_start is min(sample_date) over the WHOLE group, identical regardless of row/file order; date_end stays NULL", {
+  setup <- commit_test_setup()
+  con <- setup$con
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  key <- .rc_key("T.ORDER-INDEP")
+  event <- mk_commit_event(tibble::tibble(hash = setup$hash, filename = basename(setup$path),
+                                           adapter = "esdat/1", rank = 3L, kept = TRUE))
+
+  # Three rows sharing one alias_key, NOT in date order - the earliest
+  # (2025-05-01) is neither first nor last in this ordering, so a
+  # first-in-file-order bug (rows_k[[1]]) would pick 2025-06-01, not the
+  # group minimum.
+  clean_fwd <- dplyr::bind_rows(
+    mk_p11_row(source_ref = "r1", source_hash = setup$hash,
+               feature_raw = "T.ORDER-INDEP", alias_key = key,
+               feature_pending = TRUE, uuid_feature_alias = NA_character_,
+               sample_date = as.Date("2025-06-01"),
+               sample_datetime = as.POSIXct("2025-06-01 09:00:00", tz = "UTC")),
+    mk_p11_row(source_ref = "r2", source_hash = setup$hash,
+               feature_raw = "T.ORDER-INDEP", alias_key = key,
+               feature_pending = TRUE, uuid_feature_alias = NA_character_,
+               sample_date = as.Date("2025-06-15"),
+               sample_datetime = as.POSIXct("2025-06-15 09:00:00", tz = "UTC")),
+    mk_p11_row(source_ref = "r3", source_hash = setup$hash,
+               feature_raw = "T.ORDER-INDEP", alias_key = key,
+               feature_pending = TRUE, uuid_feature_alias = NA_character_,
+               sample_date = as.Date("2025-05-01"),
+               sample_datetime = as.POSIXct("2025-05-01 09:00:00", tz = "UTC"))
+  )
+  .ct_materialise_feature_aliases(con, clean_fwd, event, "test-actor", "R-15.17 forward order")
+
+  alias_fwd <- dangling_alias_row(con, key)
+  expect_equal(nrow(alias_fwd), 1)
+  expect_equal(alias_fwd$date_start[[1]], as.Date("2025-05-01"))
+  expect_true(is.na(alias_fwd$date_end[[1]]))
+
+  # Rebuild with the SAME group in REVERSED row order (simulating the two
+  # files of one event arriving in a different order) - must yield the
+  # IDENTICAL date_start, not a different, permanent one.
+  DBI::dbExecute(con, "DELETE FROM feature_alias WHERE alias_key = ?", params = list(key))
+  clean_rev <- clean_fwd[rev(seq_len(nrow(clean_fwd))), ]
+  clean_rev$uuid_feature_alias <- NA_character_
+  .ct_materialise_feature_aliases(con, clean_rev, event, "test-actor", "R-15.17 reversed order")
+
+  alias_rev <- dangling_alias_row(con, key)
+  expect_equal(nrow(alias_rev), 1)
+  expect_equal(alias_rev$date_start[[1]], as.Date("2025-05-01"))
+  expect_true(is.na(alias_rev$date_end[[1]]))
+})
+
+test_that("R-15.17: re-ingesting into an EXISTING dangling alias updates n_seen/last_seen only - date_start/date_end are left untouched even by an earlier-dated incoming row", {
+  setup <- commit_test_setup()
+  con <- setup$con
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  key <- .rc_key("T.EXISTING-DANGLING-BOUNDS")
+
+  DBI::dbExecute(con, "INSERT INTO feature_alias
+    (uuid, uuid_feature, name, alias_key, kind, n_seen, auto_assign, first_seen, last_seen,
+     confirmed_by, comments, date_start, date_end)
+    VALUES ('fa-existing-dangling', NULL, 'T.EXISTING-DANGLING-BOUNDS', ?, 'pending', 1, FALSE,
+            TIMESTAMP '2025-01-01 00:00:00', TIMESTAMP '2025-01-01 00:00:00', NULL, NULL,
+            DATE '2025-03-15', NULL)",
+    params = list(key))
+
+  files <- tibble::tibble(hash = setup$hash, filename = basename(setup$path),
+                          adapter = "esdat/1", rank = 3L, kept = TRUE)
+  event <- mk_commit_event(files)
+  # sample_date deliberately EARLIER than the recorded date_start - proves the
+  # existing-dangling branch does not widen (or otherwise touch) the bound.
+  clean <- mk_p11_row(source_ref = "r1", source_hash = setup$hash,
+                       feature_raw = "T.EXISTING-DANGLING-BOUNDS", alias_key = key,
+                       feature_pending = TRUE, uuid_feature_alias = NA_character_,
+                       sample_date = as.Date("2025-01-01"),
+                       sample_datetime = as.POSIXct("2025-01-01 09:00:00", tz = "UTC"))
+  .ct_materialise_feature_aliases(con, clean, event, "test-actor", "R-15.17 existing-dangling")
+
+  after <- dangling_alias_row(con, key)
+  expect_equal(nrow(after), 1)
+  expect_equal(after$date_start[[1]], as.Date("2025-03-15"))
+  expect_true(is.na(after$date_end[[1]]))
+  expect_equal(after$n_seen[[1]], 2)
+})
+
+# ---- PLAN-15 F.10/R-15.31/R-15.32: work-order-level re-ingest guard --------
+#
+# F.10's guard is a positive DB check ("does this work order already have
+# `sample` rows?"), not a filename/`ingest_file` check, with two PINNED
+# exemptions: a higher-revision re-ingest of a loaded WO (A12 supersede,
+# `.rc_recorded_revision`) and an `already_present` match
+# (`.rc_find_existing`) must both stay exempt. The already_present exemption
+# for an already-loaded WO is independently covered by the pre-existing
+# "R-8.7/A63" test above (WO XX1234567, already loaded via
+# commit_test_setup()); it is not re-derived here. Driven through the REAL
+# reconcile_event() -> commit_event() pipeline throughout (not hand-built
+# `resolved`), per this file's plan-11 convention below.
+
+test_that("R-15.31/R-15.32: the work-order re-ingest guard blocks a differently-named, non-matching, same-revision re-download of a loaded WO (routed to review, zero new rows), while a HIGHER-revision file for that same WO stays exempt and commits via the normal A12 supersede path", {
+  setup <- commit_test_setup(filename = "PROJ_A.ESDAT_XX9990001_0.Chemistry2e.CSV",
+                              work_order = "XX9990001", revision = 0L)
+  con <- setup$con
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  # ---- seed: WO XX9990001 already has sample/analysis rows.
+  files0 <- tibble::tibble(hash = setup$hash, filename = basename(setup$path),
+                           adapter = "esdat/1", rank = 3L, kept = TRUE)
+  event0 <- mk_event(mk_row(source_ref = "r1", source_hash = setup$hash,
+                             work_order = "XX9990001", revision = 0L,
+                             sample_datetime_raw = "01 Aug 2025 09:00"),
+                      work_order = "XX9990001")
+  resolved0 <- reconcile_event(event0, con)
+  expect_equal(nrow(resolved0$clean), 1)  # sanity: the seed genuinely commits
+  commit_event(mk_commit_event(files0, work_order = "XX9990001"), resolved0, con)
+
+  seeded_analysis <- DBI::dbGetQuery(con,
+    "SELECT uuid FROM analysis WHERE uuid NOT IN ('an-0001','an-0002','an-0003','an-0004','an-0005')")
+  expect_equal(nrow(seeded_analysis), 1)
+  seeded_uuid <- seeded_analysis$uuid[[1]]
+
+  before_sample <- count_rows(con, "sample")
+  before_analysis <- count_rows(con, "analysis")
+  before_review <- count_rows(con, "review_queue")
+
+  # ---- EXEMPTION (R-15.31): a HIGHER-revision file for the SAME work order,
+  # under a NEW filename, carrying a DIFFERENT value - must commit via the
+  # normal A12 supersede path (update in place), not be caught by the guard.
+  hi <- add_reconciled_file(setup, "PROJ_A.ESDAT_XX9990001_1_REISSUE.Chemistry2e.CSV",
+                             work_order = "XX9990001", revision = 1L)
+  files_hi <- tibble::tibble(hash = hi$hash, filename = basename(hi$path),
+                             adapter = "esdat/1", rank = 3L, kept = TRUE)
+  event_hi <- mk_event(mk_row(source_ref = "r1", source_hash = hi$hash,
+                               work_order = "XX9990001", revision = 1L,
+                               sample_datetime_raw = "01 Aug 2025 09:00",
+                               value_raw = "0.2", value_num = 0.2, below_detection = FALSE),
+                        work_order = "XX9990001")
+  resolved_hi <- reconcile_event(event_hi, con)
+  expect_equal(nrow(resolved_hi$clean), 1)
+  expect_identical(resolved_hi$clean$supersedes[[1]], seeded_uuid)
+  commit_event(mk_commit_event(files_hi, work_order = "XX9990001"), resolved_hi, con)
+
+  expect_equal(count_rows(con, "analysis"), before_analysis)  # updated in place, no new row
+  updated <- DBI::dbGetQuery(con, sprintf("SELECT value FROM analysis WHERE uuid = '%s'", seeded_uuid))
+  expect_equal(updated$value[[1]], 200)  # 0.2 mg/L -> 200 ug/L canonical (lm-0002 has no conversion_constant)
+
+  # ---- BLOCKING (R-15.32): a SAME-revision file, under yet another new
+  # filename, carrying a row for a DIFFERENT sample_date matching NOTHING
+  # already in the DB - must be blocked from commit and routed to review,
+  # not silently committed as a brand-new legitimate sample.
+  lo <- add_reconciled_file(setup, "PROJ_A.ESDAT_XX9990001_0_REDOWNLOAD.Chemistry2e.CSV",
+                             work_order = "XX9990001", revision = 0L)
+  files_lo <- tibble::tibble(hash = lo$hash, filename = basename(lo$path),
+                             adapter = "esdat/1", rank = 3L, kept = TRUE)
+  event_lo <- mk_event(mk_row(source_ref = "r1", source_hash = lo$hash,
+                               work_order = "XX9990001", revision = 0L,
+                               sample_datetime_raw = "03 Aug 2025 09:00"),
+                        work_order = "XX9990001")
+  resolved_lo <- reconcile_event(event_lo, con)
+  commit_event(mk_commit_event(files_lo, work_order = "XX9990001"), resolved_lo, con)
+
+  expect_equal(count_rows(con, "sample"), before_sample)
+  expect_equal(count_rows(con, "analysis"), before_analysis)
+  expect_gt(count_rows(con, "review_queue"), before_review)
+})
+
+test_that("R-15.32 (ACIRL false-merge guard): a first-time work order whose filename embeds a SHORTER, already-loaded ACIRL work order as a literal prefix still commits cleanly - the guard must key on the recorded work_order, never a filename-parsed one", {
+  setup <- commit_test_setup(filename = "2400-7538-02_ALS_Chemistry.CSV",
+                              work_order = "2400-7538-02", revision = 0L)
+  con <- setup$con
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  # WO A = "2400-7538-02" is already loaded (has sample rows).
+  files_a <- tibble::tibble(hash = setup$hash, filename = basename(setup$path),
+                            adapter = "esdat/1", rank = 3L, kept = TRUE)
+  event_a <- mk_event(mk_row(source_ref = "r1", source_hash = setup$hash,
+                              work_order = "2400-7538-02", revision = 0L,
+                              sample_datetime_raw = "01 Aug 2025 09:00"),
+                       work_order = "2400-7538-02")
+  commit_event(mk_commit_event(files_a, work_order = "2400-7538-02"),
+               reconcile_event(event_a, con), con)
+
+  # WO B = "2400-7538-02-01" is a DIFFERENT, never-before-loaded work order -
+  # but its filename embeds "2400-7538-02" (WO A) as a literal PREFIX, the
+  # exact false-merge bait measured on the real corpus 2026-07-23 (a filename
+  # regex matches WO A inside WO B's filename).
+  b <- add_reconciled_file(setup, "2400-7538-02-01_ALS_Chemistry.CSV",
+                            work_order = "2400-7538-02-01", revision = 0L)
+  files_b <- tibble::tibble(hash = b$hash, filename = basename(b$path),
+                            adapter = "esdat/1", rank = 3L, kept = TRUE)
+  event_b <- mk_event(mk_row(source_ref = "r1", source_hash = b$hash,
+                              work_order = "2400-7538-02-01", revision = 0L,
+                              sample_datetime_raw = "02 Aug 2025 09:00"),
+                       work_order = "2400-7538-02-01")
+
+  before_sample <- count_rows(con, "sample")
+  before_analysis <- count_rows(con, "analysis")
+  resolved_b <- reconcile_event(event_b, con)
+  expect_equal(nrow(resolved_b$clean), 1)
+  commit_event(mk_commit_event(files_b, work_order = "2400-7538-02-01"), resolved_b, con)
+
+  # WO B had NO prior sample rows - a first-time load must commit cleanly,
+  # not be caught by a guard that mistook it (via filename) for a
+  # re-download of WO A.
+  expect_equal(count_rows(con, "sample") - before_sample, 1)
+  expect_equal(count_rows(con, "analysis") - before_analysis, 1)
+})
+
+test_that("R-15.32 (ACIRL false-split guard): a re-download of a loaded work order whose true name contains a SPACE ('2400-7538 01-01') is still blocked and routed to review - the guard must not derive a shorter, never-loaded work order by regex-splitting the filename at the space", {
+  setup <- commit_test_setup(filename = "2400-7538 01-01_ALS_Chemistry.CSV",
+                              work_order = "2400-7538 01-01", revision = 0L)
+  con <- setup$con
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  files0 <- tibble::tibble(hash = setup$hash, filename = basename(setup$path),
+                           adapter = "esdat/1", rank = 3L, kept = TRUE)
+  event0 <- mk_event(mk_row(source_ref = "r1", source_hash = setup$hash,
+                             work_order = "2400-7538 01-01", revision = 0L,
+                             sample_datetime_raw = "01 Aug 2025 09:00"),
+                      work_order = "2400-7538 01-01")
+  commit_event(mk_commit_event(files0, work_order = "2400-7538 01-01"),
+               reconcile_event(event0, con), con)
+
+  before_sample <- count_rows(con, "sample")
+  before_analysis <- count_rows(con, "analysis")
+  before_review <- count_rows(con, "review_queue")
+
+  # A differently-named re-download of the SAME work order (the correct
+  # field value is passed directly here, exactly as `ingest_file.work_order`
+  # would carry it - never re-derived from the filename), same revision, a
+  # row matching nothing already in the DB: the classic F.10 re-download
+  # case, on a WO string a hyphen-only regex would truncate at the space (a
+  # false split down to "2400-7538", which was never loaded and so would
+  # slip an implementation that keys on a filename-parsed work order).
+  redl <- add_reconciled_file(setup, "2400-7538 01-01_ALS_Chemistry_v2.CSV",
+                               work_order = "2400-7538 01-01", revision = 0L)
+  files_redl <- tibble::tibble(hash = redl$hash, filename = basename(redl$path),
+                               adapter = "esdat/1", rank = 3L, kept = TRUE)
+  event_redl <- mk_event(mk_row(source_ref = "r1", source_hash = redl$hash,
+                                 work_order = "2400-7538 01-01", revision = 0L,
+                                 sample_datetime_raw = "05 Aug 2025 09:00"),
+                          work_order = "2400-7538 01-01")
+  commit_event(mk_commit_event(files_redl, work_order = "2400-7538 01-01"),
+               reconcile_event(event_redl, con), con)
+
+  expect_equal(count_rows(con, "sample"), before_sample)
+  expect_equal(count_rows(con, "analysis"), before_analysis)
+  expect_gt(count_rows(con, "review_queue"), before_review)
 })
