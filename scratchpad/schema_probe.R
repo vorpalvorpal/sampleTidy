@@ -1,0 +1,6 @@
+suppressMessages(pkgload::load_all(".", quiet=TRUE)); options(warn=-1)
+con <- st_connect("/private/tmp/claude-501/qc-dryrun/monitoring_dryrun.duckdb", read_only=TRUE)
+tb <- DBI::dbGetQuery(con,"SELECT table_name FROM information_schema.tables WHERE table_schema='main' ORDER BY 1")
+print(tb, row.names=FALSE)
+for (t in tb$table_name) cat(sprintf("%-16s: %s\n", t, paste(DBI::dbListFields(con,t), collapse=", ")))
+DBI::dbDisconnect(con, shutdown=TRUE)

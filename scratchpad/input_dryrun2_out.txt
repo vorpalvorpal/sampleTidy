@@ -1,0 +1,29 @@
+[1] TRUE
+copied live db -> /private/tmp/claude-501/qc-dryrun/monitoring_dryrun.duckdb (51.7 MB)
+[/private/tmp/claude-501/qc-dryrun/monitoring_dryrun.duckdb] Backup verified: /private/tmp/claude-501/qc-dryrun/snapshots/monitoring_pre-001-alias-indirection_20260722T214420.913Z.duckdb
+[/private/tmp/claude-501/qc-dryrun/monitoring_dryrun.duckdb] To restore if needed: cp '/private/tmp/claude-501/qc-dryrun/snapshots/monitoring_pre-001-alias-indirection_20260722T214420.913Z.duckdb' '/private/tmp/claude-501/qc-dryrun/monitoring_dryrun.duckdb'
+[/private/tmp/claude-501/qc-dryrun/monitoring_dryrun.duckdb] Pre-migration counts: feature=894 sample=15113 analysis=95737 lab_method=360
+[/private/tmp/claude-501/qc-dryrun/monitoring_dryrun.duckdb] 763 ambiguous alias rows flagged auto_assign = FALSE.
+[/private/tmp/claude-501/qc-dryrun/monitoring_dryrun.duckdb] Post-migration counts: feature=894 sample=15113 analysis=95737 lab_method=360
+[/private/tmp/claude-501/qc-dryrun/monitoring_dryrun.duckdb] Step-11 verify passed: row counts and checksum unchanged.
+[/private/tmp/claude-501/qc-dryrun/monitoring_dryrun.duckdb] 001-alias-indirection migrated successfully.
+[/private/tmp/claude-501/qc-dryrun/monitoring_dryrun.duckdb] Backup verified: /private/tmp/claude-501/qc-dryrun/snapshots/monitoring_pre-002-registry-remediation_20260722T214422.097Z.duckdb
+[/private/tmp/claude-501/qc-dryrun/monitoring_dryrun.duckdb] To restore if needed: cp '/private/tmp/claude-501/qc-dryrun/snapshots/monitoring_pre-002-registry-remediation_20260722T214422.097Z.duckdb' '/private/tmp/claude-501/qc-dryrun/monitoring_dryrun.duckdb'
+[/private/tmp/claude-501/qc-dryrun/monitoring_dryrun.duckdb] 002-registry-remediation applied.
+migrations applied
+input files: 265
+
+events=90  new_rows=3624  review_items=127
+
+=== review items by kind ===
+
+unknown_analyte unknown_feature 
+             14             113 
+
+=== kind x subkind ===
+                 
+                  <NA>
+  unknown_analyte   14
+  unknown_feature  113
+
+=== unknown_feature: 113 grouped items ===

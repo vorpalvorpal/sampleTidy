@@ -1,0 +1,156 @@
+[1] TRUE
+copied live db -> /private/tmp/claude-501/qc-dryrun/monitoring_dryrun.duckdb (51.7 MB)
+[/private/tmp/claude-501/qc-dryrun/monitoring_dryrun.duckdb] Backup verified: /private/tmp/claude-501/qc-dryrun/snapshots/monitoring_pre-001-alias-indirection_20260722T232746.929Z.duckdb
+[/private/tmp/claude-501/qc-dryrun/monitoring_dryrun.duckdb] To restore if needed: cp '/private/tmp/claude-501/qc-dryrun/snapshots/monitoring_pre-001-alias-indirection_20260722T232746.929Z.duckdb' '/private/tmp/claude-501/qc-dryrun/monitoring_dryrun.duckdb'
+[/private/tmp/claude-501/qc-dryrun/monitoring_dryrun.duckdb] Pre-migration counts: feature=894 sample=15113 analysis=95737 lab_method=360
+[/private/tmp/claude-501/qc-dryrun/monitoring_dryrun.duckdb] 763 ambiguous alias rows flagged auto_assign = FALSE.
+[/private/tmp/claude-501/qc-dryrun/monitoring_dryrun.duckdb] Post-migration counts: feature=894 sample=15113 analysis=95737 lab_method=360
+[/private/tmp/claude-501/qc-dryrun/monitoring_dryrun.duckdb] Step-11 verify passed: row counts and checksum unchanged.
+[/private/tmp/claude-501/qc-dryrun/monitoring_dryrun.duckdb] 001-alias-indirection migrated successfully.
+[/private/tmp/claude-501/qc-dryrun/monitoring_dryrun.duckdb] Backup verified: /private/tmp/claude-501/qc-dryrun/snapshots/monitoring_pre-002-registry-remediation_20260722T232748.090Z.duckdb
+[/private/tmp/claude-501/qc-dryrun/monitoring_dryrun.duckdb] To restore if needed: cp '/private/tmp/claude-501/qc-dryrun/snapshots/monitoring_pre-002-registry-remediation_20260722T232748.090Z.duckdb' '/private/tmp/claude-501/qc-dryrun/monitoring_dryrun.duckdb'
+[/private/tmp/claude-501/qc-dryrun/monitoring_dryrun.duckdb] 002-registry-remediation applied.
+migrations applied
+input files: 265
+New names:
+• `` -> `...3`
+• `` -> `...5`
+• `REG` -> `REG...6`
+• `REG` -> `REG...7`
+• `REG` -> `REG...8`
+New names:
+• `` -> `...3`
+• `` -> `...4`
+• `REG` -> `REG...6`
+• `REG` -> `REG...7`
+• `REG` -> `REG...8`
+• `REG` -> `REG...9`
+• `REG` -> `REG...10`
+• `REG` -> `REG...11`
+• `REG` -> `REG...12`
+New names:
+• `` -> `...3`
+• `` -> `...5`
+• `REG` -> `REG...6`
+• `REG` -> `REG...7`
+• `REG` -> `REG...8`
+• `REG` -> `REG...9`
+• `REG` -> `REG...10`
+• `REG` -> `REG...11`
+• `REG` -> `REG...12`
+New names:
+• `` -> `...3`
+• `` -> `...4`
+• `REG` -> `REG...6`
+• `REG` -> `REG...7`
+• `REG` -> `REG...8`
+• `REG` -> `REG...9`
+• `REG` -> `REG...10`
+• `REG` -> `REG...11`
+• `REG` -> `REG...12`
+• `REG` -> `REG...13`
+• `REG` -> `REG...14`
+• `REG` -> `REG...15`
+• `REG` -> `REG...16`
+• `REG` -> `REG...17`
+New names:
+• `` -> `...3`
+• `` -> `...5`
+• `REG` -> `REG...6`
+• `REG` -> `REG...7`
+• `REG` -> `REG...8`
+• `REG` -> `REG...9`
+• `REG` -> `REG...10`
+• `REG` -> `REG...11`
+• `REG` -> `REG...12`
+• `REG` -> `REG...13`
+• `REG` -> `REG...14`
+• `REG` -> `REG...15`
+• `REG` -> `REG...16`
+• `REG` -> `REG...17`
+New names:
+• `` -> `...3`
+• `` -> `...4`
+• `REG` -> `REG...6`
+• `REG` -> `REG...7`
+• `REG` -> `REG...8`
+• `REG` -> `REG...9`
+• `REG` -> `REG...10`
+• `REG` -> `REG...11`
+New names:
+• `` -> `...3`
+• `` -> `...5`
+• `REG` -> `REG...6`
+• `REG` -> `REG...7`
+• `REG` -> `REG...8`
+• `REG` -> `REG...9`
+• `REG` -> `REG...10`
+• `REG` -> `REG...11`
+New names:
+• `` -> `...3`
+• `` -> `...4`
+• `REG` -> `REG...6`
+• `REG` -> `REG...7`
+• `REG` -> `REG...8`
+• `REG` -> `REG...9`
+• `REG` -> `REG...10`
+• `REG` -> `REG...11`
+• `REG` -> `REG...12`
+New names:
+• `` -> `...3`
+• `` -> `...4`
+• `REG` -> `REG...6`
+• `REG` -> `REG...7`
+• `REG` -> `REG...8`
+New names:
+• `` -> `...3`
+• `` -> `...4`
+• `REG` -> `REG...6`
+• `REG` -> `REG...7`
+• `REG` -> `REG...8`
+• `REG` -> `REG...9`
+• `REG` -> `REG...10`
+• `REG` -> `REG...11`
+• `REG` -> `REG...12`
+• `REG` -> `REG...13`
+New names:
+• `` -> `...3`
+• `` -> `...4`
+• `REG` -> `REG...6`
+• `REG` -> `REG...7`
+• `REG` -> `REG...8`
+• `REG` -> `REG...9`
+New names:
+• `` -> `...3`
+• `` -> `...4`
+• `REG` -> `REG...6`
+• `REG` -> `REG...7`
+• `REG` -> `REG...8`
+• `REG` -> `REG...9`
+New names:
+• `` -> `...3`
+• `` -> `...4`
+• `REG` -> `REG...6`
+• `REG` -> `REG...7`
+• `REG` -> `REG...8`
+• `REG` -> `REG...9`
+• `REG` -> `REG...10`
+• `REG` -> `REG...11`
+
+events=90  new_rows=3621  review_items=57
+
+=== review items by kind ===
+
+unknown_analyte unknown_feature 
+             14              43 
+
+=== kind x subkind ===
+                 
+                  ambiguous <NA>
+  unknown_analyte         0   14
+  unknown_feature        12   31
+
+=== unknown_feature: 43 grouped items ===
+Error in data.frame(feature_raw = feat, work_order = wo, n_rows = uf$n_rows,  : 
+  arguments imply differing number of rows: 43, 0
+Execution halted

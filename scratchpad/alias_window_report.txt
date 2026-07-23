@@ -1,0 +1,139 @@
+SOURCE: /private/tmp/claude-501/qc-dryrun/snapshots/monitoring_pre-002-registry-remediation_20260722T232748.090Z.duckdb 
+(post-001, pre-002, pre-dry-run-ingest. 894 features / 1989 aliases / 15113 samples.)
+n_seen = times the token appeared in the curated cypher/feature_mask import — NOT data occurrences.
+Samples never link to non-self aliases, so per-alias usage is unrecoverable; the *competing features'*
+sample windows below are the evidence for setting alias date_start/date_end.
+
+
+########## A. COLLISION CLASS: alias key IS another feature's real name (9) ##########
+These are the ones that need date bounds. For each: the key, who it currently resolves to,
+and the SAME-NAMED feature it is stealing the string from.
+
+ alias_key            kind n_seen resolves_to tgt_samples  tgt_first   tgt_last tgt_reg_start tgt_reg_end SAMENAME_feature same_samples same_first  same_last
+     b.s01 historical_code      2      B.TS41           1 2026-01-20 2026-01-20    2026-01-21           —            B.S01          184 2002-11-30 2026-03-15
+     b.s04 historical_code      1       B.S01         184 2002-11-30 2026-03-15             —           —            B.S04           37 2014-12-17 2023-12-17
+     b.s22 historical_code     12       B.S06         107 2016-12-11 2026-03-15             —           —            B.S22           58 2005-11-30 2026-03-15
+     b.s22 historical_code      1      B.TS18           6 2020-05-18 2021-11-11             —           —            B.S22           58 2005-11-30 2026-03-15
+    b.ts02 historical_code      1      B.TS27           1 2021-11-11 2021-11-11    2021-11-12           —           B.TS02            0          —          —
+    b.ts18 historical_code      3       B.S30          37 2022-03-01 2023-09-12             —           —           B.TS18            6 2020-05-18 2021-11-11
+    b.ts40 historical_code      6      B.TS39          47 2022-09-26 2025-05-28    2022-09-27           —           B.TS40            1 2024-04-07 2024-04-07
+    b.ts41 historical_code      1     B.TMW15           1 2024-04-07 2024-04-07    2024-04-08           —           B.TS41            1 2026-01-20 2026-01-20
+     k.e02 historical_code      1       K.S06          23 2020-08-10 2025-09-03             —           —            K.E02           30 2020-07-27 2026-03-02
+
+
+########## B. all other historical_code aliases (code-like keys, 108) ##########
+        alias_key            kind n_seen resolves_to tgt_samples  tgt_first   tgt_last tgt_reg_start tgt_reg_end
+             b.39 historical_code      1      B.TS39          47 2022-09-26 2025-05-28    2022-09-27           —
+         b.b_mw11 historical_code      1       B.E01         142 2006-05-31 2026-01-26             —           —
+         b.b_mw11 historical_code      1      B.MW11          69 2011-12-11 2026-03-15             —           —
+           b.e01- historical_code      1       B.E01         142 2006-05-31 2026-01-26             —           —
+  b.e01-discharge historical_code      2       B.E01         142 2006-05-31 2026-01-26             —           —
+            b.e02 historical_code      1      B.TS28          39 2022-03-06 2023-09-12    2022-03-14           —
+             b.e1 historical_code      3       B.E01         142 2006-05-31 2026-01-26             —           —
+            b.e39 historical_code      4      B.TS39          47 2022-09-26 2025-05-28    2022-09-27           —
+           b.eo01 historical_code      3       B.E01         142 2006-05-31 2026-01-26             —           —
+           b.lo01 historical_code      1       B.L01         103 2016-12-11 2026-03-23             —           —
+           b.lo02 historical_code      1       B.E01         142 2006-05-31 2026-01-26             —           —
+          b.mw011 historical_code      2      B.MW11          69 2011-12-11 2026-03-15             —           —
+           b.s.22 historical_code      1       B.S06         107 2016-12-11 2026-03-15             —           —
+          b.s.s22 historical_code      1       B.S22          58 2005-11-30 2026-03-15             —           —
+           b.s01- historical_code      1       B.S01         184 2002-11-30 2026-03-15             —           —
+  b.s01-downstram historical_code      1       B.S01         184 2002-11-30 2026-03-15             —           —
+ b.s01-downstream historical_code      6       B.S01         184 2002-11-30 2026-03-15             —           —
+           b.s03- historical_code      4       B.S03         153 2002-11-30 2026-03-15             —           —
+    b.s03-upstram historical_code      1       B.S03         153 2002-11-30 2026-03-15             —           —
+   b.s03-upstream historical_code      5       B.S03         153 2002-11-30 2026-03-15             —           —
+           b.s05- historical_code      3       B.S05         137 2014-12-17 2026-03-15             —           —
+  b.s05-diversion historical_code      5       B.S05         137 2014-12-17 2026-03-15             —           —
+ b.s05-stormwater historical_code      1       B.S05         137 2014-12-17 2026-03-15             —           —
+ b.s06_stormwater historical_code      1       B.S06         107 2016-12-11 2026-03-15             —           —
+           b.s06- historical_code      1       B.S06         107 2016-12-11 2026-03-15             —           —
+ b.s06-stormwater historical_code      6       B.S06         107 2016-12-11 2026-03-15             —           —
+             b.s1 historical_code      2       B.S01         184 2002-11-30 2026-03-15             —           —
+             b.s3 historical_code      1       B.S03         153 2002-11-30 2026-03-15             —           —
+           b.s30- historical_code      1       B.S30          37 2022-03-01 2023-09-12             —           —
+      b.s30-water historical_code      3       B.S30          37 2022-03-01 2023-09-12             —           —
+            b.s39 historical_code     32      B.TS39          47 2022-09-26 2025-05-28    2022-09-27           —
+             b.s5 historical_code      2       B.S05         137 2014-12-17 2026-03-15             —           —
+            b.s60 historical_code      1       B.S06         107 2016-12-11 2026-03-15             —           —
+           b.sa06 historical_code      1       B.S06         107 2016-12-11 2026-03-15             —           —
+           b.so01 historical_code      1       B.E01         142 2006-05-31 2026-01-26             —           —
+           b.so01 historical_code      1       B.S01         184 2002-11-30 2026-03-15             —           —
+           b.so03 historical_code      2       B.S03         153 2002-11-30 2026-03-15             —           —
+           b.ts01 historical_code      1      B.TS26           1 2021-11-11 2021-11-11    2021-11-12           —
+           b.ts05 historical_code      8      B.TS32          15 2020-04-28 2025-06-17             —           —
+          b.ts28- historical_code      2      B.TS28          39 2022-03-06 2023-09-12    2022-03-14           —
+   b.ts28-upstram historical_code      1      B.TS28          39 2022-03-06 2023-09-12    2022-03-14           —
+  b.ts28-upstream historical_code      1      B.TS28          39 2022-03-06 2023-09-12    2022-03-14           —
+       b.ts40-old historical_code      1      B.TS39          47 2022-09-26 2025-05-28    2022-09-27           —
+               b1 historical_code      1     BH.MW01           3 2020-05-19 2023-07-04    1995-08-01           —
+               b2 historical_code      1     BH.MW02           6 2020-05-19 2024-05-28    1995-08-01           —
+               b3 historical_code      1     BH.MW03           5 2020-05-19 2023-11-21    1995-08-01           —
+               b4 historical_code      1     BH.MW04           4 2020-05-19 2023-11-21    1995-08-01           —
+               b5 historical_code      1     BH.MW05           4 2021-05-26 2024-05-28    1995-08-01           —
+           bh.b02 historical_code      1     BH.MW02           6 2020-05-19 2024-05-28    1995-08-01           —
+           bh.b03 historical_code      1     BH.MW03           5 2020-05-19 2023-11-21    1995-08-01           —
+           bh.b04 historical_code      1     BH.MW04           4 2020-05-19 2023-11-21    1995-08-01           —
+           bh.b05 historical_code      1     BH.MW05           4 2021-05-26 2024-05-28    1995-08-01           —
+          bh.bn2a historical_code      1    BH.MW02A           5 2020-05-19 2023-11-21    1995-08-01           —
+          bh.bn2b historical_code      1    BH.MW02B           3 2021-05-26 2023-07-04    1995-08-01           —
+          bh.bs01 historical_code      1      BH.S01           7 2020-05-19 2025-06-23             —           —
+          bh.bs02 historical_code      1      BH.S02           5 2021-05-26 2025-06-23             —           —
+          bh.bs03 historical_code      1      BH.S03           6 2020-05-19 2025-06-23             —           —
+             bn2a historical_code      1    BH.MW02A           5 2020-05-19 2023-11-21    1995-08-01           —
+             bn2b historical_code      1    BH.MW02B           3 2021-05-26 2023-07-04    1995-08-01           —
+              bs1 historical_code      1      BH.S01           7 2020-05-19 2025-06-23             —           —
+              bs2 historical_code      1      BH.S02           5 2021-05-26 2025-06-23             —           —
+              bs3 historical_code      1      BH.S03           6 2020-05-19 2025-06-23             —           —
+         k.b.mw01 historical_code      1      K.MW01          22 2020-08-10 2025-12-09    2021-09-08           —
+         k.b.mw02 historical_code      1      K.MW02           9 2020-08-10 2024-06-18    2021-09-08           —
+         k.b.mw03 historical_code      1      K.MW03          16 2020-08-10 2025-09-03    2021-09-08           —
+         k.b.mw04 historical_code      1      K.MW04          22 2020-08-10 2025-12-09    2021-09-08           —
+         k.bore12 historical_code      1      K.MW12          12 2020-08-10 2024-06-18             —           —
+  k.e01-discharge historical_code      1       K.E01          41 2020-07-27 2026-03-02             —           —
+      k.e01/k.s05 historical_code      1       K.E01          41 2020-07-27 2026-03-02             —           —
+  k.e02-discharge historical_code      1       K.E02          30 2020-07-27 2026-03-02             —           —
+      k.e02/k.s06 historical_code      1       K.E02          30 2020-07-27 2026-03-02             —           —
+           k.eo01 historical_code      1       K.E01          41 2020-07-27 2026-03-02             —           —
+           k.kl01 historical_code      1       K.L01          18 2020-08-06 2025-03-11             —           —
+           k.ks05 historical_code      2       K.S05          34 2020-02-24 2026-02-01             —           —
+           k.ks07 historical_code      6       K.S07          41 2020-08-10 2026-02-01             —           —
+           k.mp_1 historical_code     11      K.MW01          22 2020-08-10 2025-12-09    2021-09-08           —
+           k.mp_2 historical_code      4      K.MW02           9 2020-08-10 2024-06-18    2021-09-08           —
+           k.mp_3 historical_code      7      K.MW03          16 2020-08-10 2025-09-03    2021-09-08           —
+           k.mp_4 historical_code     11      K.MW04          22 2020-08-10 2025-12-09    2021-09-08           —
+         k.mw010a historical_code      1       K.E01          41 2020-07-27 2026-03-02             —           —
+         k.mw011b historical_code      2     K.MW11B          22 2020-08-10 2025-12-09             —           —
+          k.s.s07 historical_code      1       K.S07          41 2020-08-10 2026-02-01             —           —
+            k.s01 historical_code      1       K.S09          45 2020-02-24 2026-02-01             —           —
+            k.s1a historical_code     13      K.S01A          26 2020-02-24 2025-12-09             —           —
+             k.s3 historical_code      1       K.S03          47 2020-02-24 2026-02-01             —           —
+           k.sa01 historical_code      3      K.S01A          26 2020-02-24 2025-12-09             —           —
+           k.so06 historical_code      4       K.S06          23 2020-08-10 2025-09-03             —           —
+           k.so07 historical_code      1       K.S07          41 2020-08-10 2026-02-01             —           —
+           k.so09 historical_code      6       K.S09          45 2020-02-24 2026-02-01             —           —
+           k.so10 historical_code      1       K.S10           6 2020-04-02 2024-08-11             —           —
+            l.l06 historical_code      1      L.MW06           8 2020-08-12 2025-05-26             —           —
+            l.l07 historical_code      1      L.MW07           9 2020-08-12 2025-11-24             —           —
+            l.l08 historical_code      1      L.MW08           9 2020-08-12 2025-11-24             —           —
+            l.l09 historical_code      1      L.MW09           7 2020-08-12 2025-11-24             —           —
+           l.ls01 historical_code      1       L.S01           5 2020-08-12 2024-05-28             —           —
+           l.ls02 historical_code      1       L.S02           5 2020-08-12 2024-05-28             —           —
+            l.w01 historical_code      1       L.L01           9 2020-08-12 2025-11-24             —           —
+            l.w02 historical_code      1       L.L02           9 2020-08-12 2025-11-24             —           —
+             mp_1 historical_code      1      K.MW01          22 2020-08-10 2025-12-09    2021-09-08           —
+             mp_2 historical_code      1      K.MW02           9 2020-08-10 2024-06-18    2021-09-08           —
+             mp_4 historical_code      1      K.MW04          22 2020-08-10 2025-12-09    2021-09-08           —
+              s1a historical_code      1      K.S01A          26 2020-02-24 2025-12-09             —           —
+               s3 historical_code      1       K.S03          47 2020-02-24 2026-02-01             —           —
+               s5 historical_code      1       K.S05          34 2020-02-24 2026-02-01             —           —
+               s6 historical_code      1       K.S06          23 2020-08-10 2025-09-03             —           —
+               s7 historical_code      1       K.S07          41 2020-08-10 2026-02-01             —           —
+               s8 historical_code      1       K.S08          16 2020-08-10 2025-03-11             —           —
+               s9 historical_code      1       K.S09          45 2020-02-24 2026-02-01             —           —
+
+
+########## C. descriptive + mask_long (978) — summary only ##########
+        kind Freq
+ descriptive  190
+   mask_long  788

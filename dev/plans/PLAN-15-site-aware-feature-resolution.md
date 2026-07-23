@@ -868,6 +868,64 @@ row (`date` at 14:00, `datetime` at the real instant) that asserts an incoming r
 the same local date MATCHES. Against today's code that test fails, which is the point —
 if it passes before the change, it is not testing the right thing.
 
+### F.13 `time_known` flag on `sample` (FILED FOR LATER — Robin, 2026-07-23)
+Robin: *"Where time is unknown set it to 10am (since that is a best guess). Your
+no time col is a good idea, file that for later."*
+
+The 10:00 substitution is now applied (35 rows, 2026-07-23) and is the standing
+rule for date-only sources, but it is **lossy**: a genuine 10 a.m. sampling is
+now indistinguishable from "no time recorded". That is exactly the ambiguity
+that made the 2,046 legacy `00:00` rows unresolvable and killed the F.11
+migration route. Adding an explicit boolean stops it recurring:
+
+- `ALTER TABLE sample ADD COLUMN time_known BOOLEAN` (plain ADD COLUMN).
+- Adapters set it TRUE when the source carried a clock time, FALSE when the
+  substitution fired. Backfill: FALSE for the 35 rows carrying the 10:00
+  substitution (identifiable from `change_log` — reason "unknown sampling time
+  set to 10:00 local"), TRUE elsewhere where `datetime` is non-NULL.
+- Once it exists, A62's "provably distinct" test should consult it: two rows
+  both `time_known = FALSE` are NOT provably distinct however their clocks read.
+
+This also unblocks F.11 — with `time_known` recorded, `sample.date` carries no
+information `datetime` + the flag does not, and can finally be dropped.
+
+### F.14 `confirm_analyte_methods()` fails on any method that has analyses (DEFECT)
+Found 2026-07-23 confirming the ALS SAR method (12 analyses): it aborts with
+`Constraint Error: ... still referenced by a foreign key in a different table`.
+`lab_method` is both an FK child of `analyte` and an FK parent of `analysis`, and
+duckdb 1.4.1 refuses to UPDATE a chained-FK table's own outgoing-FK column while
+anything downstream references it — the identical limitation migration 002
+documents at `.mig002_detach_reason`.
+
+So the function works **only for a zero-referenced dangling method**, which is
+the rare case; the normal case — a method that arrived with data — always fails.
+The transaction rolls back cleanly, so it is loud, not silent.
+
+The SAR confirmation was completed by hand using 002's detach → repoint →
+reattach loop through `db_update()`, tagged with 002's exact reason suffixes so
+`.mig002_torn_guard()` can still detect a torn run. Verified after: 12 of 12
+analyses reattached, zero orphans.
+
+Fix: fold that loop into `confirm_analyte_methods()` itself. Acceptance (must be
+able to FAIL): confirm a method **with** dependent analyses and assert both that
+`lab_method.uuid_analyte` moved AND that every dependent analysis still points
+at the same `lab_method`. A test using a zero-referenced method passes against
+today's broken code.
+
+### F.15 `review_queue` items have no close path (DEFECT — found 2026-07-23)
+After `confirm_feature_aliases()` and `confirm_analyte_methods()` resolved every
+pending alias and method (`pending_features()` 0, `pending_analytes()` 0), the
+four `review_queue` rows that raised them **stayed `status = 'open'`**. `R/mutate.R:583`
+exposes `review_queue(con, status)` as a READER only; nothing anywhere writes
+`status`. So the queue accumulates permanently-open items for work that is done,
+and its open count stops meaning anything — a monitoring signal that only ever
+grows is not a signal.
+
+Fix: close (or supersede) the originating review item when the confirmation that
+resolves it succeeds, in the same transaction. Acceptance (must be able to FAIL):
+open an item, confirm its alias, assert the item is no longer `open` **and** that
+an unrelated open item is untouched.
+
 ### F.12 Migration 001 broke the reporting views (DEFECT — found 2026-07-23)
 Two separate problems, both introduced by 001's view rebuild and both invisible
 until something tried to *read* the views.
