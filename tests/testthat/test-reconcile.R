@@ -2966,3 +2966,444 @@ test_that("PLAN-15 E.2 shape: a contradictory alias bound (date_start > date_end
   expect_equal(nrow(.rc_feature_candidates("T.CONTRA", as.Date("2022-06-01"), registry)), 0)
   expect_equal(nrow(.rc_feature_candidates("T.CONTRA", as.Date("2026-06-01"), registry)), 0)
 })
+
+# =============================================================================
+# P15-T-review-payload unit: F.3 (real migration-parity oracle), F.5 (payload
+# order-independence), F.6 (single-candidate suggestion), F.7 (doc drift),
+# E.3 (expired_alias), E.7 (self-precedence note). ONE PASS, ONE `subkind`
+# precedence table (S-15.6): self_precedence_note > ambiguous > expired_alias
+# > suggestion > structural > bare. Each block below locks one link in that
+# chain against its immediate neighbour.
+# =============================================================================
+
+# ---- local helper: sys.source the REAL migration-001 normaliser -----------
+# Same pattern as test-migration-001.R:42/.mig001_load() (each test FILE is
+# sourced into its own env by testthat, so redefining this name per file is
+# the established convention here, not a collision).
+
+.mig001_load <- function() {
+  env <- new.env(parent = globalenv())
+  path <- testthat::test_path("..", "..", "dev", "migrations", "001-alias-indirection.R")
+  skip_if_not(file.exists(path), "dev/migrations not in built package (run via devtools::test)")
+  sys.source(path, envir = env)
+  env
+}
+
+# ---- F.3: the migration-parity oracle, respecified (R-15.22/R-15.23) ------
+
+test_that("R-15.22: .rc_feature_key reproduces the REAL sys.sourced .mig001_normalize over the stored alias_key domain (idempotence on migration-001's own output) and on the ASCII discriminating inputs the two functions genuinely agree on - NOT a locally re-declared oracle", {
+  mig <- .mig001_load()
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  fa <- DBI::dbGetQuery(con, "SELECT name, alias_key FROM feature_alias")
+  expect_true(nrow(fa) > 0)
+
+  # Sanity tie: the seeded `alias_key` domain IS what the REAL migration-001
+  # normaliser produces from the raw `name` - ties "the stored domain" to
+  # "real .mig001_normalize output", never to an independently-typed fixture
+  # literal.
+  expect_identical(mig$.mig001_normalize(fa$name), fa$alias_key)
+
+  # THE property that matters (F.3, cold audit finding 4): re-normalising
+  # migration-001's own stored output through `.rc_feature_key` must
+  # reproduce it exactly, for EVERY key actually stored - a key reconcile
+  # computes at runtime must find the row migration 001 wrote. Not a
+  # tautology: nothing here re-implements the normaliser; the oracle is the
+  # real DB domain plus the real sys.sourced function above.
+  expect_identical(.rc_feature_key(fa$alias_key), fa$alias_key)
+
+  # ASCII discriminating inputs (kept from the original F.3 list, minus the
+  # NBSP case - R-15.23's explicit divergence instead): a double internal
+  # space and a trailing tab, on which `.rc_feature_key` and the REAL
+  # `.mig001_normalize` genuinely agree.
+  ascii_inputs <- c("B.  S01", "B.S01\t")
+  expect_identical(.rc_feature_key(ascii_inputs), mig$.mig001_normalize(ascii_inputs))
+})
+
+test_that("R-15.23: .rc_feature_key and the REAL .mig001_normalize DIVERGE on a leading-NBSP input - .rc_feature_key (F.2's Unicode-aware trim) folds it to the clean key, .mig001_normalize's base trimws() leaves the NBSP in place (locks F.2 against a silent revert)", {
+  mig <- .mig001_load()
+  nbsp_input <- " B.S01"   # LEADING U+00A0 NBSP (bytes c2 a0) - not a plain space
+  clean_key <- "b.s01"
+
+  rc_out <- .rc_feature_key(nbsp_input)
+  mig_out <- mig$.mig001_normalize(nbsp_input)
+
+  expect_identical(rc_out, clean_key)            # F.2: folds the NBSP away
+  expect_false(identical(mig_out, clean_key))    # base trimws() does not strip NBSP
+  expect_false(identical(rc_out, mig_out))       # EXPLICIT divergence, not silently absorbed
+})
+
+# ---- F.5: review payload order-independence (R-15.26) ---------------------
+
+test_that("R-15.26: the review payload's candidate list is the UNION of the WHOLE group (not just cand_list[[g[[1]]]]'s first row), and is BYTE-IDENTICAL whichever order the two rows are presented in", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  # test-local pair sharing ONE alias_key ('ordkeynosite' - deliberately no
+  # recognised site prefix, so no structural token can interfere with this
+  # test's own signal): f-ord-a is defunct after 2024-12-31, f-ord-b is
+  # unbounded. Both aliases are auto_assign=FALSE so `.rc_feature_candidates`
+  # never auto-resolves either row - both stay "pending" and reach
+  # `.rc_feature_review` regardless of date or row order.
+  DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix, date_end, lon, lat) VALUES
+    ('f-ord-a', 'T.ORD01', 'T', 'surface', 'water', DATE '2024-12-31', 150.5001, -33.5001),
+    ('f-ord-b', 'T.ORD02', 'T', 'surface', 'water', NULL, 150.5002, -33.5002)")
+  DBI::dbExecute(con, "INSERT INTO feature_alias
+    (uuid, uuid_feature, name, alias_key, kind, auto_assign, first_seen, last_seen) VALUES
+    ('fa-ord-a', 'f-ord-a', 'ORDKEYNOSITE', 'ordkeynosite', 'descriptive', FALSE,
+     TIMESTAMP '2025-01-01 00:00:00', TIMESTAMP '2025-01-01 00:00:00'),
+    ('fa-ord-b', 'f-ord-b', 'ORDKEYNOSITE', 'ordkeynosite', 'descriptive', FALSE,
+     TIMESTAMP '2025-01-01 00:00:00', TIMESTAMP '2025-01-01 00:00:00')")
+
+  # Only THIS row's own date (2024-06-01, before f-ord-a's date_end) leaves
+  # BOTH candidates live in `.rc_feature_suggestions()`; `new_row`'s date
+  # (2025-06-01, after f-ord-a's date_end) narrows ITS OWN suggestion set to
+  # exactly f-ord-b - the "only the LATER row's date narrows the candidate
+  # set" shape the cold-audit finding names.
+  old_row <- mk_row(source_ref = "old", feature_raw = "ORDKEYNOSITE",
+                     lab_sample_id = "XX9999980001", sample_datetime_raw = "01 Jun 2024 09:00")
+  new_row <- mk_row(source_ref = "new", feature_raw = "ORDKEYNOSITE",
+                     lab_sample_id = "XX9999980002", sample_datetime_raw = "01 Jun 2025 09:00")
+
+  out_old_first <- reconcile_event(mk_event(mk_rows(old_row, new_row)), con)
+  out_new_first <- reconcile_event(mk_event(mk_rows(new_row, old_row)), con)
+
+  rv_old_first <- out_old_first$review[out_old_first$review$kind == "unknown_feature", ]
+  rv_new_first <- out_new_first$review[out_new_first$review$kind == "unknown_feature", ]
+  expect_equal(nrow(rv_old_first), 1)
+  expect_equal(nrow(rv_new_first), 1)
+
+  # Against TODAY's code the new-first ordering emits NO `candidates=` clause
+  # at all (`cand_list[[g[[1]]]]` reads the FIRST ROW's OWN suggestion set,
+  # a single-candidate set the `length(sugg) > 1` gate drops entirely) - the
+  # failure this criterion exists to catch.
+  expect_identical(rv_old_first$payload[[1]], rv_new_first$payload[[1]])   # byte-identical
+
+  expect_true(grepl("candidates=", rv_old_first$payload[[1]], fixed = TRUE))
+  cand_str <- regmatches(rv_old_first$payload[[1]],
+                          regexpr("candidates=[^,]*", rv_old_first$payload[[1]]))
+  # order-INDEPENDENT: don't assume which of the two lands first in the union.
+  cand_set <- strsplit(sub("candidates=", "", cand_str), "\\|")[[1]]
+  expect_setequal(cand_set, c("f-ord-a", "f-ord-b"))
+})
+
+# ---- F.6: single-candidate suggestions are no longer discarded (R-15.27) --
+
+test_that("R-15.27: ZERO suggestion candidates emits a bare unknown_feature payload - no subkind= clause at all", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  event <- mk_event(mk_rows(
+    # 'QQQNOTHING' matches no feature_alias row and no site prefix (T/TH/Z).
+    mk_row(source_ref = "zero_cand", feature_raw = "QQQNOTHING",
+           lab_sample_id = "XX9999970001", sample_datetime_raw = "10 Jun 2025 09:00")
+  ))
+  out <- reconcile_event(event, con)
+  rv <- out$review[out$review$kind == "unknown_feature" &
+                      grepl("zero_cand", out$review$source_ref, fixed = TRUE), ]
+  expect_equal(nrow(rv), 1)
+  expect_false(grepl("subkind=", rv$payload[[1]], fixed = TRUE))
+})
+
+test_that("R-15.27: exactly ONE suggestion candidate (fixture T.BORE -> f-0003 via fa-0009, auto_assign=FALSE) emits subkind=suggestion,candidates=f-0003 - the lone candidate is no longer discarded by the length(sugg)>1 gate", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  event <- mk_event(mk_rows(
+    mk_row(source_ref = "one_cand", feature_raw = "T.BORE",
+           lab_sample_id = "XX9999970002", sample_datetime_raw = "10 Jun 2025 09:00")
+  ))
+  out <- reconcile_event(event, con)
+  a <- out$clean[out$clean$source_ref == "one_cand", ]
+  expect_true(a$feature_pending)
+  rv <- out$review[out$review$kind == "unknown_feature" &
+                      grepl("one_cand", out$review$source_ref, fixed = TRUE), ]
+  expect_equal(nrow(rv), 1)
+  expect_true(grepl("subkind=suggestion", rv$payload[[1]], fixed = TRUE))
+  expect_true(grepl("candidates=f-0003", rv$payload[[1]], fixed = TRUE))
+  # Against TODAY's code this is `subkind=structural,site=T,point=BORE`
+  # instead (the candidate was dropped by the >1 gate) - the failure this
+  # criterion exists to catch, and the precedence-table link `suggestion` >
+  # `structural` (S-15.6).
+  expect_false(grepl("subkind=ambiguous", rv$payload[[1]], fixed = TRUE))
+  expect_false(grepl("subkind=structural", rv$payload[[1]], fixed = TRUE))
+})
+
+test_that("R-15.27: TWO OR MORE suggestion candidates (fixture T.DUAL -> f-0004/f-0005) still emit subkind=ambiguous, never subkind=suggestion - the >=2 branch of the same total order (regression guard)", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  event <- mk_event(mk_rows(
+    mk_row(source_ref = "two_cand", feature_raw = "T.DUAL",
+           lab_sample_id = "XX9999970003", sample_datetime_raw = "10 Jun 2025 09:00")
+  ))
+  out <- reconcile_event(event, con)
+  rv <- out$review[out$review$kind == "unknown_feature" &
+                      grepl("two_cand", out$review$source_ref, fixed = TRUE), ]
+  expect_equal(nrow(rv), 1)
+  expect_true(grepl("subkind=ambiguous", rv$payload[[1]], fixed = TRUE))
+  expect_false(grepl("subkind=suggestion", rv$payload[[1]], fixed = TRUE))
+})
+
+# ---- E.3: expired-only alias goes to review, not structural (R-15.15) -----
+
+test_that("R-15.15: a key whose ONLY alias is EXPIRED lands in review with subkind=expired_alias and is NOT structurally resolved, paired with an identical-SHAPE raw carrying NO alias row at all which DOES structurally resolve (proves Layer 2 is gated, not disabled)", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  # 'T S07' (space form) structurally parses to f-0007 (T.S07), which itself
+  # already carries a self-alias - so an UNGATED Layer 2 would resolve this
+  # cleanly. The ONLY alias reaching key 't s07' is the one inserted here,
+  # and it is EXPIRED (date_end 2019-12-31, long before the row's 2025 date).
+  DBI::dbExecute(con, "INSERT INTO feature_alias
+    (uuid, uuid_feature, name, alias_key, kind, auto_assign, first_seen, last_seen, date_start, date_end) VALUES
+    ('fa-exp15', 'f-0007', 'T S07', 't s07', 'historical_code', FALSE,
+     TIMESTAMP '2018-01-01 00:00:00', TIMESTAMP '2019-12-31 00:00:00',
+     DATE '2018-01-01', DATE '2019-12-31')")
+
+  event <- mk_event(mk_rows(
+    mk_row(source_ref = "expired_only", feature_raw = "T S07",
+           lab_sample_id = "XX9999960001", sample_datetime_raw = "12 Jun 2025 09:00"),
+    # PAIRED positive control (same test): 'T S01' (space form) reaches ZERO
+    # alias rows at all (f-0001's self-alias is stored under the DOTTED key
+    # 't.s01', not this space form) and DOES structurally resolve.
+    mk_row(source_ref = "no_alias_control", feature_raw = "T S01",
+           lab_sample_id = "XX9999960002", sample_datetime_raw = "12 Jun 2025 09:00")
+  ))
+  out <- reconcile_event(event, con)
+
+  ex <- out$clean[out$clean$source_ref == "expired_only", ]
+  expect_true(ex$feature_pending)
+  expect_true(is.na(ex$uuid_feature))
+  rv <- out$review[out$review$kind == "unknown_feature" &
+                      grepl("expired_only", out$review$source_ref, fixed = TRUE), ]
+  expect_equal(nrow(rv), 1)
+  expect_true(grepl("subkind=expired_alias", rv$payload[[1]], fixed = TRUE))
+  expect_true(grepl("expired=f-0007@2018-01-01..2019-12-31", rv$payload[[1]], fixed = TRUE))
+  # Against TODAY's code this is `subkind=structural,site=T,point=S7` instead
+  # (Layer 2 auto-resolution is already correctly gated by
+  # `.rc_alias_rows_exist()`, but nothing emits `subkind=expired_alias` yet).
+  expect_false(grepl("subkind=structural", rv$payload[[1]], fixed = TRUE))
+
+  ctrl <- out$clean[out$clean$source_ref == "no_alias_control", ]
+  expect_false(ctrl$feature_pending)
+  expect_identical(ctrl$uuid_feature, "f-0001")
+})
+
+test_that("R-15.16: payload emission at expired-candidate count boundaries - exactly ONE expired candidate still emits subkind=expired_alias (guards the length(sugg)>1 gate); TWO live + ONE expired emits subkind=ambiguous with candidates= restricted to the two LIVE ones plus an expired= clause naming the third", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  # Case 1: a single EXPIRED-only candidate (no structural interference -
+  # 'QQQEXP16A' matches no site prefix).
+  DBI::dbExecute(con, "INSERT INTO feature_alias
+    (uuid, uuid_feature, name, alias_key, kind, auto_assign, first_seen, last_seen, date_start, date_end) VALUES
+    ('fa-exp16a', 'f-0002', 'QQQEXP16A', 'qqqexp16a', 'historical_code', FALSE,
+     TIMESTAMP '2018-01-01 00:00:00', TIMESTAMP '2019-12-31 00:00:00',
+     DATE '2018-01-01', DATE '2019-12-31')")
+
+  # Case 2: TWO live candidates + ONE expired candidate, one shared key.
+  DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix, lon, lat) VALUES
+    ('f-exp16-live1', 'T.EXP16L1', 'T', 'surface', 'water', 150.6001, -33.6001),
+    ('f-exp16-live2', 'T.EXP16L2', 'T', 'surface', 'water', 150.6002, -33.6002)")
+  DBI::dbExecute(con, "INSERT INTO feature_alias
+    (uuid, uuid_feature, name, alias_key, kind, auto_assign, first_seen, last_seen, date_start, date_end) VALUES
+    ('fa-exp16b1', 'f-exp16-live1', 'QQQEXP16B', 'qqqexp16b', 'descriptive', FALSE,
+     TIMESTAMP '2025-01-01 00:00:00', TIMESTAMP '2025-01-01 00:00:00', NULL, NULL),
+    ('fa-exp16b2', 'f-exp16-live2', 'QQQEXP16B', 'qqqexp16b', 'descriptive', FALSE,
+     TIMESTAMP '2025-01-01 00:00:00', TIMESTAMP '2025-01-01 00:00:00', NULL, NULL),
+    ('fa-exp16b3', 'f-0002', 'QQQEXP16B', 'qqqexp16b', 'historical_code', FALSE,
+     TIMESTAMP '2018-01-01 00:00:00', TIMESTAMP '2019-12-31 00:00:00',
+     DATE '2018-01-01', DATE '2019-12-31')")
+
+  event <- mk_event(mk_rows(
+    mk_row(source_ref = "one_expired", feature_raw = "QQQEXP16A",
+           lab_sample_id = "XX9999950001", sample_datetime_raw = "13 Jun 2025 09:00"),
+    mk_row(source_ref = "two_live_one_expired", feature_raw = "QQQEXP16B",
+           lab_sample_id = "XX9999950002", sample_datetime_raw = "13 Jun 2025 09:00")
+  ))
+  out <- reconcile_event(event, con)
+
+  rv_a <- out$review[out$review$kind == "unknown_feature" &
+                        grepl("one_expired", out$review$source_ref, fixed = TRUE), ]
+  expect_equal(nrow(rv_a), 1)
+  expect_true(grepl("subkind=expired_alias", rv_a$payload[[1]], fixed = TRUE))
+  expect_true(grepl("expired=f-0002@2018-01-01..2019-12-31", rv_a$payload[[1]], fixed = TRUE))
+  expect_false(grepl("subkind=ambiguous", rv_a$payload[[1]], fixed = TRUE))
+
+  rv_b <- out$review[out$review$kind == "unknown_feature" &
+                        grepl("two_live_one_expired", out$review$source_ref, fixed = TRUE), ]
+  expect_equal(nrow(rv_b), 1)
+  expect_true(grepl("subkind=ambiguous", rv_b$payload[[1]], fixed = TRUE))
+  expect_true(grepl("expired=f-0002@2018-01-01..2019-12-31", rv_b$payload[[1]], fixed = TRUE))
+  cand_str <- regmatches(rv_b$payload[[1]], regexpr("candidates=[^,]*", rv_b$payload[[1]]))
+  cand_set <- strsplit(sub("candidates=", "", cand_str), "\\|")[[1]]
+  # Against TODAY's code `candidates=` also lists the expired uuid_feature
+  # (f-0002) - the expired one belongs in `expired=` only, per the pinned
+  # grammar ("2 live + 1 expired emits ambiguous WITH an expired= clause").
+  expect_setequal(cand_set, c("f-exp16-live1", "f-exp16-live2"))
+})
+
+# ---- E.7: self-precedence note (R2) - blocking flag, commit, negative -----
+# control (no assigned R-15.NN ID in the dispatch brief; PLAN-CHANGE REQUEST
+# filed in the handoff report). Named "E.7:" per this file's existing
+# convention for un-numbered plan-block criteria (cf. "B.4:", "PLAN-15 A:").
+
+test_that("E.7: a key reaching a live SELF arm plus one live NON-self arm resolves via the self arm, commits a real sample/analysis row (assert row COUNTS, not merely the absence of a review item), and records exactly ONE non-blocking review row naming the shadowed feature and carrying an EXPLICIT boolean blocking flag - paired in the same test with a key reaching two live NON-self arms, which still goes to review and does NOT commit", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  # f-0002's OWN self-alias (fa-0002, unbounded) shares its key 't.s02' with
+  # a NEW curated historical arm pointing at a DIFFERENT feature (f-0003),
+  # bounded 2015-01-01..2019-12-31 - the "an alias key IS another feature's
+  # real name" shape (E.0/R1/R2).
+  DBI::dbExecute(con, "INSERT INTO feature_alias
+    (uuid, uuid_feature, name, alias_key, kind, auto_assign, first_seen, last_seen, date_start, date_end) VALUES
+    ('fa-e7-block', 'f-0003', 'T.S02', 't.s02', 'historical_code', TRUE,
+     TIMESTAMP '2015-01-01 00:00:00', TIMESTAMP '2019-12-31 00:00:00',
+     DATE '2015-01-01', DATE '2019-12-31')")
+
+  # BEFORE: no sample/analysis is yet linked to f-0002 in the seed (only
+  # f-0001/f-0003/f-0006/f-0007 have pre-existing committed rows), so a
+  # targeted count below isolates THIS row's own commit from the negative
+  # control's pending commit in the same event.
+  before_f2 <- DBI::dbGetQuery(con,
+    "SELECT count(*) AS n FROM \"sample\" s JOIN feature_alias fa ON fa.uuid = s.uuid_feature_alias
+     WHERE fa.uuid_feature = 'f-0002'")$n
+  before_dual <- DBI::dbGetQuery(con,
+    "SELECT count(*) AS n FROM \"sample\" s JOIN feature_alias fa ON fa.uuid = s.uuid_feature_alias
+     WHERE fa.uuid_feature IN ('f-0004', 'f-0005')")$n
+
+  event <- mk_event(mk_rows(
+    # date INSIDE the historical arm's bound: both fa-0002 (self, unbounded)
+    # and fa-e7-block (historical, bounded) are alias-live - self must win.
+    mk_row(source_ref = "e7_self_wins", feature_raw = "T.S02",
+           lab_sample_id = "XX9999940001", sample_datetime_raw = "01 Jun 2017 09:00"),
+    # NEGATIVE CONTROL (same test): T.DUAL -> f-0004/f-0005, NEITHER arm is
+    # 'self' - must still go to review and NOT commit. Without this pair, an
+    # implementation of self-precedence as "always take the first candidate"
+    # would pass the positive half alone.
+    mk_row(source_ref = "e7_no_self_control", feature_raw = "T.DUAL",
+           lab_sample_id = "XX9999940002", sample_datetime_raw = "01 Jun 2017 09:00")
+  ))
+  out <- reconcile_event(event, con)
+
+  win <- out$clean[out$clean$source_ref == "e7_self_wins", ]
+  expect_false(win$feature_pending)
+  expect_identical(win$uuid_feature, "f-0002")   # (a) self wins, never f-0003
+
+  ctrl <- out$clean[out$clean$source_ref == "e7_no_self_control", ]
+  expect_true(ctrl$feature_pending)
+  expect_true(is.na(ctrl$uuid_feature))
+
+  commit_event(event, out, con)
+
+  # (b) a REAL committed row, counted - not merely "no review item for it".
+  after_f2 <- DBI::dbGetQuery(con,
+    "SELECT count(*) AS n FROM \"sample\" s JOIN feature_alias fa ON fa.uuid = s.uuid_feature_alias
+     WHERE fa.uuid_feature = 'f-0002'")$n
+  after_dual <- DBI::dbGetQuery(con,
+    "SELECT count(*) AS n FROM \"sample\" s JOIN feature_alias fa ON fa.uuid = s.uuid_feature_alias
+     WHERE fa.uuid_feature IN ('f-0004', 'f-0005')")$n
+  expect_equal(after_f2 - before_f2, 1)      # the self-precedence win committed
+  expect_equal(after_dual - before_dual, 0)  # the negative control did NOT
+
+  an_count <- DBI::dbGetQuery(con,
+    "SELECT count(*) AS n FROM analysis a
+     JOIN \"sample\" s ON s.uuid = a.uuid_sample
+     JOIN feature_alias fa ON fa.uuid = s.uuid_feature_alias
+     WHERE fa.uuid_feature = 'f-0002'")$n
+  expect_equal(an_count, 1)
+
+  # (c) exactly ONE review_queue row, naming the shadowed feature (f-0003),
+  # `kind` UNCHANGED ('unknown_feature' - a new top-level kind would read as
+  # a new class of work to every existing review_queue consumer), and an
+  # EXPLICIT boolean blocking flag a reader can branch on directly - not an
+  # inference from the subkind name.
+  # PROVISIONAL ORACLE: the plan pins the PROPERTY ("a boolean, not an
+  # implied property of the subkind value"), not the literal token spelling.
+  # `blocking=FALSE`/`blocking=TRUE` is this test's best reading, matching
+  # the `subkind=`/`candidates=`/`expired=` key=value grammar already in
+  # use; Phase 6 may rename the key in one place if it picks otherwise.
+  note <- out$review[grepl("e7_self_wins", out$review$source_ref, fixed = TRUE), ]
+  expect_equal(nrow(note), 1)
+  expect_identical(note$kind, "unknown_feature")
+  expect_true(grepl("subkind=self_precedence_note", note$payload[[1]], fixed = TRUE))
+  expect_true(grepl("f-0003", note$payload[[1]], fixed = TRUE))
+  expect_true(grepl("blocking=FALSE", note$payload[[1]], fixed = TRUE))
+  expect_false(grepl("blocking=TRUE", note$payload[[1]], fixed = TRUE))
+
+  # the negative control's review row is a plain ambiguous item, never a
+  # self-precedence note.
+  ctrl_rv <- out$review[grepl("e7_no_self_control", out$review$source_ref, fixed = TRUE), ]
+  expect_equal(nrow(ctrl_rv), 1)
+  expect_false(grepl("subkind=self_precedence_note", ctrl_rv$payload[[1]], fixed = TRUE))
+})
+
+# ---- F.7: documentation drift (R-15.28/R-15.29) ----------------------------
+# Source-scanning meta-tests, comment/string-aware (phase4 checklist #6):
+# each isolates the exact roxygen/comment block rather than grepping the
+# whole file, and each carries its OWN decoy fixture proving the extraction
+# does not trip on an unrelated mention of the same token elsewhere.
+
+#' The contiguous run of `#'`-prefixed roxygen lines immediately above the
+#' first line matching `fn_regex`, collapsed to one string (or NA if no
+#' unique match / no roxygen block precedes it).
+.rc_roxygen_block <- function(lines, fn_regex) {
+  fn_line <- grep(fn_regex, lines)
+  if (length(fn_line) != 1) return(NA_character_)
+  end <- fn_line - 1L
+  start <- end
+  while (start >= 1 && grepl("^#'", lines[[start]])) start <- start - 1L
+  start <- start + 1L
+  if (start > end) return(NA_character_)
+  paste(lines[start:end], collapse = "\n")
+}
+
+#' All contiguous comment blocks (any run of `#`-prefixed lines, roxygen or
+#' plain) in `lines`, each collapsed to one string.
+.rc_comment_blocks <- function(lines) {
+  is_comment <- grepl("^\\s*#", lines)
+  blocks <- list()
+  i <- 1L; n <- length(lines)
+  while (i <= n) {
+    if (is_comment[[i]]) {
+      j <- i
+      while (j <= n && is_comment[[j]]) j <- j + 1L
+      blocks[[length(blocks) + 1]] <- paste(lines[i:(j - 1)], collapse = "\n")
+      i <- j
+    } else {
+      i <- i + 1L
+    }
+  }
+  blocks
+}
+
+test_that("R-15.28: .rc_resolve_existing_pending's roxygen no longer cites the stripping .rc_key(feature_raw) as the pending-lookup key, and DOES name .rc_feature_key alongside alias_key (source-scanning meta-test over R/reconcile.R; fails against today's source)", {
+  src <- readLines(testthat::test_path("..", "..", "R", "reconcile.R"), warn = FALSE)
+  block <- .rc_roxygen_block(src, "^\\.rc_resolve_existing_pending <- function")
+  expect_false(is.na(block))
+  expect_false(grepl(".rc_key(feature_raw)", block, fixed = TRUE))
+  expect_true(grepl(".rc_feature_key", block, fixed = TRUE))
+  expect_true(grepl("alias_key", block, fixed = TRUE))
+
+  # DECOY (comment/string-aware, not a whole-file grep): a synthetic "file"
+  # where an UNRELATED preceding function's roxygen mentions the forbidden
+  # token - the block extraction must isolate only the TARGET function's own
+  # roxygen and must not be tripped by the decoy.
+  decoy_lines <- c(
+    "#' some other function's doc happens to mention .rc_key(feature_raw)",
+    "#' as an example of what NOT to do.",
+    "decoy_fn <- function(x) x",
+    "",
+    "#' the real target's roxygen, clean.",
+    "#' @keywords internal",
+    "target_fn <- function(x) x"
+  )
+  decoy_block <- .rc_roxygen_block(decoy_lines, "^target_fn <- function")
+  expect_false(grepl(".rc_key(feature_raw)", decoy_block, fixed = TRUE))
+})
+
+test_that("R-15.29: a SINGLE contiguous comment block in R/reconcile.R names all THREE coexisting key normalisers (.rc_feature_key, .rc_key, .st_normalise_key) - a comment naming only two of them must not satisfy this (fails against today's source, which has no such comment at all)", {
+  src <- readLines(testthat::test_path("..", "..", "R", "reconcile.R"), warn = FALSE)
+  blocks <- .rc_comment_blocks(src)
+  names_all_three <- function(b) {
+    grepl(".rc_feature_key", b, fixed = TRUE) &&
+      grepl(".rc_key", b, fixed = TRUE) &&
+      grepl(".st_normalise_key", b, fixed = TRUE)
+  }
+  hit <- vapply(blocks, names_all_three, logical(1))
+  expect_true(any(hit),
+              info = "no single comment block names .rc_feature_key, .rc_key AND .st_normalise_key")
+
+  # DECOY: a block naming only TWO of the three must NOT satisfy the check -
+  # proves the guard requires all three, not "a comment mentioning keys".
+  decoy_two_of_three <- c("# uses .rc_feature_key and .rc_key only, not the third one")
+  expect_false(any(vapply(.rc_comment_blocks(decoy_two_of_three), names_all_three, logical(1))))
+})
