@@ -54,7 +54,8 @@ via `unify_value()` (after `normalise_lab_text()` on both). Invalid/
 incompatible units → review `kind = "unknown_unit"` (payload: units_raw,
 analyte, example values). `parse_value` skip_reasons (`no_sample`,
 `not_computable`, `empty`) → `skipped` with that reason. Text-only results
-(`value_chr`) pass through unconverted with `quantified = TRUE`, units
+(`value_chr`) pass through unconverted with `quantified = NA` (a text
+result is not a measurement, so neither TRUE nor FALSE is true of it), units
 ignored. Criteria: mg/L→µg/L row multiplies value and rl by 1000; `pH`
 dimensionless passes; `"banana/L"` queues unknown_unit; an `NS` row lands in
 skipped not review; BDL row keeps `quantified = FALSE` with converted rl.

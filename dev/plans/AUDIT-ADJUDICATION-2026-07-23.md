@@ -53,6 +53,16 @@ Sydney-local conversions all agree:
 Writing the auditor's numbers into the plan would have planted the day-early
 landmine this project has already been bitten by. Use 2026-05-25 / 2026-05-04.
 
+**#4's supporting claim is wrong — and the finding is stronger than the auditor thought.**
+The audit says F.3's three named discriminating inputs (`"B.  S01"`, `" B.S01"`,
+`"B.S01\t"`) "all still agree, so they do not discriminate either." Hexdumped, the
+second one is not a leading space: it is `c2 a0`, **U+00A0 NBSP**. Measured against
+the real functions, the two diverge on it — `.rc_feature_key("T.S01"+NBSP)` →
+`"t.s01"`, `.mig001_normalize(...)` → `"t.s01 "`. So the plan's own listed
+input IS discriminating, and it is exactly the input F.2 was written to handle.
+F.3's prescribed parity test therefore fails on the plan's own example. The
+finding stands; its stated reason does not.
+
 **#14's BDL total is wrong.** 47,227 is the count of *all* `quantified = FALSE`
 rows. The set where the comparison is even defined — `value` and `rl_low` both
 non-null — is **35,174**. The 232 / 0 figures are correct and the finding stands.

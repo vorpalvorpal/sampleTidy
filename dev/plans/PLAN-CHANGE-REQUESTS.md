@@ -771,3 +771,92 @@ and `.ig_remove_verified()` skips anything without an `asset` row. So they were
 lost by some other route while sitting unarchived in the input directory — which
 is precisely the failure mode F.17 describes. **F.17 should be treated as
 remediation of a realised loss, not as a precaution.**
+
+---
+
+## PLAN-15 Work E + F.4–F.18 — cold plan audit adjudicated: 21 findings accepted, 3 rejected or corrected (2026-07-23)
+
+A read-only cold audit of PLAN-15 Work E and F.4–F.18 returned **24 findings**.
+Per the project rule that reviewer findings are hypotheses to be disproved rather
+than verdicts, each was re-verified independently against the code and the live
+registry
+`/Users/rjs/Library/Application Support/org.R-project.R/R/sampleTidy/monitoring.duckdb`
+(read-only) before acceptance. **21 accepted, 3 rejected or corrected.** Evidence
+record: `dev/plans/AUDIT-ADJUDICATION-2026-07-23.md`.
+
+**The framing fact behind most of the accepted findings.** Work E's empirical pins
+were measured against a **pre-cutover snapshot** — 894 features / 1,989 aliases /
+15,113 samples — but are presented in the plan as live-registry facts. Live today
+on the path above is **895 features / 1,994 aliases / 15,149 samples**. Anything in
+Work E that reads as a measurement needs re-measuring before it is trusted.
+
+### The three corrections to the auditor — what independent verification bought
+
+1. **E.5's stale proxy dates: the finding stands, the auditor's replacements were
+   one day late.** Both literals *are* stale, but the corrected values are **not**
+   the auditor's 2026-05-26 / 2026-05-05:
+
+   | item | plan pins | auditor says | **actual** |
+   |---|---|---|---|
+   | `k.e02` → K.S06 | 2025-09-04 | 2026-05-26 | **2026-05-25** |
+   | `b.s04` → B.S01 | 2026-03-16 | 2026-05-05 | **2026-05-04** |
+
+   Measured every representation side by side — raw `date`, raw `datetime`,
+   `CAST(date AS DATE)` and both Sydney-local conversions all agree. **Why this
+   matters:** `sample.date` stores Sydney midnight as a UTC-naive `TIMESTAMP`, so a
+   naive cast reads a day out. Writing the auditor's numbers into the plan would
+   have planted the same day-early landmine this project was already bitten by
+   (see the PLAN-14 R-14.3 entry above). Use **2026-05-25 / 2026-05-04**.
+
+2. **Finding #22 REJECTED on both halves.** (a) F.17's "zero `quarantined` files
+   for that event" does **not** collide with A10 — A10 routes ACIRL dust sheets to
+   state `ignored`, not `quarantined`. (b) F.17 need **not** carry F.18's
+   dual-layout rule: that rule governs *reading legacy* assets, whereas F.17 is
+   new-ingest code, which only ever writes `<archive_dir>/<uuid>/<filename>`.
+   Neither half survives.
+
+3. **Finding #14's BDL total was wrong; the finding itself stands.** 47,227 is the
+   count of *all* `quantified = FALSE` rows. The set where the `value` vs `rl_low`
+   comparison is even defined — both non-null — is **35,174**. The **232** rows
+   with `value > rl_low`, and **0** below, are correct, so F.16's self-contradiction
+   (`:874–875` pins `value == rl_low` as "a testable invariant"; `:893` says the
+   opposite) is real.
+
+### Highest-consequence accepted findings
+
+- **Migration 003 as specified would REGRESS Robin's own curation.** E.5's 8 keys
+  (`b.s01, b.ts02, b.ts41, b.s22, b.s04, k.e02, b.ts18, b.ts40`) span **19** alias
+  arms, not the **17** the plan pins; and `b.s01` and `k.e02` are already
+  `auto_assign = TRUE` with `kind = 'transcription_error'`,
+  `confirmed_by = 'R. Shannon'`. Run against the real resolver, `B.S01` → n=1 and
+  `K.E02` → n=1: both already auto-resolve to exactly one candidate.
+- **F.3 is unbuilt and its prescribed parity test now FAILS against shipped F.2**,
+  whose Unicode-whitespace divergence was deliberate. The obvious way to make F.3
+  pass is to revert F.2 — so the parity oracle has to be restated before F.3 is
+  written.
+- **F.10 as specified blocks A12 revision supersede and the `already_present`
+  path** — `.rc_find_existing()` (`reconcile.R:1009`) and `.rc_recorded_revision()`
+  (`:1067`) both depend on the precondition F.10 would block.
+- **Two E.6 criteria and one F.4 criterion cannot fail as written.** 003's "aborts
+  if a feature lacks a `self` alias" is unfailable (0 of 895 live and 0 of 13
+  fixture features lack one); F.4's oracle admits the very mutation it targets
+  (`TS1` → TH.S01, `TS01` → {} satisfies "different features", and so would
+  `TS01` → T.S01).
+- **F.5 and F.7 carry no acceptance criteria at all** — both zero, while six other
+  F items have "Acceptance (must be able to FAIL)".
+- **`change_log.source_hash` is a mixed-algorithm column nobody migrated** —
+  **100% 64-char (SHA-256) over 1,412 rows** while new writes are 32-char
+  (xxHash128). Discovered by this audit; consistent with the A5 entry above, but
+  the *mixed-width consequence* was not previously pinned anywhere.
+
+### Sequencing constraints newly pinned
+
+`F.9 → 003` · `F.5 → F.6 → E.3` in one pass under a **single `subkind` precedence
+table** · `F.11 → F.12` · F.10's supersede exemption before F.10 · F.15's
+schema-linkage decision before F.15.
+
+### Open — needs a ruling from Robin
+
+May `b.s01` and `k.e02` regress to review for pre-bound dates, given that both
+resolve cleanly today (n=1 each) and both are already curated `auto_assign = TRUE`
+by Robin? Migration 003 cannot be written either way until this is answered.

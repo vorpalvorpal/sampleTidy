@@ -304,7 +304,7 @@ ambiguity notes referenced below.
 - "banana/L" queues unknown_unit → "R-8.4: an invalid unit string queues unknown_unit"
 - NS lands in skipped, not review → "R-8.4: an NS row lands in skipped, not review"
 - BDL row keeps quantified FALSE with converted rl → "R-8.4: a BDL row keeps quantified FALSE with a converted rl"
-- (bonus) text-only results pass through, quantified TRUE → "R-8.4: text-only results pass through unconverted with quantified TRUE"
+- (bonus) text-only results pass through, quantified NA → "R-8.4: text-only results pass through unconverted with quantified NA"
 
 ### R-8.5 sample datetime
 - ESdat row yields date + datetime → "R-8.5: an ESdat-format datetime yields both sample_date and sample_datetime"
@@ -323,6 +323,7 @@ ambiguity notes referenced below.
 - recorded rev 0, incoming rev 1 → supersede → "R-8.7: conflict with recorded revision 0 and incoming revision 1 becomes a supersede row"
 - no recorded revision → review (A12) → "R-8.7: conflict with no recorded revision queues for review"
 - equal value, different quantified → conflict → "R-8.7: equal values but different quantified is a conflict"
+- (bonus) equal text value, quantified NA on both sides → already_present, not a second commit (A14) → "A14/R-8.7: a re-ingested TEXT result matches as already_present and does NOT commit twice (quantified NA compares equal to NA)"
 
 ### R-8.8 output contract
 - disjoint + complete over a mixed event (every R-8.x case at once) → "R-8.8: clean/review/skipped are disjoint and complete over a mixed event"

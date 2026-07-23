@@ -94,6 +94,9 @@ Internal seams (not exported, stable for tests via `:::`):
 ```
 analysis(uuid, uuid_sample, uuid_lab, value DOUBLE, value_chr, quantified BOOL,
          rl_low, rl_high, purpose, comments)            # 95,737 rows
+       # quantified is NULLABLE and used as a tri-state (A14): live invariant
+       # `quantified IS NULL` ⟺ `value_chr IS NOT NULL`, 0 violations over all
+       # 15,149 samples' analyses (315 text rows, 23 of them "no sample taken").
 sample(uuid, uuid_feature, uuid_project, date TS, date_start TS, datetime TS,
        datetime_start TS, organisation, person, purpose, comments)  # 15,113
        # A48: uuid_feature is DROPPED and replaced by uuid_feature_alias.
@@ -196,7 +199,12 @@ for lab reports; `sample.organisation ∈ {ACIRL, Internal, ALS}`;
   after a successful run; quarantined/failed/cruft files are never deleted.
 - **A14** Value-equality for already-present: numeric within
   `abs(a-b) <= 1e-9 * max(1, abs(a), abs(b))` after unit conversion, plus
-  equal `quantified` flag; else conflict.
+  equal `quantified` flag; else conflict. `quantified` is a **tri-state**
+  (TRUE plain numeric, FALSE below/above detection, NA text result), so
+  "equal" here is NA-aware: **NA equals NA** — two identical text results
+  are `already_present`, not a second commit — while NA against TRUE or
+  FALSE is a difference. (`.rc_values_equal()` used to return FALSE on any
+  NA, which would have re-committed every re-ingested observation.)
 
 ### Phase 5 adjudications (from the test-suite audit; binding on implementation)
 
