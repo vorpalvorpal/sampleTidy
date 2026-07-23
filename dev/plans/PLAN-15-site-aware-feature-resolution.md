@@ -569,10 +569,17 @@ an earlier draft of this paragraph claimed they did — corrected here:
   the 2024-04-08 bound sits *inside* that range — the two points overlap, unlike the
   B.TS18/B.S30 pair. The arm therefore stays live for B.TS39 samples up to 2024-04-08:
   the key remains ambiguous (2 live arms → review) on or before that date, and resolves
-  to B.TS40 after it. That is still a sensible outcome — the alias is retired going
-  forward — but the test must assert the date-split behaviour, not inertness.
-  **FLAG FOR ROBIN: the "same shape as B.TS18/B.S30" premise behind this ruling was
-  factually wrong. The ruling may still be what he wants; it should be re-confirmed.**
+  to B.TS40 after it.
+  **RE-CONFIRMED on the corrected facts (Robin, 2026-07-23): keep 2024-04-08.** Robin's
+  ruling: the exact date is not settled and is not worth settling now — *the requirement
+  is that the alias is marked finished*. So the literal is DEFERRED-PROVISIONAL: it is
+  correct for the retirement requirement (no `b.ts40` sample after 2024-04-08 will ever
+  reach B.TS39 again) and merely unverified for backfill before it. An implementer still
+  uses exactly this literal. **The test asserts retirement — `b.ts40` at a post-bound
+  date resolves to B.TS40 — and must NOT encode the pre-bound ambiguity as a
+  requirement**, since that half of the behaviour may yet be re-cut. If a specific
+  B.TS40→B.TS39 changeover date later surfaces, only this literal changes; no test or
+  code should need to move with it.
 
 ### E.6 Acceptance criteria (each must be able to FAIL)
 **Ordering: E depends on B.** The E.3 criterion is vacuous until Layer 2 exists, so
@@ -625,6 +632,130 @@ Work E lands after Work B, and the E.3 test carries a positive control (below).
   `.rc_feature_candidates(feature_raw, NA, registry)`**: `.rc_parse_dates`
   (reconcile.R:615-640) drops unparseable rows before commit, so an end-to-end test of
   this criterion passes regardless of the implementation.
+
+## Work F — Work A remediation (from the Phase-5 cold audit, 2026-07-23)
+
+Work A shipped without a TDD audit. The audit confirmed its central claim empirically —
+`.rc_feature_key` reproduces `.mig001_normalize` on **1989/1989** stored `alias_key`s,
+and every mixed-key mutation was killed by existing tests — but found that adopting
+`tolower(trimws())` silently dropped two hygiene properties `.rc_key` had. **Two
+mutations survived the entire suite**, which is the six-times-repeated failure mode.
+
+### F.1 Punctuation-only raw is no longer held (BLOCKING — data corruption)
+`.rc_feature_key` guards `is.na(x) | k == ""` (reconcile.R:67) but not "no alphanumeric
+character". `feature_raw = "."` or `"-"` therefore yields key `"."`, survives the A44
+guard, and `commit_event()` materialises `feature_alias(alias_key = '.', kind =
+'pending')` plus a sample against it. Under `.rc_key` these were held. Reproduced.
+**Fix:** extend the guard to `!grepl("[[:alnum:]]", k)` → NA. **Test:** a `"."` raw is
+held, and NO alias/sample row is written — assert the row counts, not just the status.
+
+### F.2 Non-ASCII whitespace survives the trim (BLOCKING — duplicate samples)
+`trimws()` does not strip NBSP (` `), `\v` or `\f`. `.rc_feature_key("T.S01 ")`
+= `"t.s01 "`, which does not match `t.s01`, so commit creates a second alias **and a
+second sample for a point that already exists**. A plain ASCII trailing space resolves
+fine, so the failure is spelling-dependent and silent. Zero incidence in the 265-file
+dry run (all 43 residual raws are clean ASCII) — latent, not active. **Fix:** Unicode-aware
+trim plus `normalise_lab_text()`, matching what `.rc_key` already did. **Test:** the NBSP
+variant resolves to the SAME feature as the clean string, with no new alias row.
+
+### F.3 The migration-parity oracle is a tautology (BLOCKING — false-green gate)
+`test-reconcile.R:848` re-declares `mig_normalize <- function(x) tolower(trimws(x))`
+locally and compares `.rc_feature_key` against it — so it asserts a function equals its
+own copy. Proof: mutating `.rc_feature_key` to `tolower(str_squish(x))`, a genuine
+divergence from the migration, **survives the whole suite**. **Fix:** `sys.source` the
+real `.mig001_normalize` from `dev/migrations/001-alias-indirection.R` (the pattern
+already exists at `test-migration-001.R:42`) and add discriminating inputs: `"B.  S01"`,
+`" B.S01"`, `"B.S01\t"`.
+
+### F.4 The collision oracle is a tautology (SHOULD-FIX — false-green gate)
+`test-reconcile.R:853-860` asserts only that `.rc_feature_key(c("BS1","B.S1"))` has two
+distinct values — a restatement of the function definition. The real hazard is at
+RESOLUTION level: `bs1` is a curated `auto_assign=TRUE` alias for BH.S01 and no `bs01`
+alias exists, so a naive longest-match on `BS01` lands in the opposite catchment.
+**Fix:** this is fixture F2, which Work B's suite now adds (`TS1`→`TH.S01`); assert
+`.rc_feature_candidates` returns *different features* for the two strings.
+
+### F.5 Review payload is order-dependent (SHOULD-FIX)
+`.rc_feature_review` reads `cand_list[[g[[1]]]]` (reconcile.R:298) — the first row of the
+group. Two rows sharing a key with different sample dates give `candidates=f-0006|f-0007`
+old-first, and **no candidates at all** new-first. Reproduced. **Fix:** take the union of
+`cand_list[g]`.
+
+### F.6 Single-candidate suggestions are discarded — RULING REQUIRED, now made
+`if (length(sugg) > 1)` (reconcile.R:264) drops a lone `auto_assign=FALSE` candidate, so
+fixture `T.BORE` yields suggestion `f-0003` but an empty payload — the "suggestion
+mechanism inert" failure the Cross-cutting section exists to fix. Mutating `>1` to `>=1`
+**survives the entire suite**. **PINNED:** emit the single candidate as
+`subkind=suggestion` (distinct from `subkind=ambiguous`, which requires ≥2 — one
+candidate is not an ambiguity). This composes with E.3's `subkind=expired_alias`, which
+likewise must emit at count 1. One test per branch: 0 → bare, 1 → `suggestion`,
+≥2 → `ambiguous`.
+
+### F.7 Documentation drift (MINOR, but a trap for the Work B implementer)
+- reconcile.R:470 says the pending lookup keys on `.rc_key(feature_raw)`; it keys on
+  `rows$alias_key` (= `.rc_feature_key`). This is the exact comment a B.4 implementer
+  reads.
+- reconcile.R:60 roxygen claims the guard covers "blank/whitespace-only" — true only for
+  ASCII whitespace, and silent on punctuation-only (F.1).
+- **Three** feature keys now coexist: `.rc_feature_key` (alias/grouping),
+  `.rc_key` (lab-method + analyte), and `.st_normalise_key` = `tolower(str_squish())`
+  (assemble.R:74, joining samples↔results). Assemble therefore treats `"T  S01"` and
+  `"T S01"` as one sample while reconcile keys them apart. Not necessarily wrong;
+  undocumented and untested. Add a comment naming all three and their scopes.
+
+### F.8 Pre-Work-A pending aliases have no upgrade path (NOTE — not currently triggerable)
+A DB committed under the old key holds `alias_key = 'bs01'` where reconcile now computes
+`'b.s01'`; the lookup misses, a new alias is created, and `.rc_find_existing` then
+double-commits. **Verified not reachable today: both the post-001 snapshot and the
+dry-run DB hold ZERO dangling aliases.** Record the precondition — "no pending aliases
+exist" — and re-check it before any live commit, or write a migration.
+
+## Registry data changes pending the live cutover
+
+**The authoritative DB is not yet on the package schema.** `/Users/rjs/OneDrive - Blue
+Mountains City Council/Sharepoint/waste_data - Environmental monitoring/data/monitoring.duckdb`
+has `analysis, analyte, analyte_mask, asset, feature, feature_mask, guideline,
+lab_invoice, lab_method, project, sample` and **lacks `change_log`, `feature_alias`,
+`ingest_file`, `review_queue`**. So `add_feature()` and every other mutation-layer call
+would fail against it (they write `change_log`), and `st_config("live_db")` currently
+points at a *different* copy under `~/Library/Application Support/`. Registry changes are
+therefore recorded here as pinned data and applied at cutover through the mutation layer,
+with provenance — never hand-INSERTed into the authoritative file.
+
+### D.1 New feature B.L05 (Robin, 2026-07-23)
+| field | value |
+|---|---|
+| `name` | `B.L05` |
+| `site` | `B` (name prefix must equal site — 894/894 invariant Work B depends on) |
+| description | `Leachate tankered to Lawson STP` |
+| `lon` | `150.431198` |
+| `lat` | `-33.732518` |
+| `matrix` | `leachate` |
+| `flow` | NULL — not ruled, do not guess |
+
+Coordinates are **WGS84 decimal degrees (EPSG:4326)**, not Web Mercator: Nearmap's
+browser reports lat/lon in degrees, Web Mercator is metres in the millions. They are in
+the same frame as every existing row (B.L01 = 150.6163/-33.73305) and land beside
+`L.centroid` (150.4310/-33.73420), which is the expected Lawson position. Recorded
+explicitly because misreading the CRS later would move the point ~thousands of km.
+
+**Why it exists:** `Discharge Point - Lawson STP` is B.L01 leachate tankered to Lawson
+STP and sampled at delivery — the same water, a physically distinct sampling location.
+Evidence it is NOT B.L01: work order ES2515987 contains `B.L01 (Trade Waste Dam)` and
+`Dis Lawson` as two separate samples with two separate ALS sample numbers.
+
+**Historical rows stay on B.L01** (Robin's ruling). B.L05 applies to new data only. Do
+NOT write a migration to repoint history.
+
+### D.2 Alias curation, applied after migration 001 creates `feature_alias`
+| alias_key | → feature | kind | note |
+|---|---|---|---|
+| `trade waste dam` | B.L01 | `descriptive` | lab writes `B.L01 (Trade Waste Dam)` in the ES2515987 XTAB — documentary |
+| `discharge point - lawson stp` | **B.L05** | `descriptive` | clears the other descriptive residual |
+
+Together these clear all 15 `descriptive` residual items (6 work orders + 9 work orders).
+`Dis Lawson` and `T/W Pump` also appear in the corpus and are UNRULED — do not alias them
+on a guess.
 
 ## Verification
 - Re-run the input/ dry-run (scratchpad/input_dryrun2.R) after each phase; track the
