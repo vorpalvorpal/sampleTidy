@@ -432,16 +432,45 @@ ambiguous.
   `.rc_feature_candidates` filters on `auto_assign` (reconcile.R:171) *before* anything
   else, so a date bound alone still yields zero candidates and the row still goes
   pending — E.5 would be inert for the keys whose every arm is still FALSE.
-  PINNED: **003 flips `auto_assign` to TRUE on exactly the 17 still-FALSE arms listed
-  in E.5, and nothing else.** Not a global recompute — the other multi-arm FALSE rows
-  (676 `mask_long`, 66 `descriptive` at the time of the original measurement) are
-  un-ruled ambiguities that must stay parked.
-- With those 17 flipped (19 arms TRUE in total, counting the 2 already flipped),
+  ~~PINNED: **003 flips `auto_assign` to TRUE on exactly the 17 still-FALSE arms listed
+  in E.5, and nothing else.**~~ **RESTATED under R1 (Robin, 2026-07-23) — see
+  `dev/plans/RULINGS-2026-07-23-alias-self-precedence.md`.** The pin above is not
+  wrong, it is *incomplete*: it treats the self arms as part of E.5's curated list,
+  and they are not. There are now **two separate flip rules**, and 003 applies both:
+  1. **UNIVERSAL — R1: 003 sets `auto_assign = TRUE` on the `self` arm of EVERY key,
+     unconditionally.** Not only the 8 keys of E.5, not conditional on how many arms
+     the key has, not conditional on a date bound. **A feature is always reachable by
+     its own name.** Migration 001's blanket-FALSE broke that: measured on
+     `/Users/rjs/Library/Application Support/org.R-project.R/R/sampleTidy/monitoring.duckdb`
+     (read-only, 2026-07-23) it left **8 self arms `auto_assign = FALSE`**;
+     `confirm_feature_aliases()` repaired 2 of them by hand that morning, and
+     **6 features are still unreachable by their own name today** — `b.s22`→B.S22 (58
+     samples), `b.s04`→B.S04 (37), `b.ts18`→B.TS18 (6), `b.ts40`→B.TS40 (1),
+     `b.ts41`→B.TS41 (1), `b.ts02`→B.TS02 (0). That is a live defect, not a
+     hypothetical.
+  2. **CURATED — E.5's historical arms.** The non-`self` arms of the 8 keys, flipped
+     exactly as E.5's itemised list says and **nothing else**. Still not a global
+     recompute: the other multi-arm FALSE rows (676 `mask_long`, 66 `descriptive` at
+     the time of the original measurement) are un-ruled ambiguities that must stay
+     parked.
+
+  The two rules are disjoint by construction (rule 1 touches only `kind = 'self'`,
+  rule 2 only non-self arms), so neither post-condition may be asserted as a bare
+  count of rows updated. Assert rule 1 as the invariant **"zero `feature_alias` rows
+  with `kind = 'self'` and `auto_assign` not TRUE"**, and rule 2 as E.5's end state
+  over its named arms.
+- With those arms flipped (~~17~~ **19 arms TRUE in total across E.5's 8 keys, counting
+  the 2 already flipped — plus, under R1, every other `self` arm in the table**),
   ambiguity becomes **date-dependent and is decided by the
   count of LIVE candidates**, which is what the existing caller already does
-  (`status <- "pending"` on 0 or >1, reconcile.R:455). Inside a bound the key still
-  reaches ≥2 live arms → review, exactly as today; outside it reaches 1 → resolves.
-  `auto_assign = FALSE` retains its other meaning, a per-row curator veto.
+  (`status <- "pending"` on 0 or >1, reconcile.R:455) — **except where R2's
+  self-precedence applies.** Under R1 a key can now reach ≥2 live arms *because* its
+  self arm is on; where exactly one of those live candidates is `kind = 'self'`, the
+  self arm WINS, the row resolves through it, and a non-blocking note is emitted
+  (**E.7**). Otherwise: inside a bound the key still reaches ≥2 live arms → review,
+  exactly as today; outside it reaches 1 → resolves.
+  `auto_assign = FALSE` retains its other meaning, a per-row curator veto — on any
+  arm except a `self` arm, which R1 removes from the curator's reach.
 - This is a filter on the ALIAS, and is separate from the existing `.rc_narrow_live()`
   filter on the FEATURE's `date_end`. **The feature-side liveness must then be applied
   UNCONDITIONALLY**, not via `.rc_narrow_live()`, which only fires when
@@ -539,14 +568,46 @@ live one, goes to REVIEW — it does NOT fall through to Layer 2.**
   set, clear, and leave-alone.
 
 ### E.5 The curated bounds (data, applied by migration 003)
-Robin's rulings on the 9 collision-class rows. **Rule 1** = one-off mislabelling
-(`n_seen == 1` or the target has exactly 1 sample) → close it at the sample date.
-**Rule 2** = a recurring issue Robin wants to review every time → leave open.
-**Rule 3** = the same-named point is decommissioned → close at the last sample date.
 
-ALL NINE ARE SETTLED (Robin, 2026-07-23). `date_end` is inclusive; `date_start` stays
-NULL on every row. These are DATA, not derivable — an implementer must use exactly
-these literals and must not recompute them.
+> **RESTATED 2026-07-23 UNDER R1/R5 — read
+> `dev/plans/RULINGS-2026-07-23-alias-self-precedence.md` before implementing this
+> section.** Two things changed. **(a) The date bounds no longer decide whether
+> `b.s01` and `k.e02` resolve.** R1's self-precedence does that, at every date,
+> unconditionally. What the bounds now govern is narrower and entirely different:
+> **which shadowed arms get NOTED** in the non-blocking `review_queue` row of E.7. A
+> bound that is one day out no longer mis-routes a sample; it mis-annotates a note.
+> **(b) Rule 1 must set `date_start` as well as `date_end` (R5)**, and `k.e02`→K.S06
+> moves from rule 1 to rule 2. Both are worked through below.
+
+Robin's rulings on the 9 collision-class rows. **Rule 1** = one-off mislabelling
+(`n_seen == 1` or the target has exactly 1 sample) → close it **to a POINT at** the
+sample date. **Rule 2** = a recurring issue Robin wants to review every time → leave
+open. **Rule 3** = the same-named point is decommissioned → close at the last sample
+date.
+
+ALL NINE ARE SETTLED (Robin, 2026-07-23). `date_end` is inclusive. ~~`date_start` stays
+NULL on every row.~~ **CORRECTED under R5 (see the R5 box below): rule-1 rows set
+`date_start = date_end`. Rule-2 and rule-3 rows keep `date_start` NULL.** These are
+DATA, not derivable — an implementer must use exactly these literals and must not
+recompute them.
+
+**R5 — a rule-1 arm gets a POINT bound, not an open-ended-back one.** The liveness rule
+of E.2 is `(date_start IS NULL OR date_start <= d) AND (date_end IS NULL OR date_end >= d)`,
+so an arm with `date_end` only is **live back to the beginning of time**. Rule 1 exists
+for a mislabelling that happened *once*; leaving `date_start` NULL lets that one day
+shadow decades. Measured on
+`/Users/rjs/Library/Application Support/org.R-project.R/R/sampleTidy/monitoring.duckdb`
+(read-only, 2026-07-23) on the worst case — B.TS41 has exactly ONE sample (2026-01-21),
+so the arm `b.s01`→B.TS41 would otherwise shadow 24 years of B.S01 history:
+
+| bound on `b.s01`→B.TS41 | `b.s01` samples falling inside it |
+|---|---:|
+| `date_end = 2026-01-21`, `date_start` NULL (as first pinned) | **178 of 186** |
+| `date_start = date_end = 2026-01-21` (R5, point bound) | **1** |
+
+Under R1 this no longer decides resolution — but it decides whether 177 samples each
+carry a spurious "self-precedence overrode B.TS41" note. **PINNED: every rule-1 row
+sets `date_start = date_end`.**
 
 **The literals below are SYDNEY-LOCAL calendar dates, corrected +1 day from the first
 draft.** `sample.date` in the legacy registry stores Sydney midnight as a UTC-naive
@@ -561,17 +622,29 @@ excluded the very sample it was derived from. Robin's rulings are unchanged; onl
 arithmetic is fixed. (Note `commit.R:369` writes NEW samples as local-date-at-00:00-UTC
 — a different convention from the legacy rows. Out of scope here, but recorded.)
 
-| alias_key | resolves_to | rule | `date_end` (local) | stored | basis |
-|---|---|---|---|---|---|
-| `b.s01` | B.TS41 | 1 | **2026-01-21** | 2026-01-20 13:00 | exact — target's only sample |
-| `b.ts02` | B.TS27 | 1 | **2021-11-12** | 2021-11-11 13:00 | exact — target's only sample |
-| `b.ts41` | B.TMW15 | 1 | **2024-04-08** | 2024-04-07 14:00 | exact — target's only sample |
-| `b.s22` | B.S06 | 2 | **NULL** (stays open) | — | recurring; Robin reviews every time |
-| `b.s04` | B.S01 | 1 | ~~2026-03-16~~ **2026-05-04** | see note below | proxy — target's last sample |
-| `b.s22` | B.TS18 | 1 | **2021-11-12** | 2021-11-11 13:00 | proxy — target's last sample |
-| `k.e02` | K.S06 | 1 | ~~2025-09-04~~ **2026-05-25** | see note below | proxy — target's last sample |
-| `b.ts18` | B.S30 | 3 | **2021-11-12** | 2021-11-11 13:00 | earlier of the two (B.TS18's last) |
-| `b.ts40` | B.TS39 | 3 | **2024-04-08** | 2024-04-07 14:00 | earlier of the two (B.TS40's last) |
+| alias_key | resolves_to | rule | `date_start` (local) | `date_end` (local) | stored | basis |
+|---|---|---|---|---|---|---|
+| `b.s01` | B.TS41 | 1 | **2026-01-21** (point, R5) | **2026-01-21** | 2026-01-20 13:00 | exact — target's only sample |
+| `b.ts02` | B.TS27 | 1 | **2021-11-12** (point, R5) | **2021-11-12** | 2021-11-11 13:00 | exact — target's only sample |
+| `b.ts41` | B.TMW15 | 1 | **2024-04-08** (point, R5) | **2024-04-08** | 2024-04-07 14:00 | exact — target's only sample |
+| `b.s22` | B.S06 | 2 | NULL | **NULL** (stays open) | — | recurring; Robin reviews every time |
+| `b.s04` | B.S01 | 1 | NULL — see "the 2 proxies" below | ~~2026-03-16~~ **2026-05-04** | see note below | proxy — target's last sample |
+| `b.s22` | B.TS18 | 1 | NULL — see "the 2 proxies" below | **2021-11-12** | 2021-11-11 13:00 | proxy — target's last sample |
+| `k.e02` | K.S06 | ~~1~~ **2** | NULL | ~~2025-09-04~~ ~~**2026-05-25**~~ **NULL** (stays open) | — | **RECLASSIFIED, R5 — see below** |
+| `b.ts18` | B.S30 | 3 | NULL | **2021-11-12** | 2021-11-11 13:00 | earlier of the two (B.TS18's last) |
+| `b.ts40` | B.TS39 | 3 | NULL | **2024-04-08** | 2024-04-07 14:00 | earlier of the two (B.TS40's last) |
+
+**`k.e02`→K.S06 IS RECLASSIFIED FROM RULE 1 TO RULE 2 (R5, Robin, 2026-07-23).** Not a
+correction to the literal — a correction to the *rule*. No `date_end` can separate these
+two arms, because **K.E02 (31 samples, from 2020-07-28) and K.S06 (24 samples, from
+2020-08-11) coexist for their entire lifespans and both end 2026-05-25.** Any bound
+placed on the K.S06 arm is therefore inside K.E02's range too, so **post-003 that key
+would go to review at every date and never resolve.** It is a rule-2 case —
+*recurring, Robin reviews every time* — and the arm stays open. **Consequence for E.6:
+the itemised UPDATE list now produces SEVEN non-NULL `date_end` values over the 9 rows,
+not eight** (`b.s22`→B.S06 and `k.e02`→K.S06 both stay NULL); the E.6 criterion is
+struck and restated accordingly. Note this does NOT leave `k.e02` unresolvable: under
+R1 the `k.e02` self arm wins at every date and the K.S06 arm rides along as an E.7 note.
 
 **TWO PROXY LITERALS CORRECTED 2026-07-23 (cold audit, finding 6 as adjudicated).**
 `b.s04`→B.S01 and `k.e02`→K.S06 were pinned against the WRONG target samples and are
@@ -583,6 +656,12 @@ the same day-early/day-late landmine this section documents, arrived at from the
 side: `sample.date` stores Sydney midnight as a UTC-naive TIMESTAMP, so a naive cast
 reads a day off in whichever direction the caster guessed. **Use only 2026-05-04 and
 2026-05-25. Do not re-derive them, and do not accept the auditor's numbers.**
+**SUPERSEDED IN PART, R5 (2026-07-23): the `k.e02`→K.S06 half is now MOOT** — that arm
+is rule 2 and stays open, so no `date_end` is written for it and ~~2026-05-25~~ is not
+transcribed anywhere. The correction is retained above as the audit record of why the
+literal was never used, and 2026-05-25 survives as the *measurement* that proves K.E02
+and K.S06 end on the same day, which is the reason for the reclassification.
+**`b.s04`→B.S01 is unaffected: still rule 1, still 2026-05-04.**
 
 **THE LITERALS IN THIS TABLE ARE FROZEN AS OF 2026-07-23 AND ARE NOT RE-DERIVED
 LATER.** They are DATA, adjudicated once against the registry as it stood on that date.
@@ -606,6 +685,18 @@ The flip must be keyed on something that distinguishes the arms — the pair plu
 `kind`, or a `WHERE auto_assign IS NOT TRUE` restriction (see the flip list below,
 which excludes them outright). Each of the 9 `date_end` items must still assert it
 matched exactly one row, aborting the migration otherwise.
+**AMENDED 2026-07-23 (R1/R3).** Two changes. (a) **R3 removes the collision at
+source**: the duplicate `(b.s01, B.S01)` and `(k.e02, K.E02)` arms are merged into their
+`self` arms and deleted (**E.8**), so after E.8 the pair `(alias_key, target
+feature.name)` matches exactly one row again — but E.8 must land BEFORE 003 for that to
+be true, and 003 must not *depend* on it: keep the `kind`-qualified key regardless, so
+003 is correct whether or not a future duplicate exists. (b) **R1's universal self flip
+is not keyed on the pair at all** — it is keyed on `kind = 'self'` across the whole
+table, matches **all 895 self arms** rather than 1, and must not carry an "exactly one
+row" assertion. Measured on
+`/Users/rjs/Library/Application Support/org.R-project.R/R/sampleTidy/monitoring.duckdb`
+(read-only, 2026-07-23): 895 `self` rows, **887 already TRUE, 8 FALSE**, over 895
+features. Only E.5's curated non-self arms use the pair.
 
 **The `auto_assign` flip (E.2), itemised. RESTATED 2026-07-23 (cold audit, finding 1):
 the 8 keys span 19 arms, not 17, and 2 of those arms are ALREADY `auto_assign = TRUE`.**
@@ -632,23 +723,36 @@ real resolver, `b.s01` returns exactly 1 candidate and `k.e02` returns exactly 1
   `b.s22`→{B.S06, B.S22, B.TS18}; `b.ts02`→{B.TS02, B.TS27}; `b.ts18`→{B.S30, B.TS18};
   `b.ts40`→{B.TS39, B.TS40}; `b.ts41`→{B.TMW15, B.TS41};
   `k.e02`→{~~K.E02 (already TRUE)~~, K.S06}.
+  **RE-FRAMED under R1 (2026-07-23):** the arm list itself is unchanged, but the `self`
+  members of it (`B.S01`, `B.S04`, `B.S22`, `B.TS02`, `B.TS18`, `B.TS40`, `B.TS41`,
+  `K.E02`) are no longer flipped *because E.5 says so* — they are flipped by R1's
+  universal rule, which reaches them and 887 other self arms alike. E.5's own UPDATE
+  set is now **only the non-self arms**: `b.s01`→{B.TS41}; `b.s04`→{B.S01};
+  `b.s22`→{B.S06, B.TS18}; `b.ts02`→{B.TS27}; `b.ts18`→{B.S30}; `b.ts40`→{B.TS39};
+  `b.ts41`→{B.TMW15}; `k.e02`→{K.S06}. The end state over the 19 arms is identical;
+  what changed is which rule owns which arm, and therefore what a failing assertion
+  would be telling you.
 - **Post-condition (assert this, not the UPDATE count): all 19 arms are
   `auto_assign = TRUE` and nothing else changed.** An assertion written as "17 rows
   updated" is satisfied by a migration that also silently un-flips the two.
-- **⚠ OPEN — RULING NEEDED FROM ROBIN. Migration 003 as previously specified would
-  REGRESS these two.** The two confirmed arms are `transcription_error` aliases of
-  keys that E.5 is about to date-bound. Once bounds exist, a `b.s01` row dated INSIDE
-  the `b.s01`→B.TS41 bound (on or before 2026-01-21) reaches TWO live arms — the
-  confirmed B.S01 arm and the still-live B.TS41 arm — and by E.2's own "decided by the
-  count of LIVE candidates" rule it goes back to REVIEW. A key that a human explicitly
-  confirmed on 2026-07-23 would start queueing again for historical dates. Same shape
-  for `k.e02` inside the `k.e02`→K.S06 bound (on or before 2026-05-25). The options
-  are (i) accept the regression as correct — the confirmation was about *today's*
-  strings, and a 2021 row genuinely is ambiguous; (ii) let a `confirmed_by` arm win
-  over an unconfirmed one regardless of date; or (iii) give the confirmed arms a
-  `date_start` that opens where the other arm's `date_end` closes. **Do not implement
-  003 until this is ruled.** Whichever way it goes, a test must pin the behaviour of
-  `b.s01` and `k.e02` at a date INSIDE the bound, not only outside it.
+  **Add R1's post-condition alongside it, as a separate assertion:** zero
+  `feature_alias` rows with `kind = 'self'` and `auto_assign` not TRUE, table-wide.
+  The 19-arm assertion does not imply it and cannot substitute for it.
+- ~~**⚠ OPEN — RULING NEEDED FROM ROBIN. Migration 003 as previously specified would
+  REGRESS these two.**~~ **ANSWERED 2026-07-23 by R1 — see
+  `dev/plans/RULINGS-2026-07-23-alias-self-precedence.md`.** The question was whether
+  `b.s01`/`k.e02` may regress to review for dates inside their bounds, given that a
+  human had confirmed them; the three options on the table were (i) accept the
+  regression, (ii) let `confirmed_by` win, (iii) give the confirmed arms a
+  `date_start`. **Robin ruled none of them.** All three treat the symptom — a
+  hand-confirmed *duplicate* arm — as though it were the mechanism. The mechanism is
+  R1: the `self` arm always wins, so `b.s01` and `k.e02` resolve at every date,
+  including dates inside the bound, and the shadowed arm becomes an E.7 note rather
+  than a blocker. R3 (**E.8**) then deletes the two duplicate arms outright and R4
+  (**F.19**) stops `confirm_feature_aliases()` minting more of them. **003 is no
+  longer blocked on a ruling.** The test obligation stands unchanged and is now
+  answerable: pin the behaviour of `b.s01` and `k.e02` at a date INSIDE the bound —
+  it must RESOLVE to B.S01 / K.E02 and emit exactly one non-blocking note.
 
 **On the rule-2 row — `b.s22` is DELIBERATELY never auto-resolved. Do not "fix" it.**
 Confirmed 2026-07-23 (cold audit, finding 21): `.rc_feature_candidates("B.S22")`
@@ -657,16 +761,43 @@ in review at **every** date post-003 too — the flip makes all three arms TRUE,
 `b.s22`→B.TS18 arm closes at 2021-11-12, and from any later date the key still reaches
 TWO live arms (self→B.S22 and the deliberately-unbounded →B.S06), so the live-candidate
 count is >1 and the row goes pending. **That is Rule 2 working exactly as ruled** —
-Robin wants to see this key every time. A later reader who finds `b.s22` "still not
+Robin wants to see this key every time. ~~A later reader who finds `b.s22` "still not
 resolving" after 003 has found the requirement, not a bug; no test may assert that it
-resolves, and any test touching it must assert that it does NOT.
+resolves, and any test touching it must assert that it does NOT.~~
 
-**On the 3 proxies.** Per-alias usage is unrecoverable — migration 001 repoints every
+> **⚠ RULE 2's MECHANISM CHANGES UNDER R1 — the requirement does not.** Post-R1 the
+> `b.s22` self arm is `auto_assign = TRUE`, so from any post-2021-11-12 date the key
+> reaches two live candidates of which **exactly one is `kind = 'self'`** — and R1 says
+> the self arm wins. So `b.s22` **resolves to B.S22 and commits**, carrying an E.7 note
+> naming the shadowed →B.S06 arm. It no longer goes pending. Robin still sees the key
+> every time, through the note instead of through a blocked row. The same reasoning now
+> covers `k.e02`, reclassified to rule 2 above.
+> **Restated test obligation:** a test touching `b.s22` must assert (a) it RESOLVES to
+> B.S22, and (b) it emits an E.7 note naming B.S06. ~~Asserting that it does not
+> resolve~~ is now the wrong assertion and would pin the pre-R1 behaviour.
+> **Flagged, not decided:** if Robin wants rule 2 to keep BLOCKING rather than
+> annotating, that is a further ruling and a per-arm veto flag would be needed — R1 as
+> written admits no exception. Recorded here so the change is visible rather than
+> discovered.
+
+**On the ~~3~~ 2 proxies.** *(`k.e02`→K.S06 is no longer one of them — it is rule 2
+under R5.)* Per-alias usage is unrecoverable — migration 001 repoints every
 sample to its *self* alias and the raw string was never retained on `sample` — so for
 `n_seen == 1` against a many-sampled target we know the mislabelling happened once but
 not *when*. Robin's ruling: use the target's last sample date. This is deliberately
 conservative (the alias stays live across the target's whole history) and can be
 tightened later if a specific incident date surfaces.
+
+**R5 and the 2 proxies — NOT RULED, do not guess.** R5 pins the point bound for the
+rule-1 rows whose target has exactly ONE sample (`b.s01`→B.TS41, `b.ts02`→B.TS27,
+`b.ts41`→B.TMW15) — those are the case it was measured on. It supplies no `date_start`
+literal for the two *proxy* rule-1 rows, and the paragraph above is the reason: their
+whole point is that the incident date is unknown and the arm stays live across the
+target's history, which a point bound would contradict. **`date_start` therefore stays
+NULL on `b.s04`→B.S01 and `b.s22`→B.TS18 until Robin rules otherwise.** Under R1
+nothing turns on it except how many E.7 notes those two keys generate; that is the
+right size of consequence for an unruled value, and it is why this is flagged rather
+than filled in.
 
 **On the 2 rule-3 rows.** Both were flagged as looking like **renames** rather than
 mislabellings, and Robin ruled: use the earlier date. The two do NOT behave alike, and
@@ -732,10 +863,18 @@ Work E lands after Work B, and the E.3 test carries a positive control (below).
 - **E.2 `auto_assign`:** a bounded two-arm key resolves to its surviving arm outside
   the bound. Concretely, post-003 `b.ts18` at a 2026 date resolves to B.TS18. Without
   the 17-row flip this fails — which is the point; it is the only criterion that
-  catches E.5 being inert. **Add the paired criterion for the two already-TRUE arms**
+  catches E.5 being inert. ~~**Add the paired criterion for the two already-TRUE arms**
   (E.5's open ruling): assert the behaviour of `b.s01` and `k.e02` at a date INSIDE
-  their bounds, whichever way Robin rules — this is the only criterion that catches
-  003 regressing a human confirmation.
+  their bounds, whichever way Robin rules~~ **RESTATED under R1 (2026-07-23): assert
+  that `b.s01` and `k.e02` at a date INSIDE their historical arm's bound RESOLVE to
+  B.S01 / K.E02 and emit exactly one E.7 note each** — this is the only criterion that
+  catches 003 regressing a human confirmation.
+- **E.2 R1, universal self flip (NEW, must be able to FAIL):** a seed feature whose
+  `self` arm is `auto_assign = FALSE` and which is NOT one of E.5's 8 keys resolves by
+  its own canonical name after 003. Without R1's table-wide rule this fails, and a
+  migration that flips only E.5's arms fails it — which is the point. Pair it with the
+  table-wide post-condition (zero `self` arms not TRUE), because the post-condition
+  alone is satisfied by a seed that never had a FALSE self arm to begin with.
 - **E.2 feature-side liveness:** a key with one live alias arm pointing at a *defunct*
   feature goes to review, not to the defunct feature. Build it on the `T.REUSED`
   fixture (fa-0007→f-0006, `date_end 2020-06-30`; fa-0008→f-0007 live) by bounding the
@@ -769,8 +908,13 @@ Work E lands after Work B, and the E.3 test carries a positive control (below).
   untouched are three distinguishable outcomes; a bounds-only call needs no
   `uuid_feature`.
 - Migration 003 on **the named post-001 003 seed** (box (i) above — NOT the live
-  registry, NOT `helper-migration-db.R`) produces **8 non-NULL `date_end` values over
-  the 9 itemised rows** (`b.s22`→B.S06 stays NULL) and leaves **every OTHER alias row
+  registry, NOT `helper-migration-db.R`) produces ~~**8 non-NULL `date_end` values over
+  the 9 itemised rows** (`b.s22`→B.S06 stays NULL)~~ **SEVEN non-NULL `date_end` values
+  over the 9 itemised rows — corrected 2026-07-23 under R5, which reclassifies
+  `k.e02`→K.S06 to rule 2; `b.s22`→B.S06 and `k.e02`→K.S06 both stay NULL — plus THREE
+  non-NULL `date_start` values, one per exact rule-1 row, each equal to its own
+  `date_end` (R5's point bound). A criterion that checks `date_end` only passes against
+  a migration that never writes a `date_start` at all** and leaves **every OTHER alias row
   in the seed** NULL/NULL — asserted as a count of the complement, ~~all other 1980
   aliases~~ **never as a hard-coded total** (finding 3: the live count is 1,994 today,
   so 1980 is wrong AND unreachable in a fixture; a seed carrying ~1,985 aliases would
@@ -802,6 +946,107 @@ Work E lands after Work B, and the E.3 test carries a positive control (below).
   which drops unparseable rows before commit, so an end-to-end test of this criterion
   passes regardless of the implementation.
 
+### E.7 Self-precedence, and the note that records it (R2 — Robin, 2026-07-23)
+Source: `dev/plans/RULINGS-2026-07-23-alias-self-precedence.md`, R2. R1 makes every
+`self` arm `auto_assign = TRUE`; **E.7 is what stops that turning into a review-queue
+flood**, and it is a prerequisite of R1 being safe, not a nicety on top of it.
+
+**The rule.** In candidate resolution, where a key reaches **more than one live
+candidate and exactly one of them is `kind = 'self'`, the self arm WINS**: the row
+resolves through it and the sample commits. The shadowed candidates are not discarded —
+they are recorded on a `review_queue` row that is **explicitly NON-BLOCKING**.
+
+**Why the code cannot be left alone.** Two localised changes in `R/reconcile.R`, and the
+first one is not optional:
+1. **Self-precedence in `.rc_feature_candidates`** (`R/reconcile.R:162-182`), which
+   filters to `auto_assign = TRUE` at **`:171`** before anything else. Under R1 a key
+   with a live historical arm now passes **two** rows through that filter, so
+   `length(distinct_feat) == 1` at **`:448`** is FALSE and the row falls through to
+   `status[[i]] <- "pending"` at **`:455`** — i.e. it goes to review, which is the exact
+   behaviour R1 exists to prevent. R1 without E.7 is a regression, not an improvement.
+2. **Retain the shadowed candidates and emit the note.** The clean-hit path
+   (**`R/reconcile.R:448-453`**) `next`s out at **`:452`**, *before* the pending
+   assignment at `:455` and before the candidate-collection code at **`:460-461`**
+   (`sugg <- .rc_feature_suggestions(...)`; `if (length(sugg) > 1) cand_list[[i]] <- sugg`).
+   So the one path that will now carry a self-precedence win is precisely the path that
+   currently collects nothing. The shadowed candidates must be captured on that path
+   and carried into the review payload.
+   *(Citation corrected on verification 2026-07-23: the rulings document cites
+   `:450-453` and `:455`; the `if` opens at `:448`, the `next` is at `:452`, and the
+   candidate collection is at `:460-461`, not `:455`. The argument is unaffected.)*
+
+**FIRST NON-BLOCKING REVIEW KIND EMITTED BY THE FEATURE RESOLVER.** Everything the
+resolver queues today is a row that did NOT commit. This one commits. **The payload
+grammar must therefore distinguish a note from a blocker**, or a queue reader will work
+a note as though it were a task. **Fold this into the SINGLE `subkind` precedence table
+already pinned in the Work F header (audit finding 7) — do not invent a second
+vocabulary and do not add a parallel table.** That table currently orders `ambiguous` >
+`expired_alias` > `suggestion` > `structural`; the note takes its place in it — at
+precedence **0, above `ambiguous`**, because the two describe the same input shape and
+`ambiguous` would otherwise swallow every self-precedence case — and the note/blocker
+distinction must be a payload token a reader can branch on, not an inference from the
+`subkind` name. *(The spelling `self_precedence` is this plan's proposal, not Robin's
+ruling; R2 pins that the note exists and must be distinguishable, not what it is
+called. Rename freely, in one place, before implementation.)*
+
+**Architecturally available today — verified, not assumed.** Nothing in `R/` reads
+`review_queue` to gate anything: `commit.R:632-652` appends every review row
+independently of whether samples commit (`db_append(con, "review_queue", ...)` at
+**`commit.R:650`**), the only reader is `review_queue()` (**`R/mutate.R:583`**), a
+plain SELECT, and the centralised writer is `review_queue_add()`
+(**`R/db-schema.R:292`**). Precedent for annotate-alongside-committed-data already
+exists in three kinds: **`unknown_unit`** (`reconcile.R:861`), **`value_conflict`**
+(`reconcile.R:1180`, `assemble.R:179`) and **`batch_duplicate`** (`reconcile.R:1243`).
+E.7 is a new *kind*, not a new *architecture*.
+
+Acceptance (must be able to FAIL): a key whose `self` arm and one live historical arm
+are BOTH `auto_assign = TRUE`, reconciled at a date inside the historical arm's bound,
+must (a) resolve to the self feature, (b) produce a committed `sample`/`analysis` row —
+assert the row counts, not merely the absence of a review item — and (c) produce exactly
+one `review_queue` row naming the shadowed feature and carrying the non-blocking token.
+**All three halves in one test.** Without (b) an implementation that queues and blocks
+passes; without (c) an implementation that silently drops the shadowed arm passes — and
+silent dropping is the failure mode R2 exists to prevent. **Paired negative control in
+the same test:** a key reaching two live NON-self arms still goes to review and does NOT
+commit, so the test fails if self-precedence was implemented as "always take the first
+candidate".
+
+### E.8 Merge the two duplicate identity arms (R3 — Robin, 2026-07-23)
+Source: `dev/plans/RULINGS-2026-07-23-alias-self-precedence.md`, R3.
+
+`b.s01` → B.S01 and `k.e02` → K.E02 each exist **twice** in the registry: once
+`kind = 'self'` with `auto_assign` FALSE, and once `kind = 'transcription_error'` with
+`auto_assign` TRUE and `confirmed_by = 'R. Shannon'` (both written 2026-07-23 at the
+cutover by `confirm_feature_aliases()`). **Both duplicates carry the identical `name` as
+their self arm** — `"B.S01"` and `"K.E02"` — and **both have
+`alias_key = lower(feature.name)`**. They are identity mappings, not transcription
+errors: the string is the feature's own name, spelled correctly.
+
+**These are the only two such duplicates in the registry.** Measured on
+`/Users/rjs/Library/Application Support/org.R-project.R/R/sampleTidy/monitoring.duckdb`
+(read-only, 2026-07-23): `feature_alias` holds exactly **2** rows with
+`kind = 'transcription_error'`, and they are these two.
+
+**Required: merge each into its `self` arm and DELETE the duplicate** — carry the
+`confirmed_by` and `auto_assign = TRUE` onto the surviving `self` row, then remove the
+`transcription_error` row, with `change_log` provenance on both operations. Any
+`sample.uuid_feature_alias` reference to the deleted row must be repointed to the
+surviving self arm in the same transaction; do not delete a row anything still points
+at.
+
+**Sequencing: E.8 lands before migration 003, and F.19 before E.8** — F.19 first,
+because until `confirm_feature_aliases()` is fixed the next confirmation mints a third
+duplicate and E.8 has to be run again. E.8 also removes the `(alias_key, target
+feature.name)` two-row collision documented in E.5's "Row identity for the UPDATEs";
+003 must nonetheless keep its `kind`-qualified key rather than relying on E.8 having
+run.
+
+Acceptance (must be able to FAIL): after E.8, `feature_alias` holds exactly ONE row for
+each of `(b.s01, B.S01)` and `(k.e02, K.E02)`, that row has `kind = 'self'`,
+`auto_assign = TRUE` and the preserved `confirmed_by`; the sample count attached to each
+feature is UNCHANGED across the merge (assert it before and after — a merge that orphans
+samples otherwise passes); and reconciling the raw `"B.S01"` still resolves to B.S01.
+
 ## Work F — Work A remediation (from the Phase-5 cold audit, 2026-07-23)
 
 **SEQUENCING (Robin, 2026-07-23): F.1, F.2 and F.3 are FOLDED INTO THE B/C
@@ -825,24 +1070,45 @@ that cannot be made correct without rework:
 | **F.11 → F.12** | F.12(b) restores a projection *including* `date` — the very dependency F.11 exists to remove. Landing F.12 first re-creates F.11's own blocker. See F.12. |
 | **F.10's supersede exemption → F.10** | F.10 as written blocks the A12 revision-supersede and `already_present` paths. The exemptions must be pinned BEFORE the guard is built, or the guard ships breaking them. See F.10. |
 | **F.15's linkage decision → F.15** | `review_queue` has no column linking an item to the alias it raised, so F.15 is not implementable until that schema decision is made. See F.15. |
+| **F.19 → E.8 → migration 003** | *(added 2026-07-23, R3/R4.)* Until `confirm_feature_aliases()` stops minting duplicate identity arms (F.19), E.8's cleanup is not durable — the next confirmation re-creates the problem. E.8 in turn removes the two-row `(alias_key, target feature.name)` collision 003's UPDATE keying has to work around. See F.19, E.8. |
+| **E.7 → R1's flip (migration 003)** | *(added 2026-07-23, R1/R2.)* R1 turns every `self` arm on, which makes keys with a live historical arm reach TWO candidates. Without E.7's self-precedence they go PENDING (`reconcile.R:455`) — R1 landed without E.7 is a review-queue regression, not a fix. See E.7. |
+| **F.19 and E.8 → the NEXT INGEST of the incoming files** | *(added 2026-07-23, Robin.)* Not a build dependency — a **calendar** one. More input files are arriving. Every ambiguous key in them generates a pending alias, and every confirmation of one writes another mislabelled (and possibly duplicate) row. Ingesting first means cleaning up more later. |
+| **F.10 and F.17 → the backfill items** | *(promoted 2026-07-23, Robin — same reason.)* F.10 (work-order re-ingest guard) and F.17 (each file archived against its work order) are **promoted AHEAD of the backfill items** they were previously queued behind. Both protect the incoming files: F.10 stops a re-download double-committing, F.17 stops a deliverable being lost unarchived — and F.17's own entry records that this loss is **realised, not hypothetical** (13 files). Backfill can wait; arriving files cannot. |
 
 **ONE `subkind` PRECEDENCE TABLE, covering all four values.** F.6 adds `suggestion`
 and E.3 adds `expired_alias` to a vocabulary that already holds `ambiguous` and
 `structural`, and nothing orders the four. **The code ALREADY pins `ambiguous` >
 `structural` (`R/reconcile.R:587-593`) — EXTEND that order, do not invent a new one:**
 
-| precedence | `subkind` | emitted when |
-|---|---|---|
-| 1 (highest) | `ambiguous` | ≥2 live candidates. Already implemented. Expired candidates, if any, ride along in an `expired=` clause (E.3) rather than winning. |
-| 2 | `expired_alias` | 0 live candidates and ≥1 expired/not-yet-started one (E.3). Must emit at count 1. |
-| 3 | `suggestion` | exactly 1 live candidate, `auto_assign = FALSE` (F.6). Must emit at count 1. |
-| 4 (lowest) | `structural` | no alias row at all, and Layer 2 produced a parse (B.7). Already implemented as the fallback. |
+**EXTENDED 2026-07-23 to FIVE values (R2).** E.7's self-precedence note folds in here,
+as R2 requires — there is no second table and no second vocabulary. It also forces a
+column the table did not previously need: **whether the row COMMITTED.** Every subkind
+below it belongs to a row that did not; E.7's belongs to a row that did.
+
+| precedence | `subkind` | row committed? | emitted when |
+|---|---|---|---|
+| 0 (highest) | `self_precedence` | **YES — NOTE, non-blocking** | ≥2 live candidates of which **exactly one** is `kind = 'self'` (R1/R2, E.7). The self arm resolves the row; the shadowed live candidates ride along in a `shadowed=` clause. This case is carved OUT of `ambiguous` below — it is checked first, or `ambiguous` swallows it. |
+| 1 | `ambiguous` | no | ~~≥2 live candidates~~ **≥2 live candidates, NOT uniquely resolved by precedence 0** (restated 2026-07-23). Already implemented. Expired candidates, if any, ride along in an `expired=` clause (E.3) rather than winning. |
+| 2 | `expired_alias` | no | 0 live candidates and ≥1 expired/not-yet-started one (E.3). Must emit at count 1. |
+| 3 | `suggestion` | no | exactly 1 live candidate, `auto_assign = FALSE` (F.6). Must emit at count 1. |
+| 4 (lowest) | `structural` | no | no alias row at all, and Layer 2 produced a parse (B.7). Already implemented as the fallback. |
 
 Rationale for 2 above 3: an expired alias is a curation act the operator needs to see;
 a lone unconfirmed suggestion is weaker information. A row can satisfy at most one of
 2 and 3 by construction (a candidate is either live or not), so the ordering between
 them only ever matters if a future change makes them co-occur — pin it now anyway.
 One test per branch, and one test asserting the precedence at each adjacent pair.
+
+**Rationale for 0 at the top, and the reader contract.** `self_precedence` and
+`ambiguous` describe the same *shape* of input — several live candidates — and differ
+only in whether one of them is the feature's own name. If `ambiguous` is evaluated
+first it wins every time and R1 never takes effect, so the ordering is load-bearing
+rather than cosmetic. **A queue reader must branch on the committed column, not on the
+subkind name**: `self_precedence` is the only value that does not denote outstanding
+work, and a reader that treats "has a `review_queue` row" as "needs attention" will
+mis-handle it. Pin the token explicitly in the payload; do not leave it to be inferred
+from the subkind string. Add one test asserting the 0-vs-1 precedence at the adjacent
+pair, like every other pair in this table.
 
 **F.4–F.8 ARE DEFERRED TO POST-CUTOVER (Robin, 2026-07-23).** They are NOT
 abandoned — they are follow-up work, to be picked up once the migrated DB is in
@@ -876,6 +1142,23 @@ The compensating controls, which are therefore NON-NEGOTIABLE:
      *(The "zero cross-site mis-merge" half is the load-bearing one and is the
      cheapest to re-baseline: it is a property, not a count, and it does not depend on
      the corpus size.)*
+     **RULED 2026-07-23 (Robin): (a) RE-BASELINE — not (b) strike.** The reason is that
+     **new input files are arriving**, so a dry-run gate is about to have live work to
+     do; striking a control at the moment it becomes useful is the wrong trade. The
+     control is therefore RESTORED to the list, and the Phase-8 deferral rests on four
+     controls again **once the re-baseline numbers are recorded here** — until then it
+     is still three, and this entry is the outstanding work item.
+     **Two STANDING CAUTIONS, which apply to every dry run from now on and are part of
+     the control, not advice about it:**
+     - **A dry run has SIDE EFFECTS and poisons the following real run.** It is not
+       read-only. **It runs on a COPY of the database, never on the live one** —
+       `/Users/rjs/Library/Application Support/org.R-project.R/R/sampleTidy/monitoring.duckdb`
+       is not a valid dry-run target. Copy, run, read the residual off the copy,
+       discard the copy.
+     - **No work order already in the DB is ever re-ingested.** This is the F.10 policy
+       and it binds the re-baseline too: the baseline is measured over the files whose
+       work orders are NOT yet present, not over the whole archived corpus. A baseline
+       taken by replaying loaded work orders measures the guard, not the resolver.
   2. the pre-cutover backup with recorded SHA-256;
   3. the cutover verification battery, every check of which must be able to fail;
   4. `change_log` provenance on every registry change, so corrections are
@@ -1679,6 +1962,50 @@ what was actually done (1,272 deleted, 180 restored, 8 deliberately not restored
 state 1,464 rows). There is no `bytes_not_retained` state to implement and no 254-row
 recovery to attempt. **Nothing in F.18 is outstanding except the
 `change_log.source_hash` mixed-algorithm finding recorded above.**
+
+### F.19 `confirm_feature_aliases()` mislabels every confirmation as a transcription error (DEFECT — R4, Robin, 2026-07-23)
+**⚠ URGENT. Not "urgent" as emphasis — urgent because the defect is actively producing
+bad rows.** More input files are arriving, every ambiguous key they carry generates a
+pending alias, and every pending alias Robin confirms is written out with a false
+relationship label and, where the key is an identity mapping, as a **duplicate row**.
+E.8 cleans up the two that exist; F.19 is what stops there being a third. Source:
+`dev/plans/RULINGS-2026-07-23-alias-self-precedence.md`, R4.
+
+**The defect.** `R/feature-alias.R:134-137`:
+
+```r
+changes <- list(uuid_feature = uuid_feature, confirmed_by = confirmed_by, auto_assign = TRUE)
+if (identical(alias$kind[[1]], "pending")) {
+  changes$kind <- "transcription_error"
+}
+```
+
+The rewrite `kind 'pending' -> 'transcription_error'` is **unconditional** for every
+confirmed pending row, with no test of what the relationship actually was. There is only
+one branch, and it guesses. **An identity mapping is definitionally not a transcription
+error** — the string is the feature's own name, spelled correctly. That is how the two
+duplicate arms of E.8 came to exist and to be labelled `transcription_error` with
+`confirmed_by = 'R. Shannon'` against a `name` identical to the target's.
+
+**Required, both halves:**
+1. **Detect identity — `alias_key == lower(feature.name)` — and flip the EXISTING
+   `self` arm rather than minting a duplicate row.** Under R1 that arm is already
+   `auto_assign = TRUE`, so in the common case the correct action is a no-op plus a
+   `confirmed_by`, not an INSERT. (This is also why F.19 must precede E.8: with F.19 in
+   place, the E.8 cleanup is a one-time backfill rather than a recurring chore.)
+2. **Where it is a genuine NON-identity alias, label it honestly** rather than assuming
+   `transcription_error`. The caller knows what they are confirming; the function must
+   not invent a relationship it was never told. `historical_code`, `mask_long` and
+   `descriptive` all already exist in the vocabulary and are all more common in the
+   registry than `transcription_error` is.
+
+Acceptance (must be able to FAIL): confirm a pending alias whose key IS the target
+feature's lower-cased name and assert that (a) NO new `feature_alias` row is created —
+assert the table row count, not the resolution outcome — and (b) the existing `self` arm
+carries the `confirmed_by`; then, in the same test, confirm a pending alias whose key is
+NOT the target's name and assert it is NOT labelled `transcription_error` by default.
+Without the second half an implementation that hard-codes `kind = 'self'` for everything
+passes; without the first half the duplicate-minting behaviour survives untouched.
 
 ## Registry data changes ~~pending~~ **APPLIED at the live cutover (2026-07-23) — RECORD, not a work list**
 

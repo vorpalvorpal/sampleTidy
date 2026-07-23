@@ -860,3 +860,173 @@ schema-linkage decision before F.15.
 May `b.s01` and `k.e02` regress to review for pre-bound dates, given that both
 resolve cleanly today (n=1 each) and both are already curated `auto_assign = TRUE`
 by Robin? Migration 003 cannot be written either way until this is answered.
+
+---
+
+## PLAN-15 Work E — five rulings on self-arm precedence and the confirm mislabelling (Robin, 2026-07-23)
+
+Source of truth: **`dev/plans/RULINGS-2026-07-23-alias-self-precedence.md`** (R1–R5).
+This entry is the change record; the rulings document is the authority, and where the
+two ever disagree the rulings document wins.
+
+**This ANSWERS the open question left at the end of the entry above** — *"May `b.s01`
+and `k.e02` regress to review for pre-bound dates?"* — and answers it by rejecting the
+frame. All three options that were on the table (accept the regression / let
+`confirmed_by` win / give the confirmed arms a `date_start`) treat a hand-confirmed
+duplicate arm as the mechanism. It is the symptom. **Migration 003 is no longer blocked
+on a ruling.**
+
+### The live defect the rulings were made against
+
+Migration 001 set `auto_assign = FALSE` on every arm of every multi-arm alias key —
+**including the `self` arm**. A feature was thereby made unreachable by its own name.
+Measured on
+`/Users/rjs/Library/Application Support/org.R-project.R/R/sampleTidy/monitoring.duckdb`
+(read-only): **8 self arms left FALSE**, of which `confirm_feature_aliases()` repaired 2
+by hand on the morning of 2026-07-23 — and repaired them by minting duplicate rows
+rather than flipping the arm, which is R3/R4 below. **6 features are still unreachable
+by their own name today:**
+
+| alias_key | feature | samples attached |
+|---|---|---|
+| `b.s22` | B.S22 | 58 |
+| `b.s04` | B.S04 | 37 |
+| `b.ts18` | B.TS18 | 6 |
+| `b.ts40` | B.TS40 | 1 |
+| `b.ts41` | B.TS41 | 1 |
+| `b.ts02` | B.TS02 | 0 |
+
+Re-verified independently on the same path (read-only, 2026-07-23) before writing any of
+this into the plan: `feature_alias` holds **895 `self` rows over 895 features — 887
+TRUE, 8 FALSE** — and exactly **2** rows of `kind = 'transcription_error'`, which are
+the two duplicates of R3.
+
+### The five rulings, and where each landed in PLAN-15
+
+| ruling | verdict | lands in |
+|---|---|---|
+| **R1** | A `self` arm is ALWAYS `auto_assign = TRUE`. 003 sets it on the `self` arm of EVERY key, unconditionally — a feature is always reachable by its own name. Where a key reaches >1 live candidate and exactly one is `kind = 'self'`, the self arm WINS and the row resolves. | **E.2** (pin restated), **E.5** (flip list re-framed, open-ruling bullet closed), **E.6** (new criterion) |
+| **R2** | The override is NOTED, not silent: emit a **non-blocking** `review_queue` row; the sample still commits. | **E.7** (NEW) |
+| **R3** | Merge the two duplicate identity arms into their `self` arms and delete the duplicates. | **E.8** (NEW) |
+| **R4** | `confirm_feature_aliases()` mislabels every confirmation as `transcription_error`; fix it. **URGENT.** | **F.19** (NEW) |
+| **R5** | E.5 rule 1 must set `date_start` as well as `date_end`; `k.e02`→K.S06 is reclassified rule 1 → rule 2. | **E.5** (table + criteria) |
+
+### R1 SUPERSEDES the exemption proposal — recorded explicitly
+
+**The earlier proposal to exempt `b.s01`/`k.e02` from migration 003 is SUPERSEDED and is
+struck in PLAN-15 rather than deleted.** It was a symptom-level fix: it would have
+protected the two keys a human happened to have confirmed that morning and left the
+other six features unreachable by their own name indefinitely, because nothing in the
+proposal generalised. R1 generalises: the rule is about `kind = 'self'`, not about which
+keys E.5 curated. **E.5's date bounds keep a job, but a smaller and different one — they
+now govern only which shadowed arms get NOTED**, never whether a row resolves.
+
+### R5 — the rule-1 bound was open-ended backwards, and that is a 178-row defect
+
+E.5's table set `date_end` only. The E.2 liveness rule is
+`(date_start IS NULL OR date_start <= d) AND (date_end IS NULL OR date_end >= d)`, so a
+`date_end`-only arm is **live back to the beginning of time**. B.TS41 has exactly ONE
+sample (2026-01-21), so the arm `b.s01`→B.TS41 shadowed 24 years of B.S01 history:
+
+| bound on `b.s01`→B.TS41 | `b.s01` samples inside it |
+|---|---:|
+| `date_end = 2026-01-21`, `date_start` NULL (as pinned) | **178 of 186** |
+| `date_start = date_end = 2026-01-21` (point bound) | **1** |
+
+**PINNED: a single-sample rule-1 target gets a POINT bound.** Under R1 this no longer
+decides resolution — it decides whether 177 samples each carry a spurious note.
+*(R5 supplies no `date_start` for the two **proxy** rule-1 rows, whose whole premise is
+that the incident date is unknown; PLAN-15 flags those as NOT RULED rather than
+guessing.)*
+
+**`k.e02`→K.S06 is reclassified rule 1 → rule 2.** K.E02 (31 samples, from 2020-07-28)
+and K.S06 (24 samples, from 2020-08-11) **coexist for their entire lifespans and both
+end 2026-05-25**, so no `date_end` can separate them — pre-R1, that key would have gone
+to review at every date and never resolved. **Consequence: 003's itemised list now
+produces SEVEN non-NULL `date_end` values over the 9 rows, not eight**, and the 2026-05-25
+literal corrected by the cold audit is now never transcribed. It survives as the
+*measurement* that proves the reclassification.
+
+### R2 — the first non-blocking review kind the feature resolver emits
+
+**Everything the resolver queues today is a row that did NOT commit. This one commits.**
+The payload grammar must therefore distinguish note from blocker, or a queue reader will
+work a note as though it were a task. **Folded into the SINGLE `subkind` precedence table
+already pinned in the Work F header (audit finding 7)** — no second table, no second
+vocabulary — extended to five values with an explicit *row committed?* column, the note
+sitting at precedence 0 above `ambiguous` (the two describe the same input shape, so
+`ambiguous` first would swallow every self-precedence case).
+
+**Architecturally available today, verified rather than assumed:** nothing in `R/` reads
+`review_queue` to gate anything — `commit.R:650` appends review rows independently of
+whether samples commit, the sole reader is the plain SELECT in `review_queue()`
+(`R/mutate.R:583`), and the centralised writer is `review_queue_add()`
+(`R/db-schema.R:292`). Three kinds already annotate alongside data that lands:
+`unknown_unit` (`reconcile.R:861`), `value_conflict` (`reconcile.R:1180`,
+`assemble.R:179`) and `batch_duplicate` (`reconcile.R:1243`).
+
+**R1 without R2 is a regression.** `.rc_feature_candidates` filters on
+`auto_assign = TRUE` (`reconcile.R:171`), so once R1 turns the self arms on, a key with
+a live historical arm passes **two** rows through that filter, `length(distinct_feat) == 1`
+at `:448` is FALSE, and the row lands on `status[[i]] <- "pending"` at `:455`. The
+clean-hit path (`:448-453`) `next`s out at `:452`, before the candidate-collection code
+at `:460-461` — so the one path that will carry a self-precedence win is exactly the path
+that currently collects nothing.
+
+> **One citation in the rulings document is imprecise and is corrected in PLAN-15.**
+> R2 cites the clean-hit path as `:450-453` and the candidate-collection code as `:455`.
+> Verified: the `if` opens at **`:448`**, the `next` is at **`:452`**, `:455` is the
+> `status <- "pending"` assignment, and the candidate collection is at **`:460-461`**.
+> The argument is unaffected — the `next` does precede the collection — but an
+> implementer editing `:450-453` would edit the wrong three lines.
+
+### R4 is URGENT, and R3 is its backlog
+
+`R/feature-alias.R:134-137` rewrites `kind 'pending' -> 'transcription_error'`
+**unconditionally** for every confirmed pending row, with no test of what the
+relationship was. There is one branch and it guesses. An identity mapping is
+definitionally not a transcription error, and this is how the two duplicate arms came to
+exist — both carrying the **identical `name`** as their self arm, both with
+`alias_key = lower(feature.name)`, both `confirmed_by = 'R. Shannon'`:
+
+| alias_key | target | kind | auto_assign | identity? |
+|---|---|---|---|---|
+| `b.s01` | B.S01 | `self` | FALSE | yes |
+| `b.s01` | B.S01 | `transcription_error` | TRUE | yes |
+| `k.e02` | K.E02 | `self` | FALSE | yes |
+| `k.e02` | K.E02 | `transcription_error` | TRUE | yes |
+
+**These are the only two such duplicates in the registry.** R3 merges each into its
+`self` arm and deletes the duplicate; R4 stops there being a third. **Urgent because
+more input files are arriving** and every ambiguous key they carry keeps generating
+these — ingest first and the cleanup is larger, not smaller.
+
+### Sequencing — one build dependency, three calendar ones
+
+| ordering | kind | why |
+|---|---|---|
+| `E.7 → R1's flip (003)` | build | R1 landed without E.7's self-precedence sends the newly two-candidate keys to `pending` |
+| `F.19 → E.8 → 003` | build | until confirm is fixed, E.8's cleanup is not durable; E.8 then removes the two-row `(alias_key, target name)` collision 003 works around |
+| `F.19, E.8 → next ingest` | **calendar** | more files are arriving; every confirmation before F.19 writes another mislabelled row |
+| `F.10, F.17 → the backfill items` | **calendar** | **promoted ahead of backfill.** F.10 stops a re-download double-committing, F.17 stops a deliverable being lost unarchived — and F.17's realised loss is 13 files, per the A5 entry above. Backfill can wait; arriving files cannot |
+
+### Compensating control #1 (the dry-run gate) — RE-BASELINE, not strike
+
+The gate was marked **⛔ UNEXECUTABLE** by the cold audit (finding 9) and Robin was
+offered (a) re-baseline or (b) strike-and-replace. **Robin ruled (a) RE-BASELINE**, on
+the ground that new input files are arriving — striking a control at the moment it
+becomes useful is the wrong trade. The control is restored to the list; the Phase-8
+deferral rests on four controls again **once the re-baseline numbers are recorded in
+PLAN-15**, and on three until then.
+
+**Two standing cautions were pinned with it, as part of the control rather than as
+advice about it:**
+
+1. **A dry run has SIDE EFFECTS and poisons the following real run — it is not
+   read-only, so it runs on a COPY.**
+   `/Users/rjs/Library/Application Support/org.R-project.R/R/sampleTidy/monitoring.duckdb`
+   is never a valid dry-run target.
+2. **No work order already in the DB is ever re-ingested.** This binds the re-baseline
+   itself: the baseline is measured over files whose work orders are NOT yet present. A
+   baseline taken by replaying loaded work orders measures the F.10 guard, not the
+   resolver.
