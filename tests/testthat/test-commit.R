@@ -909,3 +909,35 @@ test_that("R-8.7/A63: a re-ingested reading under a conversion_constant method i
   expect_identical(out$skipped$reason[out$skipped$source_ref == "r1"], "already_present")
   expect_false("r1" %in% out$review$source_ref)
 })
+
+test_that("R-11.16: a qualitative text row commits quantified = NA, not FALSE (the tri-state survives the write)", {
+  # Ruled by Robin 2026-07-23. `isTRUE()` maps NA to FALSE, which silently
+  # recorded "this is not a measurement" as "below detection". In the live
+  # registry 315 rows are text-valued and 23 of those record that no sample was
+  # taken - committing them as quantified = FALSE asserts a non-detection that
+  # was never performed.
+  setup <- commit_test_setup()
+  con <- setup$con
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  files <- tibble::tibble(hash = setup$hash, filename = basename(setup$path),
+                          adapter = "esdat/1", rank = 3L, kept = TRUE)
+  # below_detection deliberately FALSE so that a fallback to it could not
+  # accidentally produce the NA we are asserting.
+  clean <- mk_p11_row(source_ref = "r1", source_hash = setup$hash,
+                       value_raw = "Could not find due to long grass",
+                       value_num = NA_real_, value_converted = NA_real_,
+                       value_chr = "Could not find due to long grass",
+                       below_detection = FALSE, quantified = NA,
+                       sample_date = as.Date("2025-07-13"),
+                       sample_datetime = as.POSIXct("2025-07-13 09:00:00", tz = "UTC"))
+  commit_event(mk_commit_event(files), mk_resolved(clean = clean), con)
+
+  new_row <- DBI::dbGetQuery(con,
+    "SELECT quantified, value_chr FROM analysis WHERE uuid NOT IN ('an-0001','an-0002','an-0003','an-0004','an-0005')")
+  expect_equal(nrow(new_row), 1)
+  expect_true(is.na(new_row$quantified[[1]]))
+  # and it must be NA specifically - FALSE is the bug this guards
+  expect_false(isFALSE(new_row$quantified[[1]]))
+  expect_equal(new_row$value_chr[[1]], "Could not find due to long grass")
+})

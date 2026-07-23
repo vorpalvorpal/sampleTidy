@@ -510,7 +510,15 @@
   has_rh <- "rl_high" %in% names(clean)
 
   for (i in seq_len(n)) {
-    quantified <- if (has_q) isTRUE(clean$quantified[[i]]) else !isTRUE(clean$below_detection[[i]])
+    # NA must SURVIVE. `isTRUE()` maps NA to FALSE, which silently recorded an
+    # unknown/non-measurement detection state as "below detection" - see the
+    # note in .st_parse_values(). The tri-state is real in the data.
+    quantified <- if (has_q) {
+      q <- clean$quantified[[i]]
+      if (length(q) != 1L || is.na(q)) NA else isTRUE(q)
+    } else {
+      !isTRUE(clean$below_detection[[i]])
+    }
     source_hash <- clean$source_hash[[i]]
 
     value <- clean$value_converted[[i]]

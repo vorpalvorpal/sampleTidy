@@ -1102,7 +1102,15 @@
 #' @keywords internal
 #' @noRd
 .rc_values_equal <- function(inc_value, inc_chr, inc_quant, exist_value, exist_chr, exist_quant) {
-  if (is.na(inc_quant) || is.na(exist_quant) || !identical(inc_quant, exist_quant)) return(FALSE)
+  # `quantified` is a TRI-state. NA is not "unknown detection state" - since
+  # 2026-07-23 it means "this result is not a measurement at all", i.e. the row
+  # is text-valued, and it is exactly as determinate as TRUE or FALSE. Treating
+  # NA as unmatchable (the old `is.na(...) -> FALSE`) means two identical text
+  # results never compare equal, so a re-ingested qualitative observation is
+  # never recognised as already_present and COMMITS A SECOND TIME.
+  # An NA/non-NA mismatch is still a genuine difference.
+  if (is.na(inc_quant) != is.na(exist_quant)) return(FALSE)
+  if (!is.na(inc_quant) && !identical(inc_quant, exist_quant)) return(FALSE)
   if (!is.na(inc_value) && !is.na(exist_value)) {
     return(abs(inc_value - exist_value) <= 1e-9 * max(1, abs(inc_value), abs(exist_value)))
   }
