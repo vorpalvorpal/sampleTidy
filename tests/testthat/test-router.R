@@ -55,7 +55,7 @@ make_matcher_adapter <- function(id, tier_for) {
 
 test_that("R-3.5: exactly one adapter at the winning tier claims the file", {
   clear_adapters()
-  withr::defer(clear_adapters())
+  withr::defer({ clear_adapters(); register_builtin_adapters() })
   register_adapter(make_matcher_adapter("exact_adapter", function(fm) if (grepl("TARGET", fm$filename)) "exact" else "no"))
   register_adapter(make_matcher_adapter("format_adapter", function(fm) if (fm$ext == "csv") "format" else "no"))
 
@@ -74,7 +74,7 @@ test_that("R-3.5: exactly one adapter at the winning tier claims the file", {
 
 test_that("R-3.5: a tie at the winning tier quarantines with reason adapter_tie and both ids in the review_queue payload", {
   clear_adapters()
-  withr::defer(clear_adapters())
+  withr::defer({ clear_adapters(); register_builtin_adapters() })
   register_adapter(make_matcher_adapter("tie_a", function(fm) if (grepl("TIEFILE", fm$filename)) "exact" else "no"))
   register_adapter(make_matcher_adapter("tie_b", function(fm) if (grepl("TIEFILE", fm$filename)) "exact" else "no"))
 
@@ -97,7 +97,7 @@ test_that("R-3.5: a tie at the winning tier quarantines with reason adapter_tie 
 
 test_that("R-3.5: a file no adapter claims quarantines with reason unclaimed", {
   clear_adapters()
-  withr::defer(clear_adapters())
+  withr::defer({ clear_adapters(); register_builtin_adapters() })
   register_adapter(make_matcher_adapter("picky", function(fm) "no"))
 
   dir <- withr::local_tempdir()
@@ -114,7 +114,7 @@ test_that("R-3.5: a file no adapter claims quarantines with reason unclaimed", {
 
 test_that("R-3.5: re-routing the same path is a no-op (state unchanged, no new sighting)", {
   clear_adapters()
-  withr::defer(clear_adapters())
+  withr::defer({ clear_adapters(); register_builtin_adapters() })
   register_adapter(make_matcher_adapter("claimer", function(fm) if (fm$ext == "csv") "format" else "no"))
 
   dir <- withr::local_tempdir()
@@ -138,7 +138,7 @@ test_that("R-3.5: re-routing the same path is a no-op (state unchanged, no new s
 
 test_that("R-3.5: a different path with an identical file (same hash) records a sighting and does not re-claim", {
   clear_adapters()
-  withr::defer(clear_adapters())
+  withr::defer({ clear_adapters(); register_builtin_adapters() })
   register_adapter(make_matcher_adapter("claimer2", function(fm) if (fm$ext == "csv") "format" else "no"))
 
   dir <- withr::local_tempdir()
@@ -165,7 +165,7 @@ test_that("R-3.5: a different path with an identical file (same hash) records a 
 
 test_that("R-3.5: match() throwing inside an adapter marks only that file failed and continues with remaining files", {
   clear_adapters()
-  withr::defer(clear_adapters())
+  withr::defer({ clear_adapters(); register_builtin_adapters() })
   register_adapter(make_matcher_adapter("thrower", function(fm) {
     if (grepl("THROWS", fm$filename)) stop("kaboom from match()") else "no"
   }))
@@ -193,7 +193,7 @@ test_that("R-3.5: match() throwing inside an adapter marks only that file failed
 
 test_that("R-3.6: router_matrix() returns (path, adapter, tier) for every adapter x path, with no state changes", {
   clear_adapters()
-  withr::defer(clear_adapters())
+  withr::defer({ clear_adapters(); register_builtin_adapters() })
   register_adapter(make_matcher_adapter("m1", function(fm) if (grepl("A", fm$filename)) "exact" else "no"))
   register_adapter(make_matcher_adapter("m2", function(fm) if (fm$ext == "csv") "format" else "no"))
 
@@ -217,7 +217,7 @@ test_that("R-3.6: router_matrix() returns (path, adapter, tier) for every adapte
 
 test_that("R-12.1: an adapter match() returning NA fails only that file (reason names the adapter); other files route normally", {
   clear_adapters()
-  withr::defer(clear_adapters())
+  withr::defer({ clear_adapters(); register_builtin_adapters() })
   register_adapter(make_matcher_adapter("na_adapter", function(fm) if (grepl("BADNA", fm$filename)) NA_character_ else "no"))
   register_adapter(make_matcher_adapter("normal_adapter", function(fm) if (fm$ext == "csv") "format" else "no"))
 
@@ -242,7 +242,7 @@ test_that("R-12.1: an adapter match() returning NA fails only that file (reason 
 
 test_that("R-12.1: an adapter match() returning a value outside the tier vocabulary ('weird') fails only that file (reason names the adapter and the bad value); other files route normally", {
   clear_adapters()
-  withr::defer(clear_adapters())
+  withr::defer({ clear_adapters(); register_builtin_adapters() })
   register_adapter(make_matcher_adapter("weird_adapter", function(fm) if (grepl("BADWEIRD", fm$filename)) "weird" else "no"))
   register_adapter(make_matcher_adapter("normal_adapter2", function(fm) if (fm$ext == "csv") "format" else "no"))
 
@@ -267,7 +267,7 @@ test_that("R-12.1: an adapter match() returning a value outside the tier vocabul
 
 test_that("R-12.1 regression: an adapter match() that throws still fails only that file, unchanged by the return-value validation fix", {
   clear_adapters()
-  withr::defer(clear_adapters())
+  withr::defer({ clear_adapters(); register_builtin_adapters() })
   register_adapter(make_matcher_adapter("thrower2", function(fm) {
     if (grepl("THROWS2", fm$filename)) stop("kaboom2 from match()") else "no"
   }))

@@ -12,7 +12,7 @@ make_dummy_adapter <- function(id = "dummy", version = "1.0") {
 
 test_that("R-3.3: register/retrieve/clear round-trips through the registry", {
   clear_adapters()
-  withr::defer(clear_adapters())
+  withr::defer({ clear_adapters(); register_builtin_adapters() })
 
   a <- make_dummy_adapter("dummy_a", "1.0")
   register_adapter(a)
@@ -28,7 +28,7 @@ test_that("R-3.3: register/retrieve/clear round-trips through the registry", {
 
 test_that("R-3.3: registering a duplicate id overwrites with a cli_inform message", {
   clear_adapters()
-  withr::defer(clear_adapters())
+  withr::defer({ clear_adapters(); register_builtin_adapters() })
 
   register_adapter(make_dummy_adapter("dupe", "1.0"))
   expect_message(register_adapter(make_dummy_adapter("dupe", "2.0")))
@@ -40,7 +40,7 @@ test_that("R-3.3: registering a duplicate id overwrites with a cli_inform messag
 
 test_that("R-3.3: an adapter missing `parse` aborts naming the defect", {
   clear_adapters()
-  withr::defer(clear_adapters())
+  withr::defer({ clear_adapters(); register_builtin_adapters() })
 
   broken <- list(id = "broken1", version = "1.0", match = function(file_meta) "no")
   err <- tryCatch(register_adapter(broken), error = function(e) e)
@@ -51,7 +51,7 @@ test_that("R-3.3: an adapter missing `parse` aborts naming the defect", {
 
 test_that("R-3.3: an adapter whose `match` has the wrong formals aborts naming the defect", {
   clear_adapters()
-  withr::defer(clear_adapters())
+  withr::defer({ clear_adapters(); register_builtin_adapters() })
 
   broken <- list(
     id = "broken2", version = "1.0",
@@ -66,7 +66,7 @@ test_that("R-3.3: an adapter whose `match` has the wrong formals aborts naming t
 
 test_that("R-3.3: an adapter missing `id` aborts naming the defect", {
   clear_adapters()
-  withr::defer(clear_adapters())
+  withr::defer({ clear_adapters(); register_builtin_adapters() })
 
   broken <- list(
     version = "1.0",
@@ -80,7 +80,7 @@ test_that("R-3.3: an adapter missing `id` aborts naming the defect", {
 
 test_that("R-3.3: an adapter missing `version` aborts naming the defect", {
   clear_adapters()
-  withr::defer(clear_adapters())
+  withr::defer({ clear_adapters(); register_builtin_adapters() })
 
   broken <- list(
     id = "broken3",
@@ -94,7 +94,7 @@ test_that("R-3.3: an adapter missing `version` aborts naming the defect", {
 
 test_that("R-3.3: adapter_registry() returns adapters as a named list keyed by id", {
   clear_adapters()
-  withr::defer(clear_adapters())
+  withr::defer({ clear_adapters(); register_builtin_adapters() })
 
   register_adapter(make_dummy_adapter("aaa", "1.0"))
   register_adapter(make_dummy_adapter("bbb", "1.0"))
@@ -105,7 +105,7 @@ test_that("R-3.3: adapter_registry() returns adapters as a named list keyed by i
 
 test_that("R-12.10: register_builtin_adapters() emits no Overwriting inform when a built-in re-registers itself", {
   clear_adapters()
-  withr::defer(clear_adapters())
+  withr::defer({ clear_adapters(); register_builtin_adapters() })
 
   # First call populates the registry with all four built-ins (as .onLoad()
   # / the start of ingest_dir() do). The second call is the defensive
@@ -120,7 +120,7 @@ test_that("R-12.10: register_builtin_adapters() emits no Overwriting inform when
 
 test_that("R-12.10: a third-party adapter registered over a built-in id still emits an Overwriting inform", {
   clear_adapters()
-  withr::defer(clear_adapters())
+  withr::defer({ clear_adapters(); register_builtin_adapters() })
 
   register_builtin_adapters()
 

@@ -1017,6 +1017,41 @@ test_that("R-15.18 (E.4): a bounds-only call works with uuid_feature OMITTED - w
   expect_equal(after$date_start[[1]], as.Date("2024-01-01")) # bound widened
 })
 
+test_that("R-15.18 (E.4): confirm_feature_aliases() with BOTH date_start and date_end entirely OMITTED leaves BOTH bounds unchanged - the direct guard of the NULL-means-leave-alone half of the sentinel scheme (PCR-4)", {
+  setup <- fa_setup()
+  con <- setup$con
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  DBI::dbExecute(con, "INSERT INTO feature_alias
+    (uuid, uuid_feature, name, alias_key, kind, n_seen, auto_assign,
+     first_seen, last_seen, confirmed_by, date_start, date_end) VALUES
+    ('fa-9505', 'f-0002', 'Z.OMITBOTH01', 'z.omitboth01', 'historical_code', 0, TRUE,
+     TIMESTAMP '2025-01-01 00:00:00', TIMESTAMP '2025-01-01 00:00:00', NULL,
+     DATE '2024-03-01', DATE '2024-09-30')")
+
+  before <- feature_alias_row(con, "fa-9505")
+  expect_equal(before$date_start[[1]], as.Date("2024-03-01"))
+  expect_equal(before$date_end[[1]], as.Date("2024-09-30"))
+
+  # date_start and date_end are ENTIRELY OMITTED from this call - not passed
+  # as explicit NULL - the shape a real re-confirm call takes when the
+  # caller has no opinion about bounds. This is the DIRECT guard of the
+  # NULL-means-leave-alone half of the E.4 sentinel scheme (PCR-4): NULL
+  # (default/omitted) = leave alone, as.Date(NA) = clear, a real Date = set.
+  # PASSES TODAY because no bounds logic exists at all yet, so bounds
+  # trivially survive - this is a legitimate regression guard, not a false
+  # green (same shape as the R-15.12/R-15.13 guards the audit already
+  # cleared), and becomes load-bearing the moment E.4 lands. Do not "clean
+  # this up" - a single side-effect assertion elsewhere (the CLEAR test
+  # above) is not enough coverage for an API contract Robin ratified this
+  # week.
+  confirm_feature_aliases("fa-9505", "f-0002", confirmed_by = "alice")
+
+  after <- feature_alias_row(con, "fa-9505")
+  expect_equal(after$date_start[[1]], as.Date("2024-03-01")) # unchanged
+  expect_equal(after$date_end[[1]], as.Date("2024-09-30"))   # unchanged
+})
+
 # ======================================================================
 # PLAN-15 F.14 / R-15.34 - confirm_analyte_methods() must succeed on a
 # method that HAS dependent analyses (today it fails on any such method:
