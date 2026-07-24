@@ -755,10 +755,21 @@
 #' `*_pending = TRUE` (identity now known, still unresolved). The key MUST be
 #' identical to the one COMMIT creates under, or nothing ever dedups.
 #'
+#' The two branches use DIFFERENT normalisers, deliberately (PLAN-15 F.7):
+#'
 #' - feature-pending with `uuid_feature_alias == NA`: the `feature_alias` row
-#'   whose `alias_key == .rc_method_key(feature_raw)` AND `uuid_feature IS NULL`.
+#'   whose `alias_key` equals this row's own `alias_key` AND `uuid_feature IS
+#'   NULL`. That key is the punctuation-PRESERVING `.rc_feature_key`, computed
+#'   once upstream at the head of `.rc_resolve_features` and carried on the row
+#'   - NOT the punctuation-stripping `.rc_method_key`. This matters: migration
+#'   001 wrote alias keys with punctuation intact (`b.s01`, `k.e02`), so the
+#'   stripped form (`bs01`, `ke02`) matches ZERO dotted aliases. Looking these
+#'   up with the wrong normaliser is precisely the defect PLAN-15 exists to fix.
 #' - analyte-pending with `uuid_lab == NA`: the `lab_method` row with
-#'   `uuid_analyte IS NULL` and matching `(organisation, key(name), key(method))`.
+#'   `uuid_analyte IS NULL` and matching `(organisation, .rc_method_key(name),
+#'   .rc_method_key(method))`. Lab methods DO use the stripping normaliser -
+#'   this branch is correct as it stands and must not be "fixed" to match the
+#'   one above.
 #' @keywords internal
 #' @noRd
 .rc_resolve_existing_pending <- function(rows, registry) {

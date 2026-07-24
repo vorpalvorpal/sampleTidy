@@ -1701,13 +1701,28 @@ only to serve them (`.rc_roxygen_block()`, `.rc_comment_blocks()`). Declared cri
 this plan: **145 → 143**. `.strip_r_source()` is NOT deleted — it has an unrelated user at
 `test-migration-002.R:521`.
 
-**Consequence to carry, stated explicitly rather than hidden:** F.7's remaining live item —
-the `.rc_resolve_existing_pending` roxygen still naming the wrong normaliser — now has
-**no automated gate**. It was the only F item whose gate was a source-scanning meta-test,
-and per this ruling that instrument is retired rather than repaired. Verify it by
-inspection at Phase 9 sign-off. This re-opens cold-audit finding 19 for F.7 alone, with the
-ruling as its answer: a doc defect whose only possible gate is a doc-scanning test is not
-worth the false-confidence such a test buys.
+**F.7 IS NOW CLOSED — the roxygen was corrected on 2026-07-24** (Robin: *"Yes, fix it
+now."*), rather than carried to Phase 9 as an untested inspection item.
+
+The defect, for the record: `.rc_resolve_existing_pending`'s roxygen said the pending lookup
+keys on `.rc_method_key(feature_raw)` (punctuation-STRIPPING), while the body reads
+`rows$alias_key`, computed at `R/reconcile.R:424` as `.rc_feature_key(rows$feature_raw)`
+(punctuation-PRESERVING). `R/reconcile.R` therefore contradicted itself 334 lines apart — and
+the roxygen was the wrong half, documenting **the exact bug PLAN-15 exists to fix, on the
+function whose own docstring warns that "the key MUST be identical to the one COMMIT creates
+under, or nothing ever dedups."**
+
+It was also half-right, which is worse than wholly wrong: the `lab_method` bullet genuinely
+does use `.rc_method_key`, so a reader who verifies that bullet extends their trust to the
+other. The correction now states both normalisers explicitly and says why they differ, so the
+next reader cannot "fix" the correct branch to match the incorrect one.
+
+Doc-only: `test-reconcile.R` measured at 42F/0E before and after.
+
+**The general point this ruling settled stands**: a doc defect whose only possible gate is a
+doc-scanning test is not worth the false confidence such a test buys. Three consecutive audit
+rounds found bugs in that instrument rather than in the code it measured. Fixing the drift
+directly, once, beats maintaining a fragile detector for it.
 
 <!-- block: B-15.F8 -->
 ### F.8 Pre-Work-A pending aliases have no upgrade path (NOTE — not currently triggerable)
