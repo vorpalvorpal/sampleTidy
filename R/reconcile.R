@@ -91,29 +91,88 @@
 
 .rc_proto_skip <- function() {
   tibble::tibble(source_ref = character(0), reason = character(0),
-                 payload = character(0), source_hash = character(0))
+                 payload = character(0), source_hash = character(0),
+                 existing_uuid = character(0), kept_uuid_lab = character(0))
 }
 .rc_proto_review <- function() {
   tibble::tibble(source_ref = character(0), kind = character(0),
-                 payload = character(0), n_rows = integer(0),
-                 source_hash = character(0))
+                 subkind = character(0), payload = character(0), n_rows = integer(0),
+                 source_hash = character(0), uuid_existing = character(0),
+                 uuid_alias = character(0))
 }
 
 # ---- R-11.14: fold assembly's inline review flags into reconcile -----------
+#
+# PLAN-16 (R-16.7): `.rc_serialise_payload()` - the unescaped `paste0()` k=v
+# joiner - is DELETED, not repaired. Its one call site (STAGE-0, below) and
+# every other reconcile review/skip producer now route through `.rq_row()`/
+# `.rq_skip()` (R/db-schema.R) via the two thin wrappers immediately below.
 
-#' Serialise an assemble-side `review_payload` list deterministically into the
-#' review `payload` string column.
+#' Build one reconcile-shaped `review` tibble row from `.rq_row()`'s output
+#' (PLAN-16 B-16.api/R-16.8), adding back the reconcile-only bookkeeping
+#' columns (`source_ref`, `n_rows`) that `.rq_row()` itself does not carry.
+#' `diagnostics` is the ONLY free-form carrier - serialised to JSON by
+#' `.rq_row()`, never hand-glued k=v text (R-16.10/R-16.18).
 #' @keywords internal
 #' @noRd
-.rc_serialise_payload <- function(p) {
-  if (is.null(p) || length(p) == 0) return(NA_character_)
-  nms <- names(p)
-  if (is.null(nms)) nms <- as.character(seq_along(p))
-  parts <- vapply(seq_along(p), function(i) {
-    v <- p[[i]]
-    paste0(nms[[i]], "=", paste(as.character(v), collapse = "|"))
-  }, character(1))
-  paste(parts, collapse = ",")
+.rc_review_row <- function(source_ref, kind, n_rows, source_hash, subkind = NA_character_,
+                           work_order = NA_character_, uuid_existing = NA_character_,
+                           uuid_alias = NA_character_, candidates = NULL, expired = NULL,
+                           diagnostics = list()) {
+  rq <- .rq_row(
+    kind = kind, subkind = subkind, work_order = work_order, source_hash = source_hash,
+    uuid_existing = uuid_existing, uuid_alias = uuid_alias, candidates = candidates,
+    expired = expired, diagnostics = diagnostics
+  )
+  tibble::tibble(
+    source_ref = source_ref, kind = kind, subkind = rq$review$subkind[[1]],
+    payload = rq$review$payload[[1]], n_rows = n_rows, source_hash = source_hash,
+    uuid_existing = rq$review$uuid_existing[[1]], uuid_alias = rq$review$uuid_alias[[1]]
+  )
+}
+
+#' The skip tibble's own typed constructor (PLAN-16 B-16.skips). The skip
+#' tibble (`skipped_list` -> `reconcile_event()`'s `skipped` return value)
+#' never reaches `review_queue` - it stays in-memory and feeds `commit_event()`
+#' directly - so it cannot route through `.rq_row()` (which returns a
+#' `review_queue`-shaped row). It gets the SAME tier rule instead: an entity
+#' reference (`existing_uuid`, `kept_uuid_lab`) is a real, typed argument/
+#' column, never folded into free text; anything else is `diagnostics`,
+#' serialised via `jsonlite::toJSON(auto_unbox = TRUE)` exactly like
+#' `.rq_row()` - no free-text `payload` argument here either (R-16.18's
+#' rule, applied to the second carrier). PURE - no DB access.
+#' `already_present`'s `existing_uuid` is populated on EVERY call from that
+#' producer (R-16.14): it is the column `.ct_skip_existing_uuid()`'s retired
+#' regex fallback used to recover from a bare-uuid payload.
+#' @param existing_uuid the already-committed `analysis.uuid` this skip
+#'   refers to (`already_present`), or NA.
+#' @param kept_uuid_lab the winning `lab_method.uuid` (`method_duplicate`),
+#'   or NA.
+#' @param diagnostics named list -> JSON `payload` (the remainder, if any).
+#' @return `list(payload, existing_uuid, kept_uuid_lab)`.
+#' @keywords internal
+#' @noRd
+.rq_skip <- function(existing_uuid = NA_character_, kept_uuid_lab = NA_character_,
+                     diagnostics = list()) {
+  checkmate::assert_list(diagnostics)
+  payload <- as.character(jsonlite::toJSON(diagnostics, auto_unbox = TRUE))
+  list(payload = payload, existing_uuid = existing_uuid, kept_uuid_lab = kept_uuid_lab)
+}
+
+#' Build one reconcile-shaped `skipped` tibble row via `.rq_skip()` (PLAN-16
+#' B-16.skips): the typed skip-tibble constructor, same tier rule as
+#' `.rq_row()` - diagnostics -> JSON, entity references (`existing_uuid`,
+#' `kept_uuid_lab`) -> real columns, never a k=v string or a bare uuid with no
+#' structure (R-16.14).
+#' @keywords internal
+#' @noRd
+.rc_skip_row <- function(source_ref, reason, source_hash, existing_uuid = NA_character_,
+                         kept_uuid_lab = NA_character_, diagnostics = list()) {
+  rq <- .rq_skip(existing_uuid = existing_uuid, kept_uuid_lab = kept_uuid_lab, diagnostics = diagnostics)
+  tibble::tibble(
+    source_ref = source_ref, reason = reason, payload = rq$payload, source_hash = source_hash,
+    existing_uuid = rq$existing_uuid, kept_uuid_lab = rq$kept_uuid_lab
+  )
 }
 
 # ---- R-8.1: QC filter -------------------------------------------------------
@@ -868,13 +927,13 @@
     )
     if (inherits(conv, "condition")) {
       keep[[i]] <- FALSE
-      review_list[[length(review_list) + 1]] <- tibble::tibble(
-        source_ref = rows$source_ref[[i]], kind = "unknown_unit",
-        payload = paste0(
-          rows$source_ref[[i]], ",units_raw=", rows$units_raw[[i]], ",analyte=", analyte_row$name[[1]],
-          ",value_raw=", rows$value_raw[[i]]
-        ),
-        n_rows = 1L, source_hash = rows$source_hash[[i]]
+      # PLAN-16 R-16.17: units_raw/analyte/value_raw are separate retrievable
+      # diagnostics, not glued k=v text.
+      review_list[[length(review_list) + 1]] <- .rc_review_row(
+        source_ref = rows$source_ref[[i]], kind = "unknown_unit", n_rows = 1L,
+        source_hash = rows$source_hash[[i]],
+        diagnostics = list(units_raw = rows$units_raw[[i]], analyte = analyte_row$name[[1]],
+                           value_raw = rows$value_raw[[i]])
       )
       next
     }
@@ -926,12 +985,12 @@
 
   review_list <- list()
   for (i in which(!keep)) {
-    review_list[[length(review_list) + 1]] <- tibble::tibble(
-      source_ref = rows$source_ref[[i]], kind = "parse_error",
-      payload = paste0(
-        rows$source_ref[[i]], ",subkind=datetime,sample_datetime_raw=", rows$sample_datetime_raw[[i]]
-      ),
-      n_rows = 1L, source_hash = rows$source_hash[[i]]
+    # PLAN-16 R-16.17: subkind='datetime' is a real column; sample_datetime_raw
+    # is a separate retrievable diagnostic.
+    review_list[[length(review_list) + 1]] <- .rc_review_row(
+      source_ref = rows$source_ref[[i]], kind = "parse_error", n_rows = 1L,
+      source_hash = rows$source_hash[[i]], subkind = "datetime",
+      diagnostics = list(sample_datetime_raw = rows$sample_datetime_raw[[i]])
     )
   }
 
@@ -990,9 +1049,11 @@
     keep[losers] <- FALSE
 
     for (li in losers) {
-      skipped_list[[length(skipped_list) + 1]] <- tibble::tibble(
+      # PLAN-16 R-16.17/B-16.skips: kept_uuid_lab is a real column on the SKIP
+      # tibble, via .rq_skip() - never a k=v payload string.
+      skipped_list[[length(skipped_list) + 1]] <- .rc_skip_row(
         source_ref = rows$source_ref[[li]], reason = "method_duplicate",
-        payload = paste0("kept_uuid_lab=", kept_uuid_lab), source_hash = rows$source_hash[[li]]
+        source_hash = rows$source_hash[[li]], kept_uuid_lab = kept_uuid_lab
       )
     }
   }
@@ -1173,9 +1234,15 @@
 
     if (.rc_values_equal(inc_value, inc_chr, inc_quant, exist_value, exist_chr, exist_quant)) {
       keep[[i]] <- FALSE
-      skipped_list[[length(skipped_list) + 1]] <- tibble::tibble(
+      # PLAN-16 R-16.14: existing_uuid is a real, ALWAYS-populated column on
+      # the SKIP tibble via .rq_skip() - the bare-uuid-with-no-structure
+      # shape (format c) is retired; this is the column
+      # .ct_skip_existing_uuid()'s retired regex fallback used to recover.
+      skipped_list[[length(skipped_list) + 1]] <- .rc_skip_row(
         source_ref = rows$source_ref[[i]], reason = "already_present",
-        payload = existing$analysis_uuid[[1]], source_hash = rows$source_hash[[i]]
+        source_hash = rows$source_hash[[i]], existing_uuid = existing$analysis_uuid[[1]],
+        diagnostics = list(value_existing = exist_value, value_incoming = inc_value,
+                           quantified_existing = exist_quant, quantified_incoming = inc_quant)
       )
       next
     }
@@ -1187,15 +1254,23 @@
       supersedes[[i]] <- existing$analysis_uuid[[1]]
     } else {
       keep[[i]] <- FALSE
-      review_list[[length(review_list) + 1]] <- tibble::tibble(
-        source_ref = rows$source_ref[[i]], kind = "value_conflict",
-        payload = paste0(
-          rows$source_ref[[i]], ",existing_value=", exist_value, ",incoming_value=", inc_value,
-          ",existing_uuid=", existing$analysis_uuid[[1]], ",existing_quantified=", exist_quant,
-          ",incoming_quantified=", inc_quant, ",recorded_revision=", recorded_rev,
-          ",incoming_revision=", incoming_rev
-        ),
-        n_rows = 1L, source_hash = rows$source_hash[[i]]
+      # PLAN-16 R-16.19/R-16.20: subkind='measurement' (discriminated by
+      # subkind, not a second grammar); uuid_existing is a real column, never
+      # a diagnostics key. Vocabulary is <thing>_<role> (role in
+      # {existing,incoming}), shared with .fa_merge_samples' subkind=
+      # 'alias_merge' on value_existing/value_incoming; quantified_*/
+      # revision_* are the reconcile-only permitted extras. uuid_incoming is
+      # deliberately ABSENT (not NA) - the incoming value is not yet a row
+      # and has no uuid to name.
+      review_list[[length(review_list) + 1]] <- .rc_review_row(
+        source_ref = rows$source_ref[[i]], kind = "value_conflict", n_rows = 1L,
+        source_hash = rows$source_hash[[i]], subkind = "measurement",
+        uuid_existing = existing$analysis_uuid[[1]],
+        diagnostics = list(
+          value_existing = exist_value, value_incoming = inc_value,
+          quantified_existing = exist_quant, quantified_incoming = inc_quant,
+          revision_existing = recorded_rev, revision_incoming = incoming_rev
+        )
       )
     }
   }
@@ -1250,10 +1325,12 @@
     losers <- idx[-1]
     keep[losers] <- FALSE
     for (li in losers) {
-      review_list[[length(review_list) + 1]] <- tibble::tibble(
-        source_ref = rows$source_ref[[li]], kind = "batch_duplicate",
-        payload = paste0(rows$source_ref[[li]], ",kept_source_ref=", rows$source_ref[[winner]]),
-        n_rows = 1L, source_hash = rows$source_hash[[li]]
+      # PLAN-16 R-16.17: kept_source_ref is a separate retrievable diagnostic,
+      # not glued to the loser's own source_ref.
+      review_list[[length(review_list) + 1]] <- .rc_review_row(
+        source_ref = rows$source_ref[[li]], kind = "batch_duplicate", n_rows = 1L,
+        source_hash = rows$source_hash[[li]],
+        diagnostics = list(kept_source_ref = rows$source_ref[[winner]])
       )
     }
   }
@@ -1283,8 +1360,15 @@
 reconcile_event <- function(event, con) {
   results <- event$results
 
-  review_cols <- c("source_ref", "kind", "payload", "source_hash")
-  skip_cols <- c("source_ref", "reason", "payload", "source_hash")
+  # PLAN-16: widened to carry the typed columns .rq_row()/.rq_skip() emit
+  # (R-16.8/B-16.skips). Producers not yet converted to the structured
+  # constructor (unknown_feature/unknown_analyte) simply leave these NA -
+  # `.rc_fill_missing_cols()` below backfills them so every producer's
+  # tibble can be bound/selected uniformly regardless of conversion status.
+  review_cols <- c("source_ref", "kind", "subkind", "payload", "source_hash",
+                    "uuid_existing", "uuid_alias")
+  skip_cols <- c("source_ref", "reason", "payload", "source_hash",
+                  "existing_uuid", "kept_uuid_lab")
 
   if (nrow(results) == 0) {
     return(list(clean = results, review = .rc_proto_review()[, review_cols],
@@ -1297,14 +1381,23 @@ reconcile_event <- function(event, con) {
   review_acc <- list()
   count_acc <- list()
 
+  # A producer not yet routed through .rq_row()/.rq_skip() lacks the new
+  # typed columns entirely; add them as NA rather than erroring on selection.
+  .rc_fill_missing_cols <- function(df, cols) {
+    for (col in setdiff(cols, names(df))) df[[col]] <- NA_character_
+    df
+  }
+
   add_skip <- function(df) {
     if (nrow(df) == 0) return(invisible())
-    skipped_acc[[length(skipped_acc) + 1]] <<- df[, skip_cols]
     count_acc[[length(count_acc) + 1]] <<- data.frame(key = df$reason, n = 1L, stringsAsFactors = FALSE)
+    df <- .rc_fill_missing_cols(df, skip_cols)
+    skipped_acc[[length(skipped_acc) + 1]] <<- df[, skip_cols]
   }
   add_review <- function(df) {
     if (nrow(df) == 0) return(invisible())
     count_acc[[length(count_acc) + 1]] <<- data.frame(key = df$kind, n = df$n_rows, stringsAsFactors = FALSE)
+    df <- .rc_fill_missing_cols(df, review_cols)
     review_acc[[length(review_acc) + 1]] <<- df[, review_cols]
   }
 
@@ -1312,18 +1405,23 @@ reconcile_event <- function(event, con) {
 
   # STAGE-0 (R-11.14): partition assembly's inline review flags out BEFORE QC.
   # These are "we don't trust this row" flags - held, never committed (distinct
-  # from feature/analyte-pending rows which DO commit).
+  # from feature/analyte-pending rows which DO commit). PLAN-16 R-16.7/R-16.10:
+  # routes through .rq_row() (JSON diagnostics) instead of the now-deleted
+  # .rc_serialise_payload() - the payload round-trips byte-identical because
+  # jsonlite escapes by construction.
   if ("needs_review" %in% names(active)) {
     flagged <- .rc_is_true_vec(active$needs_review)
     if (any(flagged)) {
       fr <- active[flagged, , drop = FALSE]
-      stage0 <- tibble::tibble(
-        source_ref = fr$source_ref,
-        kind = fr$review_kind,
-        payload = vapply(seq_len(nrow(fr)), function(i) .rc_serialise_payload(fr$review_payload[[i]]), character(1)),
-        n_rows = 1L,
-        source_hash = fr$source_hash
-      )
+      stage0_rows <- lapply(seq_len(nrow(fr)), function(i) {
+        diag <- fr$review_payload[[i]]
+        if (is.null(diag)) diag <- list()
+        .rc_review_row(
+          source_ref = fr$source_ref[[i]], kind = fr$review_kind[[i]], n_rows = 1L,
+          source_hash = fr$source_hash[[i]], diagnostics = diag
+        )
+      })
+      stage0 <- dplyr::bind_rows(stage0_rows)
       add_review(stage0)
       active <- active[!flagged, , drop = FALSE]
     }
