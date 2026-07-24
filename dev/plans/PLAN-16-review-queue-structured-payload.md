@@ -112,15 +112,42 @@ anyway.
    as permanent. (`read_only = TRUE` on the connection does not prevent this: `INSTALL`
    writes to the extension directory, not to the database.)
 
-   **What survives as a deliberate policy:** nothing queryable lives in the JSON remainder,
-   and all JSON handling is R-side via `jsonlite`. The reason is no longer "SQL cannot do it"
-   but "we choose not to depend on a **network-fetched** extension for correctness". It is
-   `install_mode = REPOSITORY`, so a fresh machine or an offline one gets exactly the
-   autoload failure I hit — a package whose reads depend on it would work here and fail
-   there. **This is a policy ruling and Robin should confirm or overturn it**; it is not a
-   fact about the database. If overturned, the JSON remainder becomes queryable and R-16.6's
-   scope widens, but the column/child-table split does not change (see B-16.design, where
-   reason 5 is now void and the other four carry the decision).
+   **What survives is a deliberate policy — CONFIRMED by Robin, 2026-07-24.** The reason is no
+   longer "SQL cannot do it" but "we choose not to depend on a **network-fetched** extension
+   for correctness". The extension is `install_mode = REPOSITORY`, so a fresh or offline
+   machine gets exactly the autoload failure I first hit — and the live DB cut over to local
+   with Sharepoint as a snapshot destination, so a snapshot restored on another machine is a
+   real path, not a hypothetical one. A production read that depended on `json_extract` would
+   work here and silently break there. The policy costs nothing today (nothing wants to query
+   the remainder, which is diagnostics by construction) and it reinforces the plan's own
+   thesis: a queryable field hiding in a JSON blob is the same defect as structure hidden in
+   `k=v` text.
+
+   The policy has three parts, and the second and third matter as much as the first:
+
+   1. **Production code and committed views never read from the JSON remainder** — not with
+      `json_extract`, not with a `LIKE` on serialised JSON, not by any path. All JSON
+      handling in package code and in tests is R-side via `jsonlite`, a dependency already
+      present. This is what R-16.6 enforces.
+   2. **If a diagnostic field ever needs to be queried, promote it to a column via a
+      migration — do not reach for `json_extract`.** This is the escape hatch, named so a
+      future implementer does not read part 1 as a dead end. It is also the *better* move
+      regardless: a column is indexable and can carry an FK; a JSON path is neither. The
+      remainder holding a field is the signal that nothing queries it yet, not a barrier to
+      querying it later.
+   3. **This does NOT forbid a human running `json_extract` interactively.** An analyst at a
+      REPL, an ad-hoc investigation, a one-off script — all fine. The policy governs
+      committed correctness paths (package code, migrations, stored views), not what a person
+      types into a live session.
+
+   Not doing now, recorded so the option is not rediscovered as new: **vendoring/bundling the
+   extension** would remove the portability cliff and make part 1 safe to relax. It is real
+   machinery bought for queryable JSON that nothing needs yet; revisit only if a concrete
+   need appears.
+
+   The design is independent of all this: R-16.6 enforces part 1, and the column/child-table
+   split stands on its own (see B-16.design — reason 5 for the child table is void now that
+   SQL JSON works, but reasons 1–4 carry the decision alone).
 2. **There are two independent insert paths into `review_queue` and both must be covered.**
    `review_queue_add()` (`R/db-schema.R:292`) is called only by `R/router.R`. `R/commit.R`
    and `R/feature-alias.R` bypass it entirely, building a full tibble row and calling
@@ -408,15 +435,23 @@ pin a shape, and the behavioural criteria are where the gate really is.
 - a row with `kind = 'expired'` round-trips `date_start` and `date_end` as `DATE`; a row with
   `kind = 'candidate'` carries `NA` for both. Both halves required.
 
-### R-16.6 No production code parses a payload with a regex — on EITHER carrier
+### R-16.6 No production code reads a payload by regex OR by SQL JSON — on EITHER carrier
 - no occurrence of `sub(`, `gsub(`, `regmatches(`, `regexpr(`, `grepl(` applied to a
   `payload` value anywhere in `R/`, covering **both** the `review_queue` payload and the
   **skip tibble's** `payload` (B-16.skips). A criterion scoped to only the first is satisfied
-  by relocating the regex to the second. This is a source-scanning assertion and must therefore be
-  comment- and string-aware, and must carry its own decoy. **Deliberate exception, named
-  here so the test can whitelist it rather than a reader "fixing" it later**: the migration's
-  one-way parser for the 4 legacy rows (B-16.migration) necessarily parses the old format;
-  it lives in the migration, not in `R/`, and the criterion is scoped to `R/`.
+  by relocating the regex to the second.
+- **And no SQL-side read of the JSON remainder** (constraint 1, part 1): no `json_extract`,
+  `json_valid`, `->`, `->>`, or `LIKE`/`SIMILAR TO` against a `payload` value in any SQL that
+  package code or a migration issues, and no such reference in a stored view's definition. A
+  criterion that forbids only the R-side regex is satisfied by moving the parse into SQL,
+  which is the exact portability cliff the policy exists to prevent.
+- This is a source-scanning assertion and must therefore be comment- and string-aware, and
+  must carry its own decoy. **Two deliberate exceptions, named here so the test whitelists
+  them rather than a reader "fixing" them later**: (a) the migration's one-way parser for the
+  4 legacy rows (B-16.migration) necessarily parses the old format — it lives in the
+  migration, not in `R/`; (b) `jsonlite` calls in `R/` are the *sanctioned* JSON path
+  (constraint 1, part 1) and are not violations. The criterion forbids SQL JSON and regex,
+  not R-side `jsonlite`.
 
 ### R-16.7 .rc_serialise_payload is gone
 - the symbol does not exist in the package namespace, and no call site remains.
