@@ -222,7 +222,7 @@ CREATE TABLE IF NOT EXISTS review_queue_candidate (
 );
 ```
 
-> **`uuid_feature` carries no DB-level FK** (pinned default, *** ROBIN TO CONFIRM ***). An
+> **`uuid_feature` carries no DB-level FK** (CONFIRMED by Robin, 2026-07-25 — Option A). An
 > inline `REFERENCES feature(uuid)` is not constructible as an auto-migration — DuckDB rejects
 > a `REFERENCES` to a table absent at `CREATE TABLE` time and has no `ALTER TABLE ADD FOREIGN
 > KEY`, and `feature` (a corpus table) is never present when `ensure_schema()` runs v6 on a
@@ -399,12 +399,11 @@ because the two test units each depend on a different half and the split was imp
 
   Consequence to state plainly: between the v6 DDL applying and the operator running 006, the
   live DB carries the new columns with the legacy `payload` still un-promoted — a transient
-  polymorphic state the snapshot-guarded remediation then resolves. **Robin's call to
-  confirm** (this is the one design point Phase 4 could not read off the plan unambiguously):
-  the alternative is a single all-in-one auto v6 that converts on open, which would orphan the
-  006 script and the P16-T-migration test. The hand-run split is chosen because it matches the
-  established snapshot-first / DB-changing-session discipline; if Robin prefers all-in-one,
-  P16-T-migration is redirected to drive the conversion through `ensure_schema()` instead.
+  polymorphic state the snapshot-guarded remediation then resolves. **CONFIRMED by Robin,
+  2026-07-25:** the hand-run split stands (the rejected alternative was a single all-in-one
+  auto v6 that converts on open, which would orphan the 006 script and the P16-T-migration
+  test). Chosen because a lossy live-DB rewrite is exactly what the snapshot-first /
+  DB-changing-session discipline exists to gate.
 
 <!-- block: B-16.risk -->
 ## Risks accepted, stated plainly
@@ -471,8 +470,8 @@ pin a shape, and the behavioural criteria are where the gate really is.
 - `uuid_feature` is `NOT NULL` and its resolution to a live `feature(uuid)` is verified by the
   **migration itself** (R-16.12/R-16.13), NOT by a DB-level foreign key.
 
-  **DEVIATION from B-16.ddl, surfaced at Phase-6 implementation (P16-db-schema), pinned as the
-  default pending Robin's confirmation.** *** ROBIN TO CONFIRM *** The original DDL pinned
+  **DEVIATION from B-16.ddl, surfaced at Phase-6 implementation (P16-db-schema). CONFIRMED by
+  Robin, 2026-07-25 (Option A — no FK).** The original DDL pinned
   `uuid_feature ... REFERENCES feature(uuid)`. That FK is **not constructible** as an
   auto-migration, for three independently reproduced reasons ([MEASURE TWICE],
   scratchpad/p16u1_fk_probe.R):
