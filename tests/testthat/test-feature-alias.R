@@ -753,6 +753,38 @@ fa_e8_setup <- function() {
       ('fa-e8-dup', 'f-e8-01', 'Z.E8DUP01', 'z.e8dup01', 'transcription_error', 1, TRUE,
        TIMESTAMP '2026-07-23 00:00:00', TIMESTAMP '2026-07-23 00:00:00', 'R. Shannon')")
 
+    # Phase-5 audit round 3 B4: a SECOND feature + a NON-IDENTITY pair - the
+    # negative control the E.8 fixture lacked entirely. 'z.e8diff01' IS an
+    # identity key for f-e8-02 (its self arm's alias_key == lower(name)),
+    # but the SECOND arm sharing that key points at a DIFFERENT feature
+    # (f-e8-03) - the canonical "an alias key IS another feature's real
+    # name" shape (mirrors t.s02 in test-reconcile.R's R-15.45: self f-0002
+    # + historical f-0003). E.8 restricts the merge to IDENTITY duplicates -
+    # `alias_key == lower(feature.name)` with BOTH arms pointing at the SAME
+    # feature (PLAN-15:1258-1261). An implementation written as "for every
+    # alias_key holding a self row and >=1 non-self row, merge" - with no
+    # same-feature restriction - would wrongly merge this pair too, deleting
+    # a curated historical/descriptive arm of exactly the kind E.5/E.7/003
+    # exist to preserve.
+    # MERGE-CANDIDATE-COUNT COMMENT: for alias_key 'z.e8diff01', a
+    # plan-conformant merge_identity_aliases() must treat this as ZERO
+    # identity-duplicate pairs (fa-e8-self2 -> f-e8-02, fa-e8-otherfeat ->
+    # f-e8-03 - two DIFFERENT features), vs alias_key 'z.e8dup01' above,
+    # which is exactly ONE identity pair (fa-e8-self/fa-e8-dup, both ->
+    # f-e8-01). Both R-15.44 tests below assert `result$alias_key` never
+    # contains 'z.e8diff01'.
+    DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, lon, lat) VALUES
+      ('f-e8-02', 'Z.E8DIFF01', 'Z', 150.8802, -33.8802),
+      ('f-e8-03', 'Z.E8DIFF02', 'Z', 150.8803, -33.8803)")
+    DBI::dbExecute(con, "INSERT INTO feature_alias
+      (uuid, uuid_feature, name, alias_key, kind, n_seen, auto_assign, first_seen, last_seen, confirmed_by) VALUES
+      ('fa-e8-self2', 'f-e8-02', 'Z.E8DIFF01', 'z.e8diff01', 'self', 2, FALSE,
+       TIMESTAMP '2020-01-01 00:00:00', TIMESTAMP '2020-01-01 00:00:00', NULL)")
+    DBI::dbExecute(con, "INSERT INTO feature_alias
+      (uuid, uuid_feature, name, alias_key, kind, n_seen, auto_assign, first_seen, last_seen, confirmed_by) VALUES
+      ('fa-e8-otherfeat', 'f-e8-03', 'Z.E8DIFF01', 'z.e8diff01', 'historical_code', 1, TRUE,
+       TIMESTAMP '2015-01-01 00:00:00', TIMESTAMP '2019-12-31 00:00:00', 'R. Shannon')")
+
     DBI::dbExecute(con, "INSERT INTO \"sample\"
       (uuid, uuid_feature_alias, date, datetime, organisation) VALUES
       ('s-e8-01', 'fa-e8-dup', TIMESTAMP '2026-06-01 00:00:00', TIMESTAMP '2026-06-01 09:00:00', 'ALS')")
@@ -783,6 +815,11 @@ test_that("R-15.44 (E.8): merges a duplicate identity arm into its self arm, del
   expect_identical(result$uuid_loser[[1]], "fa-e8-dup")
   expect_equal(result$n_repointed[[1]], 1)
 
+  # Phase-5 audit round 3 B4: the non-identity pair (z.e8diff01, self ->
+  # f-e8-02 vs historical_code -> f-e8-03) must be ABSENT from the returned
+  # tibble - the negative control this fixture previously lacked.
+  expect_false("z.e8diff01" %in% result$alias_key)
+
   # (a) exactly ONE feature_alias row for the key afterwards.
   after_rows <- DBI::dbGetQuery(con, "SELECT * FROM feature_alias WHERE alias_key = 'z.e8dup01'")
   expect_equal(nrow(after_rows), 1)
@@ -811,6 +848,19 @@ test_that("R-15.44 (E.8): merges a duplicate identity arm into its self arm, del
   expect_equal(after_n, before_n)
   repointed <- DBI::dbGetQuery(con, "SELECT uuid_feature_alias FROM \"sample\" WHERE uuid = 's-e8-01'")$uuid_feature_alias
   expect_identical(repointed, "fa-e8-self") # repoint landed on the survivor, not orphaned
+
+  # (e) B4: the non-identity pair (different features sharing a key)
+  # SURVIVES untouched - never merged, never deleted, both rows intact with
+  # their original fields.
+  diff_rows <- DBI::dbGetQuery(con,
+    "SELECT * FROM feature_alias WHERE alias_key = 'z.e8diff01' ORDER BY uuid")
+  expect_equal(nrow(diff_rows), 2)
+  expect_setequal(diff_rows$uuid, c("fa-e8-self2", "fa-e8-otherfeat"))
+  self2 <- diff_rows[diff_rows$uuid == "fa-e8-self2", ]
+  other <- diff_rows[diff_rows$uuid == "fa-e8-otherfeat", ]
+  expect_identical(self2$uuid_feature[[1]], "f-e8-02")
+  expect_identical(other$uuid_feature[[1]], "f-e8-03")
+  expect_identical(other$confirmed_by[[1]], "R. Shannon")
 })
 
 test_that("R-15.44 (E.8): dry_run = TRUE leaves both alias rows AND the sample pointer unchanged, while still returning the same itemised tibble", {
@@ -836,6 +886,10 @@ test_that("R-15.44 (E.8): dry_run = TRUE leaves both alias rows AND the sample p
   expect_identical(result$uuid_loser[[1]], "fa-e8-dup")
   expect_equal(result$n_repointed[[1]], 1)
 
+  # Phase-5 audit round 3 B4: absent from the itemised tibble under dry_run
+  # too - the non-identity pair is never a merge candidate, dry_run or not.
+  expect_false("z.e8diff01" %in% result$alias_key)
+
   after_rows <- DBI::dbGetQuery(con,
     "SELECT * FROM feature_alias WHERE alias_key = 'z.e8dup01' ORDER BY uuid")
   after_sample <- DBI::dbGetQuery(con,
@@ -844,6 +898,12 @@ test_that("R-15.44 (E.8): dry_run = TRUE leaves both alias rows AND the sample p
   expect_equal(nrow(after_rows), 2)         # BOTH rows survive - dry_run must not delete
   expect_equal(after_rows, before_rows)     # nothing on either row was written
   expect_identical(after_sample, before_sample) # sample pointer NOT repointed
+
+  # (B4) the non-identity pair survives untouched under dry_run too.
+  diff_rows <- DBI::dbGetQuery(con,
+    "SELECT * FROM feature_alias WHERE alias_key = 'z.e8diff01' ORDER BY uuid")
+  expect_equal(nrow(diff_rows), 2)
+  expect_setequal(diff_rows$uuid, c("fa-e8-self2", "fa-e8-otherfeat"))
 })
 
 # ======================================================================
