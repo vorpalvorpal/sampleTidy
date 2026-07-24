@@ -3125,8 +3125,18 @@ test_that("R-15.26: the review payload's candidate list is the UNION of the WHOL
   expect_true(grepl("candidates=", rv_old_first$payload[[1]], fixed = TRUE))
   cand_str <- regmatches(rv_old_first$payload[[1]],
                           regexpr("candidates=[^,]*", rv_old_first$payload[[1]]))
+  # Phase-5 round-5 audit A4: guard the length before `[[1]]` - a payload
+  # lacking the `candidates=` clause makes `regmatches()` return
+  # `character(0)`, and a bare `[[1]]` on that raises "subscript out of
+  # bounds", which testthat records as an ERROR that aborts the rest of this
+  # `test_that()` block instead of a clean FAILURE.
+  expect_equal(length(cand_str), 1L)
   # order-INDEPENDENT: don't assume which of the two lands first in the union.
-  cand_set <- strsplit(sub("candidates=", "", cand_str), "\\|")[[1]]
+  cand_set <- if (length(cand_str) == 1L) {
+    strsplit(sub("candidates=", "", cand_str), "\\|")[[1]]
+  } else {
+    character(0)
+  }
   expect_setequal(cand_set, c("f-ord-a", "f-ord-b"))
 })
 
@@ -3159,7 +3169,21 @@ test_that("R-15.27: exactly ONE suggestion candidate (fixture T.BORE -> f-0003 v
                       grepl("one_cand", out$review$source_ref, fixed = TRUE), ]
   expect_equal(nrow(rv), 1)
   expect_true(grepl("subkind=suggestion", rv$payload[[1]], fixed = TRUE))
-  expect_true(grepl("candidates=f-0003", rv$payload[[1]], fixed = TRUE))
+  # Phase-5 round-5 audit A3: `grepl("candidates=f-0003", ..., fixed = TRUE)`
+  # also passes on `candidates=f-0003|<anything>` - the criterion is the lone
+  # candidate (the SET), not a substring, so a payload with extra candidates
+  # sharing this prefix would wrongly satisfy it. Parse the candidates=
+  # clause and assert the SET instead, matching R-15.16's idiom. A4's length
+  # guard (see above) applies here too: an empty match must FAIL cleanly,
+  # never ERROR via a bare `[[1]]` on `character(0)`.
+  cand_str <- regmatches(rv$payload[[1]], regexpr("candidates=[^,]*", rv$payload[[1]]))
+  expect_equal(length(cand_str), 1L)
+  cand_set <- if (length(cand_str) == 1L) {
+    strsplit(sub("candidates=", "", cand_str), "\\|")[[1]]
+  } else {
+    character(0)
+  }
+  expect_setequal(cand_set, "f-0003")
   # Against TODAY's code this is `subkind=structural,site=T,point=BORE`
   # instead (the candidate was dropped by the >1 gate) - the failure this
   # criterion exists to catch, and the precedence-table link `suggestion` >
@@ -3294,7 +3318,15 @@ test_that("R-15.16: payload emission at the expired-candidate count boundary - e
   expect_true(grepl("subkind=ambiguous", rv_b$payload[[1]], fixed = TRUE))
   expect_true(grepl("expired=f-0002@2018-01-01..2019-12-31", rv_b$payload[[1]], fixed = TRUE))
   cand_str <- regmatches(rv_b$payload[[1]], regexpr("candidates=[^,]*", rv_b$payload[[1]]))
-  cand_set <- strsplit(sub("candidates=", "", cand_str), "\\|")[[1]]
+  # Phase-5 round-5 audit A4: guard the length before `[[1]]` (see the
+  # matching comment above, R-15.27) - a missing `candidates=` clause must
+  # FAIL cleanly, never ERROR and abort the rest of this block.
+  expect_equal(length(cand_str), 1L)
+  cand_set <- if (length(cand_str) == 1L) {
+    strsplit(sub("candidates=", "", cand_str), "\\|")[[1]]
+  } else {
+    character(0)
+  }
   # Against TODAY's code `candidates=` also lists the expired uuid_feature
   # (f-0002) - the expired one belongs in `expired=` only, per the pinned
   # grammar ("2 live + 1 expired emits ambiguous WITH an expired= clause").
@@ -3365,7 +3397,17 @@ test_that("R-15.46: a key holding exactly ONE live arm (auto_assign=FALSE) AND a
   # ("expiry is context"). Parse the candidates= clause and assert the SET
   # instead, matching R-15.16's idiom above.
   cand_str <- regmatches(rv$payload[[1]], regexpr("candidates=[^,]*", rv$payload[[1]]))
-  cand_set <- strsplit(sub("candidates=", "", cand_str), "\\|")[[1]]
+  # Phase-5 round-5 audit A4: guard the length before `[[1]]`. This is the
+  # site the delta names explicitly - a bare `[[1]]` on `character(0)` here
+  # would ERROR and abort the rest of this `test_that()` block, so the
+  # PAIRED CONTROL below (`expired_only_control`, the assertion that catches
+  # a hard-coded subkind) would never run.
+  expect_equal(length(cand_str), 1L)
+  cand_set <- if (length(cand_str) == 1L) {
+    strsplit(sub("candidates=", "", cand_str), "\\|")[[1]]
+  } else {
+    character(0)
+  }
   expect_setequal(cand_set, "f-1546-live")
   expect_true(grepl("expired=f-0002@2018-01-01..2019-12-31", rv$payload[[1]], fixed = TRUE))
 
@@ -3592,7 +3634,10 @@ test_that("R-15.45 (E.7): a key reaching a live SELF arm plus one live NON-self 
   while (i <= n) {
     j <- i
     while (j < n && comment_lines[[j + 1]] == comment_lines[[j]] + 1L) j <- j + 1L
-    blocks[[length(blocks) + 1]] <- paste(lines[comment_lines[i]:comment_lines[j]], collapse = "\n")
+    blocks[[length(blocks) + 1]] <- paste(
+      comment_rows$text[comment_rows$line1 %in% comment_lines[i:j]],
+      collapse = "\n"
+    )
     i <- j + 1L
   }
   blocks
@@ -3652,4 +3697,23 @@ test_that("R-15.29: a SINGLE contiguous comment block in R/reconcile.R names all
     "line three\""
   )
   expect_false(any(vapply(.rc_comment_blocks(decoy_string_literal), names_all_three, logical(1))))
+
+  # DECOY (Phase-5 round-5 audit A2): consecutive CODE lines carrying
+  # trailing comments that say nothing about the normalisers. The PREVIOUS
+  # implementation built each "block" from the whole physical source line
+  # (`lines[comment_lines[i]:comment_lines[j]]`), code included - so this
+  # decoy's block would come back containing the literal code calls
+  # `.rc_feature_key(x)` and `.rc_key(x)`, even though no COMMENT token here
+  # names either. The fix builds each block from the COMMENT tokens' own
+  # text (`comment_rows$text`), so the block here must be exactly
+  # "# step 1\n# step 2" - neither normaliser name present.
+  decoy_code_with_trailing_comments <- c(
+    "f <- function(x) {", "  a <- .rc_feature_key(x)   # step 1",
+    "  b <- .rc_key(x)           # step 2", "  a }"
+  )
+  code_leaked_into_block <- function(b) {
+    grepl(".rc_feature_key", b, fixed = TRUE) || grepl(".rc_key", b, fixed = TRUE)
+  }
+  expect_false(any(vapply(.rc_comment_blocks(decoy_code_with_trailing_comments),
+                          code_leaked_into_block, logical(1))))
 })

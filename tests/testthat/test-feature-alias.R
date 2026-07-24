@@ -1116,36 +1116,16 @@ test_that("R-15.34: confirm_analyte_methods() succeeds on a method WITH dependen
   expect_true(all(after_deps$uuid_lab == "lm-9401")) # every dependent analysis still points at the SAME lab_method
 })
 
-test_that("R-11.10/R-11.11 (A55, source meta-test): confirmed_by carries NO default value in either function's signature - comment/string-stripped, with a decoy that must NOT trip the guard", {
-  # Comment/string-aware: a raw line-grep would false-positive on the decoy
-  # comment below (which mentions a defaulted confirmed_by in prose) - strip
-  # comments and string literals before matching (phase4-test-authoring.md
-  # meta-test rule).
-  pkg_root <- normalizePath(file.path(testthat::test_path(), "..", ".."))
-  target <- file.path(pkg_root, "R", "feature-alias.R")
-  skip_if_not(file.exists(target), "R/feature-alias.R not yet written (expected pre-Phase-6)")
-
-  lines <- readLines(target, warn = FALSE)
-  # DECOY (must not trip the guard): "confirmed_by = 'system'" as a default
-  # is exactly the anti-pattern A55 forbids - never write it into a real
-  # signature, but mentioning it here in a comment must be inert.
-  stripped <- vapply(lines, function(l) {
-    l <- sub("#.*$", "", l) # strip line comments
-    l <- gsub('"[^"]*"', "", l) # strip double-quoted string literals
-    l <- gsub("'[^']*'", "", l) # strip single-quoted string literals
-    l
-  }, character(1))
-  src_text <- paste(stripped, collapse = "\n")
-
-  sig_re <- "(confirm_feature_aliases|confirm_analyte_methods)\\s*<-\\s*function\\s*\\(([^)]*)\\)"
-  matches <- gregexpr(sig_re, src_text, perl = TRUE)
-  captured <- regmatches(src_text, matches)[[1]]
-  expect_gt(length(captured), 0) # both signatures found once written
-
-  for (sig in captured) {
-    expect_false(
-      grepl("confirmed_by\\s*=", sig),
-      info = paste("confirmed_by must not carry a default value:", sig)
-    )
+test_that("R-11.10/R-11.11 (A55): confirmed_by carries NO default value in either function's real parsed signature", {
+  # Assert on the real parsed signature via formals() rather than a source
+  # regex: a regex capturing `([^)]*)` cannot cross a `)`, so it truncates at
+  # the first close-paren inside the argument list (e.g. a `db = st_config()`
+  # or a future `date_start = as.Date(NA)` default) and silently stops
+  # checking every argument after that point - an argument-order-dependent
+  # guard, which is the defect this replaces (phase5-delta-to-apply-r5.md A1).
+  for (fn in list(confirm_feature_aliases, confirm_analyte_methods)) {
+    expect_true(is.function(fn))
+    expect_true("confirmed_by" %in% names(formals(fn)))
+    expect_true(identical(formals(fn)$confirmed_by, quote(expr = )))
   }
 })
