@@ -489,7 +489,8 @@
   sites <- .rc_site_registry(registry)
   index <- .rc_structural_index(registry)
   parsed_site <- rep(NA_character_, n)   # the site Layer 2 RECOGNISED, if any
-  struct <- rep(NA_character_, n)
+  struct_site <- rep(NA_character_, n)
+  struct_point <- rep(NA_character_, n)
   resolution <- rep(NA_character_, n)
   feat_name <- function(u) {
     nm <- registry$feature$name[match(u, registry$feature$uuid)]
@@ -524,7 +525,8 @@
     if (is.null(p)) next
     parsed_site[[i]] <- p$site
     if (is.na(p$point)) next
-    struct[[i]] <- paste0("site=", p$site, ",point=", p$point)
+    struct_site[[i]] <- p$site
+    struct_point[[i]] <- p$point
     # B.4 gate: any alias row at all (live, expired or dangling) keeps this
     # key with Layer 1 / the operator. B.2: a direct boundary suggests only.
     if (!p$boundary || .rc_alias_rows_exist(alias_key[[i]], registry)) next
@@ -555,7 +557,8 @@
       point <- .rc_canonical_point(alias_key[[i]])
       if (grepl("[. ]", point)) next
       # C.1: on a miss the row keeps S as its SUGGESTED site.
-      struct[[i]] <- paste0("site=", l3, ",point=", point)
+      struct_site[[i]] <- l3
+      struct_point[[i]] <- point
       # B.4/C.3: curation (including a dangling pending alias) always wins -
       # suggest, never resolve.
       if (.rc_alias_rows_exist(alias_key[[i]], registry)) next
@@ -592,7 +595,7 @@
   keep <- status %in% c("hit", "pending")
   kept <- rows[keep, , drop = FALSE]
 
-  review <- .rc_feature_review(rows, status, cand_list, struct, work_order)
+  review <- .rc_feature_review(rows, status, cand_list, struct_site, struct_point, work_order)
   list(kept = kept, review = review)
 }
 
@@ -624,7 +627,7 @@
 #' first of the group (seam S-4). Covers both committable-pending and held rows.
 #' @keywords internal
 #' @noRd
-.rc_feature_review <- function(rows, status, cand_list, struct, work_order) {
+.rc_feature_review <- function(rows, status, cand_list, struct_site, struct_point, work_order) {
   idx <- which(status %in% c("pending", "held"))
   if (length(idx) == 0) return(.rc_proto_review())
 
@@ -637,26 +640,35 @@
     refs <- rows$source_ref[g]
     fr <- rows$feature_raw[[g[[1]]]]
     cand <- cand_list[[g[[1]]]]
-    st <- struct[g]
-    st <- if (any(!is.na(st))) st[!is.na(st)][[1]] else NA_character_
-    base <- paste0(
-      paste(refs, collapse = ","), ",feature_raw=", fr,
-      ",work_order=", work_order, ",n_rows=", length(g)
-    )
+    # STEP 1 (R-16.11): select the group's precedence INDEX once, then read
+    # both parallel vectors at it - site and point can never come from
+    # different rows of the group (the mis-JOIN R-16.12 warns against).
+    gi <- g[!is.na(struct_site[g])]
+    st_site  <- if (length(gi)) struct_site[[gi[[1]]]]  else NA_character_
+    st_point <- if (length(gi)) struct_point[[gi[[1]]]] else NA_character_
     # Precedence: an ambiguity is the actionable fact and wins the `subkind`;
     # a structural parse (PLAN-15 B.7 - including the direct-boundary and
     # assumed-site cases, which suggest but never resolve) is the fallback.
-    payload <- if (!is.null(cand)) {
-      paste0(base, ",subkind=ambiguous,candidates=", paste(cand, collapse = "|"))
-    } else if (!is.na(st)) {
-      paste0(base, ",subkind=structural,", st)
+    # PLAN-16 R-16.8/R-16.17: no k=v payload string; feature_raw/site/point/
+    # candidates are typed diagnostics keys, n_rows is a real column.
+    subkind <- if (!is.null(cand)) {
+      "ambiguous"
+    } else if (!is.na(st_site)) {
+      "structural"
     } else {
-      base
+      NA_character_
     }
-    out[[length(out) + 1]] <- tibble::tibble(
+    diagnostics <- list(feature_raw = fr)
+    if (identical(subkind, "ambiguous")) {
+      diagnostics$candidates <- as.character(cand)
+    } else if (identical(subkind, "structural")) {
+      diagnostics$site <- st_site
+      diagnostics$point <- st_point
+    }
+    out[[length(out) + 1]] <- .rc_review_row(
       source_ref = paste(refs, collapse = ","), kind = "unknown_feature",
-      payload = payload, n_rows = length(g),
-      source_hash = rows$source_hash[[g[[1]]]]
+      n_rows = length(g), source_hash = rows$source_hash[[g[[1]]]],
+      work_order = work_order, subkind = subkind, diagnostics = diagnostics
     )
   }
   dplyr::bind_rows(out)
@@ -776,14 +788,19 @@
 .rc_analyte_review <- function(rows, cas_suggest) {
   out <- list()
 
+  # PLAN-16 R-16.18 RULING: `suggested_analyte` is an analyte uuid, but it is
+  # NOT a typed column - `uuid_existing` means "the existing entity this row
+  # duplicates" (wrong sense here: A66 says the CAS match is a SUGGESTION,
+  # not a link), and `review_queue_candidate.uuid_feature` is FK'd to
+  # `feature`, not `analyte`. It stays a diagnostics key (no "=" in a bare
+  # uuid, so R-16.11's leaf-value check still passes).
   for (i in which(!is.na(cas_suggest))) {
-    out[[length(out) + 1]] <- tibble::tibble(
-      source_ref = rows$source_ref[[i]], kind = "unknown_analyte",
-      payload = paste0(
-        rows$source_ref[[i]], ",subkind=known_analyte_no_method,analyte_raw=", rows$analyte_raw[[i]],
-        ",org=", rows$org[[i]], ",cas_number=", rows$cas_number[[i]], ",suggested_analyte=", cas_suggest[[i]]
-      ),
-      n_rows = 1L, source_hash = rows$source_hash[[i]]
+    out[[length(out) + 1]] <- .rc_review_row(
+      source_ref = rows$source_ref[[i]], kind = "unknown_analyte", n_rows = 1L,
+      source_hash = rows$source_hash[[i]], subkind = "known_analyte_no_method",
+      diagnostics = list(analyte_raw = rows$analyte_raw[[i]], org = rows$org[[i]],
+                         cas_number = rows$cas_number[[i]],
+                         suggested_analyte = cas_suggest[[i]])
     )
   }
 
@@ -795,10 +812,12 @@
       refs <- rows$source_ref[g]
       ar <- rows$analyte_raw[[g[[1]]]]
       org <- rows$org[[g[[1]]]]
-      out[[length(out) + 1]] <- tibble::tibble(
+      # subkind deliberately NA - no new vocabulary invented here.
+      out[[length(out) + 1]] <- .rc_review_row(
         source_ref = paste(refs, collapse = ","), kind = "unknown_analyte",
-        payload = paste0(paste(refs, collapse = ","), ",analyte_raw=", ar, ",org=", org, ",n_rows=", length(g)),
-        n_rows = length(g), source_hash = rows$source_hash[[g[[1]]]]
+        n_rows = length(g), source_hash = rows$source_hash[[g[[1]]]],
+        subkind = NA_character_,
+        diagnostics = list(analyte_raw = ar, org = org)
       )
     }
   }

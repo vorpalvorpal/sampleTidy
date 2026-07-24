@@ -141,8 +141,8 @@ test_that("R-8.2: a typo feature queues one grouped review item covering all its
   out <- reconcile_event(event, con)
   unknown_feature <- out$review[out$review$kind == "unknown_feature", ]
   expect_equal(nrow(unknown_feature), 1)
-  expect_true(all(c("r1", "r2") %in% strsplit(unknown_feature$payload[[1]], ",")[[1]]) ||
-                grepl("r1", unknown_feature$payload[[1]]) && grepl("r2", unknown_feature$payload[[1]]))
+  expect_true(all(c("r1", "r2") %in% strsplit(unknown_feature$source_ref[[1]], ",")[[1]]) ||
+                grepl("r1", unknown_feature$source_ref[[1]]) && grepl("r2", unknown_feature$source_ref[[1]]))
 })
 
 test_that("R-8.2: an ambiguous feature name queues review listing both candidate uuids", {
@@ -1048,8 +1048,9 @@ test_that("PLAN-15 A: an all-auto_assign=FALSE ambiguous key (T.DUAL) does NOT a
   expect_true(row$feature_pending)
   rv <- out$review[out$review$kind == "unknown_feature" & grepl("r1", out$review$source_ref), ]
   expect_equal(nrow(rv), 1)
-  expect_true(grepl("subkind=ambiguous", rv$payload[[1]]))
-  expect_true(grepl("f-0004", rv$payload[[1]]) && grepl("f-0005", rv$payload[[1]]))
+  expect_identical(rv$subkind[[1]], "ambiguous")
+  dg <- jsonlite::fromJSON(rv$payload[[1]])
+  expect_true("f-0004" %in% dg$candidates && "f-0005" %in% dg$candidates)
 })
 
 test_that("PLAN-15 A: the committed alias_key on a pending row is punctuation-preserving (matches migration format)", {
@@ -1816,9 +1817,9 @@ test_that("R-15.4/R-15.24/R-15.25/B.2: a DIRECT (no dot/space) boundary NEVER au
   rv_direct <- out$review[out$review$kind == "unknown_feature" &
                             grepl("direct", out$review$source_ref, fixed = TRUE), ]
   expect_equal(nrow(rv_direct), 1)
-  expect_true(grepl("subkind=structural", rv_direct$payload[[1]], fixed = TRUE))
-  # anchored: a bare grepl("site=T") also matches the OTHER site, "site=TH".
-  expect_true(grepl("(^|,)site=T(,|$)", rv_direct$payload[[1]], ignore.case = TRUE))
+  expect_identical(rv_direct$subkind[[1]], "structural")
+  dg_direct <- jsonlite::fromJSON(rv_direct$payload[[1]])
+  expect_identical(dg_direct$site, "T")
 
   # POSITIVE CONTROL (same test): the boundary form DOES auto-resolve -
   # proves the resolver is active, not merely disabled.
@@ -2005,8 +2006,8 @@ test_that("B.4: a key reaching >=1 alias row (all auto_assign=FALSE) is gated fr
   expect_true(is.na(a$uuid_feature))
   rv <- out$review[out$review$kind == "unknown_feature" & grepl("ambig", out$review$source_ref), ]
   expect_equal(nrow(rv), 1)
-  expect_true(grepl("subkind=ambiguous", rv$payload[[1]]))
-  expect_false(grepl("subkind=structural", rv$payload[[1]]))
+  expect_identical(rv$subkind[[1]], "ambiguous")
+  expect_false(identical(rv$subkind[[1]], "structural"))
 
   cl <- out$clean[out$clean$source_ref == "clean", ]
   expect_false(cl$feature_pending)
@@ -2056,7 +2057,7 @@ test_that("B.4: an EXISTING dangling alias for a structurally-parseable key (F6)
   rv <- out$review[out$review$kind == "unknown_feature" &
                      grepl("dangling_new", out$review$source_ref, fixed = TRUE), ]
   expect_equal(nrow(rv), 1)
-  expect_true(grepl("subkind=structural", rv$payload[[1]]))   # B.4/B.7: structural suggestion attached
+  expect_identical(rv$subkind[[1]], "structural")   # B.4/B.7: structural suggestion attached
 
   fr <- out$clean[out$clean$source_ref == "fresh", ]
   expect_false(fr$feature_pending)
@@ -2186,11 +2187,12 @@ test_that("R-15.1/R-15.2/R-15.3/B.7: a structural miss (site recognised, no matc
   expect_true(is.na(m$uuid_feature))
   rv <- out$review[out$review$kind == "unknown_feature" & grepl("miss", out$review$source_ref), ]
   expect_equal(nrow(rv), 1)
-  expect_true(grepl("subkind=structural", rv$payload[[1]]))
-  # ANCHORED: a bare grepl("site=T") is also satisfied by "site=TH", i.e. by
-  # an implementation that suggested the WRONG (other) site.
-  expect_true(grepl("(^|,)site=T(,|$)", rv$payload[[1]], ignore.case = TRUE))
-  expect_true(grepl("(^|,)point=S88(,|$)", rv$payload[[1]], ignore.case = TRUE))
+  expect_identical(rv$subkind[[1]], "structural")
+  dg <- jsonlite::fromJSON(rv$payload[[1]])
+  # ANCHORED: dg$site is the exact site string, never merely a substring
+  # match that "TH" would also satisfy.
+  expect_identical(dg$site, "T")
+  expect_identical(dg$point, "S88")
 
   h <- out$clean[out$clean$source_ref == "hit", ]
   expect_false(h$feature_pending)
@@ -2403,10 +2405,11 @@ test_that("C.2/C.1 MISS path: when the assumed site yields NO hit the row stays 
   # "S as the suggested site", but does not name a distinct subkind for the
   # Layer-3 case. Phase 6 re-checks the token against real output; the
   # load-bearing half is the anchored site=TH, which must be the ASSUMED site.
-  expect_true(grepl("subkind=structural", rv$payload[[1]], fixed = TRUE))
-  expect_true(grepl("(^|,)site=TH(,|$)", rv$payload[[1]], ignore.case = TRUE))
-  expect_false(grepl("(^|,)site=T(,|$)", rv$payload[[1]], ignore.case = TRUE))
-  expect_true(grepl("(^|,)point=MW1(,|$)", rv$payload[[1]], ignore.case = TRUE))
+  expect_identical(rv$subkind[[1]], "structural")
+  dg <- jsonlite::fromJSON(rv$payload[[1]])
+  expect_identical(dg$site, "TH")
+  expect_false(identical(dg$site, "T"))
+  expect_identical(dg$point, "MW1")
 })
 
 # ---- C.3: the iff gate, operationally ---------------------------------------
@@ -3122,22 +3125,9 @@ test_that("R-15.26: the review payload's candidate list is the UNION of the WHOL
   # failure this criterion exists to catch.
   expect_identical(rv_old_first$payload[[1]], rv_new_first$payload[[1]])   # byte-identical
 
-  expect_true(grepl("candidates=", rv_old_first$payload[[1]], fixed = TRUE))
-  cand_str <- regmatches(rv_old_first$payload[[1]],
-                          regexpr("candidates=[^,]*", rv_old_first$payload[[1]]))
-  # Phase-5 round-5 audit A4: guard the length before `[[1]]` - a payload
-  # lacking the `candidates=` clause makes `regmatches()` return
-  # `character(0)`, and a bare `[[1]]` on that raises "subscript out of
-  # bounds", which testthat records as an ERROR that aborts the rest of this
-  # `test_that()` block instead of a clean FAILURE.
-  expect_equal(length(cand_str), 1L)
+  dg <- jsonlite::fromJSON(rv_old_first$payload[[1]])
   # order-INDEPENDENT: don't assume which of the two lands first in the union.
-  cand_set <- if (length(cand_str) == 1L) {
-    strsplit(sub("candidates=", "", cand_str), "\\|")[[1]]
-  } else {
-    character(0)
-  }
-  expect_setequal(cand_set, c("f-ord-a", "f-ord-b"))
+  expect_setequal(dg$candidates, c("f-ord-a", "f-ord-b"))
 })
 
 # ---- F.6: single-candidate suggestions are no longer discarded (R-15.27) --
@@ -3153,7 +3143,7 @@ test_that("R-15.27: ZERO suggestion candidates emits a bare unknown_feature payl
   rv <- out$review[out$review$kind == "unknown_feature" &
                       grepl("zero_cand", out$review$source_ref, fixed = TRUE), ]
   expect_equal(nrow(rv), 1)
-  expect_false(grepl("subkind=", rv$payload[[1]], fixed = TRUE))
+  expect_true(is.na(rv$subkind[[1]]))
 })
 
 test_that("R-15.27: exactly ONE suggestion candidate (fixture T.BORE -> f-0003 via fa-0009, auto_assign=FALSE) emits subkind=suggestion,candidates=f-0003 - the lone candidate is no longer discarded by the length(sugg)>1 gate", {
@@ -3169,27 +3159,16 @@ test_that("R-15.27: exactly ONE suggestion candidate (fixture T.BORE -> f-0003 v
                       grepl("one_cand", out$review$source_ref, fixed = TRUE), ]
   expect_equal(nrow(rv), 1)
   expect_true(grepl("subkind=suggestion", rv$payload[[1]], fixed = TRUE))
-  # Phase-5 round-5 audit A3: `grepl("candidates=f-0003", ..., fixed = TRUE)`
-  # also passes on `candidates=f-0003|<anything>` - the criterion is the lone
-  # candidate (the SET), not a substring, so a payload with extra candidates
-  # sharing this prefix would wrongly satisfy it. Parse the candidates=
-  # clause and assert the SET instead, matching R-15.16's idiom. A4's length
-  # guard (see above) applies here too: an empty match must FAIL cleanly,
-  # never ERROR via a bare `[[1]]` on `character(0)`.
-  cand_str <- regmatches(rv$payload[[1]], regexpr("candidates=[^,]*", rv$payload[[1]]))
-  expect_equal(length(cand_str), 1L)
-  cand_set <- if (length(cand_str) == 1L) {
-    strsplit(sub("candidates=", "", cand_str), "\\|")[[1]]
-  } else {
-    character(0)
-  }
-  expect_setequal(cand_set, "f-0003")
+  # Phase-5 round-5 audit A3: the criterion is the lone candidate (the SET),
+  # not a substring - assert the SET, matching R-15.16's idiom.
+  dg <- jsonlite::fromJSON(rv$payload[[1]])
+  expect_true(setequal(dg$candidates, "f-0003"))
   # Against TODAY's code this is `subkind=structural,site=T,point=BORE`
   # instead (the candidate was dropped by the >1 gate) - the failure this
   # criterion exists to catch, and the precedence-table link `suggestion` >
   # `structural` (S-15.6).
-  expect_false(grepl("subkind=ambiguous", rv$payload[[1]], fixed = TRUE))
-  expect_false(grepl("subkind=structural", rv$payload[[1]], fixed = TRUE))
+  expect_false(identical(rv$subkind[[1]], "ambiguous"))
+  expect_false(identical(rv$subkind[[1]], "structural"))
 })
 
 test_that("R-15.27: TWO OR MORE suggestion candidates (fixture T.DUAL -> f-0004/f-0005) still emit subkind=ambiguous, never subkind=suggestion - the >=2 branch of the same total order (regression guard)", {
@@ -3202,8 +3181,8 @@ test_that("R-15.27: TWO OR MORE suggestion candidates (fixture T.DUAL -> f-0004/
   rv <- out$review[out$review$kind == "unknown_feature" &
                       grepl("two_cand", out$review$source_ref, fixed = TRUE), ]
   expect_equal(nrow(rv), 1)
-  expect_true(grepl("subkind=ambiguous", rv$payload[[1]], fixed = TRUE))
-  expect_false(grepl("subkind=suggestion", rv$payload[[1]], fixed = TRUE))
+  expect_identical(rv$subkind[[1]], "ambiguous")
+  expect_false(identical(rv$subkind[[1]], "suggestion"))
 })
 
 # ---- E.3: expired-only alias goes to review, not structural (R-15.15) -----

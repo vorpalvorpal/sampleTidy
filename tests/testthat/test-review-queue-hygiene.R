@@ -512,9 +512,34 @@ test_that("R-16.8: no hand-built paste0()/sprintf() payload string survives in R
   expect_true(length(real_hits) == 0, info = info)
 })
 
-# ==== R-16.8, part 2: all 14 content-producing sites route through .rq_row() ======
+# ==== R-16.8, part 2: all 14 content-producing sites route (transitively) ==
+# ==== through the structured constructor `.rq_row()` ======================
 
-test_that("R-16.8: each of the 14 content-producing review-writing sites (11 enclosing functions per dev/tdd-run/p16-payload-prod-inventory.md section 1b) calls the structured constructor .rq_row()", {
+#' The CLOSED, ENUMERATED set of symbols that count as "routes through the
+#' structured constructor" for R-16.8's coverage check. `.rq_row()` is the
+#' constructor itself; the other four are its sanctioned thin wrappers - each
+#' already adjudicated by the plan, never a loose name pattern (a genuinely
+#' new hand-builder, e.g. one calling paste0()/sprintf() directly, has no
+#' entry here and must still fail):
+#'   - `.rq_row`           - the structured constructor itself.
+#'   - `.rc_review_row`    - R/reconcile.R adapter: adds reconcile's own
+#'     bookkeeping columns (`source_ref`, `n_rows`) that `.rq_row()` does not
+#'     carry, then calls `.rq_row()` (B-16.api).
+#'   - `.rc_skip_row`      - R/reconcile.R SKIP-tibble carrier. Per B-16.skips
+#'     the skip tibble is a different shape from a review_queue row and
+#'     cannot route through `.rq_row()` at all; `.rc_skip_row()` is its
+#'     sanctioned typed constructor, calling `.rq_skip()`.
+#'   - `.rq_skip`          - the skip tibble's typed constructor proper (see
+#'     `.rc_skip_row` above), applying the same entity-ref/JSON tiering rule
+#'     as `.rq_row()` (B-16.skips).
+#'   - `review_queue_add`  - R/db-schema.R public API, which B-16.api
+#'     explicitly describes as routing "through `.rq_row()` rather than
+#'     re-implementing it".
+.HY_SANCTIONED_ROW_CONSTRUCTORS <- c(
+  ".rq_row", ".rc_review_row", ".rc_skip_row", ".rq_skip", "review_queue_add"
+)
+
+test_that("R-16.8: each of the 14 content-producing review-writing sites (11 enclosing functions per dev/tdd-run/p16-payload-prod-inventory.md section 1b) routes - directly or via a sanctioned wrapper - through the structured constructor .rq_row()", {
   # Mapping: p16-payload-prod-inventory.md section 1b's 14 numbered sites,
   # collapsed to their 11 distinct enclosing functions (several sites share
   # one function's branches - e.g. site 1's three shapes are all inside
@@ -540,10 +565,19 @@ test_that("R-16.8: each of the 14 content-producing review-writing sites (11 enc
   )
   stopifnot(sum(lengths(targets)) == 11L)
 
-  rqrow_pat <- "(?<![[:alnum:]._])\\.rq_row\\s*\\("
+  # Build the detector from the closed sanctioned-constructor set above -
+  # escaping the literal `.` each name starts with (these names contain only
+  # word characters and a leading dot, so a fixed-string dot-escape is
+  # sufficient; no other regex metacharacters can occur).
+  .esc_name <- function(nm) gsub(".", "\\.", nm, fixed = TRUE)
+  rqrow_pat <- paste0(
+    "(?<![[:alnum:]._])(",
+    paste(vapply(.HY_SANCTIONED_ROW_CONSTRUCTORS, .esc_name, character(1)), collapse = "|"),
+    ")\\s*\\("
+  )
 
-  # POSITIVE CONTROL (decoy): prove the `.rq_row(` detector itself works
-  # before trusting its silence against the 11 real functions below.
+  # POSITIVE CONTROL (decoy): prove the detector catches a genuine `.rq_row(`
+  # call before trusting its silence against the 11 real functions below.
   decoy <- .hy_source_from_text("f <- function() {\n  .rq_row(kind = 'x')\n}\n")
   decoy_span <- .hy_named_top_level_spans(decoy)[["f"]]
   decoy_chunk <- paste(.hy_scrub_lines(decoy)[decoy_span["line1"]:decoy_span["line2"]], collapse = "\n")
@@ -557,6 +591,16 @@ test_that("R-16.8: each of the 14 content-producing review-writing sites (11 enc
   decoy_comment_chunk <- paste(.hy_scrub_lines(decoy_comment)[decoy_comment_span["line1"]:decoy_comment_span["line2"]], collapse = "\n")
   expect_false(grepl(rqrow_pat, decoy_comment_chunk, perl = TRUE),
                info = "negative control failed: a comment-only mention of .rq_row( was treated as a real call")
+
+  # THIRD CONTROL: a decoy hand-builder that calls NONE of the sanctioned
+  # constructors (it hand-assembles its payload with paste0()) must still be
+  # treated as NOT routed - guards against a matcher bug that is always true
+  # (which would make the whole criterion pass vacuously).
+  decoy_unrouted <- .hy_source_from_text("f <- function(x) {\n  payload <- paste0('k=', x)\n  payload\n}\n")
+  decoy_unrouted_span <- .hy_named_top_level_spans(decoy_unrouted)[["f"]]
+  decoy_unrouted_chunk <- paste(.hy_scrub_lines(decoy_unrouted)[decoy_unrouted_span["line1"]:decoy_unrouted_span["line2"]], collapse = "\n")
+  expect_false(grepl(rqrow_pat, decoy_unrouted_chunk, perl = TRUE),
+               info = "third control failed: a non-routing decoy (paste0()-only hand-builder, no sanctioned constructor) was incorrectly treated as routed")
 
   missing <- character(0)
   for (relpath in names(targets)) {
