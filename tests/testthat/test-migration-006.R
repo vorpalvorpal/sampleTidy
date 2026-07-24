@@ -193,14 +193,29 @@ seed_migration_006_db <- function(dir = NULL) {
   con <- DBI::dbConnect(duckdb::duckdb(), path, read_only = FALSE)
   on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
 
-  # review_queue at its CURRENT real shape (schema_version 1-4) - reuses the
-  # REAL production ops-schema function rather than re-deriving it.
-  ensure_schema(con)
-
+  # feature/asset created BEFORE ensure_schema: once R-16.1's v6 lands in
+  # .st_schema_migrations, ensure_schema() applies v6 HERE too, and v6's
+  # review_queue_candidate.uuid_feature FK REFERENCES feature(uuid) - so
+  # feature must already exist when that DDL runs. ensure_schema does not
+  # create feature itself (it is a corpus table, not part of the ops schema).
   DBI::dbExecute(con, .rq006_feature_ddl)
   DBI::dbExecute(con, .rq006_asset_ddl)
-  for (stmt in .rq006_v6_ddl) DBI::dbExecute(con, stmt)
-  DBI::dbExecute(con, "INSERT INTO schema_version (version, applied_at) VALUES (6, CURRENT_TIMESTAMP)")
+
+  # review_queue + ops schema, from the REAL production function. Applies
+  # schema_version 1-4 today; 1-6 once R-16.1's v6 DDL lands in Phase 6.
+  ensure_schema(con)
+
+  # Apply the v6 DDL + its schema_version marker ONLY if ensure_schema has not
+  # already applied version 6 - idempotent across the Phase-4 -> Phase-6
+  # transition. Pre-v6: ensure_schema stops at 4, so we hand-apply the exact
+  # B-16.ddl statements (the fixture's whole point: a post-DDL/pre-data DB).
+  # Post-v6: this is a no-op, avoiding the non-idempotent ADD COLUMN error and
+  # a duplicate schema_version row.
+  applied <- DBI::dbGetQuery(con, "SELECT version FROM schema_version")$version
+  if (!(6L %in% applied)) {
+    for (stmt in .rq006_v6_ddl) DBI::dbExecute(con, stmt)
+    DBI::dbExecute(con, "INSERT INTO schema_version (version, applied_at) VALUES (6, CURRENT_TIMESTAMP)")
+  }
 
   # 4 distinct features - resolving the 4 distinct candidate uuids referenced
   # by the k=v fixture below (evidence file §4: "all 4 resolve to live
