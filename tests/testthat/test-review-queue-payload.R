@@ -206,18 +206,16 @@ test_that("R-16.14/R-16.17: already_present's existing_uuid is a real, always-po
   hit <- out$skipped[out$skipped$reason == "already_present", , drop = FALSE]
   expect_equal(nrow(hit), 1)
 
-  # ORACLE: call the REAL retired-regex fallback directly (R/commit.R:591-603)
-  # against this SAME bare-uuid payload - a harmless no-op passthrough (no
-  # "existing_uuid=" substring to match), which is exactly why the bug was
-  # invisible: the fallback "succeeded" by not matching.
-  legacy_oracle <- .ct_skip_existing_uuid(hit, 1)
-  expect_identical(legacy_oracle, hit$payload[[1]])
-
-  # FUTURE shape: existing_uuid is a real column on the RETURNED tibble,
-  # carrying the IDENTICAL uuid - RED today (column absent from the real
-  # reconcile_event() shape, B-16.skips).
+  # ORACLE is the SEEDED existing uuid, pinned directly - never through
+  # .ct_skip_existing_uuid() (the retired regex fallback R-16.14 removes): an
+  # oracle must not be the function under test. This <0.1 mg/L -> 100 ug/L row
+  # resolves to the seeded analysis row an-0001 (helper-db.R:498, value 100 /
+  # quantified FALSE) -> reason already_present.
+  # existing_uuid is a real column on the RETURNED skip tibble carrying that
+  # uuid - RED today (column absent from the real reconcile_event() shape,
+  # B-16.skips); GREEN once the structured column lands in Phase 6.
   existing_uuid <- if ("existing_uuid" %in% names(out$skipped)) hit$existing_uuid[[1]] else NA_character_
-  expect_identical(existing_uuid, legacy_oracle)
+  expect_identical(existing_uuid, "an-0001")
 })
 
 # ==============================================================================
