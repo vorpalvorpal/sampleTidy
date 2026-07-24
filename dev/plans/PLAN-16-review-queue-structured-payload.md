@@ -276,6 +276,21 @@ cannot write one without the other. Both insert paths (constraint 2) route throu
 construction, rather than by adding an escaping rule that thirteen hand-builders would each
 have to remember.
 
+**The two call-site signatures the Phase-4 tests pin, so Phase 6 matches the tests rather
+than the tests being rewritten to a surprise shape** (each was a best-faith reading under
+NO-SILENT-DEVIATION; recorded here so the reading is the contract):
+
+- `review_queue_add()` gains `subkind`, `uuid_existing`, `uuid_alias` (mirroring the new
+  column names 1:1) and `candidates` (a `character()` of feature uuids in rank order), and
+  writes the `review_queue_candidate` child rows itself — i.e. it routes through `.rq_row()`
+  rather than re-implementing it. R-16.9 asserts this path is byte-identical to the raw
+  `db_append()` path.
+- `.ct_rewrite_review_payloads(con, review, clean)` gains `con` as its first argument (every
+  other `.ct_*` DB writer in `R/commit.R` already takes it), and `review` carries the
+  `review_queue` row's own `uuid` — the key for its `UPDATE review_queue SET uuid_alias = ?
+  WHERE uuid = ?`. If Phase 6 lands a different call shape it needs a delta to
+  `test-review-queue-commit.R`, not a silent production rewrite to match a guess.
+
 <!-- block: B-16.skips -->
 ## The skip tibble is a second carrier, and it needs the same treatment
 
@@ -361,6 +376,29 @@ requirement, not minimality of the migration.
 The migration is **one-way and lossy by design** (the unkeyed `source_ref` prefix becomes a
 JSON array). Because it is lossy, it takes a snapshot first, per the standing rule that a
 snapshot must follow every DB-changing session — here, also precede it.
+
+**Two mechanisms, split by whether the step is lossy** (pinned after the Phase-4 test audit,
+because the two test units each depend on a different half and the split was implicit):
+
+- The **DDL** (6a columns + 6b child table) is an **auto** migration — version 6 in
+  `.st_schema_migrations`, applied by `ensure_schema()` on open. It is idempotent
+  (`IF NOT EXISTS`) and non-lossy, so applying it automatically is safe. This is what R-16.1
+  and P16-T-schema exercise.
+- The **96-row data conversion** is a **hand-run** remediation script,
+  `dev/migrations/006-review-queue-payload.R`, on the `dev/migrations/00N-*.R` precedent of
+  001/002 (recorded with a `1000+` marker version, not a ladder number). It is run
+  deliberately by an operator with a snapshot taken first, *because it is lossy* — an
+  on-open auto-migration cannot honour the snapshot-first rule, and a silent lossy conversion
+  is exactly what that rule exists to prevent. This is what R-16.12 and R-16.13 exercise.
+
+  Consequence to state plainly: between the v6 DDL applying and the operator running 006, the
+  live DB carries the new columns with the legacy `payload` still un-promoted — a transient
+  polymorphic state the snapshot-guarded remediation then resolves. **Robin's call to
+  confirm** (this is the one design point Phase 4 could not read off the plan unambiguously):
+  the alternative is a single all-in-one auto v6 that converts on open, which would orphan the
+  006 script and the P16-T-migration test. The hand-run split is chosen because it matches the
+  established snapshot-first / DB-changing-session discipline; if Robin prefers all-in-one,
+  P16-T-migration is redirected to drive the conversion through `ensure_schema()` instead.
 
 <!-- block: B-16.risk -->
 ## Risks accepted, stated plainly
