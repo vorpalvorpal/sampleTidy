@@ -679,15 +679,6 @@ test_that("R-15.37: confirming an identity-mapped pending alias (alias_key == lo
 # ======================================================================
 # PLAN-15 E.8 / R-15.44 - merge the two duplicate identity arms (R3).
 #
-# TARGET FUNCTION CONTRACT (unwritten - Phase 6). PLAN-CHANGE REQUEST FILED
-# (Phase-5 delta B6, see this unit's report): the plan pins E.8's ACCEPTANCE
-# in full but names no entry-point function/signature for it - unlike
-# migration 003 (which carries an explicit "TARGET FILE CONTRACT" comment at
-# the top of test-migration-003.R), E.8 has none. This test's best reading,
-# mirroring `confirm_feature_aliases()`'s own `db = st_config("live_db")`
-# convention in this SAME file/module (F.19 precedes E.8 and both touch
-# R/feature-alias.R):
-#
 #   merge_identity_aliases(db = st_config("live_db"), actor, dry_run = FALSE)
 #     -> tibble(alias_key, uuid_winner, uuid_loser, n_repointed)
 #   PINNED by the orchestrator 2026-07-24 in PLAN-15 B-15.E8 - this is no longer
@@ -699,9 +690,7 @@ test_that("R-15.37: confirming an identity-mapped pending alias (alias_key == lo
 #   and `auto_assign = TRUE` onto the surviving self row, repoints every
 #   `sample.uuid_feature_alias` reference from the deleted row onto the
 #   survivor, then deletes the duplicate - one `with_db_write()` transaction,
-#   `change_log` provenance on both writes. Phase 6 may need to add exactly
-#   this symbol, or the orchestrator may rename/reshape it before it lands -
-#   re-check against the real implementation before trusting this as final.
+#   `change_log` provenance on both writes.
 # ======================================================================
 
 #' A local, FK-constrained fixture reproducing E.8's duplicate-identity shape
@@ -743,6 +732,15 @@ fa_e8_setup <- function() {
       uuid_feature_alias VARCHAR NOT NULL REFERENCES feature_alias(uuid),
       date TIMESTAMP, datetime TIMESTAMP, organisation VARCHAR)")
 
+    # Phase-5 audit round 2 B1: `.rc_load_registry()` (R/reconcile.R:25-34)
+    # does an unconditional `SELECT * FROM` all SIX of feature/feature_alias/
+    # feature_mask/analyte/lab_method/project - the (c) assertion below goes
+    # through the REAL resolver, so all six must EXIST (empty is fine; none
+    # of this unit's assertions touch these four). Reuses
+    # helper-migration-003-db.R's own `.st_mig003_empty_ddl` idiom rather
+    # than inventing a new one.
+    for (ddl in .st_mig003_empty_ddl) DBI::dbExecute(con, ddl)
+
     DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, lon, lat) VALUES
       ('f-e8-01', 'Z.E8DUP01', 'Z', 150.8801, -33.8801)")
 
@@ -773,7 +771,17 @@ test_that("R-15.44 (E.8): merges a duplicate identity arm into its self arm, del
      WHERE fa.uuid_feature = 'f-e8-01'")$n
   expect_equal(before_n, 1) # positive control: the sample is reachable before the merge
 
-  merge_identity_aliases(actor = "phase5-e8-test")
+  result <- merge_identity_aliases(actor = "phase5-e8-test")
+
+  # Phase-5 audit round 2 C2: the return value is PINNED as
+  # tibble(alias_key, uuid_winner, uuid_loser, n_repointed) - nothing
+  # previously asserted it, so an implementation returning NULL passed.
+  expect_named(result, c("alias_key", "uuid_winner", "uuid_loser", "n_repointed"))
+  expect_equal(nrow(result), 1)
+  expect_identical(result$alias_key[[1]], "z.e8dup01")
+  expect_identical(result$uuid_winner[[1]], "fa-e8-self")
+  expect_identical(result$uuid_loser[[1]], "fa-e8-dup")
+  expect_equal(result$n_repointed[[1]], 1)
 
   # (a) exactly ONE feature_alias row for the key afterwards.
   after_rows <- DBI::dbGetQuery(con, "SELECT * FROM feature_alias WHERE alias_key = 'z.e8dup01'")
@@ -803,6 +811,39 @@ test_that("R-15.44 (E.8): merges a duplicate identity arm into its self arm, del
   expect_equal(after_n, before_n)
   repointed <- DBI::dbGetQuery(con, "SELECT uuid_feature_alias FROM \"sample\" WHERE uuid = 's-e8-01'")$uuid_feature_alias
   expect_identical(repointed, "fa-e8-self") # repoint landed on the survivor, not orphaned
+})
+
+test_that("R-15.44 (E.8): dry_run = TRUE leaves both alias rows AND the sample pointer unchanged, while still returning the same itemised tibble", {
+  # Phase-5 audit round 2 C2: dry_run was asserted NOWHERE - an
+  # implementation that deletes and repoints REGARDLESS of dry_run passed.
+  setup <- fa_e8_setup()
+  con <- setup$con
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  before_rows <- DBI::dbGetQuery(con,
+    "SELECT * FROM feature_alias WHERE alias_key = 'z.e8dup01' ORDER BY uuid")
+  before_sample <- DBI::dbGetQuery(con,
+    "SELECT uuid_feature_alias FROM \"sample\" WHERE uuid = 's-e8-01'")$uuid_feature_alias
+
+  result <- merge_identity_aliases(actor = "phase5-e8-dryrun-test", dry_run = TRUE)
+
+  # dry_run returns the SAME itemised tibble a real run would - an operator
+  # previewing the merge sees exactly what would happen.
+  expect_named(result, c("alias_key", "uuid_winner", "uuid_loser", "n_repointed"))
+  expect_equal(nrow(result), 1)
+  expect_identical(result$alias_key[[1]], "z.e8dup01")
+  expect_identical(result$uuid_winner[[1]], "fa-e8-self")
+  expect_identical(result$uuid_loser[[1]], "fa-e8-dup")
+  expect_equal(result$n_repointed[[1]], 1)
+
+  after_rows <- DBI::dbGetQuery(con,
+    "SELECT * FROM feature_alias WHERE alias_key = 'z.e8dup01' ORDER BY uuid")
+  after_sample <- DBI::dbGetQuery(con,
+    "SELECT uuid_feature_alias FROM \"sample\" WHERE uuid = 's-e8-01'")$uuid_feature_alias
+
+  expect_equal(nrow(after_rows), 2)         # BOTH rows survive - dry_run must not delete
+  expect_equal(after_rows, before_rows)     # nothing on either row was written
+  expect_identical(after_sample, before_sample) # sample pointer NOT repointed
 })
 
 # ======================================================================
