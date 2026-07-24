@@ -466,9 +466,50 @@ introducing `subkind` as a real column anyway:
 - `kind = 'value_conflict', subkind = 'measurement'` — the `R/reconcile.R` producer.
 - `kind = 'value_conflict', subkind = 'alias_merge'` — the `R/feature-alias.R` producer.
 
-Both map their existing-uuid onto the single `uuid_existing` column; everything else is
-diagnostics and goes to JSON, where the two shapes may legitimately differ. This also
-resolves the naming collision by making it moot — neither spelling survives as a key.
+Both map their existing-uuid onto the single `uuid_existing` column.
+
+**They also share one vocabulary** (Robin's ruling, 2026-07-24: *"should we fix this so they
+use the same vocab?"*). An earlier draft of this ruling claimed the naming collision became
+"moot" once the values moved to JSON. That was wrong — JSON keys are still keys, so
+`{"existing_value": …}` vs `{"value_existing": …}` would have carried the collision straight
+through the refactor untouched. Fixing storage is not fixing vocabulary.
+
+Verified in the source before unifying, because forcing shared terms onto genuinely different
+relationships would be worse than leaving them apart. They are the same relationship: **an
+incumbent and an arrival in conflict over the same `(sample, lab_method)` slot.** In
+`.rc_three_way` the arrival comes from the file being ingested; in `.fa_merge_samples`
+(`R/feature-alias.R:215-250`) it arrives by being re-pointed onto the winner sample during an
+alias merge. That difference is *how the arrival got there* — which is precisely what
+`subkind` now records, so the field names must not encode it a second time.
+
+The scheme is `<thing>_<role>`, `role ∈ {existing, incoming}` — noun-first, matching the
+`uuid_existing` / `uuid_alias` column convention this plan already adopts, and sorting keys
+by concept rather than by role.
+
+| concept | `reconcile.R` today | `feature-alias.R` today | unified |
+|---|---|---|---|
+| incumbent analysis uuid | `existing_uuid` | `uuid_existing` | **column `uuid_existing`** |
+| arriving analysis uuid | *(none — see below)* | `uuid_new` | `uuid_incoming` (JSON) |
+| incumbent value | `existing_value` | `value_existing` | `value_existing` |
+| arriving value | `incoming_value` | `value_new` | `value_incoming` |
+| incumbent quantified flag | `existing_quantified` | — | `quantified_existing` |
+| arriving quantified flag | `incoming_quantified` | — | `quantified_incoming` |
+| revision on record | `recorded_revision` | — | `revision_existing` |
+| arriving revision | `incoming_revision` | — | `revision_incoming` |
+
+Two decisions inside that table worth stating rather than burying:
+
+- **`incoming`, not `new`.** "New" is ambiguous (new to the database? newly created?);
+  "incoming" names the direction of data flow, which is the actual concept, and it is already
+  the vocabulary of the larger producer.
+- **`recorded_revision` → `revision_existing` is a rename beyond the strict collision.**
+  It is not one of the clashing pairs, but leaving it as the one field outside the scheme
+  would make the vocabulary half-unified, which is worse than either alternative. Note its
+  source is `.rc_recorded_revision()`, whose name does not change.
+
+**The asymmetry is real and is preserved, not papered over:** `uuid_incoming` is **absent for
+`subkind='measurement'`**, because at conflict time the incoming value is not yet a row and
+has no uuid. A unified vocabulary must not imply a field exists where it cannot.
 
 ### RULING C — do NOT backfill coverage on the old format
 
@@ -549,7 +590,20 @@ argument at all (B-16.api), so a hand-built string cannot be injected. R-16.18 p
   `subkind = 'alias_merge'`; both populate `uuid_existing`. Assert both producers in one
   test so the pair cannot drift apart again.
 
-### R-16.20 The alias uuid is stored once
+### R-16.20 The two value_conflict producers share one vocabulary
+- for the fields the two producers have in common, the key names are **identical**:
+  `value_existing` and `value_incoming` appear in both, and neither `existing_value`,
+  `incoming_value`, `value_new` nor `uuid_new` appears anywhere.
+- assert this by **comparing the two producers' key sets to each other** — not by checking
+  each against a hard-coded list. A test that pins each producer separately passes happily
+  while they drift apart, which is the failure this criterion exists to prevent. The shared
+  subset must match exactly; the reconcile-only extras (`quantified_*`, `revision_*`) are
+  the permitted difference.
+- **`uuid_incoming` must be absent, not `NA`, for `subkind='measurement'`** — the incoming
+  value is not yet a row and has no uuid, and a unified vocabulary must not imply a field
+  exists where it cannot.
+
+### R-16.21 The alias uuid is stored once
 - after a commit-time alias rewrite, `uuid_alias` holds the uuid and the JSON remainder
   contains no `alias_uuid` key. A test asserting only that `uuid_alias` is correct does not
   satisfy this — the point is the absence of the duplicate.
