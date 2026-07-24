@@ -63,8 +63,36 @@ all agree.
 
 **92 of the 96 live rows were written by a scratchpad script, not by the package.** They
 are uniform and valid (`{filename, state, uuid_asset}`, all 92 parse). They are
-asset-integrity evidence about the archive and must be preserved exactly; no package code
-produces or reads them, so nothing needs promoting to columns.
+asset-integrity evidence about the archive and their content must be preserved.
+
+**They are restructured like every other kind, not exempted** (Robin's ruling, 2026-07-24:
+"they should match the rest — don't remove content, but change structure"). An earlier draft
+of this plan left them as-is on the grounds that no package code reads them. That was wrong,
+and the reasoning was wrong twice over: it confused *"the package does not read this"* with
+*"this has no structure"*, and it would have left the column polymorphic after a refactor
+whose entire purpose is to stop it being polymorphic. **One table, one schema.**
+
+Measured (`scratchpad/p16_asset_rows.R`), these rows turn out to contain almost no
+free-form content at all:
+
+| payload key | what it actually is | tier |
+|---|---|---|
+| `state` | **a single constant across all 92 rows** — `"file present but bytes do not match the stored xxHash128"`. A one-member enum, not free text. | **`subkind = 'hash_mismatch'`** |
+| `uuid_asset` | a real entity reference: **all 92 resolve to live `asset` rows** | **`uuid_existing`** column |
+| `filename` | **identical to `asset.filename` on all 92** — a duplicate of joinable data | JSON remainder (see below) |
+
+So the JSON remainder for this kind collapses to a single key. Two of the three fields were
+never diagnostics; they were structure stored as text — which is the plan's thesis, found
+again in the one place the earlier draft had exempted from it.
+
+**`filename` is deliberately KEPT despite being derivable**, and this is a real exception to
+RULING D's no-duplicates rule. The distinction is between duplicating a **live pointer** (bad
+— two places to update, which is what `alias_uuid=` was) and snapshotting an **audit fact**
+(good). These are integrity records asserting that a specific file's bytes did not match its
+stored hash; if the asset is later renamed or re-pointed, the record must still say which
+file it was about *at the time*. The duplication buys forensic fidelity, so it is deliberate
+rather than accidental. Under Robin's "don't remove content", dropping it was not on offer
+anyway.
 
 <!-- block: B-16.constraints -->
 ## Hard constraints this design must honour
@@ -149,10 +177,22 @@ Notes that are decisions, not description:
 - **`uuid_existing` / `uuid_alias`, not `existing_uuid` / `alias_uuid`.** The table's
   existing convention is `uuid`-prefixed (`uuid_target`, `uuid_asset`, `uuid_row`). The
   payload keys used the opposite order; the columns follow the table, not the payload.
-- **No FK on `uuid_existing` / `uuid_alias`.** They point at different tables depending on
-  `kind` (an analysis uuid for `value_conflict`, a feature_alias uuid for the commit
-  rewrite). A polymorphic reference cannot carry an FK. Stated here so a reviewer does not
-  read the omission as an oversight.
+- **No FK on `uuid_existing` / `uuid_alias`.** They are polymorphic — the referent's table
+  depends on `kind`, and a polymorphic reference cannot carry an FK. Stated here so a
+  reviewer does not read the omission as an oversight. The full referent map, which an
+  implementer would otherwise have to reconstruct:
+
+  | `kind` | `uuid_existing` points at | `uuid_alias` |
+  |---|---|---|
+  | `value_conflict` (`subkind='measurement'`) | `analysis(uuid)` | — |
+  | `value_conflict` (`subkind='alias_merge'`) | `analysis(uuid)` | — |
+  | `already_present` | `analysis(uuid)` | — |
+  | `asset_content_unverified` | **`asset(uuid)`** | — |
+  | `unknown_feature` / `unknown_analyte` | — | `feature_alias(uuid)`, set by the commit-time rewrite |
+
+  **Because there is no FK, the migration must verify resolution itself** — R-16.12 and
+  R-16.13 both require every reference to resolve, since the database will not check it.
+  That is the price of polymorphism, paid explicitly rather than discovered later.
 - **`kind` is a plain `VARCHAR`, not a `CHECK`.** DuckDB `CHECK` constraints survive this
   schema's rebuild patterns poorly, and the enum is pinned by criterion instead. If a later
   migration makes `CHECK` safe here, add it then.
@@ -206,17 +246,27 @@ have to remember.
 <!-- block: B-16.migration -->
 ## Data migration
 
-**Four rows.** Not ninety-six — that number conflated the two formats.
+**All ninety-six rows migrate.** An earlier draft of this plan said "four rows, not
+ninety-six" — the *fact* behind that (only 4 rows are in the `k=v` format) is correct and
+still stated in B-16.formats, but the *inference* was wrong: uniformity of the table is the
+requirement, not minimality of the migration.
 
 - **1 `unknown_analyte` + 3 `unknown_feature`** rows in format (a) are parsed once, by a
   migration-local parser, into the new columns and child rows. All 4 candidate uuids
   referenced resolve to live `feature` rows, so the FK is satisfiable with **no
   dangling-reference cleanup step**. Max fan-out is 2.
-- **92 `asset_content_unverified` rows in format (b) are left exactly as they are.** They
-  are already valid JSON and already in the tier this design assigns them to. The migration
-  must not rewrite them — and a criterion must pin that, because "no package code reads
-  them" must never decay into "safe to discard".
+- **92 `asset_content_unverified` rows in format (b) are converted**, per B-16.formats:
+  `state` → `subkind = 'hash_mismatch'`, `uuid_asset` → `uuid_existing`, `filename` → the
+  JSON remainder. No content is lost and no row is dropped. This half of the migration is
+  the easier one — the source is uniform, valid JSON with one key set across all 92 rows,
+  and every `uuid_asset` resolves — but it is also the half where a silent failure is
+  hardest to notice, because nothing in the package reads these rows to complain. R-16.12
+  therefore pins the count, the key set, and the resolution of every reference.
 - Format (c) and (d) have zero live rows; they are code paths, not data.
+- `adapter_tie` (format (b), in-package, 0 live rows) keeps a JSON remainder — `tier` and
+  `adapters` are genuinely free-form diagnostics and neither is a uuid — but it is
+  serialised by `jsonlite` through the same constructor as everything else, not by
+  `sprintf`. "Matching the rest" means the same tier rule applied, not the same tier chosen.
 
 The migration is **one-way and lossy by design** (the unkeyed `source_ref` prefix becomes a
 JSON array). Because it is lossy, it takes a snapshot first, per the standing rule that a
@@ -315,10 +365,18 @@ pin a shape, and the behavioural criteria are where the gate really is.
 - a `structural` review exposes site and point as separate retrievable values, and no stored
   value contains an embedded `k=v` fragment.
 
-### R-16.12 The 92 asset_content_unverified rows survive the migration byte-identically
-- before/after the migration, all 92 rows still parse as JSON and still carry exactly
-  `{filename, state, uuid_asset}`, and their `payload` strings are unchanged. Pin the count
-  as 92 **and** the key set — a count alone is satisfied by 92 wrong rows.
+### R-16.12 The 92 asset_content_unverified rows are CONVERTED with no information loss
+- after the migration all 92 rows carry `subkind = 'hash_mismatch'`, a `uuid_existing` that
+  resolves to a live `asset` row, and a JSON remainder whose `filename` equals the value the
+  pre-migration payload carried. Row count is still exactly 92 and no row has a payload key
+  that survived un-promoted.
+- **Assert per-row, not in aggregate.** A count plus a spot-check is satisfied by 92 rows
+  where the uuid and the filename have been paired up wrongly — the failure mode that
+  matters here is a mis-JOIN during migration, which preserves every value and every count
+  while destroying the association between them. Compare the pre- and post-migration
+  `(uuid_review → uuid_asset, filename)` mapping row by row.
+- This criterion is load-bearing precisely because **nothing in the package reads these rows**,
+  so no other test and no user would ever notice them being silently mangled.
 
 ### R-16.13 The 4 legacy k=v rows migrate to columns and child rows with no loss
 - after migration: `subkind`, `work_order`, and the `source_ref` list survive; the 3 rows
