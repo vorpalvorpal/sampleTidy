@@ -97,12 +97,30 @@ anyway.
 <!-- block: B-16.constraints -->
 ## Hard constraints this design must honour
 
-1. **There is no SQL-side JSON on this deployment.** DuckDB's `json` extension is not
-   vendored and cannot autoload (`SELECT json_valid('{}')` → autoload error; `INSTALL json`
-   cannot fetch). JSON in `payload` is therefore **opaque text to SQL** — storable,
-   selectable and comparable only as a whole string. **Nothing queryable may live in JSON.**
-   All JSON handling is R-side via `jsonlite`. Any test asserting JSON structure asserts it
-   in R, never in SQL. This constraint independently produces Robin's RULING 3 shape.
+1. **~~There is no SQL-side JSON on this deployment.~~ FALSE — corrected 2026-07-24 after the
+   Phase-3 audit disproved it. Retained as a POLICY, not as a physical constraint.**
+
+   The original claim was that DuckDB's `json` extension could not autoload or install.
+   **It is installed and working**: `SELECT json_valid('{}')` returns `TRUE`, all 92 JSON
+   payloads validate in SQL, and `duckdb_extensions()` reports
+   `loaded = TRUE, installed = TRUE, install_mode = REPOSITORY`.
+
+   **The cause of the error was my own probe.** The evidence script ran `INSTALL json`,
+   which *succeeded* — it returned zero rows with a `dbFetch()`-on-a-LOAD warning, and I read
+   the empty result as failure. The extension file's mtime (13:20:48) is that probe. So the
+   first autoload attempt failed, my probe fixed it, and I then recorded the pre-probe state
+   as permanent. (`read_only = TRUE` on the connection does not prevent this: `INSTALL`
+   writes to the extension directory, not to the database.)
+
+   **What survives as a deliberate policy:** nothing queryable lives in the JSON remainder,
+   and all JSON handling is R-side via `jsonlite`. The reason is no longer "SQL cannot do it"
+   but "we choose not to depend on a **network-fetched** extension for correctness". It is
+   `install_mode = REPOSITORY`, so a fresh machine or an offline one gets exactly the
+   autoload failure I hit — a package whose reads depend on it would work here and fail
+   there. **This is a policy ruling and Robin should confirm or overturn it**; it is not a
+   fact about the database. If overturned, the JSON remainder becomes queryable and R-16.6's
+   scope widens, but the column/child-table split does not change (see B-16.design, where
+   reason 5 is now void and the other four carry the decision).
 2. **There are two independent insert paths into `review_queue` and both must be covered.**
    `review_queue_add()` (`R/db-schema.R:292`) is called only by `R/router.R`. `R/commit.R`
    and `R/feature-alias.R` bypass it entirely, building a full tibble row and calling
@@ -148,8 +166,13 @@ delegated. Child table, because:
    column beat parsing a key out of free text.
 4. `expired=<uuid>@<start>..<end>` is a uuid **plus a date range**, so it needs columns
    regardless. A `kind` discriminator absorbs it instead of inventing a second mechanism.
-5. Constraint 1 forecloses the JSON-array option anyway: with no SQL JSON, a JSON array
-   cannot be joined, filtered or FK-checked.
+5. ~~Constraint 1 forecloses the JSON-array option anyway: with no SQL JSON, a JSON array
+   cannot be joined, filtered or FK-checked.~~ **VOID — constraint 1 was disproven
+   (2026-07-24). The `json` extension works, so a JSON array *could* be queried.** Reasons
+   1–4 are unaffected and still carry the decision on their own: repointing, FK enforcement,
+   the F.15 precedent and the `expired=` date range are all independent of whether SQL can
+   read JSON. Left visible rather than deleted, so a later reader does not rediscover this
+   argument and mistake it for a live one.
 
 <!-- block: B-16.ddl -->
 ## DDL — schema version 6
@@ -225,6 +248,46 @@ cannot write one without the other. Both insert paths (constraint 2) route throu
 `jsonlite`, which escapes — that is what kills the comma hazard and the nesting bug by
 construction, rather than by adding an escaping rule that thirteen hand-builders would each
 have to remember.
+
+<!-- block: B-16.skips -->
+## The skip tibble is a second carrier, and it needs the same treatment
+
+**Added after the Phase-3 audit, which found a real hole.** Two of the fourteen producers —
+`already_present` (`R/reconcile.R:1167`) and `method_duplicate` (`R/reconcile.R:984`) — do
+**not** write to `review_queue` at all. They append to `skipped_list`, which becomes the
+in-memory `skipped` tibble that `reconcile_event()` returns and `commit_event()` consumes.
+It has its own `payload` column and it never reaches the database.
+
+`.rq_row()` as specified in B-16.api cannot cover them, so as written this plan would have
+deleted the review-side regex and left an identical one alive on the skip path — and R-16.6
+would still have passed, because it scopes to `payload` values on `review_queue`.
+
+The regex in question is the one at `R/commit.R:602`, and it reads the **skip tibble**:
+
+```r
+.ct_skip_existing_uuid <- function(skipped, i) {
+  if ("existing_uuid" %in% names(skipped)) { ... }        # <- the column path already exists
+  payload <- if ("payload" %in% names(skipped)) skipped$payload[[i]] else NA_character_
+  sub(".*existing_uuid=([^,}]+).*", "\\1", payload)       # <- the fallback
+}
+```
+
+Its own roxygen (`R/commit.R:583-588`) documents the pass-through trick explicitly, so this
+is deliberate, not accidental — which is why it must be retired deliberately too.
+
+**The fix is small, because the typed path already exists.** `.ct_skip_existing_uuid()`
+already *prefers* an `existing_uuid` column and only falls back to the regex when the column
+is absent. Today the column is present in the plan-09 unit-test shape and absent in the real
+`reconcile_event()` shape. So:
+
+- the skip tibble gains the same treatment as the review row: a **typed constructor**
+  (`.rq_skip()`), and `existing_uuid` **always populated** for `already_present`;
+- the regex fallback in `.ct_skip_existing_uuid()` is deleted, leaving only the column read;
+- the skip tibble's own `payload` follows the same tier rule — diagnostics as JSON, entity
+  references as columns. `method_duplicate`'s `kept_uuid_lab` becomes a column.
+- **R-16.6's scope widens to both carriers.** A criterion that only forbids regex on
+  `review_queue` payloads is satisfied by moving the regex to the skip path, which is
+  precisely the failure this section exists to prevent.
 
 <!-- block: B-16.read -->
 ## The read side — deleting both regex parsers
@@ -310,10 +373,22 @@ Every criterion below must be able to FAIL against the code as it stands today. 
 that merely restate the DDL are marked as such and are deliberately thin — they exist to
 pin a shape, and the behavioural criteria are where the gate really is.
 
-### R-16.1 Schema version 6 applies on top of an unapplied 5
-- opening a DB at auto-version 4 applies 5 then 6 in order and records both in
-  `schema_version`; opening an already-migrated DB applies neither and changes no row.
-  (The live DB is at 4 with 5 unapplied, so this is the real upgrade path, not a synthetic one.)
+### R-16.1 Schema version 6 applies regardless of whether version 5 exists yet
+- **Rewritten after the Phase-3 audit.** The original wording required 5 to apply before 6,
+  which RULING E makes unsatisfiable: version 5 is PLAN-15 Phase-6 work, and RULING E
+  suspends PLAN-15 Phase 6 until PLAN-16 lands. When PLAN-16 ships, **version 5 will not
+  exist in the code at all** and the ladder will read 1,2,3,4,6.
+- That gap is safe, and this criterion pins why rather than assuming it: `ensure_schema()`
+  (`R/db-schema.R:84-105`) iterates the `.st_schema_migrations` **list** and skips any
+  version already in `schema_version`. It makes no contiguity assumption and no range scan.
+- Assert all three: (a) on a DB at version 4 with **no 5 defined**, 6 applies and records;
+  (b) on a DB where 6 is already applied and 5 is **later added** to the list, 5 applies on
+  its own and 6 is not re-applied; (c) re-opening an already-migrated DB applies nothing and
+  changes no row.
+- Arm (b) is the one that matters and the one a naive test omits — it is the actual sequence
+  these two plans will produce, and it exercises the migrations arriving **out of version
+  order**. The two are independent (5 adds `uuid_target`, 6 adds three different columns plus
+  a table), so order genuinely does not matter — but that must be demonstrated, not asserted.
 
 ### R-16.2 review_queue carries subkind, uuid_existing, uuid_alias as real columns
 - all three exist with type `VARCHAR` and are nullable; none is a computed or generated column.
@@ -333,9 +408,11 @@ pin a shape, and the behavioural criteria are where the gate really is.
 - a row with `kind = 'expired'` round-trips `date_start` and `date_end` as `DATE`; a row with
   `kind = 'candidate'` carries `NA` for both. Both halves required.
 
-### R-16.6 No production code parses a payload with a regex
+### R-16.6 No production code parses a payload with a regex — on EITHER carrier
 - no occurrence of `sub(`, `gsub(`, `regmatches(`, `regexpr(`, `grepl(` applied to a
-  `payload` value anywhere in `R/`. This is a source-scanning assertion and must therefore be
+  `payload` value anywhere in `R/`, covering **both** the `review_queue` payload and the
+  **skip tibble's** `payload` (B-16.skips). A criterion scoped to only the first is satisfied
+  by relocating the regex to the second. This is a source-scanning assertion and must therefore be
   comment- and string-aware, and must carry its own decoy. **Deliberate exception, named
   here so the test can whitelist it rather than a reader "fixing" it later**: the migration's
   one-way parser for the 4 legacy rows (B-16.migration) necessarily parses the old format;
@@ -385,10 +462,17 @@ pin a shape, and the behavioural criteria are where the gate really is.
   outside JSON.
 
 ### R-16.14 already_present resolves without the regex fallback
-- an `already_present` skip populates `uuid_existing` directly, and
-  `.ct_skip_existing_uuid`'s replacement returns the same uuid the regex returned for the
-  same input. **Both halves required**: this is the one place where deleting a regex can
-  silently change behaviour, because the old code depended on the pattern *failing to match*.
+- **Scoped correctly after the Phase-3 audit:** `already_present` is a **skip-tibble**
+  producer, not a `review_queue` writer (B-16.skips). The column it must populate is the skip
+  tibble's `existing_uuid`, not `review_queue.uuid_existing`.
+- an `already_present` skip populates `existing_uuid` on every path — including the real
+  `reconcile_event()` shape, where it is absent today — and `.ct_skip_existing_uuid()`
+  retains no regex fallback.
+- **Both halves required**, and the second is the load-bearing one: the replacement must
+  return the same uuid the regex returned **for the same input**, because the old code
+  depended on the pattern *failing to match* (a bare-uuid payload has no `existing_uuid=`, so
+  `sub()` returned it unchanged). Deleting a regex whose contract is "does not match" is the
+  one place in this plan where a deletion can silently change behaviour.
 
 ### R-16.15 The commit-time alias rewrite is idempotent
 - applying the alias-uuid rewrite twice leaves `uuid_alias` equal to the value one
@@ -573,11 +657,13 @@ argument at all (B-16.api), so a hand-built string cannot be injected. R-16.18 p
 ## Acceptance criteria (continued)
 
 ### R-16.17 The five previously-uncovered producers have their shape pinned
-- `unknown_unit`, `parse_error`, `already_present`, `method_duplicate` and `batch_duplicate`
-  each get at least one assertion on their structured content — not merely on `kind` or
-  `reason`. These have no old-format coverage to translate, so they are new work, and their
-  absence from the old suite is the reason they are named individually here rather than left
-  to a general sweep.
+- `unknown_unit`, `parse_error` and `batch_duplicate` (review-queue producers) plus
+  `already_present` and `method_duplicate` (**skip-tibble** producers — see B-16.skips) each
+  get at least one assertion on their structured content, not merely on `kind` or `reason`.
+- The split matters: a test that looks for the last two in `review_queue` will find nothing
+  and can be "fixed" into vacuity. Assert them on the tibble `reconcile_event()` returns.
+- These have no old-format coverage to translate, so they are new work — which is why they
+  are named individually here rather than left to a general sweep.
 
 ### R-16.18 The constructor accepts no free-text payload
 - the structured constructor has no argument that takes a pre-serialised payload string, and
