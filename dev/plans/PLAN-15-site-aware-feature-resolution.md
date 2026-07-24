@@ -693,7 +693,29 @@ live one, goes to REVIEW — it does NOT fall through to Layer 2.**
 > writer hit this head-on; it is a Phase-2 defect of mine, not a writer's confusion.
 >
 > **PINNED: split 003 into an entry point and an injectable applier.**
-> * `mig003_run(db, snapshot_dir, dry_run = FALSE, .now = NULL)` — the production entry
+> **AMENDED 2026-07-24 (Phase-5 audit round 2, PCR-1) — `bounds` MUST BE INJECTABLE ON
+> `mig003_run()` TOO, NOT ONLY ON THE APPLIER. THE SIGNATURE BELOW IS SUPERSEDED BY:**
+> ```r
+> mig003_run(db, snapshot_dir, dry_run = FALSE, .now = NULL,
+>            bounds = .mig003_e5_bounds())
+> ```
+> **Why my original split was incomplete.** I made `.mig003_apply_bounds(con, bounds)`
+> injectable so tests could drive fixture-named keys, and separately pinned that a key
+> matching zero rows must ABORT the migration (E.5, below). Both are right; together they
+> make `mig003_run()` **impossible to call on any fixture** — it passes the real E.5
+> literals (`b.s01`, `k.e02`, …), none of which exist in a `T.*`/`TH.*` seed, so every one
+> matches zero rows and the abort fires. All four tests that drive the real entry point
+> would error under a *fully correct* migration 003.
+> **And the other branch is worse:** if Phase 6 "fixes" that by making `mig003_run()`
+> swallow non-matching items, the tests go green while **nothing asserts `mig003_run()`
+> applies any curated bound at all** — the bounds are otherwise exercised only through a
+> direct `.mig003_apply_bounds()` call, so a 003 that does the ALTER and the R1 flip and
+> applies ZERO bounds would pass.
+> `.mig003_e5_bounds()` is the real curated table as a function, so the production default
+> is unchanged and no caller passes `bounds`. Tests pass `.mig003_fixture_bounds()` and
+> thereby cover the REAL entry point instead of only the internal one.
+>
+> * ~~`mig003_run(db, snapshot_dir, dry_run = FALSE, .now = NULL)`~~ — the production entry
 >   point, signature identical to `mig001_run` (`001:280`). It owns the table-wide R1
 >   self-arm flip and calls the applier with the REAL E.5 bounds table.
 > * `.mig003_apply_bounds(con, bounds)` — takes the bounds as an ARGUMENT. Tests call it

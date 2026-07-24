@@ -690,7 +690,14 @@ test_that("R-15.30: add_feature() creates a self alias in the same transaction t
     "SELECT * FROM change_log WHERE uuid_row IN ('%s', '%s')", new_uuid, alias_uuid
   ))
   expect_equal(nrow(log_rows), 2)
-  expect_equal(length(unique(log_rows$at)), 1)
+  # Phase-5 audit round 2 B3: `length(unique(log_rows$at)), 1)` was
+  # unsatisfiable by construction - `db_append()` stamps its OWN
+  # `Sys.time()` per call (R/mutate.R:192) and takes no `at` argument, so
+  # the feature append and the alias append of one add_feature() call NEVER
+  # share a timestamp, even inside one transaction (measured 8.3ms apart).
+  # It passed only vacuously, because today just one log row exists at all.
+  # Timestamp identity is not a proxy for atomicity - see the real
+  # atomicity test below instead (mirrors R-12.6's fault-injection idiom).
   alias_log <- log_rows[log_rows$tbl == "feature_alias", ]
   expect_equal(nrow(alias_log), 1)
   expect_equal(alias_log$action[1], "insert")
@@ -714,6 +721,54 @@ test_that("R-15.30: add_feature() creates a self alias in the same transaction t
   expect_equal(row$uuid_feature[1], new_uuid)
   expect_false(is.na(row$uuid_feature_alias[1]))
   expect_false("unknown_feature" %in% result$review$kind)
+})
+
+test_that("R-15.30/B3: a failure on the SECOND write of add_feature()'s atomic pair rolls back the FIRST write too - the feature insert and the self-alias insert are one transaction, not two independent ones", {
+  path <- seed_db()
+  withr::local_options(list("sampletidy.live_db" = path))
+  con <- seed_con(path)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  before_feature <- DBI::dbGetQuery(con, "SELECT count(*) AS n FROM feature")$n
+  before_log <- count_change_log(con)
+
+  # Phase-5 audit round 2 B3's real atomicity assertion (replacing the
+  # unsatisfiable `unique(log_rows$at)` check above): let the FIRST
+  # db_append() (feature) run for real, then force the SECOND
+  # (feature_alias) to fail BEFORE it writes anything, mirroring R-12.6's
+  # fault-injection idiom below but targeting add_feature()'s own two-table
+  # write instead of a single db_update(). A genuinely atomic add_feature()
+  # - both writes inside ONE db_transaction() - must roll the first write
+  # back too; two independent with_db_write() calls would leak it.
+  real_db_append <- db_append
+  call_n <- 0L
+  testthat::local_mocked_bindings(
+    db_append = function(...) {
+      call_n <<- call_n + 1L
+      if (call_n >= 2L) stop("simulated second-write failure")
+      real_db_append(...)
+    },
+    .package = "sampleTidy"
+  )
+
+  err <- tryCatch(
+    add_feature(
+      name = "T.NEWSELF9002", site = "TestSite", lon = 150.7002, lat = -33.7002,
+      flow = "surface", matrix = "water",
+      actor = "tester", reason = "B3: second-write failure must roll back the first"
+    ),
+    error = function(e) e
+  )
+  expect_s3_class(err, "sampletidy_error")
+  expect_equal(call_n, 2,
+    info = "the mock must actually reach a second db_append() call, or this proves nothing about atomicity")
+
+  after_feature <- DBI::dbGetQuery(con, "SELECT count(*) AS n FROM feature")$n
+  after_log <- count_change_log(con)
+  expect_equal(after_feature, before_feature,
+    info = "the FIRST write (feature) must be rolled back when the SECOND (self alias) fails")
+  expect_equal(after_log, before_log,
+    info = "no change_log row may survive a rolled-back transaction")
 })
 
 test_that("R-12.6: a commit-time failure rolls back the whole call and aborts sampletidy_error, leaving no partial write (dbCommit() must sit inside the tryCatch)", {

@@ -5,7 +5,8 @@
 # package NAMESPACE, so tests `sys.source()` it directly via `.mig003_load()`
 # below, mirroring test-migration-001.R:42):
 #
-#   mig003_run(db, snapshot_dir, dry_run = FALSE, .now = NULL)
+#   mig003_run(db, snapshot_dir, dry_run = FALSE, .now = NULL,
+#              bounds = .mig003_e5_bounds())
 #     -> invisible(list(status = "migrated" | "already_migrated" | "dry_run",
 #        ...)). Against a POST-001/PRE-003 `feature_alias` (no
 #        `date_start`/`date_end` columns - see helper-migration-003-db.R):
@@ -16,10 +17,19 @@
 #          2. R1's universal self flip, TABLE-WIDE and unconditional:
 #             `auto_assign = TRUE` on every `kind = 'self'` row, regardless
 #             of whether that feature is one of E.5's curated keys.
-#          3. Applies the curated E.5 bounds via the internal
-#             `.mig003_apply_bounds()` below, called with the REAL E.5
-#             literals (`b.s01`, `k.e02`, ... - meaningless against any test
-#             fixture, since those strings do not exist in one).
+#          3. Applies `bounds` via the internal `.mig003_apply_bounds()`
+#             below. `bounds` DEFAULTS to `.mig003_e5_bounds()` (the real
+#             curated E.5 table as a function), so the production default is
+#             unchanged and no production caller passes it - but it is
+#             INJECTABLE at the `mig003_run()` level too (PLAN-15 B-15.E5,
+#             AMENDED 2026-07-24, Phase-5 audit round 2 B2/PCR-1), because
+#             the real E.5 literals (`b.s01`, `k.e02`, ...) do not exist on
+#             any `T.*`/`TH.*` test fixture and every one would match zero
+#             rows, which E.5 pins as an ABORT - making `mig003_run()`
+#             impossible to call on a fixture at all without this. Every
+#             test below passes `bounds = .mig003_fixture_bounds()`, so
+#             R-15.19's per-row assertions cover the REAL entry point, not
+#             only the internal `.mig003_apply_bounds()`.
 #        "already_migrated" if `date_start`/`date_end` already exist on
 #        `feature_alias` (idempotent no-op) - not exercised by this file.
 #
@@ -116,8 +126,10 @@ test_that("R-15.10: universal self-alias flip resolves own name after 003, even 
   cand_before <- .rc_feature_candidates("T.PLAIN01", as.Date("2025-06-01"), registry_before)
   expect_equal(nrow(cand_before), 0L)
 
+  # bounds = .mig003_fixture_bounds() (Phase-5 audit round 2 B2): the real
+  # E.5 literals default would match zero rows on this fixture and ABORT.
   snap_dir <- withr::local_tempdir()
-  mig$mig003_run(db = path, snapshot_dir = snap_dir)
+  mig$mig003_run(db = path, snapshot_dir = snap_dir, bounds = .mig003_fixture_bounds())
 
   con2 <- migration_003_con(path)
   withr::defer(DBI::dbDisconnect(con2, shutdown = TRUE))
@@ -158,31 +170,29 @@ test_that("R-15.19: migration 003 adds date bounds, writes exactly the itemised 
   # the post-migration "all TRUE" assertion below is falsifiable.
   expect_true(any(!fa_before$auto_assign[fa_before$alias_key %in% src_keys]))
   ctrl_before <- fa_before[fa_before$uuid %in% ctrl_uuids, fingerprint_cols]
+  # B3: baseline change_log count captured BEFORE mig003_run() does
+  # anything - Phase-5 audit round 2 B2(b): bounds application now happens
+  # INSIDE the real entry point (see below), not via a separate direct
+  # `.mig003_apply_bounds()` call afterwards, so the "before" snapshot for
+  # the provenance-count assertion must precede the entry-point call itself.
+  log_before <- DBI::dbGetQuery(con0, "SELECT count(*) AS n FROM change_log WHERE tbl = 'feature_alias'")$n
   DBI::dbDisconnect(con0, shutdown = TRUE)
 
-  # ---- Full production entry point: ALTER TABLE + R1's universal flip
-  # (harmless no-op against this fixture's real-E.5-literal bounds step,
-  # since none of `b.s01`/`k.e02`/... exist here - see this unit's report
-  # for why the itemised-bounds mechanism is tested via the injectable
-  # `.mig003_apply_bounds()` below instead). ----
+  # ---- Full production entry point: ALTER TABLE + R1's universal flip +
+  # the itemised bounds application - ALL via the REAL mig003_run() entry
+  # point, injecting THIS seed's own fixture-scoped bounds table (mirrors
+  # E.5's shape/counts exactly). Phase-5 audit round 2 B2(b): this covers
+  # mig003_run() itself, not only the internal .mig003_apply_bounds() - a
+  # migration that does the ALTER and the R1 flip and applies ZERO curated
+  # bounds can no longer pass this test. ----
   snap_dir <- withr::local_tempdir()
-  mig$mig003_run(db = path, snapshot_dir = snap_dir)
+  mig$mig003_run(db = path, snapshot_dir = snap_dir, bounds = .mig003_fixture_bounds())
 
   con <- migration_003_con(path)
   withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   fields <- DBI::dbListFields(con, "feature_alias")
   expect_true(all(c("date_start", "date_end") %in% fields))
-
-  # B3: at least one `change_log` provenance row per bounded alias, captured
-  # around the ONE call that owns the mandated backfill provenance (PLAN-15
-  # E.1: "each with a change_log provenance row", via db_update() like
-  # migration 002) - not conflated with mig003_run()'s own R1 flip above.
-  log_before <- DBI::dbGetQuery(con, "SELECT count(*) AS n FROM change_log WHERE tbl = 'feature_alias'")$n
-
-  # ---- The itemised-bounds mechanism itself, exercised with THIS seed's
-  # own fixture-scoped bounds table (mirrors E.5's shape/counts exactly). ----
-  mig$.mig003_apply_bounds(con, .mig003_fixture_bounds())
 
   fa_after <- DBI::dbGetQuery(con, "SELECT * FROM feature_alias ORDER BY uuid")
 
@@ -283,16 +293,22 @@ test_that("E.5: .mig003_apply_bounds() aborts (catchable error) and writes NOTHI
   withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # .mig003_apply_bounds() operates on a post-ALTER schema (mirrors R-15.19's
-  # own call order).
+  # own call order). bounds = .mig003_fixture_bounds() (Phase-5 audit round 2
+  # B2): the real E.5 literals default would match zero rows on this fixture
+  # and ABORT before the ALTER/R1 flip could even land.
   snap_dir <- withr::local_tempdir()
-  mig$mig003_run(db = path, snapshot_dir = snap_dir)
+  mig$mig003_run(db = path, snapshot_dir = snap_dir, bounds = .mig003_fixture_bounds())
 
   before <- .mig003_bounds_snapshot(con)
 
   # 'T.NONEXISTENT99' names no feature at all in this seed - zero matching
   # rows, not exactly one.
   bad_bounds <- bounds_row("t.src01", "T.NONEXISTENT99", date_end = "2024-01-01")
-  expect_error(mig$.mig003_apply_bounds(con, bad_bounds))
+  # C1 (Phase-5 audit round 2): class-checked, not a bare expect_error() -
+  # this is the ONLY test of E.5's row-identity abort, and a bare
+  # expect_error() is satisfied by ANY incidental error, including a
+  # mig003_run() abort a few lines above.
+  expect_error(mig$.mig003_apply_bounds(con, bad_bounds), class = "sampletidy_error")
 
   after <- .mig003_bounds_snapshot(con)
   expect_equal(after, before)
@@ -304,8 +320,10 @@ test_that("E.5: .mig003_apply_bounds() aborts (catchable error) and writes NOTHI
   con <- migration_003_con(path)
   withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
+  # bounds = .mig003_fixture_bounds() (Phase-5 audit round 2 B2): see the
+  # sibling abort test above.
   snap_dir <- withr::local_tempdir()
-  mig$mig003_run(db = path, snapshot_dir = snap_dir)
+  mig$mig003_run(db = path, snapshot_dir = snap_dir, bounds = .mig003_fixture_bounds())
 
   # Manufacture a genuine 2-row collision: a SECOND non-self arm sharing
   # 't.src02' AND pointing at the same target feature (mf-tgt02 / T.TGT02)
@@ -319,7 +337,8 @@ test_that("E.5: .mig003_apply_bounds() aborts (catchable error) and writes NOTHI
   before <- .mig003_bounds_snapshot(con)
 
   bad_bounds <- bounds_row("t.src02", "T.TGT02", date_end = "2021-06-15")
-  expect_error(mig$.mig003_apply_bounds(con, bad_bounds))
+  # C1 (Phase-5 audit round 2): class-checked, not a bare expect_error().
+  expect_error(mig$.mig003_apply_bounds(con, bad_bounds), class = "sampletidy_error")
 
   after <- .mig003_bounds_snapshot(con)
   expect_equal(after, before)
