@@ -158,9 +158,9 @@
 #'
 #' find-or-create from (`name` = analyte_raw, `organisation` = org, `method` =
 #' method_raw, rl_low, rl_high, `units` = units_raw), `uuid_analyte = NULL`.
-#' Dedup key is `(organisation, .rc_key(name), .rc_key(method))` AND
+#' Dedup key is `(organisation, .rc_method_key(name), .rc_method_key(method))` AND
 #' `uuid_analyte IS NULL` (PIN (e): the lookup MUST use the identical
-#' `.rc_key()` expression `.rc_lab_method_candidates()` uses, or nothing ever
+#' `.rc_method_key()` expression `.rc_lab_method_candidates()` uses, or nothing ever
 #' dedups). `conversion_constant` stays NA. Returns `clean` with `uuid_lab`
 #' filled for every pending-analyte row.
 #' @keywords internal
@@ -175,7 +175,7 @@
   }
 
   pend_idx <- which(pending)
-  dk <- paste(clean$org, .rc_key(clean$analyte_raw), .rc_key(clean$method_raw), sep = "||")
+  dk <- paste(clean$org, .rc_method_key(clean$analyte_raw), .rc_method_key(clean$method_raw), sep = "||")
 
   for (uk in unique(dk[pend_idx])) {
     rows_k <- pend_idx[dk[pend_idx] == uk]
@@ -192,9 +192,9 @@
     lab_uuid <- NA_character_
     recorded_units <- NA_character_
     if (nrow(cand) > 0) {
-      name_match <- !is.na(cand$name) & .rc_key(cand$name) == .rc_key(name_raw)
+      name_match <- !is.na(cand$name) & .rc_method_key(cand$name) == .rc_method_key(name_raw)
       method_match <- (is.na(cand$method) & is.na(method_raw)) |
-        (!is.na(cand$method) & !is.na(method_raw) & .rc_key(cand$method) == .rc_key(method_raw))
+        (!is.na(cand$method) & !is.na(method_raw) & .rc_method_key(cand$method) == .rc_method_key(method_raw))
       hit <- cand[name_match & method_match, , drop = FALSE]
       if (nrow(hit) > 0) {
         lab_uuid <- hit$uuid[[1]]

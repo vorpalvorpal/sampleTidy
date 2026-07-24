@@ -16,7 +16,7 @@ points that fail to resolve because of a **key-normalisation mismatch**:
 - migration 001 (`.mig001_normalize = tolower(trimws(x))`) stores alias keys with
   punctuation preserved: `b.s01`, `b.mw02`, `k.e02` (1239/1989 = 62% contain a
   dot/space/hyphen).
-- reconcile (`.rc_key = tolower(gsub("[^[:alnum:]]","",normalise_lab_text(x)))`)
+- reconcile (`.rc_method_key = tolower(gsub("[^[:alnum:]]","",normalise_lab_text(x)))`)
   strips punctuation and looks up `bs01`/`bmw02`/`ke02` → matches ZERO dotted keys.
 
 So reconcile cannot resolve ~62% of the alias registry; every such point is flagged
@@ -55,7 +55,7 @@ Resolution order for each incoming `feature_raw`, per row, within an event/WO:
 <!-- block: B-15.layer1 -->
 ### Layer 1 — exact curated alias (AUTHORITATIVE)
 - Key = the migration's punctuation-PRESERVING normaliser (tolower + trim, keep
-  punctuation) — NOT the stripping `.rc_key`.
+  punctuation) — NOT the stripping `.rc_method_key`.
 - This is the immediate fix for the 62% failure AND keeps `BS1`≠`B.S1`.
 - Ambiguous alias handling (makes suggestions work): when a key reaches >1 distinct
   feature all of which are `auto_assign=FALSE`, DO NOT drop it silently. Emit ALL
@@ -106,8 +106,11 @@ Resolution order for each incoming `feature_raw`, per row, within an event/WO:
   with a reason (`wo_site_inferred` / `structural_parse`) and confidence.
 - Review payloads carry candidates for EVERY unresolved/ambiguous row, so the
   suggestion mechanism (currently inert, 0/127) actually helps.
-- Do NOT change the global `.rc_key` (shared by method keys + intra-event dedup).
-  Introduce a dedicated feature-alias normaliser; leave method/dedup untouched.
+- Do NOT change the BEHAVIOUR of the global `.rc_method_key` (shared by method keys +
+  intra-event dedup). Introduce a dedicated feature-alias normaliser; leave method/dedup
+  untouched. **The NAME is not covered by this rule** — it was `.rc_key` until Robin's
+  RULING 2 of 2026-07-24 renamed it to `.rc_method_key` (see F.7 below). A rename touches
+  no behaviour, and the old name was itself the hazard.
 
 <!-- block: B-15.seam-table -->
 ## Seam table (producer → consumer, authored 2026-07-24)
@@ -157,11 +160,11 @@ These are the *shapes*, not the values; each must appear in at least one test.
 ## Work breakdown (one body of work, TDD; tests before impl per phase)
 
 - **A. Layer-1 punctuation-preserving alias key + ambiguous-candidate surfacing.**
-  **DONE 2026-07-23 (commit `1d9048d`).** `.rc_feature_key` added (NOT `.rc_key`);
+  **DONE 2026-07-23 (commit `1d9048d`).** `.rc_feature_key` added (NOT `.rc_method_key`);
   `.rc_feature_candidates` + `.rc_resolve_features` folded with it; `.rc_feature_suggestions`
   surfaces the all-`auto_assign=FALSE` ambiguous case. Fixture regenerated stripped→dotted.
   Dry-run: unknown_feature 113→43, 12 within-site candidates, zero cross-site merge; suite 2697/0/0.
-  Files: R/reconcile.R (`.rc_key` callers for features → new `.rc_feature_key`;
+  Files: R/reconcile.R (`.rc_method_key` callers for features → new `.rc_feature_key`;
   `.rc_feature_candidates` drop the strip; `.rc_feature_review` emit candidates for
   the auto_assign=FALSE ambiguous case). Tests: dotted keys resolve (B.S01, K.E02,
   BH.MW02A); BS1 stays distinct from B.S1 (NO false merge — the collision oracle);
@@ -1495,7 +1498,7 @@ above guard the rows, which is the risk Phase 8 was not the only thing protectin
 Work A shipped without a TDD audit. The audit confirmed its central claim empirically —
 `.rc_feature_key` reproduces `.mig001_normalize` on **1989/1989** stored `alias_key`s,
 and every mixed-key mutation was killed by existing tests — but found that adopting
-`tolower(trimws())` silently dropped two hygiene properties `.rc_key` had. **Two
+`tolower(trimws())` silently dropped two hygiene properties `.rc_method_key` had. **Two
 mutations survived the entire suite**, which is the six-times-repeated failure mode.
 
 <!-- block: B-15.F1 -->
@@ -1503,7 +1506,7 @@ mutations survived the entire suite**, which is the six-times-repeated failure m
 `.rc_feature_key` guards `is.na(x) | k == ""` (reconcile.R:83) but not "no alphanumeric
 character". `feature_raw = "."` or `"-"` therefore yields key `"."`, survives the A44
 guard, and `commit_event()` materialises `feature_alias(alias_key = '.', kind =
-'pending')` plus a sample against it. Under `.rc_key` these were held. Reproduced.
+'pending')` plus a sample against it. Under `.rc_method_key` these were held. Reproduced.
 **Fix:** extend the guard to `!grepl("[[:alnum:]]", k)` → NA. **Test:** a `"."` raw is
 held, and NO alias/sample row is written — assert the row counts, not just the status.
 
@@ -1514,7 +1517,7 @@ held, and NO alias/sample row is written — assert the row counts, not just the
 second sample for a point that already exists**. A plain ASCII trailing space resolves
 fine, so the failure is spelling-dependent and silent. Zero incidence in the 265-file
 dry run (all 43 residual raws are clean ASCII) — latent, not active. **Fix:** Unicode-aware
-trim plus `normalise_lab_text()`, matching what `.rc_key` already did. **Test:** the NBSP
+trim plus `normalise_lab_text()`, matching what `.rc_method_key` already did. **Test:** the NBSP
 variant resolves to the SAME feature as the clean string, with no new alias row.
 
 <!-- block: B-15.F3 -->
@@ -1665,9 +1668,9 @@ which is a single-suggestion case. This is a latent-correctness fix, not a resid
 ### F.7 Documentation drift (MINOR, but a trap for the Work B implementer)
 - **STILL LIVE (re-verified 2026-07-23, cold audit finding 19).** The
   `.rc_resolve_existing_pending` roxygen at **reconcile.R:759** says the pending lookup
-  is "the `feature_alias` row whose `alias_key == .rc_key(feature_raw)`"; the body at
+  is "the `feature_alias` row whose `alias_key == .rc_method_key(feature_raw)`"; the body at
   **reconcile.R:781** reads `k <- rows$alias_key[[i]]` (= `.rc_feature_key`). Since
-  `.rc_key` strips punctuation and `.rc_feature_key` preserves it, the comment names a
+  `.rc_method_key` strips punctuation and `.rc_feature_key` preserves it, the comment names a
   key that would match **zero** dotted aliases — it describes the exact bug PLAN-15
   exists to fix, as the documentation of the code that fixes it. This is the exact
   comment a B.4 implementer reads. Fix the roxygen, not the body.
@@ -1677,25 +1680,34 @@ which is a single-suggestion case. This is a latent-correctness fix, not a resid
   input folding to empty, and for input "carrying NO alphanumeric character at all"
   (F.1), and documents the Unicode-aware trim (F.2) explicitly. No further action.
 - **Three** feature keys now coexist: `.rc_feature_key` (alias/grouping),
-  `.rc_key` (lab-method + analyte), and `.st_normalise_key` = `tolower(str_squish())`
+  `.rc_method_key` (lab-method + analyte), and `.st_normalise_key` = `tolower(str_squish())`
   (assemble.R:74, joining samples↔results). Assemble therefore treats `"T  S01"` and
   `"T S01"` as one sample while reconcile keys them apart. Not necessarily wrong;
-  undocumented and untested. Add a comment naming all three and their scopes.
+  undocumented and untested.
 
-**Acceptance (must be able to FAIL).** Added 2026-07-23 (cold audit, finding 19): F.7
-carried no acceptance line while six other F items did, so there was nothing to stop it
-being marked done on inspection. A documentation defect still needs a falsifiable gate:
+**ROBIN'S RULING 2 — 2026-07-24: remove the hazard, not the drift.**
+The two normalisers were `.rc_key` and `.rc_feature_key`. Nothing in either NAME said which
+one strips punctuation, so a comment had to carry that information — and comments drift,
+which is what F.7 is. The fix is to make the names self-documenting rather than to police
+the comment: **`.rc_key` is renamed `.rc_method_key`** (behaviour untouched; see the
+cross-cutting rule at the top of this plan, reworded accordingly).
 
-### R-15.28 Roxygen no longer cites stripping .rc_key
-- assert the `.rc_resolve_existing_pending` roxygen contains **no** occurrence of
-  `.rc_key(feature_raw)` and **does** name `.rc_feature_key` / `alias_key` — a
-  grep-style assertion over the source file, which fails against today's source;
+That confusion was not hypothetical. It caused the Phase-5 round-5 audit finding A4, in
+which test fixtures built FEATURE keys using the METHOD normaliser.
 
-### R-15.29 Three-key comment names all three normalisers
-- assert the three-key comment exists and names all three of `.rc_feature_key`,
-  `.rc_key` and `.st_normalise_key`. A test that merely checks *a* comment is present
-  passes against a comment naming two of them.
-Both are cheap and both fail on current source, which is the bar.
+**Consequently criteria R-15.28 and R-15.29 are DELETED**, along with their two tests
+(formerly `test-reconcile.R:3646` and `:3671`) and the two test-local helpers that existed
+only to serve them (`.rc_roxygen_block()`, `.rc_comment_blocks()`). Declared criteria for
+this plan: **145 → 143**. `.strip_r_source()` is NOT deleted — it has an unrelated user at
+`test-migration-002.R:521`.
+
+**Consequence to carry, stated explicitly rather than hidden:** F.7's remaining live item —
+the `.rc_resolve_existing_pending` roxygen still naming the wrong normaliser — now has
+**no automated gate**. It was the only F item whose gate was a source-scanning meta-test,
+and per this ruling that instrument is retired rather than repaired. Verify it by
+inspection at Phase 9 sign-off. This re-opens cold-audit finding 19 for F.7 alone, with the
+ruling as its answer: a doc defect whose only possible gate is a doc-scanning test is not
+worth the false-confidence such a test buys.
 
 <!-- block: B-15.F8 -->
 ### F.8 Pre-Work-A pending aliases have no upgrade path (NOTE — not currently triggerable)

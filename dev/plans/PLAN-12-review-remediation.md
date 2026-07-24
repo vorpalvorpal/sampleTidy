@@ -388,15 +388,15 @@ call. CONTRACT A13's layout clause is re-pinned on landing.
 
 Not load-bearing at fixture scale, but the reconciler is the corpus hot path:
 - **PERF-1:** `.rc_feature_candidates()` / `.rc_lab_method_candidates()`
-  re-run `.rc_key()` (an 11-pattern gsub chain) over **every** registry name for
+  re-run `.rc_method_key()` (an 11-pattern gsub chain) over **every** registry name for
   **every** result row (`reconcile.R:77-78,162`). Precompute the keyed name
-  columns once in `.rc_load_registry()`. (Interacts with PLAN-11's `.rc_key`
-  change — do this **after** R-11.3/R-11.4 land, keyed on the new `.rc_key`.)
+  columns once in `.rc_load_registry()`. (Interacts with PLAN-11's `.rc_method_key`
+  change — do this **after** R-11.3/R-11.4 land, keyed on the new `.rc_method_key`.)
 - **PERF-2:** `.rc_recorded_revision()` re-queries per conflicting row
   (`reconcile.R:549`). Cache per `(event, work_order)`.
 
 Criteria: behaviour-identical (existing `test-reconcile.R` green, unchanged
-outputs); a micro-benchmark over the real corpus shows the per-row `.rc_key`
+outputs); a micro-benchmark over the real corpus shows the per-row `.rc_method_key`
 normalisation gone. Optional — land only if corpus timing warrants.
 
 ---

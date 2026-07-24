@@ -646,7 +646,7 @@ for lab reports; `sample.organisation ∈ {ACIRL, Internal, ALS}`;
     name (`Standing Water Level` vs `Standing water level`, both ALS, both
     method `field`, both → one analyte) — those are **genuinely different
     methods** and both rows are kept (user, binding: methods retain the
-    capitalisations actually used in reports). But `.rc_key()` folds them
+    capitalisations actually used in reports). But `.rc_method_key()` folds them
     together, `.rc_lab_method_candidates()` returns 2, and
     `.rc_resolve_analytes()` requires exactly 1 — so **every ACIRL standing
     water level reading currently strands as `unknown_analyte`** (verified

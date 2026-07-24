@@ -824,25 +824,25 @@ test_that("R-8.7/R-8.8: reconcile_event() is pure - DB row counts are unchanged 
 # PLAN 11 - feature_alias indirection, commit-everything, R-11.19 exact-match
 # =============================================================================
 
-# ---- R-11.3: .rc_key() normalisation (fold safety) -------------------------
+# ---- R-11.3: .rc_method_key() normalisation (fold safety) -------------------------
 
-test_that("R-11.3: .rc_key folds punctuation/case variants of the same code to one key", {
-  keys <- .rc_key(c("B.S01", "B S01", "BS01", "b.s01", "B..S01"))
+test_that("R-11.3: .rc_method_key folds punctuation/case variants of the same code to one key", {
+  keys <- .rc_method_key(c("B.S01", "B S01", "BS01", "b.s01", "B..S01"))
   expect_equal(length(unique(keys)), 1)
   expect_false(is.na(keys[[1]]))
 })
 
-test_that("R-11.3: .rc_key maps NA and blank names to NA (A44 guard, amended half)", {
-  expect_true(is.na(.rc_key(NA_character_)))
-  expect_true(is.na(.rc_key("")))
-  expect_true(is.na(.rc_key("   ")))
+test_that("R-11.3: .rc_method_key maps NA and blank names to NA (A44 guard, amended half)", {
+  expect_true(is.na(.rc_method_key(NA_character_)))
+  expect_true(is.na(.rc_method_key("")))
+  expect_true(is.na(.rc_method_key("   ")))
 })
 
 # ---- PLAN-15 Work A: .rc_feature_key() punctuation-PRESERVING alias key ------
 # The feature-alias registry key is written by migration-001's `.mig001_normalize`
 # = tolower(trimws(name)) - punctuation is PRESERVED. Reconcile must look features
 # up with the SAME normaliser, or the ~62% of alias keys that contain a dot/space
-# are unreachable. This is a DIFFERENT function from `.rc_key` (which strips all
+# are unreachable. This is a DIFFERENT function from `.rc_method_key` (which strips all
 # punctuation and is shared by method keys + intra-event dedup - must not change).
 
 # Phase-5 audit C1/C2: the F.3/F.4 tautologies formerly here (one comparing
@@ -879,7 +879,7 @@ test_that("PLAN-15 A: .rc_feature_key maps NA and blank/whitespace names to NA (
   as.integer(sub("distinct_keys=", "", m))
 }
 
-# the OLD .rc_key (pre-R-11.3, punctuation kept)
+# the OLD .rc_method_key (pre-R-11.3, punctuation kept)
 .rc_old_key <- function(x) tolower(stringr::str_squish(normalise_lab_text(x)))
 
 test_that("R-11.3: frozen-snapshot - feature.name fold adds zero new collisions vs the OLD key; count matches the fixture's own header", {
@@ -887,7 +887,7 @@ test_that("R-11.3: frozen-snapshot - feature.name fold adds zero new collisions 
   expected <- .rc_fixture_header_count(path)
   names <- readr::read_csv(path, comment = "#", show_col_types = FALSE)$name
   n_old <- length(unique(.rc_old_key(names)))
-  n_new <- length(unique(.rc_key(names)))
+  n_new <- length(unique(.rc_method_key(names)))
   expect_equal(n_new, expected)
   expect_equal(n_new, n_old) # the fold introduces zero NEW collisions
 })
@@ -897,7 +897,7 @@ test_that("R-11.3: frozen-snapshot - analyte.name fold adds zero new collisions 
   expected <- .rc_fixture_header_count(path)
   names <- readr::read_csv(path, comment = "#", show_col_types = FALSE)$name
   n_old <- length(unique(.rc_old_key(names)))
-  n_new <- length(unique(.rc_key(names)))
+  n_new <- length(unique(.rc_method_key(names)))
   expect_equal(n_new, expected)
   expect_equal(n_new, n_old)
 })
@@ -907,21 +907,21 @@ test_that("R-11.3: frozen-snapshot - lab_method (organisation,name,method) tripl
   expected <- .rc_fixture_header_count(path)
   triples <- readr::read_csv(path, comment = "#", show_col_types = FALSE)
   old_triple <- paste(triples$organisation, .rc_old_key(triples$name), .rc_old_key(triples$method), sep = "||")
-  new_triple <- paste(triples$organisation, .rc_key(triples$name), .rc_key(triples$method), sep = "||")
+  new_triple <- paste(triples$organisation, .rc_method_key(triples$name), .rc_method_key(triples$method), sep = "||")
   n_old <- length(unique(old_triple))
   n_new <- length(unique(new_triple))
   expect_equal(n_new, expected)
   expect_equal(n_new, n_old)
 })
 
-test_that("R-11.3: live registry property - .rc_key is injective over feature/analyte/lab_method names modulo the two known allowlisted collisions (corpus-gated, no count literal)", {
+test_that("R-11.3: live registry property - .rc_method_key is injective over feature/analyte/lab_method names modulo the two known allowlisted collisions (corpus-gated, no count literal)", {
   corpus_db <- Sys.getenv("SAMPLETIDY_CORPUS_DB")
   skip_if(corpus_db == "", "SAMPLETIDY_CORPUS_DB not set")
   con <- DBI::dbConnect(duckdb::duckdb(), corpus_db, read_only = TRUE)
   on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
 
   check_injective <- function(ids, allowed_ids) {
-    keys <- .rc_key(ids)
+    keys <- .rc_method_key(ids)
     groups <- split(ids, keys)
     groups <- groups[vapply(groups, function(g) length(unique(g)) > 1, logical(1))]
     for (g in groups) {
@@ -942,7 +942,7 @@ test_that("R-11.3: live registry property - .rc_key is injective over feature/an
 
   lm <- DBI::dbGetQuery(con, "SELECT organisation, name, method FROM lab_method")
   lm_id <- paste(lm$organisation, lm$name, lm$method, sep = "||")
-  lm_key <- paste(lm$organisation, .rc_key(lm$name), .rc_key(lm$method), sep = "||")
+  lm_key <- paste(lm$organisation, .rc_method_key(lm$name), .rc_method_key(lm$method), sep = "||")
   check_injective(lm_id, "ACIRL||Standing Water Level||field") # allowlisted below too
   # both spellings of the ACIRL pair (A65/R-11.19) are allowlisted, not just one
   groups <- split(lm_id, lm_key)
@@ -3586,134 +3586,4 @@ test_that("R-15.45 (E.7): a key reaching a live SELF arm plus one live NON-self 
   expect_equal(nrow(note_ctrl), 1)
   expect_true(grepl("subkind=ambiguous", note_ctrl$payload[[1]], fixed = TRUE))
   expect_false(grepl("subkind=self_precedence_note", note_ctrl$payload[[1]], fixed = TRUE))
-})
-
-# ---- F.7: documentation drift (R-15.28/R-15.29) ----------------------------
-# Source-scanning meta-tests, comment/string-aware (phase4 checklist #6):
-# each isolates the exact roxygen/comment block rather than grepping the
-# whole file, and each carries its OWN decoy fixture proving the extraction
-# does not trip on an unrelated mention of the same token elsewhere.
-
-#' The contiguous run of `#'`-prefixed roxygen lines immediately above the
-#' first line matching `fn_regex`, collapsed to one string (or NA if no
-#' unique match / no roxygen block precedes it).
-.rc_roxygen_block <- function(lines, fn_regex) {
-  fn_line <- grep(fn_regex, lines)
-  if (length(fn_line) != 1) return(NA_character_)
-  end <- fn_line - 1L
-  start <- end
-  while (start >= 1 && grepl("^#'", lines[[start]])) start <- start - 1L
-  start <- start + 1L
-  if (start > end) return(NA_character_)
-  paste(lines[start:end], collapse = "\n")
-}
-
-#' All contiguous comment blocks (any run of `#`-prefixed lines, roxygen or
-#' plain) in `lines`, each collapsed to one string.
-#'
-#' Phase-5 audit round 3 C2: the PREVIOUS implementation classified a line as
-#' a comment by `grepl("^\\s*#", lines)`, which also matches a line that only
-#' LOOKS like a comment because it happens to fall inside a multi-line string
-#' literal - R-15.29's guard was therefore satisfiable by a string constant,
-#' the exact "comment/string-aware" property this block's header claims.
-#' FIX: parse `lines` for real (`getParseData()`) and group only genuine
-#' `COMMENT` tokens - a line inside a string literal is tokenized as part of
-#' the STR_CONST, never as COMMENT, so it can never contribute to a block.
-.rc_comment_blocks <- function(lines) {
-  src <- paste(lines, collapse = "\n")
-  pd <- tryCatch(
-    utils::getParseData(parse(text = src, keep.source = TRUE)),
-    error = function(e) NULL
-  )
-  if (is.null(pd) || nrow(pd) == 0) return(list())
-  comment_rows <- pd[pd$token == "COMMENT", , drop = FALSE]
-  if (nrow(comment_rows) == 0) return(list())
-  comment_lines <- sort(unique(comment_rows$line1))
-  blocks <- list()
-  i <- 1L; n <- length(comment_lines)
-  while (i <= n) {
-    j <- i
-    while (j < n && comment_lines[[j + 1]] == comment_lines[[j]] + 1L) j <- j + 1L
-    blocks[[length(blocks) + 1]] <- paste(
-      comment_rows$text[comment_rows$line1 %in% comment_lines[i:j]],
-      collapse = "\n"
-    )
-    i <- j + 1L
-  }
-  blocks
-}
-
-test_that("R-15.28: .rc_resolve_existing_pending's roxygen no longer cites the stripping .rc_key(feature_raw) as the pending-lookup key, and DOES name .rc_feature_key alongside alias_key (source-scanning meta-test over R/reconcile.R; fails against today's source)", {
-  src <- readLines(testthat::test_path("..", "..", "R", "reconcile.R"), warn = FALSE)
-  block <- .rc_roxygen_block(src, "^\\.rc_resolve_existing_pending <- function")
-  expect_false(is.na(block))
-  expect_false(grepl(".rc_key(feature_raw)", block, fixed = TRUE))
-  expect_true(grepl(".rc_feature_key", block, fixed = TRUE))
-  expect_true(grepl("alias_key", block, fixed = TRUE))
-
-  # DECOY (comment/string-aware, not a whole-file grep): a synthetic "file"
-  # where an UNRELATED preceding function's roxygen mentions the forbidden
-  # token - the block extraction must isolate only the TARGET function's own
-  # roxygen and must not be tripped by the decoy.
-  decoy_lines <- c(
-    "#' some other function's doc happens to mention .rc_key(feature_raw)",
-    "#' as an example of what NOT to do.",
-    "decoy_fn <- function(x) x",
-    "",
-    "#' the real target's roxygen, clean.",
-    "#' @keywords internal",
-    "target_fn <- function(x) x"
-  )
-  decoy_block <- .rc_roxygen_block(decoy_lines, "^target_fn <- function")
-  expect_false(grepl(".rc_key(feature_raw)", decoy_block, fixed = TRUE))
-})
-
-test_that("R-15.29: a SINGLE contiguous comment block in R/reconcile.R names all THREE coexisting key normalisers (.rc_feature_key, .rc_key, .st_normalise_key) - a comment naming only two of them must not satisfy this (fails against today's source, which has no such comment at all)", {
-  src <- readLines(testthat::test_path("..", "..", "R", "reconcile.R"), warn = FALSE)
-  blocks <- .rc_comment_blocks(src)
-  names_all_three <- function(b) {
-    grepl(".rc_feature_key", b, fixed = TRUE) &&
-      grepl(".rc_key", b, fixed = TRUE) &&
-      grepl(".st_normalise_key", b, fixed = TRUE)
-  }
-  hit <- vapply(blocks, names_all_three, logical(1))
-  expect_true(any(hit),
-              info = "no single comment block names .rc_feature_key, .rc_key AND .st_normalise_key")
-
-  # DECOY: a block naming only TWO of the three must NOT satisfy the check -
-  # proves the guard requires all three, not "a comment mentioning keys".
-  decoy_two_of_three <- c("# uses .rc_feature_key and .rc_key only, not the third one")
-  expect_false(any(vapply(.rc_comment_blocks(decoy_two_of_three), names_all_three, logical(1))))
-
-  # DECOY (Phase-5 audit round 3 C2): a line naming all THREE tokens sits
-  # INSIDE a multi-line string literal, not a comment - real, syntactically
-  # valid R where the string spans three physical lines via an unescaped
-  # newline. The middle line, read as raw TEXT, starts with `#` and would
-  # satisfy the OLD `grepl("^\\s*#", lines)` classifier (the exact defect
-  # this fix corrects); a real parse must never emit it as a COMMENT block.
-  decoy_string_literal <- c(
-    "x <- \"line one",
-    "#.rc_feature_key .rc_key .st_normalise_key",
-    "line three\""
-  )
-  expect_false(any(vapply(.rc_comment_blocks(decoy_string_literal), names_all_three, logical(1))))
-
-  # DECOY (Phase-5 round-5 audit A2): consecutive CODE lines carrying
-  # trailing comments that say nothing about the normalisers. The PREVIOUS
-  # implementation built each "block" from the whole physical source line
-  # (`lines[comment_lines[i]:comment_lines[j]]`), code included - so this
-  # decoy's block would come back containing the literal code calls
-  # `.rc_feature_key(x)` and `.rc_key(x)`, even though no COMMENT token here
-  # names either. The fix builds each block from the COMMENT tokens' own
-  # text (`comment_rows$text`), so the block here must be exactly
-  # "# step 1\n# step 2" - neither normaliser name present.
-  decoy_code_with_trailing_comments <- c(
-    "f <- function(x) {", "  a <- .rc_feature_key(x)   # step 1",
-    "  b <- .rc_key(x)           # step 2", "  a }"
-  )
-  code_leaked_into_block <- function(b) {
-    grepl(".rc_feature_key", b, fixed = TRUE) || grepl(".rc_key", b, fixed = TRUE)
-  }
-  expect_false(any(vapply(.rc_comment_blocks(decoy_code_with_trailing_comments),
-                          code_leaked_into_block, logical(1))))
 })

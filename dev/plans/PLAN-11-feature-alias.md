@@ -9,7 +9,7 @@ backlog readers), `tests/testthat/test-feature-alias.R` (new),
 
 | file | owner | functions |
 |---|---|---|
-| `R/reconcile.R` | 08 | `.rc_key`, `.rc_load_registry`, `.rc_feature_candidates`, `.rc_lab_method_candidates` (A65), `.rc_resolve_features`, `.rc_resolve_analytes`, `.rc_resolve_units_values`, `.rc_method_preference`, `.rc_three_way`, `.rc_find_existing`, `.rc_proto_review`, **`.rc_proto_skip`** (F3), `reconcile_event` (incl. the new stage-0) |
+| `R/reconcile.R` | 08 | `.rc_method_key`, `.rc_load_registry`, `.rc_feature_candidates`, `.rc_lab_method_candidates` (A65), `.rc_resolve_features`, `.rc_resolve_analytes`, `.rc_resolve_units_values`, `.rc_method_preference`, `.rc_three_way`, `.rc_find_existing`, `.rc_proto_review`, **`.rc_proto_skip`** (F3), `reconcile_event` (incl. the new stage-0) |
 | `R/commit.R` | 09 | `.ct_find_or_create_sample`, `.ct_resolve_samples`, `.ct_commit_analyses`, `commit_event`, + the new `.ct_materialise_*` |
 | `R/mutate.R` | 09 | `.st_mutate_allowlist`; **`add_feature()`** (R-11.17/A58) |
 | `R/assemble.R` | 07 | synthetic `lab_sample_id` join seam (R-11.15) |
@@ -178,7 +178,7 @@ denormalisation.
   `.rc_find_existing`, `.rc_method_preference`) and read that as evidence D8 is
   wrong. It is not. The actual defect was keying those consumers on a
   **surrogate uuid that does not exist yet** instead of on the **natural key that
-  does** (`alias_key`; `(organisation, .rc_key(name), .rc_key(method))`). D8
+  does** (`alias_key`; `(organisation, .rc_method_key(name), .rc_method_key(method))`). D8
   stands; R-11.5a, R-11.7 and R-11.9 below are re-specified around the natural
   key. Every fix is a `SELECT`, so A32 holds.
 - **D9 — site-narrowing is deferred out of this plan** (orchestrator, from cold
@@ -374,7 +374,7 @@ feature_alias(
   uuid         VARCHAR PRIMARY KEY,   -- the alias's OWN identity (name is not unique)
   uuid_feature VARCHAR,               -- NULLABLE: resolution; NULL = dangling. FK -> feature(uuid)
   name         VARCHAR NOT NULL,      -- raw, as seen ('B..So3')
-  alias_key    VARCHAR NOT NULL,      -- .rc_key(name); NOT unique
+  alias_key    VARCHAR NOT NULL,      -- .rc_method_key(name); NOT unique
   kind         VARCHAR,               -- self | historical_code | descriptive |
                                       --   transcription_error | mask_long | pending
   n_seen       INTEGER DEFAULT 0,
@@ -409,7 +409,7 @@ is removed. Provenance of the write itself is unaffected — the writer still
 passes `source_hash` to `db_append()` for the `change_log` row.
 
 Criteria: the table exists after `seed_db()`; `alias_key` is always
-`.rc_key(name)`; the same `alias_key` may exist against two different features
+`.rc_method_key(name)`; the same `alias_key` may exist against two different features
 (pinned); a re-seen alias increments `n_seen` and never inserts a duplicate; a
 dangling row is reused rather than duplicated.
 
@@ -451,14 +451,14 @@ stores it unchanged; **no `analysis` table in any DDL declares a units column**
 (a pinned grep, because the reversed D7 already shipped once in `helper-db.R`).
 
 <!-- block: B-11.3 -->
-## R-11.3 Normalisation (`.rc_key`, amended)
+## R-11.3 Normalisation (`.rc_method_key`, amended)
 
-`.rc_key()` is `tolower(str_squish(normalise_lab_text(x)))`, which keeps
+`.rc_method_key()` is `tolower(str_squish(normalise_lab_text(x)))`, which keeps
 punctuation, so `B.S01` and `B S01` do not match. Extend it to strip all
 non-alphanumerics:
 
 ```r
-.rc_key <- function(x) {
+.rc_method_key <- function(x) {
   k <- tolower(gsub("[^[:alnum:]]", "", normalise_lab_text(x)))
   k[is.na(x) | k == ""] <- NA_character_
   k
@@ -469,7 +469,7 @@ non-alphanumerics:
 the analyte/method side "the risk" and pinned nothing for it; here is the actual
 number, and the risk turns out to be zero:
 
-| set | rows | distinct keys, OLD `.rc_key` | distinct keys, NEW `.rc_key` |
+| set | rows | distinct keys, OLD `.rc_method_key` | distinct keys, NEW `.rc_method_key` |
 |---|---|---|---|
 | `feature.name` | 894 | 894 | **894** |
 | `analyte.name` | 247 | 246 | **246** |
@@ -483,7 +483,7 @@ pre-existing and are *not* normalisation artefacts:
   including the identity function. A duplicate registry row; merged by plan 14.
 - **`Standing Water Level` (`lab_method`)** — the two **ACIRL** rows
   `Standing Water Level` / `Standing water level`, same org, same method
-  `field`, both → one analyte. They differ only in capitalisation, and `.rc_key`
+  `field`, both → one analyte. They differ only in capitalisation, and `.rc_method_key`
   has always lowercased, so they collide today. **These rows are correct and are
   kept** (user, binding: methods retain the capitalisations reports actually
   use). The defect is in the *matcher* — see A65 / R-11.19.
@@ -495,7 +495,7 @@ tests are needed and the draft conflated them:
   names-only fixtures — the 894 `feature.name` values, the 247 `analyte.name`
   values, the 360 `(organisation, name, method)` triples. Asserts the *fold*
   didn't change: `length(unique(key(x)))` equals the number recorded **in the
-  fixture's own header**, not a literal in the test. This catches a `.rc_key`
+  fixture's own header**, not a literal in the test. This catches a `.rc_method_key`
   regression. (Names only, no data — the A3 exception, as for the feature list.)
 - **(b) live property check** (corpus-gated like R-10.5, skipped without
   `SAMPLETIDY_CORPUS_DB`): asserts `length(unique(key(names))) == length(names)`
@@ -510,7 +510,7 @@ NA (the A44 guard); (a) and (b) both exist and (b) contains no count literal;
 the OLD-vs-NEW equivalence above is itself pinned in (a) — i.e. the fold is
 proven to add no collisions, rather than the counts being asserted blind.
 
-**A44 guard, both halves (cold review C17).** `.rc_key` newly returns NA for
+**A44 guard, both halves (cold review C17).** `.rc_method_key` newly returns NA for
 `""`. Today `.rc_feature_candidates()` (`R/reconcile.R:71-79`) survives a blank
 *registry* name only via its trailing `cand[!is.na(cand)]` guard: indexing with
 an NA on the LHS yields an NA element — the exact A44 phantom-candidate defect.
@@ -533,7 +533,7 @@ imported by **PLAN-13 R-13.1 step 5** — R-11.13 is now only a pointer stub (A6
 # NOTE: no `site` argument — D9. The event carries no site.
 ```
 
-Procedure: key ← `.rc_key(feature_raw)`; NA → zero rows (A44 guard). Collect
+Procedure: key ← `.rc_method_key(feature_raw)`; NA → zero rows (A44 guard). Collect
 `feature_alias` rows with `alias_key == key` **and `auto_assign`**; **drop rows
 with `is.na(uuid_alias)`** (the A44 registry-row guard, C17); resolve to distinct
 `uuid_feature`; if >1 distinct feature, narrow by **`date_end` only** (D9 —
@@ -618,12 +618,12 @@ That is a `SELECT`, so A32/D8 hold unchanged.
 `.rc_load_registry()` already loads `feature_alias` (R-11.4) and `lab_method`.
 For each pending row, resolve the surrogate from the natural key **against the
 registry already in memory**:
-- feature-pending → the `feature_alias` row with `alias_key == .rc_key(feature_raw)`
+- feature-pending → the `feature_alias` row with `alias_key == .rc_method_key(feature_raw)`
   **and `uuid_feature IS NULL`**. Among *pending* aliases that pair is unique
   (R-11.1's upsert guarantees it), so this is a well-defined lookup even though
   `alias_key` is not globally unique.
 - analyte-pending → the `lab_method` row with `uuid_analyte IS NULL` and matching
-  `(organisation, .rc_key(name), .rc_key(method))`.
+  `(organisation, .rc_method_key(name), .rc_method_key(method))`.
 
 Found → set `uuid_feature_alias` / `uuid_lab` from it and **keep `*_pending =
 TRUE`** (the row is still unresolved; only its *identity* is now known). R-11.8's
@@ -634,7 +634,7 @@ there is nothing in the DB to match against, so `.rc_find_existing()` returning
 "no match" is the right answer, not a bug. R-11.8 creates it.
 
 **The key must be identical on both sides or this silently breaks.** If reconcile
-looks up by `.rc_key(method)` and commit creates by raw `method`, every run
+looks up by `.rc_method_key(method)` and commit creates by raw `method`, every run
 creates a fresh dangling row and nothing ever dedups. Pinned in R-11.8(e).
 
 Criteria: a dangling measurement re-ingested **from a different file** (so hash
@@ -767,7 +767,7 @@ writes are here, through the mutation layer, never raw `dbExecute`):
 #  units = units_raw)  <- D7 reversed: the reported units land HERE, on the
 #                         method, and nowhere else. conversion_constant stays
 #                         NA (nothing has established a basis yet).
-# with uuid_analyte = NULL. Dedup by (organisation, .rc_key(name), .rc_key(method))
+# with uuid_analyte = NULL. Dedup by (organisation, .rc_method_key(name), .rc_method_key(method))
 # AND uuid_analyte IS NULL — see (e). Returns clean with uuid_lab filled.
 ```
 
@@ -797,9 +797,9 @@ five, and (a) and (e) are silent-corruption bugs, not style choices:**
 - **(d) `first_seen` / `last_seen` are `Sys.time()`** at materialisation, not the
   event's file date. They record when *we* saw the label, which is what
   `pending_features()` sorts on; the file date is already on the sample.
-- **(e) `lab_method` dedup uses `.rc_key(method)`, not raw `method`.**
+- **(e) `lab_method` dedup uses `.rc_method_key(method)`, not raw `method`.**
   `.rc_lab_method_candidates()` (`R/reconcile.R:161`) already keys on
-  `.rc_key(cand$method)`; if commit creates by a raw key while reconcile looks up
+  `.rc_method_key(cand$method)`; if commit creates by a raw key while reconcile looks up
   by a folded one, **the row created by one run is invisible to the next**, so
   every run makes a new dangling method and nothing ever dedups. R-11.5a's lookup
   and this create **must use the identical expression** — that is the whole
@@ -1066,7 +1066,7 @@ pointing at the **same** analyte. **These are genuinely different methods and
 both rows are kept** (user, binding — methods retain the capitalisations reports
 actually use). The bug is in the matcher, not the data.
 
-Today `.rc_key()` folds them together, `.rc_lab_method_candidates()`
+Today `.rc_method_key()` folds them together, `.rc_lab_method_candidates()`
 (`R/reconcile.R:159-166`) returns **2**, and `.rc_resolve_analytes()` requires
 exactly 1 — so it falls through to the CAS branch, finds no CAS, and lands
 `unknown_analyte`. **Every ACIRL standing-water-level reading currently strands

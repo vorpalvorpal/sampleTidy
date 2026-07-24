@@ -43,7 +43,7 @@
 #' never collapses into a phantom length-1 candidate.
 #' @keywords internal
 #' @noRd
-.rc_key <- function(x) {
+.rc_method_key <- function(x) {
   k <- tolower(gsub("[^[:alnum:]]", "", normalise_lab_text(x)))
   k[is.na(x) | k == ""] <- NA_character_
   k
@@ -51,7 +51,7 @@
 
 #' Fold a *feature* (sampling-point) name to its registry alias key (PLAN-15 A).
 #'
-#' Unlike `.rc_key`, this PRESERVES internal punctuation - it reproduces exactly
+#' Unlike `.rc_method_key`, this PRESERVES internal punctuation - it reproduces exactly
 #' the key that migration-001's `.mig001_normalize` (`tolower(trimws(x))`) writes
 #' into `feature_alias.alias_key`. A feature name encodes `(site, point)` with a
 #' separator (`B.S01`, `K.E02`); stripping the separator fuses genuinely distinct
@@ -59,18 +59,18 @@
 #' features up with the SAME punctuation-preserving normaliser the migration used.
 #' A NA input, one that folds to the empty string, or one carrying NO
 #' alphanumeric character at all returns NA (A44 guard). This is deliberately
-#' NOT `.rc_key`, which stays the folded key for lab-method matching and
+#' NOT `.rc_method_key`, which stays the folded key for lab-method matching and
 #' intra-event dedup.
 #'
 #' PLAN-15 F.1: the guard covers PUNCTUATION-ONLY input too. A `feature_raw` of
 #' `"."` used to fold to the key `"."`, survive the A44 guard and make commit
 #' materialise `feature_alias(alias_key = '.', kind = 'pending')` plus a sample
-#' against it. `.rc_key` held these (it strips non-alphanumerics, so `"."`
+#' against it. `.rc_method_key` held these (it strips non-alphanumerics, so `"."`
 #' folded to `""`); adopting tolower+trim silently dropped that property.
 #'
 #' PLAN-15 F.2: the trim is UNICODE-AWARE (`[\h\v]`, so NBSP / vertical tab /
 #' form feed are stripped too) and the input first goes through
-#' `normalise_lab_text()`, matching the hygiene `.rc_key` already had.
+#' `normalise_lab_text()`, matching the hygiene `.rc_method_key` already had.
 #' `trimws()` alone leaves a trailing NBSP in place, so `"T.S01 "` keyed
 #' apart from `"t.s01"` and commit created a SECOND alias - and a second sample
 #' for a point that already exists. Internal whitespace is NOT squished: the
@@ -162,7 +162,7 @@
 .rc_feature_candidates <- function(feature_raw, sample_date, registry) {
   empty <- tibble::tibble(uuid_alias = character(0), uuid_feature = character(0))
   # PLAN-15 A: features fold with the punctuation-PRESERVING key (`.rc_feature_key`),
-  # matching the migration-written `alias_key`. `.rc_key` (strip) would leave ~62%
+  # matching the migration-written `alias_key`. `.rc_method_key` (strip) would leave ~62%
   # of dotted keys unreachable AND fuse cross-site codes (BS1 vs B.S1).
   key <- .rc_feature_key(feature_raw)
   if (is.na(key)) return(empty)
@@ -420,7 +420,7 @@
   status <- rep(NA_character_, n)       # hit | pending | held
   # PLAN-15 A: the committed/grouping key is the punctuation-PRESERVING feature
   # key (matches the migration-written alias_key + `.rc_feature_candidates`); the
-  # folded `.rc_key` stays for method keys + intra-event dedup only.
+  # folded `.rc_method_key` stays for method keys + intra-event dedup only.
   alias_key <- .rc_feature_key(rows$feature_raw)
   cand_list <- vector("list", n)
 
@@ -612,11 +612,11 @@
 #' @noRd
 .rc_lab_method_candidates <- function(analyte_raw, org, method_raw, registry) {
   lm <- registry$lab_method
-  key <- .rc_key(analyte_raw)
-  cand <- lm[.rc_key(lm$name) == key & !is.na(lm$organisation) & lm$organisation == org, , drop = FALSE]
+  key <- .rc_method_key(analyte_raw)
+  cand <- lm[.rc_method_key(lm$name) == key & !is.na(lm$organisation) & lm$organisation == org, , drop = FALSE]
   if (nrow(cand) > 1 && !is.na(method_raw)) {
-    mkey <- .rc_key(method_raw)
-    narrowed <- cand[!is.na(cand$method) & .rc_key(cand$method) == mkey, , drop = FALSE]
+    mkey <- .rc_method_key(method_raw)
+    narrowed <- cand[!is.na(cand$method) & .rc_method_key(cand$method) == mkey, , drop = FALSE]
     if (nrow(narrowed) >= 1) cand <- narrowed
   }
   cand
@@ -730,7 +730,7 @@
 
   miss_idx <- which(is.na(rows$uuid_lab) & is.na(cas_suggest))
   if (length(miss_idx) > 0) {
-    key <- paste(.rc_key(rows$analyte_raw[miss_idx]), rows$org[miss_idx], sep = "||")
+    key <- paste(.rc_method_key(rows$analyte_raw[miss_idx]), rows$org[miss_idx], sep = "||")
     groups <- split(miss_idx, key)
     for (g in groups) {
       refs <- rows$source_ref[g]
@@ -756,7 +756,7 @@
 #' identical to the one COMMIT creates under, or nothing ever dedups.
 #'
 #' - feature-pending with `uuid_feature_alias == NA`: the `feature_alias` row
-#'   whose `alias_key == .rc_key(feature_raw)` AND `uuid_feature IS NULL`.
+#'   whose `alias_key == .rc_method_key(feature_raw)` AND `uuid_feature IS NULL`.
 #' - analyte-pending with `uuid_lab == NA`: the `lab_method` row with
 #'   `uuid_analyte IS NULL` and matching `(organisation, key(name), key(method))`.
 #' @keywords internal
@@ -771,7 +771,7 @@
   lm <- registry$lab_method
   lm_dangling <- lm[is.na(lm$uuid_analyte), , drop = FALSE]
   lm_natural <- if (nrow(lm_dangling) > 0) {
-    paste(lm_dangling$organisation, .rc_key(lm_dangling$name), .rc_key(lm_dangling$method), sep = "||")
+    paste(lm_dangling$organisation, .rc_method_key(lm_dangling$name), .rc_method_key(lm_dangling$method), sep = "||")
   } else {
     character(0)
   }
@@ -785,7 +785,7 @@
       }
     }
     if (isTRUE(rows$analyte_pending[[i]]) && is.na(rows$uuid_lab[[i]]) && nrow(lm_dangling) > 0) {
-      nk <- paste(rows$org[[i]], .rc_key(rows$analyte_raw[[i]]), .rc_key(rows$method_raw[[i]]), sep = "||")
+      nk <- paste(rows$org[[i]], .rc_method_key(rows$analyte_raw[[i]]), .rc_method_key(rows$method_raw[[i]]), sep = "||")
       m <- which(lm_natural == nk)
       if (length(m) >= 1) rows$uuid_lab[[i]] <- lm_dangling$uuid[[m[[1]]]]
     }

@@ -516,14 +516,14 @@ test_that("R-11.8(a,c)/M4: a RESOLVED feature_alias sharing the alias_key is lef
   expect_identical(pending$kind[[1]], "pending")
 })
 
-test_that("R-11.8(e)/M5: two rows in the SAME commit event, same analyte, differing ONLY in method raw casing, reuse ONE dangling lab_method (intra-event dedup uses .rc_key, not the raw string)", {
+test_that("R-11.8(e)/M5: two rows in the SAME commit event, same analyte, differing ONLY in method raw casing, reuse ONE dangling lab_method (intra-event dedup uses .rc_method_key, not the raw string)", {
   setup <- commit_test_setup()
   con <- setup$con
   on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # Both rows land in the SAME commit_event() call (a single event), so this
   # exercises the intra-event dedup key at commit.R:178
-  # (`paste(clean$org, .rc_key(analyte_raw), .rc_key(method_raw))`), never
+  # (`paste(clean$org, .rc_method_key(analyte_raw), .rc_method_key(method_raw))`), never
   # the cross-file DB-lookup path the R-11.8(e) two-commit test above covers.
   # Distinct features/sample times keep both rows alive through sample
   # creation and analysis commit, so both reach lab_method materialisation.
@@ -550,12 +550,12 @@ test_that("R-11.8(e)/M5: two rows in the SAME commit event, same analyte, differ
   commit_event(mk_commit_event(files), mk_resolved(clean = clean), con)
 
   dangling <- dangling_lab_method_rows(con, "ALS")
-  matching <- dangling[!is.na(dangling$name) & .rc_key(dangling$name) == .rc_key("T.DEDUPE-ANALYTE-M5") &
-                          !is.na(dangling$method) & .rc_key(dangling$method) == .rc_key("T.DEDUPE-METHOD-M5"), , drop = FALSE]
+  matching <- dangling[!is.na(dangling$name) & .rc_method_key(dangling$name) == .rc_method_key("T.DEDUPE-ANALYTE-M5") &
+                          !is.na(dangling$method) & .rc_method_key(dangling$method) == .rc_method_key("T.DEDUPE-METHOD-M5"), , drop = FALSE]
   expect_equal(nrow(matching), 1)
 })
 
-test_that("R-11.8(e): two commits of the same unknown analyte, differing ONLY in raw casing, reuse ONE dangling lab_method (dedup uses .rc_key, not raw string)", {
+test_that("R-11.8(e): two commits of the same unknown analyte, differing ONLY in raw casing, reuse ONE dangling lab_method (dedup uses .rc_method_key, not raw string)", {
   setup <- commit_test_setup()
   con <- setup$con
   on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
@@ -582,8 +582,8 @@ test_that("R-11.8(e): two commits of the same unknown analyte, differing ONLY in
   commit_event(mk_commit_event(files2), mk_resolved(clean = clean2), con)
 
   dangling <- dangling_lab_method_rows(con, "ALS")
-  matching <- dangling[!is.na(dangling$name) & .rc_key(dangling$name) == .rc_key("T.DEDUPE-ANALYTE") &
-                          !is.na(dangling$method) & .rc_key(dangling$method) == .rc_key("T.DEDUPE-METHOD"), , drop = FALSE]
+  matching <- dangling[!is.na(dangling$name) & .rc_method_key(dangling$name) == .rc_method_key("T.DEDUPE-ANALYTE") &
+                          !is.na(dangling$method) & .rc_method_key(dangling$method) == .rc_method_key("T.DEDUPE-METHOD"), , drop = FALSE]
   expect_equal(nrow(matching), 1)
   expect_true(is.na(matching$conversion_constant[[1]]))
 })
@@ -604,7 +604,7 @@ test_that("R-11.8/A63 (D7 reversed): a pending-analyte row's reported units land
   commit_event(mk_commit_event(files), mk_resolved(clean = clean), con)
 
   dangling <- dangling_lab_method_rows(con, "ALS")
-  hit <- dangling[!is.na(dangling$name) & .rc_key(dangling$name) == .rc_key("EC New Units Method"), , drop = FALSE]
+  hit <- dangling[!is.na(dangling$name) & .rc_method_key(dangling$name) == .rc_method_key("EC New Units Method"), , drop = FALSE]
   expect_equal(nrow(hit), 1)
   expect_identical(hit$units[[1]], "\u00b5S/cm")
   expect_true(is.na(hit$conversion_constant[[1]]))
@@ -629,8 +629,8 @@ test_that("R-11.8(f): a committing row's units_raw drift from an existing dangli
   commit_event(mk_commit_event(files1), mk_resolved(clean = clean1), con)
 
   dangling <- dangling_lab_method_rows(con, "ALS")
-  matching <- dangling[!is.na(dangling$name) & .rc_key(dangling$name) == .rc_key("T.DRIFT-ANALYTE") &
-                          !is.na(dangling$method) & .rc_key(dangling$method) == .rc_key("T.DRIFT-METHOD"), , drop = FALSE]
+  matching <- dangling[!is.na(dangling$name) & .rc_method_key(dangling$name) == .rc_method_key("T.DRIFT-ANALYTE") &
+                          !is.na(dangling$method) & .rc_method_key(dangling$method) == .rc_method_key("T.DRIFT-METHOD"), , drop = FALSE]
   expect_equal(nrow(matching), 1)
   lab_uuid <- matching$uuid[[1]]
   expect_identical(matching$units[[1]], "mg/L")
@@ -647,8 +647,8 @@ test_that("R-11.8(f): a committing row's units_raw drift from an existing dangli
   commit_event(mk_commit_event(files2), mk_resolved(clean = clean2), con)
 
   dangling_after <- dangling_lab_method_rows(con, "ALS")
-  matching_after <- dangling_after[!is.na(dangling_after$name) & .rc_key(dangling_after$name) == .rc_key("T.DRIFT-ANALYTE") &
-                          !is.na(dangling_after$method) & .rc_key(dangling_after$method) == .rc_key("T.DRIFT-METHOD"), , drop = FALSE]
+  matching_after <- dangling_after[!is.na(dangling_after$name) & .rc_method_key(dangling_after$name) == .rc_method_key("T.DRIFT-ANALYTE") &
+                          !is.na(dangling_after$method) & .rc_method_key(dangling_after$method) == .rc_method_key("T.DRIFT-METHOD"), , drop = FALSE]
   expect_equal(nrow(matching_after), 1)
   expect_identical(matching_after$units[[1]], "mg/L")
 

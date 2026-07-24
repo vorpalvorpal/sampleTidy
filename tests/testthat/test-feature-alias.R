@@ -87,8 +87,8 @@ lab_method_row <- function(con, uuid) {
 #'
 #' alias_key literals ('tnewcode1' etc) are hand-written in the fixture's own
 #' stripped-lowercase style (matching fa-0005's 'tambig2' etc in
-#' helper-db.R), NOT computed via `.rc_key()` - today's pre-R-11.3 `.rc_key()`
-#' still keeps punctuation (`.rc_key("T.NEWCODE1")` == "t.newcode1", not
+#' helper-db.R), NOT computed via `.rc_method_key()` - today's pre-R-11.3 `.rc_method_key()`
+#' still keeps punctuation (`.rc_method_key("T.NEWCODE1")` == "t.newcode1", not
 #' "tnewcode1"), so calling it here would silently create an alias whose key
 #' never matches this file's own literal lookups.
 mk_collision_fixture <- function(con) {
