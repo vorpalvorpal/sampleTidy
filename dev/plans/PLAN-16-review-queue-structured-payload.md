@@ -341,3 +341,157 @@ pin a shape, and the behavioural criteria are where the gate really is.
 - `R/mutate.R:577` no longer describes the payload as "JSON text" without qualification.
   Doc-only, gated by inspection at sign-off rather than by a source-scanning meta-test —
   per RULING 2, that instrument is retired.
+
+<!-- block: B-16.testmigration -->
+## Migrating the test suite
+
+Measured, not estimated (`dev/tdd-run/p16-payload-test-inventory.md`): **109 raw `payload`
+lines across 8 files, of which 77 are real assertions, 15 are hand-built fixtures and 17 are
+comments.** The earlier "~93 references across 3 files" was both an overcount of assertions
+and an undercount of files.
+
+| file | assertions | fixtures |
+|---|---:|---:|
+| `test-reconcile.R` | 65 | 0 |
+| `test-feature-alias.R` | 5 | 0 |
+| `test-commit.R` | 2 | 2 |
+| `test-assemble.R` | 2 | 0 |
+| `test-router.R` | 2 | 0 |
+| `test-mutate.R` | 1 | 0 |
+| `test-pending.R` | 0 | 5 |
+| `test-review-queue-close.R` | 0 | 8 |
+
+Two pieces of good news fall out of that table. `test-assemble.R`'s two assertions already
+read the **pre-serialisation list** (`review_payload[[1]]$subkind`) — they are structurally
+already what this schema wants, and need no change. `test-router.R`'s two are substring
+checks on genuine JSON and survive as-is.
+
+### RULING A — absence assertions translate to the POSITIVE form, not to `is.na()`
+
+15 assertions are `expect_false(grepl("subkind=X", payload))`. Translating each to
+`is.na(subkind)` would be a **stronger and different claim** than most of them make: they are
+mostly discriminating between two known alternatives (e.g. `suggestion` vs `ambiguous`), not
+asserting the field is unset.
+
+The rule, in order of precedence:
+
+1. Where a test asserts presence of one value **and** absence of another **on the same
+   field**, the pair collapses to a single `expect_identical(row$subkind, "<the one>")`. That
+   is strictly stronger than both halves together and it removes an assertion rather than
+   translating it. **Prefer this; it is the common case.**
+2. Where a test asserts absence of a specific value with no paired presence, it becomes
+   `expect_false(identical(row$subkind, "X"))` — same claim, typed.
+3. Where a test asserts no clause exists at all (`expect_false(grepl("subkind=", payload))`,
+   `test-reconcile.R:3156`), it becomes `expect_true(is.na(row$subkind))`.
+4. **Assertions that exist only to test the serialiser are DELETED, not translated.** In a
+   column world there is no serialiser to test, and translating one manufactures a vacuous
+   test. `test-reconcile.R:3156` is the flagged instance: it asserts the serialiser omits the
+   clause rather than emitting `subkind=NA`. Check it against rule 3 first — if the
+   behavioural claim survives, keep the behavioural half only.
+
+Rule 1 means the suite should get SMALLER here, and a growing assertion count in this area is
+a signal that something is being translated mechanically rather than understood.
+
+### RULING B — the two `value_conflict` grammars stay one `kind`, discriminated by `subkind`
+
+Confirmed in the source: `R/reconcile.R:1181-1186` emits
+`existing_value/incoming_value/existing_uuid/existing_quantified/incoming_quantified/recorded_revision/incoming_revision`,
+while `R/feature-alias.R:242-248` emits `uuid_existing/uuid_new/value_existing/value_new` —
+**different key names for overlapping concepts, under one `kind`.** Note `existing_value` vs
+`value_existing`: the same concept, spelled two ways.
+
+Do **not** split them into two `kind`s. `kind` is a user-visible value that existing queries
+and the review workflow already key on, and changing it is a behaviour change outside this
+plan's remit. Discriminating them is precisely what `subkind` is for, and this plan is
+introducing `subkind` as a real column anyway:
+
+- `kind = 'value_conflict', subkind = 'measurement'` — the `R/reconcile.R` producer.
+- `kind = 'value_conflict', subkind = 'alias_merge'` — the `R/feature-alias.R` producer.
+
+Both map their existing-uuid onto the single `uuid_existing` column; everything else is
+diagnostics and goes to JSON, where the two shapes may legitimately differ. This also
+resolves the naming collision by making it moot — neither spelling survives as a key.
+
+### RULING C — do NOT backfill coverage on the old format
+
+Five producers have **zero** assertions on their payload content today — `unknown_unit`,
+`parse_error`, `already_present`, `method_duplicate`, `batch_duplicate` (every test checks
+only `kind`/`reason`). That is roughly half of `R/reconcile.R`'s distinct producers.
+
+Backfilling tests against the old string format would mean writing tests for a format this
+plan deletes, then deleting them — pure waste. Design their new shape directly from the
+production code's intent, and pin it with new criteria (R-16.17). **The absence of an old
+test is not permission to land these five untested.**
+
+### RULING D — no human-readable duplicate survives in the payload
+
+`R/commit.R:.ct_rewrite_review_payloads()` currently regex-rewrites `alias_uuid=` into the
+payload string *in parallel with* PLAN-15's typed `uuid_target` column — the same value in
+two places, one typed and one parsed. That duplication is the defect pattern this plan
+exists to remove, so after PLAN-16 lands `uuid_alias` is the **only** representation and the
+`alias_uuid=` clause is not re-emitted into the JSON remainder for human convenience.
+If reviewers need it rendered, that is a presentation concern for the reader function, not a
+storage concern.
+
+### RULING E — sequencing: PLAN-16's schema lands BEFORE PLAN-15's Phase 6
+
+**35 of `test-reconcile.R`'s 65 assertions are currently RED** — they describe
+`subkind=suggestion`, `subkind=expired_alias`, `subkind=self_precedence_note`, `expired=`
+and `blocking=`, none of which exist anywhere in `R/` (grep-confirmed). They are PLAN-15
+Phase-6 behaviour, written in the payload grammar PLAN-16 deletes.
+
+That creates a real hazard and a false one. The false one first: rewriting a RED test into
+the new schema, where it stays RED, is **not** a lost signal — those 35 were never going to
+be green before PLAN-15 Phase 6 regardless. Normal TDD.
+
+The real hazard is the other 30, which are **green today**. Rewriting a green assertion is a
+green→green change, and a mistranslation there is invisible unless it is measured. So:
+
+1. PLAN-16's DDL, constructor and data migration land first.
+2. The test migration runs in two clearly separated passes, and **the green ones go first**:
+   the ~30 currently-green assertions are rewritten and must be **green again immediately**,
+   per-file counts accounted to the unit. Any change in the green count is a mistranslation
+   until proven otherwise.
+3. Only then are the 35 RED assertions rewritten. They stay red. Their correctness is
+   established by **review against the criterion they encode**, not by execution — state
+   this plainly rather than implying the suite verifies them.
+4. PLAN-15 Phase 6 then implements directly against the new schema, and those 35 go green
+   there. It never implements against the format being deleted.
+
+This ordering is why PLAN-15 Phase 6 is suspended rather than raced.
+
+### The fixture hazard
+
+**15 sites build payload strings by hand**, and 4 of them (`test-commit.R:680`,
+`test-review-queue-close.R:186-187`, `:317`, `:372`) mimic the real `.rc_feature_review()`
+grammar closely enough that, if the new writer accepts a pass-through string argument, they
+would **keep exercising the old regex path while looking like they had been migrated.** This
+is the "fixture supplies what production must supply" class that PLAN-15's audit named twice.
+The mitigation is structural, not vigilance: the new constructor takes no free-text payload
+argument at all (B-16.api), so a hand-built string cannot be injected. R-16.18 pins that.
+
+<!-- block: B-16.criteria2 -->
+## Acceptance criteria (continued)
+
+### R-16.17 The five previously-uncovered producers have their shape pinned
+- `unknown_unit`, `parse_error`, `already_present`, `method_duplicate` and `batch_duplicate`
+  each get at least one assertion on their structured content — not merely on `kind` or
+  `reason`. These have no old-format coverage to translate, so they are new work, and their
+  absence from the old suite is the reason they are named individually here rather than left
+  to a general sweep.
+
+### R-16.18 The constructor accepts no free-text payload
+- the structured constructor has no argument that takes a pre-serialised payload string, and
+  no production path allows one to be supplied. This is what makes the 15 hand-built test
+  fixtures fail loudly rather than silently keep passing.
+
+### R-16.19 value_conflict is discriminated by subkind, not by two grammars
+- both producers write `kind = 'value_conflict'`; the `R/reconcile.R` producer writes
+  `subkind = 'measurement'` and the `R/feature-alias.R` producer writes
+  `subkind = 'alias_merge'`; both populate `uuid_existing`. Assert both producers in one
+  test so the pair cannot drift apart again.
+
+### R-16.20 The alias uuid is stored once
+- after a commit-time alias rewrite, `uuid_alias` holds the uuid and the JSON remainder
+  contains no `alias_uuid` key. A test asserting only that `uuid_alias` is correct does not
+  satisfy this — the point is the absence of the duplicate.
