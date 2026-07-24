@@ -256,3 +256,332 @@ test_that("R-12.9: path_first_seen is still set exactly once across a no-clobber
   third <- DBI::dbGetQuery(con, "SELECT path_first_seen FROM ingest_file WHERE hash = ?", params = list(hash))
   expect_equal(third$path_first_seen, "/in/first.csv")
 })
+
+# ---------------------------------------------------------------------------
+# PLAN-16 - review_queue structured payload (schema version 6): R-16.1,
+# R-16.2, R-16.3, R-16.4, R-16.5, R-16.9.
+#
+# All six criteria are RED by design against today's code: `review_queue`
+# does not yet carry `subkind`/`uuid_existing`/`uuid_alias`, the
+# `review_queue_candidate` child table does not exist, and there is no
+# version-6 migration in `.st_schema_migrations`. Nothing here stubs
+# production code to make any of this pass.
+#
+# PLAN-16 does not pin review_queue_add()'s exact future argument names for
+# the new columns/candidates - only that it and the raw db_append() tibble
+# path must produce identical results (R-16.9). This suite fixes the most
+# natural extension of the EXISTING signature
+# (review_queue_add(con, kind, work_order, source_hash, payload, uuid,
+# created_at)): new args `subkind`, `uuid_existing`, `uuid_alias` (mirroring
+# the new column names 1:1, matching every other argument's own naming
+# convention) and a `candidates` argument taking a character vector of
+# feature uuids in the desired rank order. This is a designed-interface
+# choice for the Phase-6 implementer to match, flagged in the P16-T-schema
+# report - not a plan ambiguity blocking this suite.
+# ---------------------------------------------------------------------------
+
+# --- R-16.1: version 6 applies regardless of whether version 5 exists yet --
+
+test_that("R-16.1 arm (a): ensure_schema() applies version 6 to a DB at version 4 with no version 5 defined", {
+  ns <- asNamespace("sampleTidy")
+  migrations <- get(".st_schema_migrations", envir = ns)
+  base_versions <- vapply(migrations, function(m) m$version, integer(1))
+  # Sanity check on this arm's premise: no version 5 is defined in the
+  # shipped migration list yet (RULING E - PLAN-15 P6 is suspended until
+  # PLAN-16 lands). If this ever fails, the fixture assumption below needs
+  # revisiting, not a silent pass.
+  expect_false(5L %in% base_versions)
+
+  dir <- withr::local_tempdir()
+  db <- file.path(dir, "p16-v6.duckdb")
+  con <- DBI::dbConnect(duckdb::duckdb(), db, read_only = FALSE)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  ensure_schema(con)
+
+  versions <- DBI::dbGetQuery(con, "SELECT version FROM schema_version ORDER BY version")$version
+  expect_true(6L %in% versions)
+  expect_false(5L %in% versions)
+})
+
+test_that("R-16.1 arm (b): a migration arriving out of version order (5 added after 6 already shipped) applies 5 alone, and 6 is not re-applied", {
+  ns <- asNamespace("sampleTidy")
+  base_migrations <- get(".st_schema_migrations", envir = ns)
+  # Restore the real migration list unconditionally when this test ends,
+  # regardless of pass/fail, so no later test in this (or any other, per
+  # Phase-5 order-independence) file sees the injected fake version 5.
+  withr::defer(assignInNamespace(".st_schema_migrations", base_migrations, ns = "sampleTidy"))
+
+  base_versions <- vapply(base_migrations, function(m) m$version, integer(1))
+  expect_true(6L %in% base_versions)
+  expect_false(5L %in% base_versions)
+
+  dir <- withr::local_tempdir()
+  db <- file.path(dir, "p16-outoforder.duckdb")
+  con1 <- DBI::dbConnect(duckdb::duckdb(), db, read_only = FALSE)
+  ensure_schema(con1) # applies 1,2,3,4,6 - no version 5 exists yet
+  versions_step1 <- DBI::dbGetQuery(con1, "SELECT version FROM schema_version ORDER BY version")$version
+  DBI::dbDisconnect(con1, shutdown = TRUE)
+
+  expect_true(6L %in% versions_step1)
+  expect_false(5L %in% versions_step1)
+
+  # Simulate version 5 (PLAN-15 P6's uuid_target) arriving LATER, after 6 has
+  # already shipped and already been applied to this DB - the out-of-order
+  # sequence the criterion is actually about. assignInNamespace() is used
+  # (not a plain `.st_schema_migrations <<-`) because devtools::load_all()'s
+  # attached search-path copy is a DIFFERENT binding from the one
+  # ensure_schema()'s closure actually reads - only assigning into the real
+  # package namespace is visible to the function under test.
+  v5 <- list(version = 5L, ddl = "CREATE TABLE IF NOT EXISTS p16_v5_probe (uuid VARCHAR)")
+  assignInNamespace(".st_schema_migrations", c(base_migrations, list(v5)), ns = "sampleTidy")
+
+  con2 <- DBI::dbConnect(duckdb::duckdb(), db, read_only = FALSE) # re-open
+  withr::defer(DBI::dbDisconnect(con2, shutdown = TRUE))
+  ensure_schema(con2)
+  versions_step2 <- DBI::dbGetQuery(con2, "SELECT version FROM schema_version ORDER BY version")$version
+
+  # 5 applies alone...
+  expect_setequal(setdiff(versions_step2, versions_step1), 5L)
+  # ...and 6 (already recorded before the injection) is NOT re-applied - no
+  # duplicate row for either version.
+  expect_equal(sum(versions_step2 == 5L), 1L)
+  expect_equal(sum(versions_step2 == 6L), 1L)
+})
+
+test_that("R-16.1 arm (c): re-opening an already-migrated DB applies nothing and changes no row", {
+  dir <- withr::local_tempdir()
+  db <- file.path(dir, "p16-reopen.duckdb")
+
+  con1 <- DBI::dbConnect(duckdb::duckdb(), db, read_only = FALSE)
+  ensure_schema(con1)
+  before <- DBI::dbGetQuery(con1, "SELECT version, applied_at FROM schema_version ORDER BY version")
+  DBI::dbDisconnect(con1, shutdown = TRUE)
+
+  con2 <- DBI::dbConnect(duckdb::duckdb(), db, read_only = FALSE)
+  withr::defer(DBI::dbDisconnect(con2, shutdown = TRUE))
+  ensure_schema(con2)
+  after <- DBI::dbGetQuery(con2, "SELECT version, applied_at FROM schema_version ORDER BY version")
+
+  expect_equal(after$version, before$version)
+  expect_equal(after$applied_at, before$applied_at) # no row re-inserted/rewritten
+})
+
+# --- R-16.2: subkind/uuid_existing/uuid_alias are real, nullable columns ---
+
+test_that("R-16.2: review_queue carries subkind, uuid_existing, uuid_alias as real, nullable VARCHAR columns", {
+  dir <- withr::local_tempdir()
+  db <- seed_db(dir)
+  con <- seed_con(db)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  cols <- DBI::dbGetQuery(con, "
+    SELECT column_name, data_type, is_nullable, column_default
+    FROM duckdb_columns()
+    WHERE table_name = 'review_queue'
+      AND column_name IN ('subkind', 'uuid_existing', 'uuid_alias')
+    ORDER BY column_name")
+
+  expect_equal(nrow(cols), 3L)
+  expect_true(all(cols$data_type == "VARCHAR"))
+  expect_true(all(cols$is_nullable))
+  # Not a computed/generated column: a real column has no generation
+  # expression standing in as its default.
+  expect_true(all(is.na(cols$column_default)))
+
+  # And genuinely nullable in practice, not merely declared so.
+  uuid_row <- uuid::UUIDgenerate()
+  DBI::dbExecute(con, "
+    INSERT INTO review_queue (uuid, created_at, kind, subkind, uuid_existing, uuid_alias)
+    VALUES (?, ?, 'value_conflict', NULL, NULL, NULL)",
+    params = list(uuid_row, Sys.time()))
+  row <- DBI::dbGetQuery(con, "
+    SELECT subkind, uuid_existing, uuid_alias FROM review_queue WHERE uuid = ?",
+    params = list(uuid_row))
+  expect_true(is.na(row$subkind))
+  expect_true(is.na(row$uuid_existing))
+  expect_true(is.na(row$uuid_alias))
+})
+
+# --- R-16.3: review_queue_candidate FKs are enforced, not merely declared --
+
+test_that("R-16.3 review_queue_candidate FK on uuid_review is enforced: a dangling parent uuid errors", {
+  dir <- withr::local_tempdir()
+  db <- seed_db(dir)
+  con <- seed_con(db)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  expect_error(
+    DBI::dbExecute(
+      con,
+      "INSERT INTO review_queue_candidate (uuid, uuid_review, uuid_feature, kind, rank)
+       VALUES (?, ?, 'f-0001', 'candidate', 1)",
+      params = list(uuid::UUIDgenerate(), uuid::UUIDgenerate()) # uuid_review has no parent row
+    )
+  )
+})
+
+test_that("R-16.3 review_queue_candidate FK on uuid_feature is enforced: a dangling parent uuid errors", {
+  dir <- withr::local_tempdir()
+  db <- seed_db(dir)
+  con <- seed_con(db)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  parent_uuid <- review_queue_add(con, kind = "value_conflict") # a REAL, live parent
+
+  expect_error(
+    DBI::dbExecute(
+      con,
+      "INSERT INTO review_queue_candidate (uuid, uuid_review, uuid_feature, kind, rank)
+       VALUES (?, ?, ?, 'candidate', 1)",
+      params = list(uuid::UUIDgenerate(), parent_uuid, uuid::UUIDgenerate()) # uuid_feature has no parent row
+    )
+  )
+})
+
+# --- R-16.4: candidate order is preserved through a write/read round-trip -
+# ORDER, not SET: expect_setequal alone would pass a scrambled read-back and
+# FAILS this criterion by construction, so it is deliberately absent below.
+
+test_that("R-16.4 review_queue_candidate order is preserved through a write/read round-trip via rank", {
+  dir <- withr::local_tempdir()
+  db <- seed_db(dir)
+  con <- seed_con(db)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  parent <- review_queue_add(con, kind = "unknown_feature")
+
+  write_candidates <- function(feature_uuids) {
+    DBI::dbExecute(con, "DELETE FROM review_queue_candidate WHERE uuid_review = ?", params = list(parent))
+    for (i in seq_along(feature_uuids)) {
+      DBI::dbExecute(
+        con,
+        "INSERT INTO review_queue_candidate (uuid, uuid_review, uuid_feature, kind, rank)
+         VALUES (?, ?, ?, 'candidate', ?)",
+        params = list(uuid::UUIDgenerate(), parent, feature_uuids[[i]], i)
+      )
+    }
+  }
+  read_order <- function() {
+    DBI::dbGetQuery(
+      con,
+      "SELECT uuid_feature FROM review_queue_candidate WHERE uuid_review = ? ORDER BY rank",
+      params = list(parent)
+    )$uuid_feature
+  }
+
+  write_candidates(c("f-0001", "f-0002"))
+  expect_equal(read_order(), c("f-0001", "f-0002"))
+
+  write_candidates(c("f-0002", "f-0001"))
+  expect_equal(read_order(), c("f-0002", "f-0001"))
+})
+
+# --- R-16.5: the expired kind carries its date range; candidate does not --
+
+test_that("R-16.5 kind='expired' round-trips date_start/date_end as DATE; kind='candidate' carries NA for both", {
+  dir <- withr::local_tempdir()
+  db <- seed_db(dir)
+  con <- seed_con(db)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  parent <- review_queue_add(con, kind = "value_conflict")
+
+  DBI::dbExecute(
+    con,
+    "INSERT INTO review_queue_candidate
+       (uuid, uuid_review, uuid_feature, kind, date_start, date_end, rank)
+     VALUES (?, ?, 'f-0001', 'expired', DATE '2020-01-01', DATE '2020-06-30', 1)",
+    params = list(uuid::UUIDgenerate(), parent)
+  )
+  DBI::dbExecute(
+    con,
+    "INSERT INTO review_queue_candidate
+       (uuid, uuid_review, uuid_feature, kind, date_start, date_end, rank)
+     VALUES (?, ?, 'f-0002', 'candidate', NULL, NULL, 2)",
+    params = list(uuid::UUIDgenerate(), parent)
+  )
+
+  expired_row <- DBI::dbGetQuery(
+    con,
+    "SELECT date_start, date_end FROM review_queue_candidate WHERE uuid_review = ? AND kind = 'expired'",
+    params = list(parent)
+  )
+  candidate_row <- DBI::dbGetQuery(
+    con,
+    "SELECT date_start, date_end FROM review_queue_candidate WHERE uuid_review = ? AND kind = 'candidate'",
+    params = list(parent)
+  )
+
+  expect_equal(nrow(expired_row), 1L)
+  expect_equal(expired_row$date_start, as.Date("2020-01-01"))
+  expect_equal(expired_row$date_end, as.Date("2020-06-30"))
+  expect_true(inherits(expired_row$date_start, "Date"))
+
+  expect_equal(nrow(candidate_row), 1L)
+  expect_true(is.na(candidate_row$date_start))
+  expect_true(is.na(candidate_row$date_end))
+})
+
+# --- R-16.9: both insert paths write the same shape ------------------------
+
+test_that("R-16.9 review_queue_add() and the raw db_append() tibble path write identical review_queue columns and identical review_queue_candidate child rows for identical input", {
+  dir <- withr::local_tempdir()
+  db <- seed_db(dir)
+  con <- seed_con(db)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  # Identical logical input fed to both paths.
+  kind <- "unknown_feature"
+  subkind <- "descriptive"
+  work_order <- "XX1234567"
+  source_hash <- "src-hash-p16-9"
+  payload <- "note: R-16.9 fixture" # a plain diagnostics string is enough here - this test is about column/child-row shape, not payload format (R-16.6/R-16.10 own that).
+  uuid_existing <- NA_character_
+  uuid_alias <- NA_character_
+  candidate_features <- c("f-0001", "f-0002") # order matters (R-16.4)
+
+  # --- path A: review_queue_add() -------------------------------------------
+  uuid_a <- review_queue_add(
+    con, kind = kind, subkind = subkind, work_order = work_order,
+    source_hash = source_hash, payload = payload,
+    uuid_existing = uuid_existing, uuid_alias = uuid_alias,
+    candidates = candidate_features
+  )
+
+  # --- path B: the raw db_append() tibble path, mirroring
+  # .ct_commit_review()'s row shape (R/commit.R:645-650) plus the new
+  # PLAN-16 columns, with a second db_append() for the child rows - there is
+  # no single generic call that writes a parent row and its children at
+  # once via this path. ------------------------------------------------
+  uuid_b <- uuid::UUIDgenerate()
+  row_b <- tibble::tibble(
+    uuid = uuid_b, created_at = Sys.time(), kind = kind, subkind = subkind,
+    work_order = work_order, source_hash = source_hash, payload = payload,
+    status = "open", uuid_existing = uuid_existing, uuid_alias = uuid_alias
+  )
+  db_append(con, "review_queue", row_b, actor = "test", reason = "R-16.9 fixture")
+
+  cand_rows_b <- tibble::tibble(
+    uuid = vapply(candidate_features, function(x) uuid::UUIDgenerate(), character(1)),
+    uuid_review = uuid_b, uuid_feature = candidate_features,
+    kind = "candidate", date_start = as.Date(NA), date_end = as.Date(NA),
+    rank = seq_along(candidate_features)
+  )
+  db_append(con, "review_queue_candidate", cand_rows_b, actor = "test", reason = "R-16.9 fixture")
+
+  # --- compare: identical review_queue column population (uuid/created_at
+  # excluded - each row's own identity/timestamp, not shared shape). -------
+  fields <- c("kind", "subkind", "work_order", "source_hash", "payload", "status", "uuid_existing", "uuid_alias")
+  select_sql <- sprintf("SELECT %s FROM review_queue WHERE uuid = ?", paste(fields, collapse = ", "))
+  row_a <- DBI::dbGetQuery(con, select_sql, params = list(uuid_a))
+  row_b_read <- DBI::dbGetQuery(con, select_sql, params = list(uuid_b))
+  expect_equal(row_a, row_b_read)
+
+  # --- compare: identical child-row population, order (rank) included. ----
+  cand_sql <- "SELECT uuid_feature, kind, rank FROM review_queue_candidate WHERE uuid_review = ? ORDER BY rank"
+  cand_a <- DBI::dbGetQuery(con, cand_sql, params = list(uuid_a))
+  cand_b <- DBI::dbGetQuery(con, cand_sql, params = list(uuid_b))
+  expect_equal(cand_a, cand_b)
+  expect_equal(cand_a$uuid_feature, candidate_features)
+})
