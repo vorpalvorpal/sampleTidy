@@ -3225,26 +3225,28 @@ test_that("R-15.15: a key whose ONLY alias is EXPIRED lands in review with subki
   expect_identical(ctrl$uuid_feature, "f-0001")
 })
 
-test_that("R-15.16: payload emission at expired-candidate count boundaries - ONE expired candidate PLUS ONE co-occurring live suggestion still emits subkind=expired_alias, never subkind=suggestion (locks the expired_alias > suggestion link, S-15.6); TWO live + ONE expired emits subkind=ambiguous with candidates= restricted to the two LIVE ones plus an expired= clause naming the third", {
+test_that("R-15.16: payload emission at the expired-candidate count boundary - exactly ONE expired candidate, ZERO live arms, still emits subkind=expired_alias (guards the length(sugg)>1 gate); TWO live + ONE expired emits subkind=ambiguous with candidates= restricted to the two LIVE ones plus an expired= clause naming the third", {
   path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
 
-  # Case 1: a single EXPIRED candidate (no structural interference -
-  # 'QQQEXP16A' matches no site prefix) PLUS one co-occurring LIVE
-  # suggestion arm sharing the same key (Phase-5 audit round 2 C4(a): locks
-  # the expired_alias > suggestion link of the S-15.6 precedence chain -
-  # without a co-occurring live arm here, an implementation computing
-  # precedence per-shape rather than from one table could still pass this
-  # case by accident, since a lone expired candidate alone never exercises
-  # the choice between the two subkinds).
-  DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix, lon, lat) VALUES
-    ('f-exp16a-live', 'T.EXP16AL', 'T', 'surface', 'water', 150.6011, -33.6011)")
+  # Case 1: a single EXPIRED-only candidate, ZERO live arms (no structural
+  # interference - 'QQQEXP16A' matches no site prefix).
+  # Phase-5 audit round 3 B3: round-2's C4(a) added a co-occurring LIVE
+  # auto_assign=FALSE arm here and asserted subkind=expired_alias +
+  # expect_false(subkind=suggestion) - but PLAN-15's "LIVE CANDIDATE WAS
+  # OVERLOADED" ruling (2026-07-24) makes `expired_alias` conditional on
+  # ZERO live arms (auto_assign-BLIND) existing at all; adding a live arm
+  # makes the plan-conformant answer `subkind=suggestion` instead, so that
+  # edit pinned an outcome no correct implementation can produce. Reverted:
+  # this case is restored to its own shape (one expired candidate, zero live
+  # arms), and the co-occurrence shape gets its OWN test at R-15.46, below.
+  # CANDIDATE-COUNT COMMENT: .rc_feature_candidates("QQQEXP16A", <any date>,
+  # registry) returns ZERO rows for this key - fa-exp16a is auto_assign=FALSE
+  # so it fails the filter at reconcile.R:171 regardless of date.
   DBI::dbExecute(con, "INSERT INTO feature_alias
     (uuid, uuid_feature, name, alias_key, kind, auto_assign, first_seen, last_seen, date_start, date_end) VALUES
     ('fa-exp16a', 'f-0002', 'QQQEXP16A', 'qqqexp16a', 'historical_code', FALSE,
      TIMESTAMP '2018-01-01 00:00:00', TIMESTAMP '2019-12-31 00:00:00',
-     DATE '2018-01-01', DATE '2019-12-31'),
-    ('fa-exp16a-live', 'f-exp16a-live', 'QQQEXP16A', 'qqqexp16a', 'descriptive', FALSE,
-     TIMESTAMP '2025-01-01 00:00:00', TIMESTAMP '2025-01-01 00:00:00', NULL, NULL)")
+     DATE '2018-01-01', DATE '2019-12-31')")
 
   # Case 2: TWO live candidates + ONE expired candidate, one shared key.
   DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix, lon, lat) VALUES
@@ -3280,9 +3282,11 @@ test_that("R-15.16: payload emission at expired-candidate count boundaries - ONE
   expect_true(grepl("subkind=expired_alias", rv_a$payload[[1]], fixed = TRUE))
   expect_true(grepl("expired=f-0002@2018-01-01..2019-12-31", rv_a$payload[[1]], fixed = TRUE))
   expect_false(grepl("subkind=ambiguous", rv_a$payload[[1]], fixed = TRUE))
-  # C4(a): expired_alias must win over the co-occurring live suggestion arm
-  # added above - never emit subkind=suggestion for this shape.
-  expect_false(grepl("subkind=suggestion", rv_a$payload[[1]], fixed = TRUE))
+  # round-3 B3: the `expect_false(subkind=suggestion)` assertion that lived
+  # here (round-2 C4(a)) is deleted along with the live arm that motivated
+  # it - this case has zero live arms, so `suggestion` was never a
+  # discriminating check for it in the first place. The actual co-occurrence
+  # boundary (one live + one expired) is R-15.46, below.
 
   rv_b <- out$review[out$review$kind == "unknown_feature" &
                         out$review$source_ref == "two_live_one_expired", ]
@@ -3297,12 +3301,83 @@ test_that("R-15.16: payload emission at expired-candidate count boundaries - ONE
   expect_setequal(cand_set, c("f-exp16-live1", "f-exp16-live2"))
 })
 
+test_that("R-15.46: a key holding exactly ONE live arm (auto_assign=FALSE) AND at least one EXPIRED arm, reconciled inside the live arm's bounds and outside the expired one's, emits subkind=suggestion (never subkind=expired_alias) AND carries an expired= clause naming the expired candidate - paired in the same test with a control on an otherwise-identical key whose live arm is removed, which DOES emit subkind=expired_alias (PLAN-15's 'LIVE CANDIDATE WAS OVERLOADED' ruling, 2026-07-24, round-3 PCR-1: 'live arm' throughout the precedence table means date-bounds-admit-the-sample-date, auto_assign-BLIND - expired_alias fires only at ZERO live arms, suggestion at EXACTLY ONE live auto_assign=FALSE arm; expiry is context, never the subkind, whenever any live arm exists)", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  # Key A ('qqq1546'): one live, auto_assign=FALSE, UNBOUNDED arm (always
+  # date-admits) PLUS one EXPIRED arm sharing the same key.
+  # CANDIDATE-COUNT COMMENT: .rc_feature_candidates("QQQ1546", <any date>,
+  # registry) returns ZERO rows - BOTH arms are auto_assign=FALSE, so both
+  # fail the reconcile.R:171 filter before date narrowing is even reached.
+  # This is DELIBERATE, per the OVERLOADED ruling: the plan's "live arm" for
+  # this table means date-bounds-admits, auto_assign-BLIND - a DIFFERENT
+  # count from `.rc_feature_candidates()`'s auto_assign=TRUE-filtered one.
+  # This key's date-bounds-admitted live-arm count is ONE (the unbounded
+  # arm); its filtered candidate count is ZERO. Both are true at once - that
+  # is the whole point of the ruling C4's mistake needed.
+  DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix, lon, lat) VALUES
+    ('f-1546-live', 'T.Q1546LIVE', 'T', 'surface', 'water', 150.6041, -33.6041)")
+  DBI::dbExecute(con, "INSERT INTO feature_alias
+    (uuid, uuid_feature, name, alias_key, kind, auto_assign, first_seen, last_seen, date_start, date_end) VALUES
+    ('fa-1546-live', 'f-1546-live', 'QQQ1546', 'qqq1546', 'descriptive', FALSE,
+     TIMESTAMP '2025-01-01 00:00:00', TIMESTAMP '2025-01-01 00:00:00', NULL, NULL),
+    ('fa-1546-exp', 'f-0002', 'QQQ1546', 'qqq1546', 'historical_code', FALSE,
+     TIMESTAMP '2018-01-01 00:00:00', TIMESTAMP '2019-12-31 00:00:00',
+     DATE '2018-01-01', DATE '2019-12-31')")
+
+  # PAIRED CONTROL (same test): a FRESH key 'qqq1546ctrl' carries ONLY the
+  # expired arm - the live arm above does not exist on this key at all.
+  # CANDIDATE-COUNT COMMENT: .rc_feature_candidates() also returns ZERO rows
+  # here (the sole arm is auto_assign=FALSE) - identical to Key A's filtered
+  # count. The discriminator between this control and Key A is the
+  # date-bounds-admitted live-arm count (0 here, 1 above), never the
+  # auto_assign-filtered candidate count (0 in both) - so a hard-coded
+  # subkind, or one keyed off filtered-candidate count alone, fails one half
+  # of this test or the other.
+  DBI::dbExecute(con, "INSERT INTO feature_alias
+    (uuid, uuid_feature, name, alias_key, kind, auto_assign, first_seen, last_seen, date_start, date_end) VALUES
+    ('fa-1546ctrl-exp', 'f-0002', 'QQQ1546CTRL', 'qqq1546ctrl', 'historical_code', FALSE,
+     TIMESTAMP '2018-01-01 00:00:00', TIMESTAMP '2019-12-31 00:00:00',
+     DATE '2018-01-01', DATE '2019-12-31')")
+
+  event <- mk_event(mk_rows(
+    # 14 Jun 2025: inside the live arm's (unbounded) bounds, outside the
+    # expired arm's (2018-01-01..2019-12-31) bounds.
+    mk_row(source_ref = "live_plus_expired", feature_raw = "QQQ1546",
+           lab_sample_id = "XX9999951001", sample_datetime_raw = "14 Jun 2025 09:00"),
+    mk_row(source_ref = "expired_only_control", feature_raw = "QQQ1546CTRL",
+           lab_sample_id = "XX9999951002", sample_datetime_raw = "14 Jun 2025 09:00")
+  ))
+  out <- reconcile_event(event, con)
+
+  rv <- out$review[out$review$kind == "unknown_feature" &
+                      out$review$source_ref == "live_plus_expired", ]
+  expect_equal(nrow(rv), 1)
+  # BOTH halves, per the criterion text: an implementation that simply
+  # ignores expired arms whenever a live one exists would pass
+  # subkind=suggestion alone without ever emitting the expired= clause - the
+  # exact opposite of "expiry is context".
+  expect_true(grepl("subkind=suggestion", rv$payload[[1]], fixed = TRUE))
+  expect_false(grepl("subkind=expired_alias", rv$payload[[1]], fixed = TRUE))
+  expect_true(grepl("candidates=f-1546-live", rv$payload[[1]], fixed = TRUE))
+  expect_true(grepl("expired=f-0002@2018-01-01..2019-12-31", rv$payload[[1]], fixed = TRUE))
+
+  # PAIRED CONTROL: the same key shape with the live arm removed - a
+  # hard-coded subkind fails this half.
+  rv_ctrl <- out$review[out$review$kind == "unknown_feature" &
+                           out$review$source_ref == "expired_only_control", ]
+  expect_equal(nrow(rv_ctrl), 1)
+  expect_true(grepl("subkind=expired_alias", rv_ctrl$payload[[1]], fixed = TRUE))
+  expect_false(grepl("subkind=suggestion", rv_ctrl$payload[[1]], fixed = TRUE))
+  expect_true(grepl("expired=f-0002@2018-01-01..2019-12-31", rv_ctrl$payload[[1]], fixed = TRUE))
+})
+
 # ---- E.7: self-precedence note (R2) - blocking flag, commit, negative -----
 # control (no assigned R-15.NN ID in the dispatch brief; PLAN-CHANGE REQUEST
 # filed in the handoff report). Named "E.7:" per this file's existing
 # convention for un-numbered plan-block criteria (cf. "B.4:", "PLAN-15 A:").
 
-test_that("R-15.45 (E.7): a key reaching a live SELF arm plus one live NON-self arm resolves via the self arm, commits a real sample/analysis row (assert row COUNTS, not merely the absence of a review item), and records exactly ONE non-blocking review row naming the shadowed feature and carrying an EXPLICIT boolean blocking flag - paired in the same test with a SECOND self-precedence case on a DIFFERENT key where the self arm faces TWO live non-self opponents at once (Phase-5 audit round 2 C4(b): locks the self_precedence_note > ambiguous link against a co-occurring shape - a self arm reaching exactly ONE opponent, as in the first case, could still pass under an implementation that special-cases 'exactly one non-self candidate' rather than computing precedence from the one S-15.6 table), which ALSO resolves via self, commits, and names BOTH shadowed features in its note", {
+test_that("R-15.45 (E.7): a key reaching a live SELF arm plus one live NON-self arm resolves via the self arm, commits a real sample/analysis row (assert row COUNTS, not merely the absence of a review item), and records exactly ONE non-blocking review row naming the shadowed feature and carrying an EXPLICIT boolean blocking flag - paired in the same test with a SECOND self-precedence case on a NEW, LOCALLY-BUILT key (t.e7dual2, all three arms auto_assign=TRUE) where the self arm faces TWO live non-self opponents at once, AND the plan-mandated negative control (a key reaching two live NON-self arms and no self arm still goes to review and does NOT commit) - (Phase-5 audit round 3 B1+B2: round-2's C4(b) planted the second self-precedence case on T.DUAL itself, whose fa-0015/fa-0016 non-self arms are auto_assign=FALSE in the shared seed [helper-db.R:329-336], so .rc_feature_candidates() [R/reconcile.R:171, which filters to auto_assign=TRUE FIRST] returned exactly ONE row for T.DUAL - an ordinary clean Layer-1 hit that `next`s before candidate collection, so the fixture could never produce the self_precedence_note the test asserted, AND it consumed R-15.45's own plan-mandated negative control by leaving no key in the test with two live non-self arms and no self arm. FIX: the second self-precedence case now lives on a NEW key built with auto_assign=TRUE on all three arms; T.DUAL is left completely untouched and used below exactly as the negative control)", {
   path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
   # f-0002's OWN self-alias (fa-0002, unbounded) shares its key 't.s02' with
   # a NEW curated historical arm pointing at a DIFFERENT feature (f-0003),
@@ -3314,44 +3389,69 @@ test_that("R-15.45 (E.7): a key reaching a live SELF arm plus one live NON-self 
      TIMESTAMP '2015-01-01 00:00:00', TIMESTAMP '2019-12-31 00:00:00',
      DATE '2015-01-01', DATE '2019-12-31')")
 
-  # Phase-5 audit round 2 C4(b): a THIRD arm, `kind = 'self'`, added to the
-  # T.DUAL key - which already carries TWO live non-self arms in the shared
-  # seed (fa-0015/fa-0016 -> f-0004/f-0005, the ambiguous-pair fixture).
-  # This converts T.DUAL, for THIS test only, from "no self, stays
-  # ambiguous" (still fully covered, on its own FRESH seed, by R-15.27's own
-  # T.DUAL test above - unaffected by this local INSERT) into the
-  # self-vs-TWO-live-non-self shape this criterion needs.
+  # Phase-5 audit round 3 B1+B2: a NEW, LOCAL key (t.e7dual2) with all THREE
+  # arms auto_assign=TRUE - one self, two non-self opponents.
+  # CANDIDATE-COUNT COMMENT: .rc_feature_candidates("T.E7DUAL2", <any date>,
+  # registry) returns THREE rows here (fa-e7dual2-self -> f-e7dual2-self,
+  # fa-e7dual2-opp1 -> f-e7dual2-opp1, fa-e7dual2-opp2 -> f-e7dual2-opp2) -
+  # all pass the auto_assign=TRUE filter at reconcile.R:171, all unbounded so
+  # live at every fixture date. THREE distinct features survive the filter,
+  # so `length(distinct_feat) == 1` at reconcile.R:448 is FALSE and the row
+  # reaches candidate collection (never the Layer-1 `next`) - the actual
+  # multi-candidate, self-included shape self-precedence needs. T.DUAL
+  # itself is NOT touched by this insert.
   DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix, lon, lat) VALUES
-    ('f-e7-dualself', 'T.DUAL', 'T', 'surface', 'water', 150.6021, -33.6021)")
+    ('f-e7dual2-self', 'T.E7DUAL2', 'T', 'surface', 'water', 150.6031, -33.6031),
+    ('f-e7dual2-opp1', 'T.E7DUAL2OPP1', 'T', 'surface', 'water', 150.6032, -33.6032),
+    ('f-e7dual2-opp2', 'T.E7DUAL2OPP2', 'T', 'surface', 'water', 150.6033, -33.6033)")
   DBI::dbExecute(con, "INSERT INTO feature_alias
     (uuid, uuid_feature, name, alias_key, kind, auto_assign, first_seen, last_seen) VALUES
-    ('fa-e7-dualself', 'f-e7-dualself', 'T.DUAL', 't.dual', 'self', TRUE,
+    ('fa-e7dual2-self', 'f-e7dual2-self', 'T.E7DUAL2', 't.e7dual2', 'self', TRUE,
+     TIMESTAMP '2020-01-01 00:00:00', TIMESTAMP '2020-01-01 00:00:00'),
+    ('fa-e7dual2-opp1', 'f-e7dual2-opp1', 'T.E7DUAL2', 't.e7dual2', 'descriptive', TRUE,
+     TIMESTAMP '2020-01-01 00:00:00', TIMESTAMP '2020-01-01 00:00:00'),
+    ('fa-e7dual2-opp2', 'f-e7dual2-opp2', 'T.E7DUAL2', 't.e7dual2', 'descriptive', TRUE,
      TIMESTAMP '2020-01-01 00:00:00', TIMESTAMP '2020-01-01 00:00:00')")
 
-  # BEFORE: no sample/analysis is yet linked to f-0002 or f-e7-dualself in
+  # BEFORE: no sample/analysis is yet linked to f-0002 or f-e7dual2-self in
   # the seed, so targeted counts below isolate each row's own commit from
-  # the other in the same event.
+  # the other in the same event. T.DUAL's own arms (fa-0015/fa-0016 ->
+  # f-0004/f-0005) are entirely UNTOUCHED by this test's inserts and are
+  # used below only as R-15.45's paired negative control.
   before_f2 <- DBI::dbGetQuery(con,
     "SELECT count(*) AS n FROM \"sample\" s JOIN feature_alias fa ON fa.uuid = s.uuid_feature_alias
      WHERE fa.uuid_feature = 'f-0002'")$n
   before_dual <- DBI::dbGetQuery(con,
     "SELECT count(*) AS n FROM \"sample\" s JOIN feature_alias fa ON fa.uuid = s.uuid_feature_alias
      WHERE fa.uuid_feature IN ('f-0004', 'f-0005')")$n
-  before_dualself <- DBI::dbGetQuery(con,
+  before_dual2self <- DBI::dbGetQuery(con,
     "SELECT count(*) AS n FROM \"sample\" s JOIN feature_alias fa ON fa.uuid = s.uuid_feature_alias
-     WHERE fa.uuid_feature = 'f-e7-dualself'")$n
+     WHERE fa.uuid_feature = 'f-e7dual2-self'")$n
 
   event <- mk_event(mk_rows(
     # date INSIDE the historical arm's bound: both fa-0002 (self, unbounded)
     # and fa-e7-block (historical, bounded) are alias-live - self must win.
     mk_row(source_ref = "e7_self_wins", feature_raw = "T.S02",
            lab_sample_id = "XX9999940001", sample_datetime_raw = "01 Jun 2017 09:00"),
-    # SECOND self-precedence case (same test): T.DUAL now carries a self arm
-    # (fa-e7-dualself) PLUS the two pre-existing live non-self arms
-    # (f-0004/f-0005) - self must still win against TWO live opponents at
-    # once, not only the single-opponent shape above.
-    mk_row(source_ref = "e7_dual_self_wins", feature_raw = "T.DUAL",
-           lab_sample_id = "XX9999940002", sample_datetime_raw = "01 Jun 2017 09:00")
+    # SECOND self-precedence case (same test): T.E7DUAL2 carries a self arm
+    # (fa-e7dual2-self) plus TWO live non-self opponents, all auto_assign=TRUE
+    # - self must win against TWO live candidate opponents at once, not only
+    # the single-opponent shape above.
+    mk_row(source_ref = "e7_dual2_self_wins", feature_raw = "T.E7DUAL2",
+           lab_sample_id = "XX9999940002", sample_datetime_raw = "01 Jun 2017 09:00"),
+    # PLAN-15 R-15.45 NEGATIVE CONTROL (round-3 B2, restored to its original
+    # key): T.DUAL reaches ONLY its shared-seed pair fa-0015/fa-0016
+    # (f-0004/f-0005), BOTH auto_assign=FALSE and NO self arm anywhere on
+    # this key.  CANDIDATE-COUNT COMMENT: .rc_feature_candidates() returns
+    # ZERO rows for 't.dual' (both arms fail the auto_assign=TRUE filter),
+    # so it never auto-resolves at Layer 1; .rc_feature_suggestions()
+    # (auto_assign-BLIND) returns TWO distinct live candidates
+    # (f-0004, f-0005), which is the `ambiguous` branch (R-15.27's own
+    # T.DUAL test, above, on a fresh seed). Per R-15.45 this key must go to
+    # review and NOT commit - the test fails if self-precedence were ever
+    # implemented as "always take the first candidate".
+    mk_row(source_ref = "e7_dual_negative_control", feature_raw = "T.DUAL",
+           lab_sample_id = "XX9999940003", sample_datetime_raw = "01 Jun 2017 09:00")
   ))
   out <- reconcile_event(event, con)
 
@@ -3359,9 +3459,14 @@ test_that("R-15.45 (E.7): a key reaching a live SELF arm plus one live NON-self 
   expect_false(win$feature_pending)
   expect_identical(win$uuid_feature, "f-0002")   # (a) self wins, never f-0003
 
-  win_dual <- out$clean[out$clean$source_ref == "e7_dual_self_wins", ]
-  expect_false(win_dual$feature_pending)
-  expect_identical(win_dual$uuid_feature, "f-e7-dualself")  # self wins against BOTH opponents
+  win_dual2 <- out$clean[out$clean$source_ref == "e7_dual2_self_wins", ]
+  expect_false(win_dual2$feature_pending)
+  expect_identical(win_dual2$uuid_feature, "f-e7dual2-self")  # self wins against BOTH opponents
+
+  # negative control (pre-commit half): T.DUAL stays pending - no self arm
+  # exists anywhere on this key to win.
+  ctrl <- out$clean[out$clean$source_ref == "e7_dual_negative_control", ]
+  expect_true(ctrl$feature_pending)
 
   commit_event(event, out, con)
 
@@ -3372,12 +3477,14 @@ test_that("R-15.45 (E.7): a key reaching a live SELF arm plus one live NON-self 
   after_dual <- DBI::dbGetQuery(con,
     "SELECT count(*) AS n FROM \"sample\" s JOIN feature_alias fa ON fa.uuid = s.uuid_feature_alias
      WHERE fa.uuid_feature IN ('f-0004', 'f-0005')")$n
-  after_dualself <- DBI::dbGetQuery(con,
+  after_dual2self <- DBI::dbGetQuery(con,
     "SELECT count(*) AS n FROM \"sample\" s JOIN feature_alias fa ON fa.uuid = s.uuid_feature_alias
-     WHERE fa.uuid_feature = 'f-e7-dualself'")$n
-  expect_equal(after_f2 - before_f2, 1)             # the self-precedence win committed
-  expect_equal(after_dualself - before_dualself, 1) # the SECOND self win committed too
-  expect_equal(after_dual - before_dual, 0)          # the two SHADOWED arms never commit
+     WHERE fa.uuid_feature = 'f-e7dual2-self'")$n
+  expect_equal(after_f2 - before_f2, 1)               # the self-precedence win committed
+  expect_equal(after_dual2self - before_dual2self, 1) # the SECOND self win committed too
+  # (negative control, commit half) - the two live non-self T.DUAL arms
+  # never commit, because nothing on that key ever resolves to a single hit.
+  expect_equal(after_dual - before_dual, 0)
 
   an_count <- DBI::dbGetQuery(con,
     "SELECT count(*) AS n FROM analysis a
@@ -3408,21 +3515,28 @@ test_that("R-15.45 (E.7): a key reaching a live SELF arm plus one live NON-self 
   # the self_precedence_note > ambiguous link (S-15.6) against a shape where
   # self faces TWO live non-self opponents at once, not the `ambiguous`
   # outcome a per-case (rather than one-table) precedence implementation
-  # might wrongly emit for it - and it names BOTH shadowed features.
-  note_dual <- out$review[grepl("e7_dual_self_wins", out$review$source_ref, fixed = TRUE), ]
-  expect_equal(nrow(note_dual), 1)
-  # NA/empty-safe: today's un-E.7 code can legitimately emit ZERO review
-  # rows for this shape (a clean Layer-1 hit that never reaches the
-  # candidate-collection code at all - see this unit's report), so
-  # `note_dual$payload[[1]]` must not be dereferenced unguarded, or a
-  # zero-row result crashes the rest of this test_that() block with
-  # "subscript out of bounds" instead of a clean failure.
-  note_dual_payload <- if (nrow(note_dual) == 1) note_dual$payload[[1]] else ""
-  expect_true(grepl("subkind=self_precedence_note", note_dual_payload, fixed = TRUE))
-  expect_false(grepl("subkind=ambiguous", note_dual_payload, fixed = TRUE))
-  expect_true(grepl("f-0004", note_dual_payload, fixed = TRUE))
-  expect_true(grepl("f-0005", note_dual_payload, fixed = TRUE))
-  expect_true(grepl("blocking=FALSE", note_dual_payload, fixed = TRUE))
+  # might wrongly emit for it - and it names BOTH shadowed features. Unlike
+  # the round-2 T.DUAL fixture this replaces, today's un-E.7 code DOES
+  # already emit exactly one review row here (three candidates -> `pending`,
+  # `sugg` length 3 > 1 -> `subkind=ambiguous` naming all three), so this
+  # stays an unconditional `expect_equal(nrow(...), 1)`, same as the first
+  # case above - not an NA/empty-safe guard.
+  note_dual2 <- out$review[grepl("e7_dual2_self_wins", out$review$source_ref, fixed = TRUE), ]
+  expect_equal(nrow(note_dual2), 1)
+  expect_true(grepl("subkind=self_precedence_note", note_dual2$payload[[1]], fixed = TRUE))
+  expect_false(grepl("subkind=ambiguous", note_dual2$payload[[1]], fixed = TRUE))
+  expect_true(grepl("f-e7dual2-opp1", note_dual2$payload[[1]], fixed = TRUE))
+  expect_true(grepl("f-e7dual2-opp2", note_dual2$payload[[1]], fixed = TRUE))
+  expect_true(grepl("blocking=FALSE", note_dual2$payload[[1]], fixed = TRUE))
+
+  # negative control (review half): T.DUAL's row is ambiguous, never a
+  # self-precedence note - completing R-15.45's plan-mandated pairing IN
+  # THIS SAME TEST (not merely relying on R-15.27's separate fresh-seed
+  # T.DUAL test, which asserts subkind only, never commit counts).
+  note_ctrl <- out$review[grepl("e7_dual_negative_control", out$review$source_ref, fixed = TRUE), ]
+  expect_equal(nrow(note_ctrl), 1)
+  expect_true(grepl("subkind=ambiguous", note_ctrl$payload[[1]], fixed = TRUE))
+  expect_false(grepl("subkind=self_precedence_note", note_ctrl$payload[[1]], fixed = TRUE))
 })
 
 # ---- F.7: documentation drift (R-15.28/R-15.29) ----------------------------
@@ -3447,19 +3561,32 @@ test_that("R-15.45 (E.7): a key reaching a live SELF arm plus one live NON-self 
 
 #' All contiguous comment blocks (any run of `#`-prefixed lines, roxygen or
 #' plain) in `lines`, each collapsed to one string.
+#'
+#' Phase-5 audit round 3 C2: the PREVIOUS implementation classified a line as
+#' a comment by `grepl("^\\s*#", lines)`, which also matches a line that only
+#' LOOKS like a comment because it happens to fall inside a multi-line string
+#' literal - R-15.29's guard was therefore satisfiable by a string constant,
+#' the exact "comment/string-aware" property this block's header claims.
+#' FIX: parse `lines` for real (`getParseData()`) and group only genuine
+#' `COMMENT` tokens - a line inside a string literal is tokenized as part of
+#' the STR_CONST, never as COMMENT, so it can never contribute to a block.
 .rc_comment_blocks <- function(lines) {
-  is_comment <- grepl("^\\s*#", lines)
+  src <- paste(lines, collapse = "\n")
+  pd <- tryCatch(
+    utils::getParseData(parse(text = src, keep.source = TRUE)),
+    error = function(e) NULL
+  )
+  if (is.null(pd) || nrow(pd) == 0) return(list())
+  comment_rows <- pd[pd$token == "COMMENT", , drop = FALSE]
+  if (nrow(comment_rows) == 0) return(list())
+  comment_lines <- sort(unique(comment_rows$line1))
   blocks <- list()
-  i <- 1L; n <- length(lines)
+  i <- 1L; n <- length(comment_lines)
   while (i <= n) {
-    if (is_comment[[i]]) {
-      j <- i
-      while (j <= n && is_comment[[j]]) j <- j + 1L
-      blocks[[length(blocks) + 1]] <- paste(lines[i:(j - 1)], collapse = "\n")
-      i <- j
-    } else {
-      i <- i + 1L
-    }
+    j <- i
+    while (j < n && comment_lines[[j + 1]] == comment_lines[[j]] + 1L) j <- j + 1L
+    blocks[[length(blocks) + 1]] <- paste(lines[comment_lines[i]:comment_lines[j]], collapse = "\n")
+    i <- j + 1L
   }
   blocks
 }
@@ -3505,4 +3632,17 @@ test_that("R-15.29: a SINGLE contiguous comment block in R/reconcile.R names all
   # proves the guard requires all three, not "a comment mentioning keys".
   decoy_two_of_three <- c("# uses .rc_feature_key and .rc_key only, not the third one")
   expect_false(any(vapply(.rc_comment_blocks(decoy_two_of_three), names_all_three, logical(1))))
+
+  # DECOY (Phase-5 audit round 3 C2): a line naming all THREE tokens sits
+  # INSIDE a multi-line string literal, not a comment - real, syntactically
+  # valid R where the string spans three physical lines via an unescaped
+  # newline. The middle line, read as raw TEXT, starts with `#` and would
+  # satisfy the OLD `grepl("^\\s*#", lines)` classifier (the exact defect
+  # this fix corrects); a real parse must never emit it as a COMMENT block.
+  decoy_string_literal <- c(
+    "x <- \"line one",
+    "#.rc_feature_key .rc_key .st_normalise_key",
+    "line three\""
+  )
+  expect_false(any(vapply(.rc_comment_blocks(decoy_string_literal), names_all_three, logical(1))))
 })

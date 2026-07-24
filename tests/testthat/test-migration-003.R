@@ -175,7 +175,13 @@ test_that("R-15.19: migration 003 adds date bounds, writes exactly the itemised 
   # INSIDE the real entry point (see below), not via a separate direct
   # `.mig003_apply_bounds()` call afterwards, so the "before" snapshot for
   # the provenance-count assertion must precede the entry-point call itself.
-  log_before <- DBI::dbGetQuery(con0, "SELECT count(*) AS n FROM change_log WHERE tbl = 'feature_alias'")$n
+  # Phase-5 audit round 3 C1: restricted to the nine itemised
+  # `ma-src%02d-cur` uuids (see log_after, below) so the count discriminates
+  # bounds-application provenance from R1's unrelated table-wide self flip.
+  cur_uuids_for_log <- sprintf("ma-src%02d-cur", 1:9)
+  log_before <- DBI::dbGetQuery(con0, sprintf(
+    "SELECT count(*) AS n FROM change_log WHERE tbl = 'feature_alias' AND uuid_row IN (%s)",
+    paste(sprintf("'%s'", cur_uuids_for_log), collapse = ", ")))$n
   DBI::dbDisconnect(con0, shutdown = TRUE)
 
   # ---- Full production entry point: ALTER TABLE + R1's universal flip +
@@ -196,7 +202,16 @@ test_that("R-15.19: migration 003 adds date bounds, writes exactly the itemised 
 
   fa_after <- DBI::dbGetQuery(con, "SELECT * FROM feature_alias ORDER BY uuid")
 
-  log_after <- DBI::dbGetQuery(con, "SELECT count(*) AS n FROM change_log WHERE tbl = 'feature_alias'")$n
+  # Phase-5 audit round 3 C1: counting ALL change_log rows for
+  # tbl='feature_alias' does not discriminate - R1's table-wide self flip
+  # alone touches 22 `self` arms on this seed, so a 003 that ALTERs and
+  # flips but applies ZERO curated bounds still cleared this count. Restrict
+  # to rows whose `uuid_row` is one of the nine itemised `ma-src%02d-cur`
+  # uuids (log_before, captured above from con0 pre-mig003_run(), is
+  # filtered identically), so only bounds-application provenance is counted.
+  log_after <- DBI::dbGetQuery(con, sprintf(
+    "SELECT count(*) AS n FROM change_log WHERE tbl = 'feature_alias' AND uuid_row IN (%s)",
+    paste(sprintf("'%s'", cur_uuids_for_log), collapse = ", ")))$n
   bounds_for_log <- .mig003_fixture_bounds()
   n_bounded_for_log <- sum(!is.na(bounds_for_log$date_start) | !is.na(bounds_for_log$date_end))
   expect_gte(log_after - log_before, n_bounded_for_log)

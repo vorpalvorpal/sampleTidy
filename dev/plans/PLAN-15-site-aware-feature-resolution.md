@@ -1362,14 +1362,66 @@ below it belongs to a row that did not; E.7's belongs to a row that did.
 |---|---|---|---|
 | 0 (highest) | `self_precedence` | **YES — NOTE, non-blocking** | ≥2 live candidates of which **exactly one** is `kind = 'self'` (R1/R2, E.7). The self arm resolves the row; the shadowed live candidates ride along in a `shadowed=` clause. This case is carved OUT of `ambiguous` below — it is checked first, or `ambiguous` swallows it. |
 | 1 | `ambiguous` | no | ~~≥2 live candidates~~ **≥2 live candidates, NOT uniquely resolved by precedence 0** (restated 2026-07-23). Already implemented. Expired candidates, if any, ride along in an `expired=` clause (E.3) rather than winning. |
-| 2 | `expired_alias` | no | 0 live candidates and ≥1 expired/not-yet-started one (E.3). Must emit at count 1. |
-| 3 | `suggestion` | no | exactly 1 live candidate, `auto_assign = FALSE` (F.6). Must emit at count 1. |
+| 2 | `expired_alias` | no | **ZERO live arms** (auto_assign-BLIND — see the ruling below) and ≥1 expired/not-yet-started one (E.3). Must emit at count 1. |
+| 3 | `suggestion` | no | **exactly ONE live arm**, `auto_assign = FALSE` (F.6). Must emit at count 1. Carries an `expired=` clause if the key ALSO has expired arms (ruling below). |
 | 4 (lowest) | `structural` | no | no alias row at all, and Layer 2 produced a parse (B.7). Already implemented as the fallback. |
 
-Rationale for 2 above 3: an expired alias is a curation act the operator needs to see;
+> **RULED 2026-07-24 — "LIVE CANDIDATE" WAS OVERLOADED, AND THAT IS WHAT MADE 2 AND 3
+> LOOK CONTRADICTORY.** *(Phase-5 audit round 3, PCR-1.)*
+>
+> The struck rationale below claimed 2 and 3 "cannot co-occur by construction (a candidate
+> is either live or not)". The reasoning was wrong because the table used **"live
+> candidate" to mean two different sets**: rows 0-2 mean the `auto_assign`-FILTERED set
+> from `.rc_feature_candidates()` (`R/reconcile.R:171`), while row 3's "1 live candidate,
+> `auto_assign = FALSE`" means a row that filter EXCLUDES. So a key holding one parked
+> (`auto_assign = FALSE`) live arm and one expired arm satisfies **both** conditions at
+> once: zero filtered candidates (→ `expired_alias`) and exactly one live arm
+> (→ `suggestion`).
+>
+> **THE FIX IS TO DEFINE THE TERM, NOT TO REORDER THE TABLE.** Throughout this table,
+> **"live arm" means any `feature_alias` row for the key whose date bounds admit the
+> sample date, `auto_assign`-BLIND.** With that reading:
+>
+> * **2 `expired_alias` fires only when there are ZERO live arms** and ≥1 expired /
+>   not-yet-started one. This is exactly what E.3's own gate already says
+>   ("reaches ≥1 alias row which is EXPIRED … **and no live one**").
+> * **3 `suggestion` fires when there is EXACTLY ONE live arm and it is
+>   `auto_assign = FALSE`.**
+>
+> Zero live arms versus one live arm — **now genuinely disjoint**, so the ordering between
+> 2 and 3 never arises. The original claim was right about the conclusion and wrong about
+> the reason, which is why it survived review twice.
+>
+> **THE GENERAL RULE, which the `ambiguous` row already stated for its own case and which
+> now applies to EVERY subkind: expired candidates NEVER select the subkind when any live
+> arm exists — they ride along in an `expired=` clause.** The subkind always comes from the
+> live set (`ambiguous` at ≥2 filtered candidates, `suggestion` at exactly one parked live
+> arm); `expired_alias` is the name for the case where the live set is empty. The principle
+> is the one already pinned for `ambiguous`: **the actionable fact wins and expiry is
+> context.** An operator with a live arm to confirm does not need the row relabelled by a
+> historical bound.
+>
+> So the shape "one parked live arm + one expired arm" is
+> **`subkind=suggestion` CARRYING an `expired=` clause** — and it needs its own test,
+> because it is the one shape that previously had two defensible answers.
+
+### R-15.46
+*(Declared 2026-07-24 with the PCR-1 ruling above. The shape that previously had two
+defensible answers needs its own test, or the ruling is unfalsifiable.)*
+
+Acceptance (must be able to FAIL): a key holding **exactly one live arm with
+`auto_assign = FALSE` AND at least one expired arm**, reconciled at a date inside the live
+arm's bounds and outside the expired one's, emits `subkind=suggestion` — **not**
+`subkind=expired_alias` — **and** carries an `expired=` clause naming the expired
+candidate. Assert BOTH halves: without the `expired=` assertion an implementation that
+simply ignores expired arms whenever a live one exists passes, which is the opposite of
+"expiry is context". **Paired control in the same test:** the same key with its live arm
+removed emits `subkind=expired_alias`, so the test fails if the subkind was hard-coded.
+
+~~Rationale for 2 above 3: an expired alias is a curation act the operator needs to see;
 a lone unconfirmed suggestion is weaker information. A row can satisfy at most one of
 2 and 3 by construction (a candidate is either live or not), so the ordering between
-them only ever matters if a future change makes them co-occur — pin it now anyway.
+them only ever matters if a future change makes them co-occur — pin it now anyway.~~
 One test per branch, and one test asserting the precedence at each adjacent pair.
 
 **Rationale for 0 at the top, and the reader contract.** `self_precedence` and
