@@ -232,17 +232,25 @@
   clean
 }
 
-#' Rewrite each review payload with the alias uuid its pending row materialised
-#' to (R-11.9 commit-side, seam S-8). The commit is the only point where a
-#' review item, its clean row (matched by `source_ref`), and the freshly
-#' created alias uuid all coexist. Appends `,alias_uuid=<uuid>` (or replaces an
-#' existing `alias_uuid=` token). Non-pending / unmatched review rows pass
-#' through untouched.
+#' Rewrite the `review_queue` row's typed `uuid_alias` column for every
+#' review item whose pending feature materialised to an alias uuid in this
+#' commit (R-11.9 commit-side, seam S-8; PLAN-16 S-16.4). The commit is the
+#' only point where a review item, its clean row (matched by `source_ref`),
+#' and the freshly created alias uuid all coexist.
+#'
+#' `review$uuid` is the `review_queue` row's own primary key - by the time
+#' this runs, `.ct_commit_review()` has already inserted the row and carried
+#' its generated `uuid` back onto `review`. The write is a keyed `UPDATE` of
+#' `uuid_alias` (via the mutation layer's `db_update()`, A32) - idempotent
+#' (R-16.15) because it SETs rather than appends, and `uuid_alias` is the
+#' ONLY representation of the alias uuid (R-16.21, RULING D): the JSON
+#' `payload` text itself is never touched by this rewrite. Non-pending /
+#' unmatched review rows pass through untouched.
 #' @keywords internal
 #' @noRd
-.ct_rewrite_review_payloads <- function(review, clean) {
+.ct_rewrite_review_payloads <- function(con, review, clean) {
   if (nrow(review) == 0 ||
-      !all(c("source_ref", "payload") %in% names(review)) ||
+      !all(c("source_ref", "uuid") %in% names(review)) ||
       !all(c("source_ref", "feature_pending", "uuid_feature_alias") %in% names(clean))) {
     return(review)
   }
@@ -257,14 +265,13 @@
     if (is.na(sr) || !(sr %in% names(amap))) next
     au <- amap[[sr]]
     if (is.na(au)) next
-    pl <- review$payload[[i]]
-    if (is.na(pl)) pl <- ""
-    if (grepl("alias_uuid=", pl)) {
-      pl <- sub("alias_uuid=[^,}]+", paste0("alias_uuid=", au), pl)
-    } else {
-      pl <- paste0(pl, ",alias_uuid=", au)
-    }
-    review$payload[[i]] <- pl
+    row_uuid <- review$uuid[[i]]
+    if (is.na(row_uuid)) next
+    db_update(
+      con, "review_queue", uuid = row_uuid,
+      changes = list(uuid_alias = au),
+      actor = .ct_actor, reason = "commit_event: review alias rewrite"
+    )
   }
   review
 }
@@ -580,12 +587,11 @@
 
 #' Resolve one `resolved$skipped` row's existing analysis uuid
 #'
-#' Prefers an `existing_uuid` column (the plan-09 unit-test shape). Falls
-#' back to parsing it out of `payload` for the real `reconcile_event()`
-#' shape - which for `already_present` rows sets `payload` to the bare
-#' existing analysis uuid, so the `existing_uuid=` regex is a harmless
-#' pass-through there (no match -> `sub()` returns `payload` unchanged) and
-#' also handles a future payload that does embed `existing_uuid=<uuid>`.
+#' Reads the typed `existing_uuid` column (R-16.14): `already_present`
+#' populates it directly (`.rq_skip()`, R/reconcile.R), so the regex that
+#' used to parse a bare-uuid `payload` as a pass-through fallback is retired
+#' - the equivalence (same uuid the regex used to recover) is asserted by
+#' the R-16.14 test, not assumed.
 #' @keywords internal
 #' @noRd
 .ct_skip_existing_uuid <- function(skipped, i) {
@@ -595,11 +601,7 @@
       return(val)
     }
   }
-  payload <- if ("payload" %in% names(skipped)) skipped$payload[[i]] else NA_character_
-  if (is.na(payload)) {
-    return(NA_character_)
-  }
-  sub(".*existing_uuid=([^,}]+).*", "\\1", payload)
+  NA_character_
 }
 
 #' Write a provenance `change_log` row for every `already_present` skip
@@ -633,23 +635,43 @@
 #' `work_order` always comes from the event, not the review tibble - the
 #' real `reconcile_event()` review shape has no `work_order` column of its
 #' own.
+#'
+#' Returns `review` with its own generated `uuid` column filled in (or added,
+#' if absent), one per row, in the same order as inserted - the primary key
+#' `.ct_rewrite_review_payloads()` keys its `UPDATE review_queue SET
+#' uuid_alias = ?` on (PLAN-16 S-16.4). Must therefore run BEFORE that
+#' rewrite so the row it updates already exists.
 #' @keywords internal
 #' @noRd
 .ct_commit_review <- function(con, review, event, actor, reason) {
   n <- nrow(review)
   if (n == 0) {
-    return(invisible(NULL))
+    return(review)
   }
+  if (!("uuid" %in% names(review))) {
+    review$uuid <- NA_character_
+  }
+  # PLAN-16: carry the typed columns reconcile now populates (subkind /
+  # uuid_existing / uuid_alias) through to review_queue -- reconcile moved this
+  # data OUT of the payload string and INTO real columns, so a commit-side
+  # writer that only copied `payload` would silently drop it. Defensive
+  # `%in%`: unconverted producers (still legacy-migration pending) may omit a
+  # column, in which case it stores NA rather than erroring.
+  col_or_na <- function(nm, i) if (nm %in% names(review)) review[[nm]][[i]] else NA_character_
   for (i in seq_len(n)) {
     source_hash <- if ("source_hash" %in% names(review)) review$source_hash[[i]] else NA_character_
+    row_uuid <- uuid::UUIDgenerate()
     row <- tibble::tibble(
-      uuid = uuid::UUIDgenerate(), created_at = Sys.time(), kind = review$kind[[i]],
-      work_order = event$work_order, source_hash = source_hash,
-      payload = review$payload[[i]], status = "open"
+      uuid = row_uuid, created_at = Sys.time(), kind = review$kind[[i]],
+      subkind = col_or_na("subkind", i), work_order = event$work_order,
+      source_hash = source_hash, payload = review$payload[[i]], status = "open",
+      uuid_existing = col_or_na("uuid_existing", i),
+      uuid_alias = col_or_na("uuid_alias", i)
     )
     db_append(con, "review_queue", row, actor = actor, reason = reason, source_hash = source_hash)
+    review$uuid[[i]] <- row_uuid
   }
-  invisible(NULL)
+  review
 }
 
 # ---- step 6: file states --------------------------------------------------------
@@ -729,12 +751,11 @@ commit_event <- function(event, resolved, con) {
     if (nrow(clean) > 0) {
       # Step 1b (R-11.8, D8): all pending-alias / dangling-method WRITES happen
       # here (reconcile stays read-only). Must precede sample resolution so a
-      # newly-materialised alias uuid is available to key the sample by, and the
-      # review-payload rewrite (R-11.9) so review items carry a resolvable
-      # alias_uuid.
+      # newly-materialised alias uuid is available to key the sample by, and
+      # the review-payload rewrite below (R-11.9/PLAN-16 S-16.4) so review
+      # items carry a resolvable alias uuid.
       clean <- .ct_materialise_feature_aliases(con, clean, event, .ct_actor, reason)
       clean <- .ct_materialise_lab_methods(con, clean, event, .ct_actor, reason)
-      review <- .ct_rewrite_review_payloads(review, clean)
 
       clean$uuid_sample <- .ct_resolve_samples(con, clean, uuid_project, reason)
       # PLAN-15 C.4: provenance for every structural / WO-site-inferred
@@ -746,7 +767,13 @@ commit_event <- function(event, resolved, con) {
     .ct_archive_files(con, event)
     .ct_record_already_present(con, resolved$skipped, .ct_actor, reason)
 
-    .ct_commit_review(con, review, event, .ct_actor, reason)
+    # review_queue rows are written FIRST, so each one's own uuid exists to
+    # key the alias rewrite below (PLAN-16 S-16.4 keys UPDATE review_queue
+    # SET uuid_alias = ? WHERE uuid = ?).
+    review <- .ct_commit_review(con, review, event, .ct_actor, reason)
+    if (nrow(clean) > 0) {
+      review <- .ct_rewrite_review_payloads(con, review, clean)
+    }
 
     .ct_set_file_states(con, event$files, nrow(clean), nrow(review), reason)
 
