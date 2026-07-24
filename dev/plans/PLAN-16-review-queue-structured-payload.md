@@ -214,13 +214,19 @@ ALTER TABLE review_queue ADD COLUMN uuid_alias    VARCHAR;
 CREATE TABLE IF NOT EXISTS review_queue_candidate (
   uuid          VARCHAR NOT NULL PRIMARY KEY,
   uuid_review   VARCHAR NOT NULL REFERENCES review_queue(uuid),
-  uuid_feature  VARCHAR NOT NULL REFERENCES feature(uuid),
+  uuid_feature  VARCHAR NOT NULL,   -- resolution verified by the migration, NOT an FK: see R-16.3
   kind          VARCHAR NOT NULL,   -- 'candidate' | 'expired'
   date_start    DATE,
   date_end      DATE,
   rank          INTEGER NOT NULL
 );
 ```
+
+> **`uuid_feature` carries no DB-level FK** (pinned default, *** ROBIN TO CONFIRM ***). An
+> inline `REFERENCES feature(uuid)` is not constructible as an auto-migration — DuckDB rejects
+> a `REFERENCES` to a table absent at `CREATE TABLE` time and has no `ALTER TABLE ADD FOREIGN
+> KEY`, and `feature` (a corpus table) is never present when `ensure_schema()` runs v6 on a
+> bare DB. Full rationale + the three reproduced facts are under **R-16.3**.
 
 Notes that are decisions, not description:
 
@@ -459,10 +465,35 @@ pin a shape, and the behavioural criteria are where the gate really is.
 - all three exist with type `VARCHAR` and are nullable; none is a computed or generated column.
 
 ### R-16.3 review_queue_candidate exists with enforced foreign keys
-- `uuid_review` references `review_queue(uuid)` and `uuid_feature` references
-  `feature(uuid)`, and **both are enforced**: inserting a child row whose parent uuid does
-  not exist must raise, for each of the two FKs independently. A test that only checks the
-  constraint is *declared* does not satisfy this.
+- `uuid_review` references `review_queue(uuid)` and **is enforced**: inserting a child row
+  whose `uuid_review` parent does not exist must raise. A test that only checks the constraint
+  is *declared* does not satisfy this.
+- `uuid_feature` is `NOT NULL` and its resolution to a live `feature(uuid)` is verified by the
+  **migration itself** (R-16.12/R-16.13), NOT by a DB-level foreign key.
+
+  **DEVIATION from B-16.ddl, surfaced at Phase-6 implementation (P16-db-schema), pinned as the
+  default pending Robin's confirmation.** *** ROBIN TO CONFIRM *** The original DDL pinned
+  `uuid_feature ... REFERENCES feature(uuid)`. That FK is **not constructible** as an
+  auto-migration, for three independently reproduced reasons ([MEASURE TWICE],
+  scratchpad/p16u1_fk_probe.R):
+  1. DuckDB rejects a `REFERENCES` to a table absent at `CREATE TABLE` time with a hard
+     Catalog Error (it is not a deferred constraint).
+  2. DuckDB has **no** `ALTER TABLE ADD FOREIGN KEY`, so the FK cannot be added later.
+  3. `feature` is a corpus/CONTRACT table, never created by `ensure_schema()`
+     (ops-tables-only invariant), yet `ensure_schema()` must succeed on a bare DB (R-1.5,
+     R-16.1 arm (a)), where `feature` is absent — as is every fixture path (`seed_db()` runs
+     `ensure_schema()` before creating `feature`).
+
+  The only alternative that keeps a DB-level FK is to create `feature` inside the ops-schema
+  ladder, which violates the standing ops-tables-only invariant. **Chosen default:**
+  `uuid_feature` carries NO FK (like the polymorphic `uuid_existing`/`uuid_alias`); the
+  `uuid_review` FK is retained; referential integrity for `uuid_feature` is enforced by the
+  migration's own resolution check (R-16.12/R-16.13) plus `NOT NULL`, plus every production
+  writer routing real feature uuids through `.rq_row()`. This mirrors the plan's existing
+  "polymorphic refs carry no FK — the migration verifies resolution itself" pattern (B-16.ddl).
+  If Robin prefers the DB-enforced FK, the resolution is to add an empty `feature` table to the
+  ops-schema ladder before v6 (reverting the invariant) — a change isolated to `R/db-schema.R`
+  (the DDL line) and this criterion's test; NO producer unit (U2–U6) depends on the outcome.
 
 ### R-16.4 Candidate order is preserved through a write/read round-trip
 - writing candidates `c(A, B)` and reading them back yields `A, B` in that order via `rank`,

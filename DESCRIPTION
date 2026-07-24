@@ -28,6 +28,7 @@ Imports:
     dplyr,
     duckdb,
     fs,
+    jsonlite,
     purrr,
     readr,
     readxl,

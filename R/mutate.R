@@ -39,7 +39,8 @@
 # exclusively through db-schema.R's own helpers (A32) rather than db_append().
 .st_mutate_allowlist <- c(
   "feature", "feature_mask", "analyte", "analyte_mask", "lab_method",
-  "project", "sample", "analysis", "asset", "review_queue", "feature_alias"
+  "project", "sample", "analysis", "asset", "review_queue", "review_queue_candidate",
+  "feature_alias"
 )
 
 #' @keywords internal
