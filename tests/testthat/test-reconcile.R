@@ -3359,7 +3359,14 @@ test_that("R-15.46: a key holding exactly ONE live arm (auto_assign=FALSE) AND a
   # exact opposite of "expiry is context".
   expect_true(grepl("subkind=suggestion", rv$payload[[1]], fixed = TRUE))
   expect_false(grepl("subkind=expired_alias", rv$payload[[1]], fixed = TRUE))
-  expect_true(grepl("candidates=f-1546-live", rv$payload[[1]], fixed = TRUE))
+  # Phase-5 audit round 4 A3: a substring `grepl("candidates=f-1546-live", ...)`
+  # also passes on `candidates=f-1546-live|f-0002` (the expired uuid leaking
+  # into candidates= too) - exactly what the OVERLOADED ruling forbids
+  # ("expiry is context"). Parse the candidates= clause and assert the SET
+  # instead, matching R-15.16's idiom above.
+  cand_str <- regmatches(rv$payload[[1]], regexpr("candidates=[^,]*", rv$payload[[1]]))
+  cand_set <- strsplit(sub("candidates=", "", cand_str), "\\|")[[1]]
+  expect_setequal(cand_set, "f-1546-live")
   expect_true(grepl("expired=f-0002@2018-01-01..2019-12-31", rv$payload[[1]], fixed = TRUE))
 
   # PAIRED CONTROL: the same key shape with the live arm removed - a

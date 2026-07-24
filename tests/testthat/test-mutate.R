@@ -663,7 +663,7 @@ test_that("R-15.30: add_feature() creates a self alias in the same transaction t
   before <- count_change_log(con)
 
   new_uuid <- add_feature(
-    name = "T.NEWSELF9001", site = "TestSite", lon = 150.7001, lat = -33.7001,
+    name = "T.NEWSELF9001", site = "T", lon = 150.7001, lat = -33.7001,
     flow = "surface", matrix = "water",
     actor = "tester", reason = "F.9: post-001 feature must get a self alias"
   )
@@ -753,7 +753,7 @@ test_that("R-15.30/B3: a failure on the SECOND write of add_feature()'s atomic p
 
   err <- tryCatch(
     add_feature(
-      name = "T.NEWSELF9002", site = "TestSite", lon = 150.7002, lat = -33.7002,
+      name = "T.NEWSELF9002", site = "T", lon = 150.7002, lat = -33.7002,
       flow = "surface", matrix = "water",
       actor = "tester", reason = "B3: second-write failure must roll back the first"
     ),
