@@ -447,15 +447,20 @@ review_queue_add <- function(con, kind, work_order = NA_character_,
                              source_hash = NA_character_, payload = NA_character_,
                              uuid = NULL, created_at = NULL,
                              subkind = NA_character_, uuid_existing = NA_character_,
-                             uuid_alias = NA_character_, candidates = NULL) {
+                             uuid_alias = NA_character_, candidates = NULL,
+                             diagnostics = list()) {
   checkmate::assert_string(kind)
   if (is.null(uuid)) uuid <- uuid::UUIDgenerate()
   if (is.null(created_at)) created_at <- Sys.time()
 
+  # `diagnostics` is the structured path a direct writer (e.g. R/router.R) uses
+  # to hand this function a diagnostics list and let .rq_row() JSON-serialise it
+  # -- so no caller builds a payload string itself (R-16.8). The legacy `payload`
+  # argument still overrides below for back-compat (R-16.9's raw-shape parity).
   rq <- .rq_row(
     kind = kind, subkind = subkind, work_order = work_order,
     source_hash = source_hash, uuid_existing = uuid_existing,
-    uuid_alias = uuid_alias, candidates = candidates
+    uuid_alias = uuid_alias, candidates = candidates, diagnostics = diagnostics
   )
   review <- rq$review
   review$uuid <- uuid

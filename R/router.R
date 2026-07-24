@@ -174,13 +174,10 @@ route_files <- function(paths, con) {
   # Tie at the winning tier: quarantine, never pick a winner (DESIGN §5).
   ingest_file_set_state(con, hash, "quarantined", "adapter_tie")
   ingest_file_set_route(con, hash, adapter = NA_character_, tier = winning_tier)
-  payload <- sprintf(
-    '{"tier":"%s","adapters":[%s]}',
-    winning_tier, paste(sprintf('"%s"', winners), collapse = ",")
-  )
   review_queue_add(
     con, kind = "adapter_tie", work_order = fm$work_order_guess,
-    source_hash = hash, payload = payload
+    source_hash = hash,
+    diagnostics = list(tier = winning_tier, adapters = winners)
   )
   tibble::tibble(
     path = path, hash = hash, filename = fm$filename, state = "quarantined",
