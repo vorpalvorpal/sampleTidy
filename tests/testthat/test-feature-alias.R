@@ -312,8 +312,13 @@ test_that("R-11.10 (D5, cold review C14): override = TRUE merges a collision - w
 
   conflict <- DBI::dbGetQuery(con, "SELECT * FROM review_queue WHERE kind = 'value_conflict'")
   expect_equal(nrow(conflict), 1)
-  expect_true(grepl("an-w2", conflict$payload[[1]], fixed = TRUE))
-  expect_true(grepl("an-l2", conflict$payload[[1]], fixed = TRUE))
+  # PLAN-16 R-16.19/R-16.20: uuid_existing is now a typed column (an-w2, the
+  # winner's existing analysis); uuid_incoming is deliberately ABSENT (an-l2
+  # has no uuid to name) - the retired "both uuids appear somewhere in
+  # payload" shape becomes: the existing uuid on its own column, and the
+  # incoming uuid nowhere at all.
+  expect_identical(conflict$uuid_existing[[1]], "an-w2")
+  expect_false(grepl("an-l2", conflict$payload[[1]], fixed = TRUE))
 
   # both analyses now live on the surviving sample - two, not four (an-l1
   # dropped, an-w1/an-w2/an-l2 remain).

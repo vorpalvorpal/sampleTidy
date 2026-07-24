@@ -421,7 +421,7 @@ test_that("R-16.3 review_queue_candidate FK on uuid_review is enforced: a dangli
   )
 })
 
-test_that("R-16.3 review_queue_candidate FK on uuid_feature is enforced: a dangling parent uuid errors", {
+test_that("R-16.3 review_queue_candidate.uuid_feature is NOT NULL but carries NO foreign key (Option A, Robin 2026-07-25): a NULL raises, and a dangling-but-present uuid is deliberately ACCEPTED because resolution is a migration guarantee, not a DB constraint", {
   dir <- withr::local_tempdir()
   db <- seed_db(dir)
   con <- seed_con(db)
@@ -429,14 +429,35 @@ test_that("R-16.3 review_queue_candidate FK on uuid_feature is enforced: a dangl
 
   parent_uuid <- review_queue_add(con, kind = "value_conflict") # a REAL, live parent
 
+  # Half 1: NOT NULL is enforced.
   expect_error(
     DBI::dbExecute(
       con,
       "INSERT INTO review_queue_candidate (uuid, uuid_review, uuid_feature, kind, rank)
-       VALUES (?, ?, ?, 'candidate', 1)",
-      params = list(uuid::UUIDgenerate(), parent_uuid, uuid::UUIDgenerate()) # uuid_feature has no parent row
+       VALUES (?, ?, NULL, 'candidate', 1)",
+      params = list(uuid::UUIDgenerate(), parent_uuid)
     )
   )
+
+  # Half 2: the FK is absent by design. A syntactically valid but non-existent
+  # uuid_feature must SUCCEED and the row must actually land -- resolution is
+  # verified by the migration (R-16.12/R-16.13), not by the database.
+  candidate_uuid <- uuid::UUIDgenerate()
+  dangling_feature_uuid <- uuid::UUIDgenerate()
+  n <- DBI::dbExecute(
+    con,
+    "INSERT INTO review_queue_candidate (uuid, uuid_review, uuid_feature, kind, rank)
+     VALUES (?, ?, ?, 'candidate', 1)",
+    params = list(candidate_uuid, parent_uuid, dangling_feature_uuid)
+  )
+  expect_equal(n, 1L)
+
+  row <- DBI::dbGetQuery(
+    con,
+    "SELECT uuid_feature FROM review_queue_candidate WHERE uuid = ?",
+    params = list(candidate_uuid)
+  )
+  expect_equal(row$uuid_feature, dangling_feature_uuid)
 })
 
 # --- R-16.4: candidate order is preserved through a write/read round-trip -

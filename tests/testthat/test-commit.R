@@ -687,13 +687,13 @@ test_that("R-11.9 (commit-side, D8): review payload carries a resolvable alias_u
   expect_equal(nrow(alias), 1)
 
   stored <- DBI::dbGetQuery(con,
-    "SELECT payload FROM review_queue WHERE kind = 'unknown_feature' AND source_hash = ?",
+    "SELECT payload, uuid_alias FROM review_queue WHERE kind = 'unknown_feature' AND source_hash = ?",
     params = list(setup$hash))
   expect_equal(nrow(stored), 1)
-  m <- regmatches(stored$payload[[1]], regexpr("alias_uuid=[^,}]+", stored$payload[[1]]))
-  expect_true(length(m) == 1 && nzchar(m))
-  extracted_uuid <- sub("^alias_uuid=", "", m)
-  expect_identical(extracted_uuid, alias$uuid[[1]])
+  # PLAN-16 R-16.21: uuid_alias is the ONLY representation of the alias uuid -
+  # a typed column, not an `alias_uuid=` fragment folded into the payload text.
+  expect_identical(stored$uuid_alias[[1]], alias$uuid[[1]])
+  expect_false(grepl("alias_uuid", stored$payload[[1]], fixed = TRUE))
 })
 
 # ---- R-11.16: quantified from parse_value(); write rl_high (F4) ------------
