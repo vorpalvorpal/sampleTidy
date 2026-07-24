@@ -239,15 +239,21 @@ confirm_feature_aliases <- function(uuid_alias, uuid_feature, confirmed_by,
           con, "analysis", la$uuid, changes = list(uuid_sample = uuid_winner),
           actor = confirmed_by, reason = "merge: re-pointed duplicate analysis onto winner sample"
         )
-        review_row <- tibble::tibble(
-          uuid = uuid::UUIDgenerate(), created_at = Sys.time(), kind = "value_conflict",
-          work_order = NA_character_, source_hash = NA_character_,
-          payload = paste0(
-            "uuid_existing=", ex$uuid, ",uuid_new=", la$uuid,
-            ",value_existing=", ex$value, ",value_new=", la$value
-          ),
-          status = "open"
-        )
+        # PLAN-16 R-16.19/R-16.20: subkind='alias_merge' (discriminated by
+        # subkind, not a second grammar); uuid_existing is a real column
+        # (the winner's analysis uuid), never a diagnostics key. Vocabulary
+        # is <thing>_<role> (role in {existing,incoming}), shared with the
+        # reconcile `.rc` measurement producer's subkind='measurement' on
+        # value_existing/value_incoming. Unlike that producer, the incoming
+        # side here IS a real analysis row (`la`) - but its uuid is
+        # deliberately NOT surfaced as a diagnostics key (no uuid_new/
+        # uuid_incoming), to keep the shared vocabulary identical; it
+        # remains discoverable via change_log's "re-pointed" row above.
+        review_row <- .rq_row(
+          kind = "value_conflict", subkind = "alias_merge",
+          uuid_existing = ex$uuid,
+          diagnostics = list(value_existing = ex$value, value_incoming = la$value)
+        )$review
         db_append(
           con, "review_queue", review_row, actor = confirmed_by,
           reason = "merge: value conflict between duplicate analyses, existing value left untouched"
@@ -388,12 +394,13 @@ confirm_analyte_methods <- function(uuid_lab, uuid_analyte, confirmed_by,
   )$val
 
   if (length(drift_units) > 1) {
-    review_row <- tibble::tibble(
-      uuid = uuid::UUIDgenerate(), created_at = Sys.time(), kind = "units_drift",
-      work_order = NA_character_, source_hash = NA_character_,
-      payload = paste0("uuid_lab=", uuid_lab, ",units=", paste(drift_units, collapse = "|")),
-      status = "open"
-    )
+    # PLAN-16 R-16.8: routed through .rq_row() - diagnostics -> JSON, no
+    # hand-built k=v string. `units_drift` has no `uuid_existing` referent
+    # in B-16.ddl's polymorphic map, so uuid_lab travels in diagnostics.
+    review_row <- .rq_row(
+      kind = "units_drift",
+      diagnostics = list(uuid_lab = uuid_lab, units = drift_units)
+    )$review
     db_append(
       con, "review_queue", review_row, actor = confirmed_by,
       reason = "confirm_analyte_methods(): units drift detected, not bulk-converting"
@@ -425,15 +432,17 @@ confirm_analyte_methods <- function(uuid_lab, uuid_analyte, confirmed_by,
     )
 
     if (inherits(conv, "condition")) {
-      review_row <- tibble::tibble(
-        uuid = uuid::UUIDgenerate(), created_at = Sys.time(), kind = "unknown_unit",
-        work_order = NA_character_, source_hash = NA_character_,
-        payload = paste0(
-          "uuid_analysis=", a$uuid, ",uuid_lab=", uuid_lab,
-          ",units_from=", method$units[[1]], ",units_to=", analyte$units[[1]]
-        ),
-        status = "open"
-      )
+      # PLAN-16 R-16.8: routed through .rq_row() - diagnostics -> JSON, no
+      # hand-built k=v string. This `unknown_unit` has no `uuid_existing`
+      # referent in B-16.ddl's polymorphic map, so the entity references
+      # travel in diagnostics.
+      review_row <- .rq_row(
+        kind = "unknown_unit",
+        diagnostics = list(
+          uuid_analysis = a$uuid, uuid_lab = uuid_lab,
+          units_from = method$units[[1]], units_to = analyte$units[[1]]
+        )
+      )$review
       db_append(
         con, "review_queue", review_row, actor = confirmed_by,
         reason = "confirm_analyte_methods(): method units could not be converted to the analyte's units"
