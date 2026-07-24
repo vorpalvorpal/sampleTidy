@@ -330,7 +330,7 @@ test_that("R-9.2: already_present rows get no new analysis but a provenance chan
 # `resolved$clean` reaching commit_event() after the plan-11 reconcile
 # rewrite (a different unit's file - R-11.5/R-11.6/R-11.7) carries columns
 # beyond the plan-09 shape above: `feature_pending` (lgl), `alias_key` (chr,
-# .rc_key(feature_raw)), `uuid_feature_alias` (chr, NA when pending),
+# .rc_feature_key(feature_raw)), `uuid_feature_alias` (chr, NA when pending),
 # `analyte_pending` (lgl), `org` (chr, reporting organisation), `method_raw`,
 # `units_raw`, `quantified` (lgl, from parse_value(), never re-derived from
 # `below_detection`), `rl_high` (dbl, from parse_value(), for `>`-rows).
@@ -341,7 +341,7 @@ mk_p11_row <- function(...) {
   defaults <- list(
     source_hash = "p11-hash-x", source_ref = "row1", work_order = "XX1234567", revision = 0L,
     org = "ALS",
-    feature_raw = "T.S01", alias_key = .rc_key("T.S01"),
+    feature_raw = "T.S01", alias_key = .rc_feature_key("T.S01"),
     feature_pending = FALSE, uuid_feature_alias = "fa-0001",
     analyte_raw = "pH Value", method_raw = "EA005P: pH by PC Titrator", units_raw = "pH Unit",
     analyte_pending = FALSE, uuid_lab = "lm-0001", uuid_analyte = "a-0001",
@@ -412,7 +412,7 @@ test_that("R-11.8: a file with a resolved row and an unknown-feature row commits
                sample_date = as.Date("2025-07-01"),
                sample_datetime = as.POSIXct("2025-07-01 09:00:00", tz = "UTC")),
     mk_p11_row(source_ref = "r2", source_hash = setup$hash,
-               feature_raw = "T.NEVER-SEEN-C20", alias_key = .rc_key("T.NEVER-SEEN-C20"),
+               feature_raw = "T.NEVER-SEEN-C20", alias_key = .rc_feature_key("T.NEVER-SEEN-C20"),
                feature_pending = TRUE, uuid_feature_alias = NA_character_,
                sample_date = as.Date("2025-07-01"),
                sample_datetime = as.POSIXct("2025-07-01 09:00:00", tz = "UTC"))
@@ -442,7 +442,7 @@ test_that("R-11.8: a file with a resolved row and an unknown-feature row commits
   state_row <- DBI::dbGetQuery(con, "SELECT state FROM ingest_file WHERE hash = ?", params = list(setup$hash))
   expect_identical(state_row$state[[1]], "archived")
 
-  alias <- dangling_alias_row(con, .rc_key("T.NEVER-SEEN-C20"))
+  alias <- dangling_alias_row(con, .rc_feature_key("T.NEVER-SEEN-C20"))
   expect_equal(nrow(alias), 1)
   expect_true(is.na(alias$uuid_feature[[1]]))
   expect_identical(alias$kind[[1]], "pending")
@@ -453,7 +453,7 @@ test_that("R-11.8(a,c): two commits of the same still-unknown feature reuse ONE 
   setup <- commit_test_setup()
   con <- setup$con
   on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
-  key <- .rc_key("T.DEDUPE-FEAT")
+  key <- .rc_feature_key("T.DEDUPE-FEAT")
 
   files1 <- tibble::tibble(hash = setup$hash, filename = basename(setup$path),
                            adapter = "esdat/1", rank = 3L, kept = TRUE)
@@ -483,7 +483,7 @@ test_that("R-11.8(a,c)/M4: a RESOLVED feature_alias sharing the alias_key is lef
   setup <- commit_test_setup()
   con <- setup$con
   on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
-  key <- .rc_key("T.SHARED-KEY-M4")
+  key <- .rc_feature_key("T.SHARED-KEY-M4")
 
   # Pre-seed a RESOLVED alias (uuid_feature NOT NULL) sharing alias_key = key.
   # The find-or-create in .ct_materialise_feature_aliases keys its lookup on
@@ -531,7 +531,7 @@ test_that("R-11.8(e)/M5: two rows in the SAME commit event, same analyte, differ
                           adapter = "esdat/1", rank = 3L, kept = TRUE)
   clean <- dplyr::bind_rows(
     mk_p11_row(source_ref = "r1", source_hash = setup$hash,
-               feature_raw = "T.S01", alias_key = .rc_key("T.S01"),
+               feature_raw = "T.S01", alias_key = .rc_feature_key("T.S01"),
                feature_pending = FALSE, uuid_feature_alias = "fa-0001",
                analyte_raw = "T.DEDUPE-ANALYTE-M5", method_raw = "T.DEDUPE-METHOD-M5",
                analyte_pending = TRUE, uuid_lab = NA_character_, uuid_analyte = NA_character_,
@@ -539,7 +539,7 @@ test_that("R-11.8(e)/M5: two rows in the SAME commit event, same analyte, differ
                sample_date = as.Date("2025-07-09"),
                sample_datetime = as.POSIXct("2025-07-09 09:00:00", tz = "UTC")),
     mk_p11_row(source_ref = "r2", source_hash = setup$hash,
-               feature_raw = "T.S02", alias_key = .rc_key("T.S02"),
+               feature_raw = "T.S02", alias_key = .rc_feature_key("T.S02"),
                feature_pending = FALSE, uuid_feature_alias = "fa-0002",
                analyte_raw = "t.dedupe-analyte-m5", method_raw = "t.dedupe-method-m5",
                analyte_pending = TRUE, uuid_lab = NA_character_, uuid_analyte = NA_character_,
@@ -666,7 +666,7 @@ test_that("R-11.9 (commit-side, D8): review payload carries a resolvable alias_u
   setup <- commit_test_setup()
   con <- setup$con
   on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
-  key <- .rc_key("T.NEEDS-REVIEW-ALIAS")
+  key <- .rc_feature_key("T.NEEDS-REVIEW-ALIAS")
 
   files <- tibble::tibble(hash = setup$hash, filename = basename(setup$path),
                           adapter = "esdat/1", rank = 3L, kept = TRUE)
@@ -967,7 +967,7 @@ test_that("R-15.17: a new pending alias's date_start is min(sample_date) over th
   setup <- commit_test_setup()
   con <- setup$con
   on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
-  key <- .rc_key("T.ORDER-INDEP")
+  key <- .rc_feature_key("T.ORDER-INDEP")
   event <- mk_commit_event(tibble::tibble(hash = setup$hash, filename = basename(setup$path),
                                            adapter = "esdat/1", rank = 3L, kept = TRUE))
 
@@ -1017,7 +1017,7 @@ test_that("R-15.17: re-ingesting into an EXISTING dangling alias updates n_seen/
   setup <- commit_test_setup()
   con <- setup$con
   on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
-  key <- .rc_key("T.EXISTING-DANGLING-BOUNDS")
+  key <- .rc_feature_key("T.EXISTING-DANGLING-BOUNDS")
 
   DBI::dbExecute(con, "INSERT INTO feature_alias
     (uuid, uuid_feature, name, alias_key, kind, n_seen, auto_assign, first_seen, last_seen,

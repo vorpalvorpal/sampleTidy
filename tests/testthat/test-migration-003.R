@@ -178,9 +178,16 @@ test_that("R-15.19: migration 003 adds date bounds, writes exactly the itemised 
   # Phase-5 audit round 3 C1: restricted to the nine itemised
   # `ma-src%02d-cur` uuids (see log_after, below) so the count discriminates
   # bounds-application provenance from R1's unrelated table-wide self flip.
+  # Phase-5 audit round 4 A2: also restricted to field IN
+  # ('date_start', 'date_end') - `.mig003_apply_bounds()`'s pinned contract
+  # sets `auto_assign = TRUE` on every one of these nine rows too, and
+  # db_update() logs one change_log row per changed field, so without this
+  # filter the auto_assign flip alone clears the threshold with ZERO bounds
+  # provenance. This filter makes the count one of bounds-field provenance
+  # only.
   cur_uuids_for_log <- sprintf("ma-src%02d-cur", 1:9)
   log_before <- DBI::dbGetQuery(con0, sprintf(
-    "SELECT count(*) AS n FROM change_log WHERE tbl = 'feature_alias' AND uuid_row IN (%s)",
+    "SELECT count(*) AS n FROM change_log WHERE tbl = 'feature_alias' AND uuid_row IN (%s) AND field IN ('date_start', 'date_end')",
     paste(sprintf("'%s'", cur_uuids_for_log), collapse = ", ")))$n
   DBI::dbDisconnect(con0, shutdown = TRUE)
 
@@ -209,12 +216,18 @@ test_that("R-15.19: migration 003 adds date bounds, writes exactly the itemised 
   # to rows whose `uuid_row` is one of the nine itemised `ma-src%02d-cur`
   # uuids (log_before, captured above from con0 pre-mig003_run(), is
   # filtered identically), so only bounds-application provenance is counted.
+  # Phase-5 audit round 4 A2: also restricted to field IN
+  # ('date_start', 'date_end'), matching log_before - the auto_assign flip
+  # that a correct applier also performs on every one of these nine rows can
+  # no longer satisfy this count. The oracle is now a count of *field*
+  # changes, not of rows: 3 non-NULL date_start + 7 non-NULL date_end = 10.
   log_after <- DBI::dbGetQuery(con, sprintf(
-    "SELECT count(*) AS n FROM change_log WHERE tbl = 'feature_alias' AND uuid_row IN (%s)",
+    "SELECT count(*) AS n FROM change_log WHERE tbl = 'feature_alias' AND uuid_row IN (%s) AND field IN ('date_start', 'date_end')",
     paste(sprintf("'%s'", cur_uuids_for_log), collapse = ", ")))$n
   bounds_for_log <- .mig003_fixture_bounds()
-  n_bounded_for_log <- sum(!is.na(bounds_for_log$date_start) | !is.na(bounds_for_log$date_end))
-  expect_gte(log_after - log_before, n_bounded_for_log)
+  n_bound_fields <- sum(!is.na(bounds_for_log$date_start)) +
+                    sum(!is.na(bounds_for_log$date_end))   # 3 + 7 = 10
+  expect_gte(log_after - log_before, n_bound_fields)
 
   # Row counts unchanged: only ALTER/UPDATE, never INSERT/DELETE.
   expect_equal(nrow(fa_after), n_rows_before)

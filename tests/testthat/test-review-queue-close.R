@@ -74,7 +74,7 @@ rq_row <- function(...) {
   defaults <- list(
     source_hash = "rq-hash-x", source_ref = "row1", work_order = "XX1234567", revision = 0L,
     org = "ALS",
-    feature_raw = "T.S01", alias_key = .rc_key("T.S01"),
+    feature_raw = "T.S01", alias_key = .rc_feature_key("T.S01"),
     feature_pending = FALSE, uuid_feature_alias = "fa-0001",
     analyte_raw = "pH Value", method_raw = "EA005P: pH by PC Titrator", units_raw = "pH Unit",
     analyte_pending = FALSE, uuid_lab = "lm-0001", uuid_analyte = "a-0001",
@@ -158,7 +158,7 @@ test_that("R-15.39: committing an event with a pending feature writes a review_q
   setup <- rq_commit_setup()
   con <- setup$con
   on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
-  key <- .rc_key("T.RQ-PENDING")
+  key <- .rc_feature_key("T.RQ-PENDING")
 
   files <- tibble::tibble(hash = setup$hash, filename = basename(setup$src_path),
                           adapter = "esdat/1", rank = 3L, kept = TRUE)
@@ -169,7 +169,7 @@ test_that("R-15.39: committing an event with a pending feature writes a review_q
                         sample_date = as.Date("2025-07-15"),
                         sample_datetime = as.POSIXct("2025-07-15 09:00:00", tz = "UTC"))
   other_row <- rq_row(source_ref = "r2", source_hash = setup$hash,
-                       feature_raw = "T.S02", alias_key = .rc_key("T.S02"),
+                       feature_raw = "T.S02", alias_key = .rc_feature_key("T.S02"),
                        feature_pending = FALSE, uuid_feature_alias = "fa-0002",
                        sample_date = as.Date("2025-07-15"),
                        sample_datetime = as.POSIXct("2025-07-15 09:05:00", tz = "UTC"))
@@ -303,7 +303,7 @@ test_that("R-15.42: end-to-end (F.15 acceptance) - open a review item via commit
   setup <- rq_commit_setup()
   con <- setup$con
   on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
-  key <- .rc_key("T.RQ-E2E")
+  key <- .rc_feature_key("T.RQ-E2E")
 
   files <- tibble::tibble(hash = setup$hash, filename = basename(setup$src_path),
                           adapter = "esdat/1", rank = 3L, kept = TRUE)
@@ -358,7 +358,7 @@ test_that("R-15.43 (PROVISIONAL ORACLE: R-15.43 - see note below): a confirm_fea
   setup <- rq_commit_setup()
   con <- setup$con
   on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
-  key <- .rc_key("T.RQ-ABORT")
+  key <- .rc_feature_key("T.RQ-ABORT")
 
   files <- tibble::tibble(hash = setup$hash, filename = basename(setup$src_path),
                           adapter = "esdat/1", rank = 3L, kept = TRUE)

@@ -61,14 +61,19 @@
 #' hardcoded lowercase `fm.variant = 'epa'` filter (the defect this
 #' criterion targets).
 #'
-#' `sample.date` is deliberately seeded a day off from the Sydney calendar
-#' date implied by `datetime` (2024-06-10 vs the true 2024-06-15, in
-#' `Australia/Sydney` = UTC+10 in June, no DST). This is the F.12(b)
-#' DECOUPLED rule's own footgun (language-footguns.md / brief): the restored
-#' `date` projection must derive from `datetime`, never select
-#' `sample.date` - this fixture makes an implementation that violates that
-#' rule provably wrong (lands on 2024-06-10) rather than accidentally
-#' correct.
+#' `datetime` is seeded at `2024-06-14 23:00:00` (naive/UTC), which is
+#' `2024-06-15 09:00` in `Australia/Sydney` (UTC+10 in June, no DST) - one
+#' hour before local midnight, so the naive calendar date and the Sydney
+#' calendar date fall on different days. `sample.date` is separately seeded
+#' at `2024-06-10`, a third distinct day. This is the F.12(b) DECOUPLED
+#' rule's own footgun (language-footguns.md / brief): the restored `date`
+#' projection must derive from `datetime`, via the Sydney-local calendar
+#' day, never select `sample.date` and never take a timezone-naive
+#' `CAST(datetime AS DATE)`. This fixture makes BOTH violations provably
+#' wrong rather than accidentally correct: selecting raw `sample.date` lands
+#' on 2024-06-10, and a timezone-naive cast of `datetime` lands on
+#' 2024-06-14 - only the mandated Sydney-local derivation lands on
+#' 2024-06-15 (23:00 UTC + 10h = 09:00 the next Sydney day).
 #'
 #' Reuses `lm-901` (`seed_pre_migration_db()`'s own lab_method fixture) so
 #' this stays additive, matching test-migration-002.R's
@@ -89,7 +94,7 @@
 
   DBI::dbExecute(con, "INSERT INTO \"sample\"
     (uuid, uuid_feature, date, datetime, organisation) VALUES
-    ('s-epa-201', 'f-201', TIMESTAMP '2024-06-10 00:00:00', TIMESTAMP '2024-06-15 03:00:00', 'ALS')")
+    ('s-epa-201', 'f-201', TIMESTAMP '2024-06-10 00:00:00', TIMESTAMP '2024-06-14 23:00:00', 'ALS')")
 
   DBI::dbExecute(con, "INSERT INTO analysis
     (uuid, uuid_sample, uuid_lab, value, quantified, rl_low) VALUES
