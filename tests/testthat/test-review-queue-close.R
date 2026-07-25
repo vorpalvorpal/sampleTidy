@@ -389,3 +389,73 @@ test_that("R-15.43 (PROVISIONAL ORACLE: R-15.43 - see note below): a confirm_fea
   expect_equal(nrow(still_open), 1)
   expect_identical(still_open$status[[1]], "open")
 })
+
+test_that("R-15.43 (transactional arm): when a MULTI-alias confirmation aborts on a later alias, an EARLIER alias's review item that was already closed inside the same transaction is rolled back to 'open', and that alias stays unconfirmed", {
+  # ORCHESTRATOR ADJUDICATION of the provisional oracle above (2026-07-26).
+  # The block above aborts on `uuid_feature = NA`, which `.fa_confirm_one_alias()`
+  # rejects BEFORE any write happens - so it passes identically whether the
+  # close lives inside confirm's transaction or outside it, and cannot pin D5's
+  # atomicity claim. This arm makes the abort land AFTER a real, successful
+  # close: two pending aliases in ONE commit, then one confirm call whose FIRST
+  # alias succeeds (updating feature_alias AND closing its review item) and
+  # whose SECOND aborts. `db_transaction()` (R/mutate.R:97) rolls the whole
+  # thing back, so the first item must return to 'open'.
+  #
+  # This is the assertion that FAILS if `review_queue_close()` is called on its
+  # own connection / its own `with_db_write()` instead of on the `con` already
+  # inside the confirmation's transaction. No fault injection or instrumentation
+  # needed - the ordering of `purrr::map()` over `uuid_alias` supplies it.
+  setup <- rq_commit_setup()
+  con <- setup$con
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  key_a <- .rc_feature_key("T.RQ-TXN-A")
+  key_b <- .rc_feature_key("T.RQ-TXN-B")
+
+  files <- tibble::tibble(hash = setup$hash, filename = basename(setup$src_path),
+                          adapter = "esdat/1", rank = 3L, kept = TRUE)
+  clean <- dplyr::bind_rows(
+    rq_row(source_ref = "r1", source_hash = setup$hash,
+           feature_raw = "T.RQ-TXN-A", alias_key = key_a,
+           feature_pending = TRUE, uuid_feature_alias = NA_character_,
+           sample_date = as.Date("2025-07-18"),
+           sample_datetime = as.POSIXct("2025-07-18 09:00:00", tz = "UTC")),
+    rq_row(source_ref = "r2", source_hash = setup$hash,
+           feature_raw = "T.RQ-TXN-B", alias_key = key_b,
+           feature_pending = TRUE, uuid_feature_alias = NA_character_,
+           sample_date = as.Date("2025-07-19"),
+           sample_datetime = as.POSIXct("2025-07-19 09:00:00", tz = "UTC"))
+  )
+  review <- tibble::tibble(
+    source_ref = c("r1", "r2"),
+    kind = "unknown_feature",
+    source_hash = setup$hash,
+    payload = c("r1,feature_raw=T.RQ-TXN-A,work_order=XX1234567,n_rows=1",
+                "r2,feature_raw=T.RQ-TXN-B,work_order=XX1234567,n_rows=1")
+  )
+  commit_event(rq_event(files), rq_resolved(clean = clean, review = review), con)
+
+  alias_a <- rq_dangling_alias(con, key_a)
+  alias_b <- rq_dangling_alias(con, key_b)
+  expect_equal(nrow(alias_a), 1)
+  expect_equal(nrow(alias_b), 1)
+
+  # Alias A is confirmable; alias B carries NA and aborts. A is FIRST, so its
+  # close really does execute before the abort.
+  expect_error(
+    confirm_feature_aliases(c(alias_a$uuid[[1]], alias_b$uuid[[1]]),
+                             c("f-0002", NA_character_), confirmed_by = "robin"),
+    class = "sampletidy_error"
+  )
+
+  rolled_back <- DBI::dbGetQuery(con, "SELECT status FROM review_queue WHERE uuid_target = ?",
+                                  params = list(alias_a$uuid[[1]]))
+  expect_equal(nrow(rolled_back), 1)
+  expect_identical(rolled_back$status[[1]], "open")
+
+  # ...and the alias itself is still unconfirmed, so the two halves cannot
+  # disagree in either direction.
+  alias_a_after <- DBI::dbGetQuery(con, "SELECT uuid_feature, confirmed_by FROM feature_alias WHERE uuid = ?",
+                                    params = list(alias_a$uuid[[1]]))
+  expect_true(is.na(alias_a_after$uuid_feature[[1]]))
+  expect_true(is.na(alias_a_after$confirmed_by[[1]]))
+})
