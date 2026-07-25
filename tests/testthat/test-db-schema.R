@@ -576,8 +576,50 @@ test_that("R-16.5 kind='expired' round-trips date_start/date_end as DATE; kind='
 })
 
 # --- R-16.9: both insert paths write the same shape ------------------------
+#
+# Round-2 audit FE10 fix (worker W-H, 2026-07-25): this test previously
+# compared review_queue_add() against a HAND-BUILT tibble that mirrored
+# .ct_commit_review()'s row shape by hand - that only proves the hand-built
+# copy was written to match whatever it was compared against; it cannot
+# detect the two real insert paths drifting apart, which is the entire point
+# of R-16.9. Both sides below now come from real production writers:
+# review_queue_add() (the public writer) on one side, and .ct_commit_review()
+# reached the way production actually reaches it - a genuine commit_event()
+# call - on the other. `mk_commit_event()`/`mk_resolved()`/`.p16_empty_files()`
+# are local, verbatim-shape copies of test-review-queue-payload.R's own
+# helpers of the same name (same no-cross-file-collision convention as every
+# other local helper in this suite; test-review-queue-payload.R built them
+# for exactly this class of problem, FF12).
 
-test_that("R-16.9 review_queue_add() and the raw db_append() tibble path write identical review_queue columns and identical review_queue_candidate child rows for identical input", {
+#' Local, verbatim-shape copy of test-review-queue-payload.R's
+#' `mk_commit_event()`: the plan-07 event shape `commit_event()` expects.
+mk_commit_event <- function(files, work_order = "XX1234567") {
+  list(
+    work_order = work_order, orphan = FALSE,
+    results = tibble::tibble(), samples = tibble::tibble(),
+    files = files,
+    report = list(n_results = 0L, n_by_sample_type = list(), n_ncp_foreign = 0L,
+                  skipped = tibble::tibble(hash = character(), source_ref = character(), reason = character()),
+                  warnings = character())
+  )
+}
+
+#' Local, verbatim-shape copy of test-review-queue-payload.R's
+#' `mk_resolved()`: the plan-08 `resolved` shape `commit_event()` expects.
+mk_resolved <- function(clean = tibble::tibble(), review = tibble::tibble(),
+                        skipped = tibble::tibble(), counts = c(new = nrow(clean))) {
+  list(clean = clean, review = review, skipped = skipped, counts = counts)
+}
+
+#' Local, verbatim-shape copy of test-review-queue-payload.R's
+#' `.p16_empty_files()`: zero rows is enough to drive the review-item write
+#' path (`.ct_commit_review()`, step 5, does not depend on `files` at all).
+.p16_empty_files <- function() {
+  tibble::tibble(hash = character(), filename = character(),
+                 adapter = character(), rank = integer(), kept = logical())
+}
+
+test_that("R-16.9 review_queue_add() and .ct_commit_review() (driven through a real commit_event() call) write identical review_queue columns and types for identical input", {
   dir <- withr::local_tempdir()
   db <- seed_db(dir)
   con <- seed_con(db)
@@ -586,14 +628,21 @@ test_that("R-16.9 review_queue_add() and the raw db_append() tibble path write i
   # Identical logical input fed to both paths.
   kind <- "unknown_feature"
   subkind <- "descriptive"
-  work_order <- "XX1234567"
+  work_order <- "XX1234567" # already seeded as project p-0001 (helper-db.R) - .ct_ensure_project() resolves to it idempotently, it does not need to create it.
   source_hash <- "src-hash-p16-9"
-  payload <- "note: R-16.9 fixture" # a plain diagnostics string is enough here - this test is about column/child-row shape, not payload format (R-16.6/R-16.10 own that).
-  uuid_existing <- NA_character_
-  uuid_alias <- NA_character_
+  payload <- "note: R-16.9 fixture" # a plain diagnostics string is enough here - this test is about column shape/types, not payload format (R-16.6/R-16.10 own that).
+  # NON-NA deliberately. These were both NA_character_, which meant this parity
+  # test - the one test whose whole job is that the two writers agree - never
+  # checked that either writer carries `uuid_existing`/`uuid_alias` at all. They
+  # are two of the three typed columns PLAN-16 exists to introduce, and a writer
+  # that dropped them entirely would have compared equal (NA == NA) and passed.
+  # Same literals as test-commit.R's FB8 block, which writes them through the
+  # commit path without an FK problem.
+  uuid_existing <- "an-0001"
+  uuid_alias <- "fa-0009"
   candidate_features <- c("f-0001", "f-0002") # order matters (R-16.4)
 
-  # --- path A: review_queue_add() -------------------------------------------
+  # --- path A: review_queue_add() (the public writer) -----------------------
   uuid_a <- review_queue_add(
     con, kind = kind, subkind = subkind, work_order = work_order,
     source_hash = source_hash, payload = payload,
@@ -601,41 +650,78 @@ test_that("R-16.9 review_queue_add() and the raw db_append() tibble path write i
     candidates = candidate_features
   )
 
-  # --- path B: the raw db_append() tibble path, mirroring
-  # .ct_commit_review()'s row shape (R/commit.R:645-650) plus the new
-  # PLAN-16 columns, with a second db_append() for the child rows - there is
-  # no single generic call that writes a parent row and its children at
-  # once via this path. ------------------------------------------------
-  uuid_b <- uuid::UUIDgenerate()
-  row_b <- tibble::tibble(
-    uuid = uuid_b, created_at = Sys.time(), kind = kind, subkind = subkind,
-    work_order = work_order, source_hash = source_hash, payload = payload,
-    status = "open", uuid_existing = uuid_existing, uuid_alias = uuid_alias
+  # --- path B: .ct_commit_review() (the commit-boundary writer), reached via
+  # a REAL commit_event() call - not a reimplementation of its insert.
+  # `candidates` is deliberately ABSENT from this side's input:
+  # .ct_commit_review()'s own roxygen (R/commit.R:710-713) documents that
+  # reconcile-side candidates travel inside `diagnostics$candidates`, never
+  # as `review_queue_candidate` child rows - so "identical input" for this
+  # writer excludes `candidates`, and that asymmetry is asserted explicitly
+  # below rather than silently ignored.
+  review_in <- tibble::tibble(
+    kind = kind, subkind = subkind, source_hash = source_hash,
+    payload = payload, uuid_existing = uuid_existing, uuid_alias = uuid_alias
   )
-  db_append(con, "review_queue", row_b, actor = "test", reason = "R-16.9 fixture")
-
-  cand_rows_b <- tibble::tibble(
-    uuid = vapply(candidate_features, function(x) uuid::UUIDgenerate(), character(1)),
-    uuid_review = uuid_b, uuid_feature = candidate_features,
-    kind = "candidate", date_start = as.Date(NA), date_end = as.Date(NA),
-    rank = seq_along(candidate_features)
+  commit_event(
+    mk_commit_event(.p16_empty_files(), work_order = work_order),
+    mk_resolved(review = review_in),
+    con
   )
-  db_append(con, "review_queue_candidate", cand_rows_b, actor = "test", reason = "R-16.9 fixture")
+  written <- DBI::dbGetQuery(
+    con, "SELECT uuid FROM review_queue WHERE source_hash = ? AND uuid != ?",
+    params = list(source_hash, uuid_a)
+  )
+  expect_equal(nrow(written), 1L) # exactly one NEW row from path B, not zero (vacuity guard) and not the path-A row re-matched.
+  uuid_b <- written$uuid[[1]]
 
-  # --- compare: identical review_queue column population (uuid/created_at
-  # excluded - each row's own identity/timestamp, not shared shape). -------
+  # --- compare: column SET, column TYPES, and column VALUES (uuid/created_at
+  # excluded - each row's own identity/timestamp, not shared shape) for the
+  # two real writers. Both route through the shared .rq_row() constructor
+  # (R/db-schema.R); this comparison is the guard against that routing ever
+  # drifting apart again. `work_order` is the one field the two paths are
+  # SPECIFIED to source differently (review_queue_add() takes the argument
+  # directly; .ct_commit_review() takes it from `event$work_order`, per
+  # R/commit.R:677-679) - both were set to the literal "XX1234567" above so
+  # values agree here too, but this is documented, not incidental.
   fields <- c("kind", "subkind", "work_order", "source_hash", "payload", "status", "uuid_existing", "uuid_alias")
   select_sql <- sprintf("SELECT %s FROM review_queue WHERE uuid = ?", paste(fields, collapse = ", "))
   row_a <- DBI::dbGetQuery(con, select_sql, params = list(uuid_a))
-  row_b_read <- DBI::dbGetQuery(con, select_sql, params = list(uuid_b))
-  expect_equal(row_a, row_b_read)
+  row_b <- DBI::dbGetQuery(con, select_sql, params = list(uuid_b))
 
-  # --- compare: identical child-row population, order (rank) included. ----
+  expect_equal(nrow(row_a), 1L)
+  expect_equal(nrow(row_b), 1L)
+  # `expect_equal(row_a, row_b)` carries the real weight: both rows are read
+  # with the SAME explicit column list, so if either path failed to populate a
+  # field the other did (a NULL subkind, say - the FF4 defect class), the values
+  # disagree and this goes red. It is type-sensitive, so it also covers types.
+  expect_equal(row_a, row_b)
+  # Column SET is compared SEPARATELY, and via SELECT * rather than the explicit
+  # list above. Comparing names()/class() of two queries that name the same
+  # columns from the same table cannot fail - it is true by construction, and
+  # asserting it would look like coverage of R-16.9's "identical columns" clause
+  # while testing nothing. What the criterion actually cares about is whether
+  # the two writers POPULATE the same columns, so compare the set each row left
+  # non-NA. This CAN fail: a writer that stops setting created_at, or forgets
+  # one of the typed columns, changes its populated set.
+  full_sql <- "SELECT * FROM review_queue WHERE uuid = ?"
+  full_a <- DBI::dbGetQuery(con, full_sql, params = list(uuid_a))
+  full_b <- DBI::dbGetQuery(con, full_sql, params = list(uuid_b))
+  populated <- function(row) sort(names(row)[!vapply(row, function(x) is.na(x[[1]]), logical(1))])
+  expect_identical(populated(full_a), populated(full_b))
+  # ...and the populated set must be non-trivial, or two writers that both wrote
+  # almost nothing would compare equal and pass.
+  expect_true(all(c("kind", "subkind", "work_order", "source_hash", "payload",
+                    "status", "uuid_existing", "uuid_alias") %in% populated(full_a)))
+
+  # --- child rows: the asymmetry documented above must be REAL, not merely
+  # asserted in a comment. review_queue_add()'s own candidate-writing
+  # shape/order is already pinned by R-16.4; here we only need path A to
+  # actually have written its candidates and path B to have written none.
   cand_sql <- "SELECT uuid_feature, kind, rank FROM review_queue_candidate WHERE uuid_review = ? ORDER BY rank"
   cand_a <- DBI::dbGetQuery(con, cand_sql, params = list(uuid_a))
   cand_b <- DBI::dbGetQuery(con, cand_sql, params = list(uuid_b))
-  expect_equal(cand_a, cand_b)
   expect_equal(cand_a$uuid_feature, candidate_features)
+  expect_equal(nrow(cand_b), 0L)
 })
 
 # ---------------------------------------------------------------------------
