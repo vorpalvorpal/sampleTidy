@@ -148,12 +148,27 @@ test_that("FG-3: a call with NEITHER candidates= nor expired= - every one of the
   expect_equal(nrow(row$candidates[[1]]), 0)
 })
 
-test_that("FG-3: reconcile_event()'s own `review` tibble carries the candidates list-column through too (not dropped a second time at the review_cols selection step); the real .rc_feature_review() producer still chooses the JSON carrier (RULING-F, unchanged), so its element is empty here - the OTHER carrier is exercised via review_queue_add() directly, below", {
+test_that("FG-3: reconcile_event()'s own `review` tibble carries the candidates list-column through too (not dropped a second time at the review_cols selection step), and the real .rc_feature_review() producer now POPULATES it - candidates travel as typed child rows, not JSON", {
+  # RETITLED AND REPOINTED 2026-07-26. This block's original title asserted
+  # "the real .rc_feature_review() producer still chooses the JSON carrier
+  # (RULING-F, unchanged), so its element is empty here", and pinned
+  # nrow(...) == 0. Robin's ruling of 2026-07-26 retires RULING-F: the
+  # producer now passes candidates= to .rc_review_row(), which is what closes
+  # R-16.23's remaining half. So the element is no longer empty, and asserting
+  # emptiness would pin the very behaviour the ruling removed.
+  #
+  # The FG-3 property this block exists for is UNCHANGED and still checked:
+  # the list-column survives the review_cols selection step rather than being
+  # dropped a second time. It is now checked in the stronger direction -
+  # against real content rather than against an empty tibble, which a
+  # dropped-and-recreated empty column would also have satisfied.
   out <- run_scenario(mk_event(mk_row(source_ref = "r1", feature_raw = "T.AMBIG2")))
   expect_true("candidates" %in% names(out$review))
   amb <- out$review[out$review$source_ref == "r1", ]
   expect_equal(nrow(amb), 1)
-  expect_equal(nrow(amb$candidates[[1]]), 0)
+  amb_cand <- amb$candidates[[1]]
+  amb_cand <- amb_cand[!is.na(amb_cand$kind) & amb_cand$kind == "candidate", ]
+  expect_setequal(amb_cand$uuid_feature, c("f-0004", "f-0005"))
 })
 
 # ==============================================================================
@@ -209,30 +224,38 @@ test_that("R-16.24: a review item with neither carrier (no child rows, default '
   expect_equal(nrow(got), 0)
 })
 
-test_that("R-16.24: the JSON-carrier row a REAL reconcile_event() run produces is read back correctly via the fallback path, in the STORED order (not sorted), and the discriminator proves it actually fell back (zero review_queue_candidate rows exist for it)", {
+test_that("R-16.24: a HISTORICAL JSON-carrier row is read back correctly via the fallback path, in the STORED order (not sorted), and the discriminator proves it actually fell back (zero review_queue_candidate rows exist for it)", {
   path <- seed_db()
   con <- seed_con(path)
   on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
 
-  # A real, unedited production run: RULING-F means this row's candidates
-  # travel as diagnostics$candidates JSON, not as review_queue_candidate rows
-  # (reconcile.R is read-only against the DB and never persists anything
-  # itself - see reconcile_event()'s own header comment). This is the exact
-  # path the W-r4 escalation confirmed is genuinely live: .rc_feature_review()
-  # (R/reconcile.R) writing real feature uuids to payload$candidates.
-  out <- reconcile_event(mk_event(mk_row(source_ref = "r1", feature_raw = "T.AMBIG2")), con)
-  amb <- out$review[out$review$source_ref == "r1" & out$review$kind == "unknown_feature", ]
-  expect_equal(nrow(amb), 1)
-  expect_identical(amb$subkind[[1]], "ambiguous")
+  # REPOINTED 2026-07-26, AND THIS IS A DELIBERATE REDUCTION IN COVERAGE.
+  #
+  # This block used to drive a REAL reconcile_event() run and persist its own
+  # payload verbatim, because under RULING-F .rc_feature_review() genuinely
+  # emitted candidates as diagnostics$candidates JSON. Robin's ruling of
+  # 2026-07-26 routes candidates to the typed child table instead, so NO
+  # PRODUCER EMITS THIS CARRIER ANY MORE and an end-to-end version of this
+  # test is no longer constructible.
+  #
+  # The reader arm must still be tested regardless, and that is not
+  # bookkeeping: the live database holds ~92 historical review_queue rows
+  # whose candidates are JSON, written by a scratchpad script before the
+  # package could do it. PLAN-16 ruled "preserve, do not convert" on those.
+  # If this fallback breaks, those rows become unreadable and the evidence in
+  # them is silently lost - nothing else in the suite would notice.
+  #
+  # So the payload below is HAND-WRITTEN to match the shape those historical
+  # rows actually have, rather than captured from a producer. Its fidelity is
+  # now an assumption this test makes, not something it proves - which is
+  # exactly what was lost, and is recorded here so a later reader does not
+  # mistake this for the end-to-end guard it used to be.
+  historical_payload <-
+    '{"source_ref":["r1"],"n_rows":1,"candidates":["f-0004","f-0005"]}'
 
-  # Persist the REAL producer's own payload verbatim, via review_queue_add()'s
-  # sanctioned test-only override (R-16.18's own comment in
-  # test-review-queue-hygiene.R: "the argument is retained for tests but no
-  # production path supplies one"). This is reconcile_event()'s actual
-  # output, not a value this test authored.
   uuid_review <- review_queue_add(
-    con, kind = amb$kind[[1]], subkind = amb$subkind[[1]],
-    work_order = "XX1234567", payload = amb$payload[[1]]
+    con, kind = "unknown_feature", subkind = "ambiguous",
+    work_order = "XX1234567", payload = historical_payload
   )
 
   got <- review_queue_candidates(con, uuid_review)
