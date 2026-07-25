@@ -1,5 +1,6 @@
-# PLAN-16 Phase 4 - source-scanning meta-tests for three PLAN-16 hygiene
-# criteria: R-16.6 (no regex/SQL-JSON read of a payload value), R-16.7
+# PLAN-16 Phase 4 - source-scanning meta-tests for PLAN-16 hygiene criteria:
+# R-16.6 (SQL-side JSON read of a payload value - the R-side regex half was
+# RETIRED 2026-07-25, see its section below for why), R-16.7
 # (`.rc_serialise_payload()` is gone), R-16.8 (every review-writing site
 # routes through the structured constructor `.rq_row()`, no hand-built
 # `paste0()`/`sprintf()` payload string survives).
@@ -12,14 +13,14 @@
 # scan of `R/` for a forbidden construct lives here; an assertion about what a
 # stored payload contains lives there. R-16.18 has one of each.
 #
-# RED BY DESIGN: `R/` still contains `.rc_serialise_payload()` (a live call
-# site), thirteen hand-built `paste0()`/`sprintf()` payload sites, and two
-# regex readers of a payload value (`R/commit.R:262-263` on the REVIEW_QUEUE
-# carrier via local var `pl`, and `R/commit.R:602` on the SKIP-TIBBLE carrier
-# via local var `payload`) - see dev/plans/PLAN-16-review-queue-structured-
-# payload.md block B-16.skips for why BOTH carriers must be scanned. Every
-# assertion below is written against the FUTURE structured shape the plan
-# pins; do not weaken one to match today's code.
+# 2026-07-25 (Phase-7b round-3 remediation, Robin's Rulings 1): the R-side
+# regex-on-payload ban is DELETED (see its section below), R-16.6's SQL-side
+# half is made CONCATENATION-AWARE (a split-`paste0()`-literal evasion, F4,
+# is now caught), and R-16.8's routing scan is WIDENED to `R/commit.R` and
+# made PER-SITE rather than per-function (F6/F5). `R/` no longer contains
+# `.rc_serialise_payload()` or any of the historical thirteen hand-built
+# payload sites this file was originally written RED against - every
+# assertion below is checked against TODAY's code, not aspirationally.
 #
 # Fixtures: none - these are pure static source scans, no DB is touched and
 # helper-db.R is not used (per the brief, do not edit it; nothing here needs
@@ -37,17 +38,19 @@
 # mere comment/string mention of the forbidden pattern does NOT trip it).
 #
 # Two scanning strategies are used, deliberately:
-#  - R-16.6 (regex-on-payload) and R-16.7 (call-site) scans operate on
-#    COMMENT/STR_CONST-SCRUBBED SOURCE TEXT with a regex, per the brief's own
-#    suggested idiom - the forbidden thing (a call to sub/gsub/regmatches/
-#    regexpr/grepl, or a call to `.rc_serialise_payload()`) is itself
-#    R-level syntax, and scrub-then-grep is the simplest robust way to check
-#    "is this pattern present in real code" without hand-rolling a full
-#    call-graph analysis.
+#  - R-16.7's call-site scan operates on COMMENT/STR_CONST-SCRUBBED SOURCE
+#    TEXT with a regex, per the brief's own suggested idiom - the forbidden
+#    thing (a call to `.rc_serialise_payload()`) is itself R-level syntax, and
+#    scrub-then-grep is the simplest robust way to check "is this pattern
+#    present in real code" without hand-rolling a full call-graph analysis.
 #  - R-16.6's SQL-side scan operates on the CONTENTS of STR_CONST tokens
 #    (SQL lives inside R string literals) - the opposite polarity: comments
 #    are excluded, but string literals are exactly the corpus, not something
-#    to strip.
+#    to strip. It is CONCATENATION-AWARE (2026-07-25): a `paste0()` call's
+#    direct STR_CONST arguments are also joined and scanned as one candidate
+#    string, so a forbidden keyword/operator split across two literal
+#    fragments of the same `paste0()` call cannot evade the per-literal scan
+#    (F4, round-3 slice I).
 #  - R-16.8's hand-builder scan uses `getParseData()` STRUCTURALLY (walking
 #    the parse tree to find the actual right-hand side of an assignment or
 #    named-call-argument literally targeting `payload`) rather than textual
@@ -57,6 +60,12 @@
 #    `.rc_qc_filter()`, R/reconcile.R:131-146, during authoring) - this
 #    approach is comment/string-aware BY CONSTRUCTION, since `parse()` never
 #    puts comment or string-literal content into the expression tree at all.
+#    R-16.8's routing-coverage scan (part 2) is likewise structural and, as
+#    of 2026-07-25, PER PRODUCING SITE (an append-idiom RHS or a
+#    `db_append("review_queue", ...)`'s enclosing block), not merely per
+#    enclosing function - a function that routes ONE branch correctly while
+#    hand-building another can no longer pass on the strength of the first
+#    branch alone (F5, round-3 slice I).
 
 # ---- local scanning helpers (this file only; do not touch helper-db.R) -----
 
@@ -185,161 +194,33 @@
   out
 }
 
-# ==== R-16.6, part 1: no R-side regex read of a payload value (either carrier) ====
+# ==== R-16.6, part 1: R-side regex ban - RETIRED 2026-07-25 ================
+#
+# Robin's Ruling 1 (round-3 remediation, dev/tdd-run/run-state.md "ROUND-3
+# RESULT + ROBIN'S RULINGS"): the R-side regex-on-payload ban
+# (`.HY_REGEX_FNS <- c("sub", "gsub", "regmatches", "regexpr", "grepl")` plus
+# the scanner block that used to sit here) is DELETED, not weakened. It
+# existed to stop exactly ONE dead end: hand-parsing the legacy k=v payload
+# grammar. That dead end is gone - migration 006 (the legacy k=v parser) was
+# retired in commit bc3d146, no `review_queue.payload` row in that shape
+# still exists, and every producer now emits JSON via `.rq_row()`/
+# `.rq_skip()`. Guarding a retired grammar protects nothing.
+#
+# It was also unenforceable AS WRITTEN, independent of the grammar retiring:
+# a five-name deny-list cannot express "do not parse this text". Phase-7b
+# round-3 slice I evaded it three separate ways against a fully green suite -
+# `gregexpr()`, `regexec()`, and a `strsplit()` + `startsWith()` hand-rolled
+# parser using no banned symbol at all. A longer name list is not the fix:
+# the property ("no ad-hoc text-parsing of a structured payload") has no
+# finite enumeration of the R functions capable of it. Removing a control
+# that reads as protection while providing none is the point - it is
+# deliberately NOT replaced with a longer list.
+#
+# `.hy_payload_word_pat` below is NOT retired - R-16.6's SQL-side half (next
+# section) still uses it; that half guards a different, still-live risk (the
+# DuckDB JSON extension is not guaranteed to autoload).
 
-.HY_REGEX_FNS <- c("sub", "gsub", "regmatches", "regexpr", "grepl")
-.hy_regex_fn_pat <- paste0(
-  "(?<![[:alnum:]._])(", paste(.HY_REGEX_FNS, collapse = "|"), ")\\s*\\("
-)
 .hy_payload_word_pat <- "(?<![[:alnum:]_])payload(?![[:alnum:]_])"
-
-#' FE9 (Phase-7b round-2 audit): TRUE if `pd` contains a STRING-LITERAL INDEX
-#' access to "payload" (`row[["payload"]]` / `row["payload"]`) whose
-#' subscript span falls inside `[l1, l2]`. This is the shape that evaded the
-#' original bare-word scan below: `.hy_scrub_lines()` blanks every STR_CONST
-#' - including the `"payload"` literal sitting inside `[[ ]]` - so a payload
-#' reached this way (rather than via the bare identifier `payload` or a
-#' `$payload` access, both of which parse as a SYMBOL token and so survive
-#' scrubbing) left no trace in the scrubbed text for `.hy_payload_word_pat`
-#' to find. Detected STRUCTURALLY, never textually (a STR_CONST's contents
-#' are exactly what scrubbing removes): the STR_CONST node's immediate
-#' `expr` wrapper must be a sibling of an `LBB` (`[[`) or `LB` (`[`) bracket
-#' token under the same enclosing subscript expr.
-.hy_str_index_payload_present <- function(pd, l1, l2) {
-  if (is.null(pd) || nrow(pd) == 0) return(FALSE)
-  lits <- pd[pd$token == "STR_CONST" & pd$text %in% c('"payload"', "'payload'"), ]
-  if (nrow(lits) == 0) return(FALSE)
-  for (i in seq_len(nrow(lits))) {
-    if (lits$line1[i] < l1 || lits$line2[i] > l2) next
-    wrap <- pd[pd$id == lits$parent[i], ]
-    if (nrow(wrap) == 0) next
-    outer_id <- wrap$parent[1]
-    sibs <- pd[pd$parent == outer_id, ]
-    if (any(sibs$token %in% c("LBB", "LB"))) return(TRUE)
-  }
-  FALSE
-}
-
-#' For each top-level function in each source, flag it if its
-#' comment/string-scrubbed body contains BOTH a call to one of the five
-#' forbidden regex functions AND EITHER the bare identifier `payload`
-#' (covers a local var literally named `payload`, or a `x$payload` access)
-#' OR a string-literal-indexed access `x[["payload"]]`/`x["payload"]`
-#' (FE9 - the latter is invisible to the scrubbed-text word scan, since
-#' scrubbing blanks the STR_CONST it lives in; caught structurally via
-#' `.hy_str_index_payload_present()` instead).
-.hy_scan_regex_on_payload <- function(sources) {
-  hits <- list()
-  for (src in sources) {
-    scrubbed <- .hy_scrub_lines(src)
-    spans <- .hy_top_level_spans(src)
-    if (nrow(spans) == 0) next
-    for (i in seq_len(nrow(spans))) {
-      l1 <- spans$line1[i]
-      l2 <- min(spans$line2[i], length(scrubbed))
-      if (l1 > l2 || l1 < 1) next
-      chunk <- paste(scrubbed[l1:l2], collapse = "\n")
-      has_payload <- grepl(.hy_payload_word_pat, chunk, perl = TRUE) ||
-        .hy_str_index_payload_present(src$pd, l1, l2)
-      if (grepl(.hy_regex_fn_pat, chunk, perl = TRUE) && has_payload) {
-        hits[[length(hits) + 1]] <- list(path = src$path, line1 = l1, line2 = l2)
-      }
-    }
-  }
-  hits
-}
-
-test_that("R-16.6: no sub()/gsub()/regmatches()/regexpr()/grepl() reads a payload value anywhere in R/, on EITHER the review_queue payload carrier or the skip tibble's payload carrier (comment/string-aware; RED against today's two known sites)", {
-  real_sources <- lapply(.hy_r_files(), .hy_source_from_file)
-
-  # POSITIVE CONTROL (decoy): the scanner must actually catch a genuine
-  # violation - proves it is not silently scanning nothing.
-  decoy_violation <- .hy_source_from_text(paste(
-    "f <- function(skipped, i) {",
-    "  payload <- skipped$payload[[i]]",
-    "  regmatches(payload, regexpr('x=[^,]+', payload))",
-    "}", sep = "\n"
-  ))
-  expect_true(
-    length(.hy_scan_regex_on_payload(list(decoy_violation))) >= 1,
-    info = "positive control failed: a synthetic regmatches(payload, ...) call was not flagged - the scanner is matching nothing"
-  )
-
-  # POSITIVE CONTROL (decoy), FE9: the SAME violation but reached via
-  # STRING-LITERAL INDEXING (`row[["payload"]]`) rather than the bare
-  # identifier - this is the shape that evaded the pre-fix scanner (the
-  # audit's "EVASION A": `v <- row[["payload"]]; sub(...)`, squarely inside
-  # R-16.6's wording, 0 hits before the fix above).
-  decoy_str_index <- .hy_source_from_text(paste(
-    "f <- function(row) {",
-    "  v <- row[[\"payload\"]]",
-    "  sub('existing_uuid=([^,]+)', '\\\\1', v)",
-    "}", sep = "\n"
-  ))
-  expect_true(
-    length(.hy_scan_regex_on_payload(list(decoy_str_index))) >= 1,
-    info = "positive control failed (FE9): a string-literal-indexed payload access (row[[\"payload\"]]) combined with sub() was not flagged"
-  )
-
-  # NEGATIVE CONTROL (nearest legitimate shape to the FE9 violation): a
-  # string-literal-indexed access to a DIFFERENT column, in a function that
-  # also happens to call a regex function on it, must NOT be flagged - the
-  # detector targets the literal "payload" specifically, not any bracketed
-  # string index.
-  decoy_str_index_other_col <- .hy_source_from_text(paste(
-    "f <- function(row) {",
-    "  v <- row[[\"kind\"]]",
-    "  sub('x=[^,]+', 'y', v)",
-    "}", sep = "\n"
-  ))
-  expect_length(.hy_scan_regex_on_payload(list(decoy_str_index_other_col)), 0)
-
-  # NEGATIVE CONTROL: a string-literal-indexed payload access with NO regex
-  # call anywhere in the same function must not be flagged either - the
-  # co-occurrence requirement still applies to the new detection path, not
-  # just presence of the index access alone.
-  decoy_str_index_no_regex <- .hy_source_from_text(paste(
-    "f <- function(row) {",
-    "  v <- row[[\"payload\"]]",
-    "  toupper(v)",
-    "}", sep = "\n"
-  ))
-  expect_length(.hy_scan_regex_on_payload(list(decoy_str_index_no_regex)), 0)
-
-  # NEGATIVE CONTROLS: a comment merely MENTIONING the pattern, and a string
-  # literal merely CONTAINING it as text, must not trip the scanner - a
-  # naive raw line-grep would flag both.
-  decoy_comment_only <- .hy_source_from_text(paste(
-    "f <- function(payload) {",
-    "  # legacy code used to do sub('x=[^,]+', 'x=1', payload) here",
-    "  msg <- \"a string mentioning grepl('x=', payload) too\"",
-    "  toupper(payload)",
-    "}", sep = "\n"
-  ))
-  expect_length(.hy_scan_regex_on_payload(list(decoy_comment_only)), 0)
-
-  # NEGATIVE CONTROL: jsonlite is the SANCTIONED R-side JSON path (plan
-  # exception b) - the scanner only forbids the five regex functions, so a
-  # jsonlite call on payload must never be flagged.
-  decoy_jsonlite <- .hy_source_from_text(paste(
-    "f <- function(payload) {",
-    "  jsonlite::fromJSON(payload)",
-    "}", sep = "\n"
-  ))
-  expect_length(.hy_scan_regex_on_payload(list(decoy_jsonlite)), 0)
-
-  # THE REAL SCAN, scoped to R/ only (dev/migrations/ is excluded by
-  # construction - plan exception a, the migration's one-way legacy k=v
-  # parser is allowed to live there).
-  real_hits <- .hy_scan_regex_on_payload(real_sources)
-  info <- sprintf(
-    "R-16.6 regex-on-payload violations still present (%d): %s",
-    length(real_hits),
-    paste(vapply(real_hits, function(h) sprintf("%s:%d-%d", basename(h$path), h$line1, h$line2), character(1)),
-          collapse = "; ")
-  )
-  expect_true(length(real_hits) == 0, info = info)
-})
 
 # ==== R-16.6, part 2: no SQL-side JSON read of a payload value =====================
 
@@ -371,16 +252,63 @@ test_that("R-16.6: no sub()/gsub()/regmatches()/regexpr()/grepl() reads a payloa
   pd$text[pd$token == "STR_CONST"]
 }
 
-#' Flag every string literal that LOOKS LIKE SQL (`.hy_looks_like_sql()`;
-#' package SQL text lives inside R string literals - the corpus here is
-#' deliberately the OPPOSITE of the comment-scrub above: comments are
-#' excluded by only looking at STR_CONST tokens, and string content is
-#' exactly what is inspected) AND contains BOTH a forbidden SQL-JSON
-#' operator/keyword AND the word `payload`.
+#' CONCATENATION-AWARE (2026-07-25, F4 round-3 slice I): a per-literal-only
+#' scan is evadable by splitting a forbidden keyword and the `payload`
+#' reference across TWO SEPARATE string-literal arguments of one `paste0()`
+#' call - e.g. `paste0("SELECT json_extract(", "payload", ", '$.tier') FROM
+#' review_queue")` - because neither literal alone contains both the keyword
+#' and the word. This walks `pd` STRUCTURALLY (never textually - a decoy
+#' that merely mentions "paste0" in a comment/string cannot trip it) to find
+#' every `paste0(...)` call, collects the DIRECT `STR_CONST` children of its
+#' argument list in source order (skipping any non-literal argument - a
+#' variable's runtime value is unknowable statically, so it is simply
+#' omitted from the join rather than treated as a boundary), and joins them
+#' with `""` (paste0's own separator) into ONE candidate string per call,
+#' exactly as the call would render at runtime if every argument were a
+#' literal. Requires >= 2 literal fragments per call (a single-literal
+#' `paste0()` degenerates to a plain literal already covered by
+#' `.hy_string_literals()` above). Only `paste0()` is handled - `paste()`'s
+#' default `sep = " "` inserts a space this package's SQL-building code does
+#' not use, and a grep across `R/` found no bare `paste()` call assembling
+#' SQL text (verified 2026-07-25).
+.hy_paste0_concat_literals <- function(pd) {
+  out <- character(0)
+  if (is.null(pd) || nrow(pd) == 0) return(out)
+  calls <- pd[pd$token == "SYMBOL_FUNCTION_CALL" & pd$text == "paste0", ]
+  if (nrow(calls) == 0) return(out)
+  for (i in seq_len(nrow(calls))) {
+    wrap <- pd[pd$id == calls$parent[i], ]
+    if (nrow(wrap) == 0) next
+    call_id <- wrap$parent[1]
+    args <- pd[pd$parent == call_id & pd$token == "expr", ]
+    args <- args[args$id != wrap$id[1], ]
+    if (nrow(args) == 0) next
+    args <- args[order(args$line1, args$col1), ]
+    parts <- character(0)
+    for (j in seq_len(nrow(args))) {
+      kids <- pd[pd$parent == args$id[j], ]
+      if (nrow(kids) == 1 && kids$token[1] == "STR_CONST") {
+        val <- tryCatch(eval(parse(text = kids$text[1])), error = function(e) NA_character_)
+        if (!is.na(val)) parts <- c(parts, val)
+      }
+    }
+    if (length(parts) >= 2) out <- c(out, paste(parts, collapse = ""))
+  }
+  out
+}
+
+#' Flag every string literal - OR every `paste0()` call's joined literal
+#' fragments (`.hy_paste0_concat_literals()`, concatenation-aware) - that
+#' LOOKS LIKE SQL (`.hy_looks_like_sql()`; package SQL text lives inside R
+#' string literals - the corpus here is deliberately the OPPOSITE of the
+#' comment-scrub above: comments are excluded by only looking at STR_CONST
+#' tokens, and string content is exactly what is inspected) AND contains
+#' BOTH a forbidden SQL-JSON operator/keyword AND the word `payload`.
 .hy_scan_sql_json_on_payload <- function(sources) {
   hits <- list()
   for (src in sources) {
-    for (lit in .hy_string_literals(src)) {
+    candidates <- c(.hy_string_literals(src), .hy_paste0_concat_literals(src$pd))
+    for (lit in candidates) {
       if (.hy_looks_like_sql(lit) &&
           grepl(.HY_SQL_JSON_PAT, lit, perl = TRUE, ignore.case = TRUE) &&
           grepl(.hy_payload_word_pat, lit, perl = TRUE)) {
@@ -422,6 +350,36 @@ test_that("R-16.6: no SQL-side JSON read (json_extract/json_valid/->/->>/LIKE/SI
     length(.hy_scan_sql_json_on_payload(list(decoy_arrow_violation))) >= 1,
     info = "positive control failed: a genuine SQL string using the bare -> JSON operator on payload was not flagged"
   )
+
+  # POSITIVE CONTROL (decoy), F4 (round-3 slice I): THE EXACT EVASION this
+  # block was widened to catch - `json_extract` and the `payload` reference
+  # split across TWO SEPARATE `paste0()` string-literal arguments, so
+  # neither literal alone contains both. A per-literal-only scan (the
+  # pre-fix version of `.hy_scan_sql_json_on_payload()`) finds zero hits
+  # here; the concatenation-aware version must find at least one.
+  decoy_split_literal <- .hy_source_from_text(paste(
+    "f <- function(con) {",
+    "  sql <- paste0(\"SELECT json_extract(\", \"payload\", \", '$.tier') FROM review_queue\")",
+    "  DBI::dbGetQuery(con, sql)",
+    "}", sep = "\n"
+  ))
+  expect_true(
+    length(.hy_scan_sql_json_on_payload(list(decoy_split_literal))) >= 1,
+    info = "positive control failed (F4): json_extract and payload split across two paste0() literal fragments was not flagged - the scan is not concatenation-aware"
+  )
+
+  # NEGATIVE CONTROL: a paste0() call whose literal fragments, joined, do NOT
+  # co-occur with both the keyword and `payload` must not be flagged - the
+  # concatenation path still requires the same SQL-keyword gate and
+  # keyword+payload co-occurrence as the per-literal path, not a blanket
+  # "any paste0() is suspicious" rule.
+  decoy_split_literal_unrelated <- .hy_source_from_text(paste(
+    "f <- function(con) {",
+    "  sql <- paste0(\"SELECT \", \"uuid, kind FROM review_queue\")",
+    "  DBI::dbGetQuery(con, sql)",
+    "}", sep = "\n"
+  ))
+  expect_length(.hy_scan_sql_json_on_payload(list(decoy_split_literal_unrelated)), 0)
 
   # NEGATIVE CONTROLS: a comment mentioning the pattern must not trip the
   # scanner, and a plain SELECT of the payload COLUMN (no JSON operator -
@@ -667,31 +625,42 @@ test_that("R-16.8: no hand-built paste0()/sprintf() payload string survives in R
   ".rq_row", ".rc_review_row", ".rc_skip_row", ".rq_skip", "review_queue_add"
 )
 
-test_that("R-16.8: each of the 14 content-producing review-writing sites (11 enclosing functions per dev/tdd-run/p16-payload-prod-inventory.md section 1b) routes - directly or via a sanctioned wrapper - through the structured constructor .rq_row()", {
-  # Mapping: p16-payload-prod-inventory.md section 1b's 14 numbered sites,
-  # collapsed to their 11 distinct enclosing functions (several sites share
-  # one function's branches - e.g. site 1's three shapes are all inside
-  # .rc_feature_review()).
-  targets <- list(
-    "R/reconcile.R" = c(
-      ".rc_feature_review",        # site 1  (3 shapes: ambiguous / structural / bare)
-      ".rc_analyte_review",        # sites 2, 3
-      ".rc_resolve_units_values",  # site 4
-      ".rc_resolve_datetime",      # site 5
-      ".rc_method_preference",     # site 6
-      ".rc_three_way",             # sites 7, 8
-      ".rc_batch_duplicate",       # site 9
-      "reconcile_event"            # site 10 (STAGE-0 serialisation call site)
-    ),
-    "R/feature-alias.R" = c(
-      ".fa_merge_samples",         # site 11
-      ".am_confirm_one_method"     # sites 12, 13
-    ),
-    "R/router.R" = c(
-      ".st_route_one_file"         # site 14
-    )
+#' Mapping: p16-payload-prod-inventory.md section 1b's 14 numbered sites,
+#' collapsed to their 11 distinct enclosing functions (several sites share
+#' one function's branches - e.g. site 1's three shapes are all inside
+#' .rc_feature_review()), PLUS `R/commit.R::.ct_commit_review` (2026-07-25,
+#' round-3 remediation, Robin's Ruling 1/F6): `.ct_commit_review()` is the
+#' write call for EVERY reconcile-sourced review row (95 of 96 real rows,
+#' per the round-3 audit) and sat entirely outside this scan's 3-file list -
+#' a mutant that deleted its `.rq_row()` call left a fully green suite.
+#' Shared by both part 2 (this block) and part 2b (per-site, below) so the
+#' two checks cannot silently drift apart on which functions are in scope.
+.HY_R168_TARGETS <- list(
+  "R/reconcile.R" = c(
+    ".rc_feature_review",        # site 1  (3 shapes: ambiguous / structural / bare)
+    ".rc_analyte_review",        # sites 2, 3
+    ".rc_resolve_units_values",  # site 4
+    ".rc_resolve_datetime",      # site 5
+    ".rc_method_preference",     # site 6
+    ".rc_three_way",             # sites 7, 8
+    ".rc_batch_duplicate",       # site 9
+    "reconcile_event"            # site 10 (STAGE-0 serialisation call site)
+  ),
+  "R/feature-alias.R" = c(
+    ".fa_merge_samples",         # site 11
+    ".am_confirm_one_method"     # sites 12, 13
+  ),
+  "R/router.R" = c(
+    ".st_route_one_file"         # site 14
+  ),
+  "R/commit.R" = c(
+    ".ct_commit_review"          # site 15 (2026-07-25 widening - the 95/96-row writer, F6)
   )
-  stopifnot(sum(lengths(targets)) == 11L)
+)
+
+test_that("R-16.8: each of the 15 content-producing review-writing sites (12 enclosing functions per dev/tdd-run/p16-payload-prod-inventory.md section 1b, WIDENED 2026-07-25 to include R/commit.R::.ct_commit_review) routes - directly or via a sanctioned wrapper - through the structured constructor .rq_row()", {
+  targets <- .HY_R168_TARGETS
+  stopifnot(sum(lengths(targets)) == 12L)
 
   # Build the detector from the closed sanctioned-constructor set above -
   # escaping the literal `.` each name starts with (these names contain only
@@ -751,6 +720,241 @@ test_that("R-16.8: each of the 14 content-producing review-writing sites (11 enc
 
   info <- sprintf("sites not yet routed through .rq_row(): %s", paste(missing, collapse = "; "))
   expect_true(length(missing) == 0, info = info)
+})
+
+# ==== R-16.8, part 2b: PER SITE, not per function (2026-07-25) ============
+#
+# Gap closed here (Robin's Ruling 1/F5, round-3 slice I): part 2 above checks
+# "does this ENTIRE function's body contain a sanctioned-constructor call
+# ANYWHERE" - true the moment ANY one branch routes correctly, even if a
+# DIFFERENT branch in the SAME function hand-builds its own row instead.
+# Slice I's mutant F5 hand-rolled a `sprintf()` payload inside one branch of
+# a multi-branch producer while leaving another branch's real
+# `.rc_review_row()` call intact; part 2's function-level scan stayed green
+# because SOME call was still present in the chunk it inspected.
+#
+# This block scans at the SITE granularity real producers actually use in
+# this codebase, both idioms verified against current source 2026-07-25:
+#  - the list-append idiom `IDENT[[length(IDENT) + 1]] <- EXPR` (every
+#    reconcile.R producer: `out`/`review_list`/`skipped_list`) - the check
+#    target is EXPR's OWN span, reusing `.hy_span_contains_call()` (R-16.8
+#    part 1's helper) rather than the whole enclosing function.
+#  - `db_append(<con>, "review_queue", <row>, ...)` (feature-alias.R,
+#    commit.R - the row is built by a `.rq_row()` call in a PRECEDING
+#    statement of the SAME block, not inline) - the check target is that
+#    call's nearest enclosing `{ ... }` block, found structurally by walking
+#    `pd$parent` until an ancestor's own children include a `'{'` token.
+# A site is a VIOLATION only if a hand-builder (`paste0()`/`sprintf()`) is
+# present in its span/block AND no sanctioned constructor is - this
+# correctly leaves alone the real §1f pure-NA/prototype sites (e.g.
+# `R/reconcile.R`'s `.rc_resolve_units_values()` `skip_reason` branch,
+# `skipped_list[[...]] <- tibble::tibble(payload = NA_character_, ...)`,
+# verified during authoring): nothing is hand-built there, so nothing to
+# flag - REQUIRING a sanctioned call unconditionally at every append-idiom
+# occurrence would false-positive on that real, legitimate site.
+# `R/router.R::.st_route_one_file` contributes zero sites to this scan (its
+# one producer calls `review_queue_add()` directly, matching neither idiom
+# shape) - already covered adequately by part 2 above, since it has exactly
+# one call, so a second, undetectable hand-built branch is not a risk there.
+
+#' Structural (AST) scan: find every `IDENT[[length(IDENT) + 1]] <- EXPR`ish
+#' assignment (detected loosely as "an `LBB` (`[[`)-indexed assignment
+#' target"; this exact idiom is the only `[[...]] <-` shape used by any
+#' target function, verified 2026-07-25) and return EXPR's span.
+.hy_double_bracket_assign_rhs_spans <- function(pd) {
+  spans <- list()
+  if (is.null(pd) || nrow(pd) == 0) return(spans)
+  lbb <- pd[pd$token == "LBB", ]
+  if (nrow(lbb) == 0) return(spans)
+  for (i in seq_len(nrow(lbb))) {
+    outer <- pd[pd$id == lbb$parent[i], ]
+    if (nrow(outer) == 0) next
+    assign_parent_id <- outer$parent[1]
+    sibs <- pd[pd$parent == assign_parent_id, ]
+    assign_op <- sibs[sibs$token %in% c("LEFT_ASSIGN", "EQ_ASSIGN"), ]
+    if (nrow(assign_op) == 0) next
+    rhs <- sibs[sibs$id != outer$id[1] & !(sibs$token %in% c("LEFT_ASSIGN", "EQ_ASSIGN")), ]
+    if (nrow(rhs) == 0) next
+    spans[[length(spans) + 1]] <- rhs[1, c("line1", "col1", "line2", "col2")]
+  }
+  spans
+}
+
+#' Walk `pd$parent` upward from `start_id` to the nearest ancestor `{ ... }`
+#' block (the first ancestor whose OWN children include a `'{'` token) and
+#' return that block's full span.
+.hy_enclosing_block_span <- function(pd, start_id) {
+  cur <- start_id
+  repeat {
+    row <- pd[pd$id == cur, ]
+    if (nrow(row) == 0) return(NULL)
+    parent_id <- row$parent[1]
+    if (is.null(parent_id) || length(parent_id) == 0 || parent_id == 0) return(NULL)
+    sibs <- pd[pd$parent == parent_id, ]
+    if (any(sibs$token == "'{'")) {
+      return(pd[pd$id == parent_id, c("line1", "col1", "line2", "col2")][1, ])
+    }
+    cur <- parent_id
+  }
+}
+
+#' Structural (AST) scan: find every `db_append(...)` call carrying a literal
+#' `"review_queue"` argument, and return its nearest enclosing block's span
+#' (`.hy_enclosing_block_span()`).
+.hy_db_append_review_queue_block_spans <- function(pd) {
+  spans <- list()
+  if (is.null(pd) || nrow(pd) == 0) return(spans)
+  calls <- pd[pd$token == "SYMBOL_FUNCTION_CALL" & pd$text == "db_append", ]
+  if (nrow(calls) == 0) return(spans)
+  for (i in seq_len(nrow(calls))) {
+    wrap <- pd[pd$id == calls$parent[i], ]
+    if (nrow(wrap) == 0) next
+    call_id <- wrap$parent[1]
+    # Each call argument is itself wrapped in an `expr` node (an STR_CONST is
+    # never a direct child of the call - it is the sole child of one of the
+    # call's `expr` argument wrappers), so the literal must be found one
+    # level down from `call_id`, not directly under it.
+    arg_exprs <- pd[pd$parent == call_id & pd$token == "expr", ]
+    found <- FALSE
+    for (a in seq_len(nrow(arg_exprs))) {
+      kids <- pd[pd$parent == arg_exprs$id[a], ]
+      if (nrow(kids) == 1 && kids$token[1] == "STR_CONST" && kids$text[1] == '"review_queue"') {
+        found <- TRUE
+        break
+      }
+    }
+    if (!found) next
+    blk <- .hy_enclosing_block_span(pd, calls$id[i])
+    if (!is.null(blk)) spans[[length(spans) + 1]] <- blk
+  }
+  spans
+}
+
+#' Producing-site spans (append-idiom RHS + db_append("review_queue",...)
+#' blocks) that fall within `[l1, l2]` (a target function's own span).
+.hy_producing_site_spans_in <- function(pd, l1, l2) {
+  all_spans <- c(.hy_double_bracket_assign_rhs_spans(pd), .hy_db_append_review_queue_block_spans(pd))
+  Filter(function(sp) sp$line1 >= l1 && sp$line2 <= l2, all_spans)
+}
+
+#' A producing site is a VIOLATION iff a hand-builder call is present in its
+#' span AND no sanctioned-constructor call is (see block comment above).
+#' `fn_filter`, if supplied, is a `relpath -> function names` list (like
+#' `.HY_R168_TARGETS`) restricting the scan to those named functions only -
+#' when `NULL` (the synthetic-decoy path, where every source is one small
+#' snippet keyed `"<synthetic>"` with no known name in advance), every named
+#' top-level function in the source is scanned instead.
+.hy_scan_unrouted_producing_sites <- function(sources_by_relpath, fn_filter = NULL) {
+  hits <- list()
+  for (relpath in names(sources_by_relpath)) {
+    src <- sources_by_relpath[[relpath]]
+    pd <- src$pd
+    spans <- .hy_named_top_level_spans(src)
+    fn_names <- if (is.null(fn_filter)) names(spans) else intersect(names(spans), fn_filter[[relpath]])
+    for (fn in fn_names) {
+      span <- spans[[fn]]
+      for (site in .hy_producing_site_spans_in(pd, span["line1"], span["line2"])) {
+        has_handbuilder <- .hy_span_contains_call(pd, site, "paste0") || .hy_span_contains_call(pd, site, "sprintf")
+        if (!has_handbuilder) next
+        has_sanctioned <- any(vapply(
+          .HY_SANCTIONED_ROW_CONSTRUCTORS, function(nm) .hy_span_contains_call(pd, site, nm), logical(1)
+        ))
+        if (!has_sanctioned) {
+          hits[[length(hits) + 1]] <- list(path = relpath, fn = fn, line1 = site$line1, line2 = site$line2)
+        }
+      }
+    }
+  }
+  hits
+}
+
+test_that("R-16.8 part 2b: no INDIVIDUAL producing site (a list-append RHS or a db_append(\"review_queue\", ...) block) inside a R-16.8 target function hand-builds a paste0()/sprintf() payload while routing is checked only at the WHOLE-FUNCTION level elsewhere - closes the gap where part 2 above would stay green if only ONE of several sites in the same function still called a sanctioned constructor", {
+  targets <- .HY_R168_TARGETS
+  target_sources <- stats::setNames(
+    lapply(names(targets), function(rp) .hy_source_from_file(file.path(.hy_pkg_root(), rp))),
+    names(targets)
+  )
+
+  # POSITIVE CONTROL (decoy): THE EXACT REGRESSION THIS BLOCK EXISTS TO CATCH
+  # (F5's shape) - a function with TWO append-idiom sites, one correctly
+  # routed and one hand-built with sprintf(). Part 2's whole-function check
+  # (reproduced inline here) would PASS this decoy (`.rc_review_row(` is
+  # present somewhere in the body); the per-site scan must FAIL it.
+  decoy_f5 <- .hy_source_from_text(paste(
+    "f <- function(x) {",
+    "  out <- list()",
+    "  out[[length(out) + 1]] <- .rc_review_row(kind = 'x')",
+    "  if (x) {",
+    "    out[[length(out) + 1]] <- tibble::tibble(payload = sprintf('site=%s', x))",
+    "  }",
+    "  out",
+    "}", sep = "\n"
+  ))
+  decoy_f5_hits <- .hy_scan_unrouted_producing_sites(list("<synthetic>" = decoy_f5))
+  expect_true(
+    length(decoy_f5_hits) >= 1,
+    info = "positive control failed (F5 shape): a hand-built sprintf() append alongside a correctly-routed one in the SAME function was not flagged"
+  )
+  whole_fn_chunk <- paste(.hy_scrub_lines(decoy_f5), collapse = "\n")
+  expect_true(
+    grepl("(?<![[:alnum:]._])\\.rc_review_row\\s*\\(", whole_fn_chunk, perl = TRUE),
+    info = "sanity check failed: the F5 decoy should still contain a real .rc_review_row( call (proving part 2's whole-function check would have passed it)"
+  )
+
+  # POSITIVE CONTROL (decoy): the db_append("review_queue", ...) idiom's own
+  # F5-shaped regression - one branch routes through .rq_row(), the sibling
+  # branch hand-builds with paste0() and calls db_append() directly.
+  decoy_f5_dbappend <- .hy_source_from_text(paste(
+    "f <- function(con, x) {",
+    "  if (x) {",
+    "    review_row <- .rq_row(kind = 'x')$review",
+    "    db_append(con, \"review_queue\", review_row)",
+    "  } else {",
+    "    review_row <- tibble::tibble(payload = paste0('k=', x))",
+    "    db_append(con, \"review_queue\", review_row)",
+    "  }",
+    "}", sep = "\n"
+  ))
+  expect_true(
+    length(.hy_scan_unrouted_producing_sites(list("<synthetic>" = decoy_f5_dbappend))) >= 1,
+    info = "positive control failed: a db_append(\"review_queue\", ...) block hand-building via paste0() (sibling to a correctly-routed branch) was not flagged"
+  )
+
+  # NEGATIVE CONTROL: the real §1f pure-NA/prototype shape (no hand-builder
+  # present at all) must not be flagged - only a HAND-BUILT site is a
+  # violation, not merely an unrouted one (the criterion targets bypasses of
+  # the structured route, not "no content at all").
+  decoy_na_prototype <- .hy_source_from_text(paste(
+    "f <- function(x) {",
+    "  skipped_list <- list()",
+    "  skipped_list[[length(skipped_list) + 1]] <- tibble::tibble(payload = NA_character_)",
+    "  skipped_list",
+    "}", sep = "\n"
+  ))
+  expect_length(.hy_scan_unrouted_producing_sites(list("<synthetic>" = decoy_na_prototype)), 0)
+
+  # NEGATIVE CONTROL: a fully-routed function (both sites call sanctioned
+  # constructors, no hand-builder anywhere) must not be flagged.
+  decoy_clean <- .hy_source_from_text(paste(
+    "f <- function(x) {",
+    "  out <- list()",
+    "  out[[length(out) + 1]] <- .rc_review_row(kind = 'x')",
+    "  out[[length(out) + 1]] <- .rc_skip_row(kind = 'y')",
+    "  out",
+    "}", sep = "\n"
+  ))
+  expect_length(.hy_scan_unrouted_producing_sites(list("<synthetic>" = decoy_clean)), 0)
+
+  # THE REAL SCAN, over the widened target function set (part 2's list,
+  # including R/commit.R::.ct_commit_review) - fn_filter restricts each file
+  # to exactly its listed target function(s), never the whole file.
+  real_hits <- .hy_scan_unrouted_producing_sites(target_sources, fn_filter = targets)
+  info <- sprintf(
+    "producing site(s) hand-build a paste0()/sprintf() payload without routing through a sanctioned constructor: %s",
+    paste(vapply(real_hits, function(h) sprintf("%s:%d-%d (%s)", h$path, h$line1, h$line2, h$fn), character(1)),
+          collapse = "; ")
+  )
+  expect_true(length(real_hits) == 0, info = info)
 })
 
 # ==== R-16.8, part 3: the sanctioned WRAPPERS THEMSELVES must still reach ==

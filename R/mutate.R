@@ -656,3 +656,101 @@ review_queue <- function(con, status = "open") {
   )
   tibble::as_tibble(rows)
 }
+
+# ---- reader: review_queue_candidates() --------------------------------------
+
+#' Read a review item's candidate features, in rank order (PLAN-16 round-3
+#' RULING 2, R-16.22)
+#'
+#' `review_queue_candidate` was, until this criterion, written by tests and
+#' read by nothing in the package - so a reviewer could never see the
+#' candidates the schema stored (CONTRACT A55 makes candidate choice the
+#' human's job). This is the reader that closes that gap.
+#'
+#' A review item's ordered candidate feature uuids can travel in ONE of TWO
+#' carriers (R-16.24; RULING-F, `dev/tdd-run/run-state.md`): most producers
+#' embed the array in `review_queue.payload`'s `candidates` diagnostics key,
+#' because at the time they run there is no real `review_queue.uuid` yet to
+#' key a child row to (see `.rc_review_row()`, R/reconcile.R, for the exact
+#' timing gap). A producer that DOES have a real row uuid at write time -
+#' `review_queue_add()`'s `candidates =` argument is the sanctioned one -
+#' persists them as `review_queue_candidate` rows instead.
+#'
+#' The two carriers are told apart by PRESENCE, never by guessing: if
+#' `uuid_review` owns any `review_queue_candidate` row, that is the
+#' authoritative carrier and the JSON `candidates` key (if any) is not
+#' consulted at all. Only when the child table has zero rows for this
+#' `uuid_review` does this function fall back to parsing `payload`. A review
+#' item carrying candidates in BOTH places at once is a producer defect, not
+#' a value to silently pick one side of - this function aborts rather than
+#' guess which carrier is authoritative (R-16.24: "make it impossible to get
+#' silently wrong").
+#'
+#' @param con an open DBI connection.
+#' @param uuid_review the `review_queue.uuid` to look up.
+#' @return a tibble `(rank, uuid_feature, kind, date_start, date_end)`, 0+
+#'   rows, ascending by `rank`. For the child-table carrier, `kind` is
+#'   `"candidate"`/`"expired"` and `date_start`/`date_end` carry the expired
+#'   arm's date bounds (`NA` for `"candidate"` rows). For the JSON-carrier
+#'   fallback, `kind` is always `"candidate"` (that carrier predates the
+#'   `expired` arm and never wrote one) and `date_start`/`date_end` are always
+#'   `NA`; `rank` is the 1-based position in the stored JSON array.
+#' @export
+review_queue_candidates <- function(con, uuid_review) {
+  checkmate::assert_string(uuid_review)
+
+  child <- DBI::dbGetQuery(
+    con,
+    "SELECT rank, uuid_feature, kind, date_start, date_end
+       FROM review_queue_candidate
+      WHERE uuid_review = ?
+      ORDER BY rank",
+    params = list(uuid_review)
+  )
+
+  row <- DBI::dbGetQuery(
+    con, "SELECT payload FROM review_queue WHERE uuid = ?",
+    params = list(uuid_review)
+  )
+  payload <- if (nrow(row) == 0L) NA_character_ else row$payload[[1]]
+  # jsonlite is the sanctioned R-side JSON path (PLAN-16, ratified 4de9fbd) -
+  # never a regex read of `payload` (R-16.6).
+  diag <- if (is.na(payload)) {
+    list()
+  } else {
+    tryCatch(jsonlite::fromJSON(payload), error = function(e) list())
+  }
+  json_cand <- diag$candidates
+  has_json <- !is.null(json_cand) && length(json_cand) > 0L
+  has_child <- nrow(child) > 0L
+
+  if (has_child && has_json) {
+    cli::cli_abort(
+      "review_queue_candidates(): review {.val {uuid_review}} carries
+       candidates in BOTH review_queue_candidate ({nrow(child)} row(s)) AND
+       its payload's {.val candidates} diagnostics key ({length(json_cand)}
+       element(s)) - R-16.24 requires exactly one carrier per review item;
+       this is a producer defect, not something to silently resolve by
+       picking a side.",
+      class = "sampletidy_error"
+    )
+  }
+
+  if (has_child) {
+    return(tibble::as_tibble(child))
+  }
+
+  if (!has_json) {
+    return(tibble::tibble(
+      rank = integer(), uuid_feature = character(), kind = character(),
+      date_start = as.Date(character()), date_end = as.Date(character())
+    ))
+  }
+
+  json_cand <- as.character(json_cand)
+  tibble::tibble(
+    rank = seq_along(json_cand), uuid_feature = json_cand, kind = "candidate",
+    date_start = as.Date(rep(NA_character_, length(json_cand))),
+    date_end = as.Date(rep(NA_character_, length(json_cand)))
+  )
+}

@@ -414,11 +414,55 @@ ingest_file_set_route <- function(con, hash, adapter = NA_character_, tier = NA_
   checkmate::assert_list(diagnostics, names = "unique")
   if (length(diagnostics) == 0L) return("{}")
   for (key in intersect(names(diagnostics), .RQ_PLURAL_DIAGNOSTIC_KEYS)) {
-    if (!inherits(diagnostics[[key]], "AsIs")) {
-      diagnostics[[key]] <- I(diagnostics[[key]])
+    val <- diagnostics[[key]]
+    if (is.null(val)) {
+      # Round-3 audit H4, RULING (pinned here, not silently patched around):
+      # a NULL value for a REGISTERED plural key serialises as "[]", the
+      # length-0 case - NOT an abort. This is the reading the plural-key
+      # design above already commits to ("ALWAYS emits a JSON array, at
+      # length 0, 1 and N alike"): NULL is semantically "no elements", the
+      # same as character(0), and an UNregistered NULL key already serialises
+      # without error (as jsonlite's own "{}" for a NULL list element) - so a
+      # registered key erroring on the identical input would make the
+      # registry actively worse than no registry at all, exactly the
+      # regression the finding describes (STAGE-0's review_payload
+      # pass-through hits this, aborting the whole transaction and losing the
+      # review row). `I(NULL)` itself raises ("attempt to set an attribute on
+      # NULL"); substituting list() first avoids that and reuses the
+      # already-verified I(list()) -> "[]" path instead of a NULL special
+      # case. The alternative (abort with a sampletidy_error) was rejected: a
+      # NULL diagnostics value is a normal "nothing to report" case for a
+      # pass-through producer, not caller error, so aborting the whole
+      # review-queue write over it is disproportionate.
+      val <- list()
     }
+    if (!inherits(val, "AsIs")) val <- I(val)
+    diagnostics[[key]] <- val
   }
   as.character(jsonlite::toJSON(diagnostics, auto_unbox = TRUE, digits = NA, na = "null"))
+}
+
+# Round-3 audit H9: `checkmate::assert_string(x, na.ok = TRUE)` only checks
+# `is.na(x)`, not that the NA is CHARACTER-typed - a bare logical `NA` (as
+# opposed to `NA_character_`) satisfies it unchanged (verified empirically:
+# `checkmate::assert_string(NA, na.ok = TRUE)` raises no error), so a scalar
+# typed argument passed a bare `NA` flows straight into `tibble::tibble()`
+# and comes back a *logical* column instead of character (proved for
+# `uuid_existing`). Reject bare logical NA explicitly here; `NA_character_`
+# and real strings are unaffected.
+#' @keywords internal
+#' @noRd
+.rq_assert_char_scalar <- function(x, what) {
+  checkmate::assert_string(x, na.ok = TRUE)
+  if (is.na(x) && !is.character(x)) {
+    cli::cli_abort(
+      "{what} must be a length-1 character string or NA_character_; a bare
+       logical NA is rejected (it silently produces a logical column instead
+       of character) - got class {.cls {class(x)}}.",
+      class = "sampletidy_error"
+    )
+  }
+  invisible(NULL)
 }
 
 # PLAN-16 (B-16.api): the single structured constructor every review_queue
@@ -472,16 +516,32 @@ ingest_file_set_route <- function(con, hash, adapter = NA_character_, tier = NA_
   # `uuid_existing = c("an-1","an-2")` produced a 2-row tibble with one
   # `uuid`), not a truncation. A length-1-string check on every scalar makes
   # that shape impossible to construct.
-  checkmate::assert_string(subkind, na.ok = TRUE)
-  checkmate::assert_string(work_order, na.ok = TRUE)
-  checkmate::assert_string(source_hash, na.ok = TRUE)
-  checkmate::assert_string(uuid_existing, na.ok = TRUE)
-  checkmate::assert_string(uuid_alias, na.ok = TRUE)
-  if (!is.null(candidates)) checkmate::assert_character(candidates)
+  .rq_assert_char_scalar(subkind, "subkind")
+  .rq_assert_char_scalar(work_order, "work_order")
+  .rq_assert_char_scalar(source_hash, "source_hash")
+  .rq_assert_char_scalar(uuid_existing, "uuid_existing")
+  .rq_assert_char_scalar(uuid_alias, "uuid_alias")
+  # Round-3 audit H8/FG-6: the DDL declares review_queue_candidate.uuid_feature
+  # NOT NULL, so `candidates` (which becomes that column 1:1) must reject NA
+  # and "" HERE, at the constructor, rather than letting either kind reach
+  # INSERT and fail there - a DB-level failure takes the whole review row down
+  # with it (the transaction rolls back). Before this fix, `candidates = NA`
+  # aborted at INSERT (constraint violation) while `candidates = ""` was
+  # silently ACCEPTED and stored - two kinds of junk treated inconsistently;
+  # both now fail early and identically, right here.
+  if (!is.null(candidates)) {
+    checkmate::assert_character(candidates, any.missing = FALSE, min.chars = 1L)
+  }
   if (!is.null(expired)) {
     checkmate::assert_data_frame(expired)
     checkmate::assert_names(
       names(expired), must.include = c("uuid_feature", "date_start", "date_end")
+    )
+    # Round-3 audit H9 (second half): `expired$uuid_feature` feeds the same
+    # NOT NULL `review_queue_candidate.uuid_feature` column as `candidates`
+    # does, but was entirely unvalidated - apply the identical H8/FG-6 rule.
+    checkmate::assert_character(
+      expired$uuid_feature, any.missing = FALSE, min.chars = 1L
     )
     # Round-2 audit FD9: REJECT a non-Date bound rather than coercing it.
     # Reproduced end to end through the real DuckDB driver: a POSIXct
@@ -498,13 +558,23 @@ ingest_file_set_route <- function(con, hash, adapter = NA_character_, tier = NA_
     for (expired_col in c("date_start", "date_end")) {
       val <- expired[[expired_col]]
       if (!inherits(val, "Date")) {
+        # Round-3 audit H5, RULING (this worker): behaviour is correct as
+        # written - `inherits(val, "Date")` is FALSE for a bare logical NA,
+        # so bare NA is (and must stay) rejected; only a typed `NA_Date_`
+        # (e.g. `as.Date(NA)`) inherits class Date and passes. The BUG was
+        # the message text: "(NA allowed)" read as "any NA is fine", which
+        # contradicts that behaviour. Fixed the message, not the check - the
+        # surrounding Date-required/POSIXct-rejected rule is deliberate (see
+        # comment above) and a permissive bare-NA carve-out here would be the
+        # same class of silent-type-drift bug H9 exists to prevent.
         cli::cli_abort(
-          "expired${expired_col} must be class Date (NA allowed); got
-           class {.cls {class(val)}}. Not auto-converted: as.Date() on a
-           POSIXct bound is itself timezone-dependent (the exact silent-
-           corruption bug this check exists to prevent) - convert
-           explicitly with as.Date() before calling .rq_row(), choosing the
-           timezone deliberately.",
+          "expired${expired_col} must be class Date (NA_Date_, e.g.
+           as.Date(NA), is allowed - a bare logical NA is NOT, since it is
+           not typed as a date); got class {.cls {class(val)}}. Not
+           auto-converted: as.Date() on a POSIXct bound is itself
+           timezone-dependent (the exact silent-corruption bug this check
+           exists to prevent) - convert explicitly with as.Date() before
+           calling .rq_row(), choosing the timezone deliberately.",
           class = "sampletidy_error"
         )
       }
@@ -528,6 +598,22 @@ ingest_file_set_route <- function(con, hash, adapter = NA_character_, tier = NA_
   # below is computed AFTER this dedup, so the `expired` block's rank offset
   # (`n_candidates + seq_len(n_expired)`) stays a dense 1..n sequence.
   if (!is.null(candidates)) candidates <- unique(candidates)
+
+  # Round-3 audit FG-5: `expired` gets the identical FD10(a) dedup, on the
+  # (uuid_feature, date_start, date_end) tuple - "two identical expired rows"
+  # means identical across all three, not merely the same feature (an
+  # expired row's date range is part of its identity; two DIFFERENT date
+  # ranges for the same feature are two genuinely distinct expired periods,
+  # not a duplicate). First-seen order preserved via `!duplicated()`, same as
+  # `unique()` does for `candidates` above. Done here (not up in validation)
+  # so it runs after the Date-type/NA checks and before `n_expired`/rank are
+  # computed from it, mirroring the candidates dedup's own placement.
+  if (!is.null(expired)) {
+    expired <- expired[
+      !duplicated(expired[c("uuid_feature", "date_start", "date_end")]), ,
+      drop = FALSE
+    ]
+  }
 
   child_parts <- list()
   n_candidates <- if (is.null(candidates)) 0L else length(candidates)
@@ -603,6 +689,18 @@ review_queue_add <- function(con, kind, work_order = NA_character_,
                              uuid_alias = NA_character_, candidates = NULL,
                              diagnostics = list()) {
   checkmate::assert_string(kind)
+  # Round-3 audit H10: `payload`/`created_at`/`uuid` were the one untyped
+  # door left in this function - every other argument already routes through
+  # `.rq_row()`'s checkmate guards, but these three are consumed BEFORE that
+  # call (or never reach it at all, in `payload`'s case). Before this fix,
+  # `payload = 1.5` was silently coerced to the string "1.5" by
+  # `tibble::tibble()`, and `payload = c("a","b")` reached the bare
+  # `if (!is.na(payload))` below and died with R's own "the condition has
+  # length > 1" rather than a `sampletidy_error`. Give all three the same
+  # checkmate treatment as every other typed argument here.
+  checkmate::assert_string(payload, na.ok = TRUE)
+  checkmate::assert_string(uuid, null.ok = TRUE)
+  checkmate::assert_posixct(created_at, len = 1L, null.ok = TRUE)
   if (is.null(uuid)) uuid <- uuid::UUIDgenerate()
   if (is.null(created_at)) created_at <- Sys.time()
 

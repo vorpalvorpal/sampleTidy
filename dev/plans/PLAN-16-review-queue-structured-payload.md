@@ -507,31 +507,51 @@ pin a shape, and the behavioural criteria are where the gate really is.
 - a row with `kind = 'expired'` round-trips `date_start` and `date_end` as `DATE`; a row with
   `kind = 'candidate'` carries `NA` for both. Both halves required.
 
-### R-16.6 No production code reads a payload by regex OR by SQL JSON — on EITHER carrier
-- no occurrence of `sub(`, `gsub(`, `regmatches(`, `regexpr(`, `grepl(` applied to a
-  `payload` value anywhere in `R/`, covering **both** the `review_queue` payload and the
-  **skip tibble's** `payload` (B-16.skips). A criterion scoped to only the first is satisfied
-  by relocating the regex to the second.
-- **And no SQL-side read of the JSON remainder** (constraint 1, part 1): no `json_extract`,
+### R-16.6 No production code reads a payload by SQL JSON
+- **The R-side regex ban is RETIRED (Robin, 2026-07-25).** It formerly listed `sub(`, `gsub(`,
+  `regmatches(`, `regexpr(`, `grepl(` applied to a `payload` value in `R/`. Its purpose was to
+  stop one specific dead end — hand-parsing the legacy k=v payload grammar — and that dead end
+  is now past: migration 006 was retired in `bc3d146` (the rows it converted no longer exist)
+  and every producer emits JSON. Round-3 slice I demonstrated the ban was in any case
+  unenforceable as written: it named five functions, so an identical parse via `gregexpr()`,
+  `regexec()`, `grep()`, `strsplit()`+`startsWith()`, or any `stringr` equivalent evaded it
+  entirely (mutants F1/F2/F3 all survived a green suite). A name list cannot express "do not
+  parse this text"; retiring it removes a control that read as protection while providing
+  none. The real guarantee is structural and is carried by R-16.8/R-16.10: entity data lives
+  in typed columns, so there is nothing in `payload` worth parsing.
+- **No SQL-side read of the JSON remainder** (constraint 1, part 1): no `json_extract`,
   `json_valid`, `->`, `->>`, or `LIKE`/`SIMILAR TO` against a `payload` value in any SQL that
   package code or a migration issues, and no such reference in a stored view's definition. A
   criterion that forbids only the R-side regex is satisfied by moving the parse into SQL,
   which is the exact portability cliff the policy exists to prevent.
 - This is a source-scanning assertion and must therefore be comment- and string-aware, and
-  must carry its own decoy. **Two deliberate exceptions, named here so the test whitelists
-  them rather than a reader "fixing" them later**: (a) the migration's one-way parser for the
-  4 legacy rows (B-16.migration) necessarily parses the old format — it lives in the
-  migration, not in `R/`; (b) `jsonlite` calls in `R/` are the *sanctioned* JSON path
-  (constraint 1, part 1) and are not violations. The criterion forbids SQL JSON and regex,
-  not R-side `jsonlite`.
+  must carry its own decoy. It must also detect a reference **assembled across
+  concatenation**: round-3 slice I evaded the per-literal scan by splitting the SQL keyword
+  and the JSON operator into separate `paste0()` fragments (mutant F4), so the scanner must
+  reason over the joined SQL string, not each literal in isolation.
+- **One deliberate exception, named here so the test whitelists it** rather than a reader
+  "fixing" it later: `jsonlite` calls in `R/` are the *sanctioned* JSON path (constraint 1,
+  part 1) and are not violations. The criterion forbids SQL-side JSON, not R-side `jsonlite`.
+  (The former second exception — the migration's one-way parser for the 4 legacy rows — went
+  away with migration 006 in `bc3d146`.)
 
 ### R-16.7 .rc_serialise_payload is gone
 - the symbol does not exist in the package namespace, and no call site remains.
 
 ### R-16.8 Every review-writing site routes through the structured constructor
-- no `paste0()`-assembled payload string survives in `R/reconcile.R`, `R/feature-alias.R` or
-  `R/router.R`; each of the 14 content-producing sites in
+- no `paste0()`-assembled payload string survives in `R/reconcile.R`, `R/feature-alias.R`,
+  `R/router.R` **or `R/commit.R`**; each of the 14 content-producing sites in
   `dev/tdd-run/p16-payload-prod-inventory.md` §1b is covered.
+- **Scope widened after round 3 (Robin, 2026-07-25).** `R/commit.R` was absent from the
+  three-file scan, and `.ct_commit_review()` there is the path that writes 95 of 96 rows — so
+  the single highest-volume writer was the one file the criterion could not see. Slice I
+  removed its `.rq_row()` routing entirely and the suite stayed green (mutant F6).
+- **Enforced per SITE, not per function.** The scan must assert that each of the 14 inventoried
+  producers routes through `.rq_row()`/`.rq_skip()`, not merely that no banned construct
+  appears somewhere in the file. Slice I's mutant F5 hand-rolled an unescaped `sprintf()`
+  payload inside `.rc_feature_review()`'s `structural` branch — a site the file-level scan
+  never reached — and produced invalid JSON for a quoted `feature_raw` while the suite stayed
+  green.
 
 ### R-16.9 Both insert paths write the same shape
 - a row inserted via `review_queue_add()` and a row inserted via the
@@ -544,12 +564,36 @@ pin a shape, and the behavioural criteria are where the gate really is.
   the live registry) plus a synthetic value containing `|` and `=`, read it back, and get the
   input byte-for-byte. **This is the criterion the whole plan exists for**; it fails against
   today's code.
+- **Stated as a PROPERTY of every producer, not of one site (Robin, 2026-07-25).** Round 3
+  found it verified on 2 of the 14 producers in `p16-payload-prod-inventory.md` §1b, which is
+  what let mutant F5 emit invalid JSON from an unverified producer against a green suite.
+  Drive the hostile-byte round-trip over **all 14**, table-driven from the inventory, so a
+  producer added later without escaping fails this criterion rather than slipping past it.
+  The hostile set is fixed and shared: comma, apostrophe, pipe, `=`, `"`, `\`, tab, newline,
+  non-ASCII.
 
 ### R-16.11 Nested structural fragments no longer exist
 - a `structural` review exposes site and point as separate retrievable values, and no stored
   value contains an embedded `k=v` fragment.
 
-### R-16.12 The 92 asset_content_unverified rows are CONVERTED with no information loss
+### R-16.12 — RETIRED 2026-07-25 (Robin). Superseded by `bc3d146`; NOT a coverage gap.
+> **Do not re-raise this as unbuilt work.** Two round-3 auditors independently reported
+> R-16.12/R-16.13 as unverified criteria with a missing `dev/migrations/006-*.R` and a missing
+> `test-migration-006.R`. Both files are legitimately absent: `review_queue` went 96 → 0 rows
+> on 2026-07-25. All 4 legacy k=v rows were verified ACTIONED in-database and deleted; the 92
+> `asset_content_unverified` rows were verified document-by-document, re-hashed and closed,
+> with the single misfile re-pointed to the project its document actually belongs to. The
+> migration therefore has nothing left to convert and was deleted with its 19-block,
+> 125-assertion test file in `bc3d146`.
+>
+> These two criteria can never again have an executable assertion, because the rows they
+> assert over do not exist. They are closed by the evidence in `bc3d146` and in
+> `dev/tdd-run/p16-live-db-evidence.md`. **Phase 9 must report them as RETIRED, not as
+> unverified.** The auditors were right to flag them — they read history-free trees by design,
+> so the retirement rationale was invisible to them.
+>
+> The original text is preserved below for the record only.
+
 - after the migration all 92 rows carry `subkind = 'hash_mismatch'`, a `uuid_existing` that
   resolves to a live `asset` row, and a JSON remainder whose `filename` equals the value the
   pre-migration payload carried. Row count is still exactly 92 and no row has a payload key
@@ -562,7 +606,8 @@ pin a shape, and the behavioural criteria are where the gate really is.
 - This criterion is load-bearing precisely because **nothing in the package reads these rows**,
   so no other test and no user would ever notice them being silently mangled.
 
-### R-16.13 The 4 legacy k=v rows migrate to columns and child rows with no loss
+### R-16.13 — RETIRED 2026-07-25 (Robin). Superseded by `bc3d146`; see R-16.12's note above.
+- Original text preserved for the record only:
 - after migration: `subkind`, `work_order`, and the `source_ref` list survive; the 3 rows
   carrying `candidates=` yield 4 distinct `review_queue_candidate` rows total, all with
   `uuid_feature` resolving to a live `feature`; and no legacy `payload` still contains `=`
@@ -800,3 +845,44 @@ argument at all (B-16.api), so a hand-built string cannot be injected. R-16.18 p
 - after a commit-time alias rewrite, `uuid_alias` holds the uuid and the JSON remainder
   contains no `alias_uuid` key. A test asserting only that `uuid_alias` is correct does not
   satisfy this — the point is the absence of the duplicate.
+
+---
+
+## Scope added 2026-07-25 (Robin): the candidate child table gets a real producer and reader
+
+Round 3 established that `review_queue_candidate` has **neither** in production. Nothing in
+`R/` ever `SELECT`s it — `review_queue()` returns 13 parent columns and joins nothing — and its
+only writer, `review_queue_add()`, is reached from exactly one production call site
+(`R/router.R:177`, the `adapter_tie` path) which passes no candidates. Slice G proved the point
+by mutation: making `.rq_row()` emit zero child rows killed 6 blocks, all of them
+constructor-level unit tests, leaving every end-to-end file green. The table is written by
+tests and read by nobody.
+
+That matters because **CONTRACT A55 makes candidate choice the human's job**. A reviewer cannot
+choose among candidates the system can store but never show. Robin's ruling: build both now
+rather than record it as forward-looking schema.
+
+### R-16.22 The candidates for a review item are retrievable through the package
+- an exported read path returns, for a given `uuid_review`, its candidate rows in `rank` order
+  with `uuid_feature` resolved — reachable without hand-written SQL.
+- **Assert against a row written by a real producer**, not a fixture inserted by the test. A
+  reader verified only against test-inserted rows re-creates exactly the gap this criterion
+  closes: both sides green, nothing connected.
+
+### R-16.23 A producer that supplies candidates actually persists them
+- at least one production path passes real `candidates` through to persisted child rows, and a
+  test drives it end to end: producer → `review_queue_candidate` → reader → the same uuids.
+- **`.rc_review_row()` must stop discarding them (FG-3).** It accepts `candidates=`/`expired=`,
+  builds the child rows via `.rq_row()`, then returns a tibble that drops `rq$candidates` with
+  no error and no warning. All 11 current call sites pass neither, so this is latent today —
+  but PLAN-15's expired-alias work (R-15.15/R-15.16) is the next natural caller and would lose
+  data silently. Either carry the child rows through or `cli_abort()`; do not drop them.
+
+### R-16.24 One review item's candidates have one carrier
+- for any single review item, candidates live **either** in the JSON remainder **or** in
+  `review_queue_candidate`, and the reader can tell which without guessing.
+- Round 3 (FG-8) found two rows with identical `kind`/`subkind = 'ambiguous'` carrying
+  candidates in different places, with no discriminator column and no reader that unions them.
+  The split itself is already adjudicated (RULING-F); what is missing is a discriminator and a
+  reader that honours it. A reader that silently returns the empty set for rows using the other
+  carrier is a wrong answer, not a missing feature.

@@ -913,3 +913,233 @@ test_that("FF8: a caller that has already wrapped a plural key in I() is honoure
     '{"candidates":["f-0001"]}'
   )
 })
+
+# ---------------------------------------------------------------------------
+# PLAN-16 Phase-7b round-3 remediation: H4, H5, H6, H7, H8, H9, H10, FG-5,
+# FG-6, F9.
+# ---------------------------------------------------------------------------
+
+# --- H4: a NULL value for a registered plural diagnostics key serialises as
+# an empty JSON array, not an abort (see the RULING comment on
+# .rq_serialise_diagnostics() in R/db-schema.R).
+
+test_that("H4: a NULL value for a registered plural diagnostics key serialises as [] instead of erroring", {
+  expect_identical(
+    sampleTidy:::.rq_serialise_diagnostics(list(candidates = NULL)),
+    '{"candidates":[]}'
+  )
+  expect_identical(
+    sampleTidy:::.rq_serialise_diagnostics(list(a = 1, source_ref = NULL)),
+    '{"a":1,"source_ref":[]}'
+  )
+})
+
+# --- H8/FG-6: candidates = NA and candidates = "" both fail early and
+# identically, at the constructor, not at INSERT.
+
+test_that("H8/FG-6: .rq_row() rejects candidates containing NA or an empty string, consistently and before any DB write", {
+  expect_error(sampleTidy:::.rq_row(kind = "unknown_feature", candidates = NA_character_))
+  expect_error(sampleTidy:::.rq_row(kind = "unknown_feature", candidates = ""))
+  expect_error(sampleTidy:::.rq_row(kind = "unknown_feature", candidates = c("f-0001", NA)))
+  expect_no_error(sampleTidy:::.rq_row(kind = "unknown_feature", candidates = "f-0001"))
+})
+
+# --- H9: expired$uuid_feature is validated the same way candidates is; and
+# a bare logical NA scalar argument is rejected rather than silently
+# producing a logical review$uuid_existing column.
+
+test_that("H9: .rq_row(expired=) rejects a missing/empty expired$uuid_feature", {
+  bad_na <- tibble::tibble(
+    uuid_feature = NA_character_, date_start = as.Date("2020-01-01"), date_end = as.Date(NA)
+  )
+  expect_error(sampleTidy:::.rq_row(kind = "expired", expired = bad_na))
+  bad_empty <- tibble::tibble(
+    uuid_feature = "", date_start = as.Date("2020-01-01"), date_end = as.Date(NA)
+  )
+  expect_error(sampleTidy:::.rq_row(kind = "expired", expired = bad_empty))
+})
+
+test_that("H9: .rq_row() rejects a bare logical NA for a scalar typed argument, so review$uuid_existing never comes back class logical", {
+  err <- tryCatch(
+    sampleTidy:::.rq_row(kind = "unknown_feature", uuid_existing = NA),
+    error = function(e) e
+  )
+  expect_s3_class(err, "sampletidy_error")
+
+  # control: NA_character_ (the documented default) is still fine, and the
+  # resulting column is genuinely character, not logical.
+  rq <- sampleTidy:::.rq_row(kind = "unknown_feature", uuid_existing = NA_character_)
+  expect_true(is.character(rq$review$uuid_existing))
+})
+
+# --- H10: review_queue_add()'s payload/created_at/uuid get the same
+# checkmate treatment as every other typed argument.
+
+test_that("H10: review_queue_add() rejects a non-character payload and a payload with length > 1", {
+  dir <- withr::local_tempdir()
+  db <- seed_db(dir)
+  con <- seed_con(db)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  expect_error(review_queue_add(con, kind = "unknown_feature", payload = 1.5))
+  # before H10, this died with the bare R message "the condition has length
+  # > 1" rather than a clean checkmate/sampletidy error - just checking that
+  # SOME error is raised (not a crash further downstream) is the guard.
+  expect_error(review_queue_add(con, kind = "unknown_feature", payload = c("a", "b")))
+})
+
+test_that("H10: review_queue_add() rejects a non-scalar-string uuid and a non-POSIXct created_at", {
+  dir <- withr::local_tempdir()
+  db <- seed_db(dir)
+  con <- seed_con(db)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  expect_error(review_queue_add(con, kind = "unknown_feature", uuid = 123))
+  expect_error(review_queue_add(con, kind = "unknown_feature", created_at = "2020-01-01"))
+})
+
+# --- H5: the expired= date-bound error message accurately describes which
+# NA is allowed (NA_Date_, not a bare logical NA) - message and behaviour
+# must agree (see the RULING comment in R/db-schema.R: behaviour was already
+# correct, only the message was wrong).
+
+test_that("H5: .rq_row(expired=) date-bound error message does not claim a bare logical NA is allowed, since one is in fact rejected", {
+  bad <- tibble::tibble(uuid_feature = "f-0001", date_start = NA, date_end = as.Date(NA))
+  err <- tryCatch(sampleTidy:::.rq_row(kind = "expired", expired = bad), error = function(e) e)
+  expect_s3_class(err, "sampletidy_error")
+  expect_false(grepl("Date \\(NA allowed\\)", conditionMessage(err), fixed = FALSE))
+
+  # control: a genuine NA_Date_ bound is still accepted (the check itself
+  # must not have been tightened, only its message corrected).
+  ok <- tibble::tibble(
+    uuid_feature = "f-0001", date_start = as.Date(NA), date_end = as.Date(NA)
+  )
+  expect_no_error(sampleTidy:::.rq_row(kind = "expired", expired = ok))
+})
+
+# --- H6: the date_end half of the FD9 guard, pinned independently of
+# date_start (a bad date_end must be caught even when date_start is valid).
+
+test_that("H6: .rq_row(expired=) rejects a bad date_end even when date_start is a valid Date (pins the date_end half of the FD9 loop)", {
+  bad <- tibble::tibble(
+    uuid_feature = "f-0001",
+    date_start = as.Date("2020-01-01"),
+    date_end = as.POSIXct("2022-03-04 09:00:00", tz = "Australia/Sydney")
+  )
+  expect_error(
+    sampleTidy:::.rq_row(kind = "expired", expired = bad),
+    regexp = "date_end.*Date"
+  )
+})
+
+# --- H7: the plural-diagnostics-keys registry's EXACT membership is pinned,
+# not merely a subset check (the production assertion is `%in%`, so a stray
+# addition to .RQ_PLURAL_DIAGNOSTIC_KEYS would flip an unregistered key's
+# JSON shape from scalar to array without this test noticing).
+
+test_that("H7: .RQ_PLURAL_DIAGNOSTIC_KEYS is EXACTLY the known set of plural diagnostics keys", {
+  expect_setequal(
+    sampleTidy:::.RQ_PLURAL_DIAGNOSTIC_KEYS,
+    c("candidates", "source_ref", "adapters", "units")
+  )
+  expect_length(sampleTidy:::.RQ_PLURAL_DIAGNOSTIC_KEYS, 4L)
+})
+
+# --- FG-5: expired rows are deduped the same way candidates are (FD10(a)),
+# preserving first-seen order and a dense rank sequence.
+
+test_that("FG-5: .rq_row() dedups identical expired rows (same uuid_feature/date_start/date_end), preserving first-seen order with a dense rank sequence", {
+  dup <- tibble::tibble(
+    uuid_feature = c("f-9", "f-9"),
+    date_start = as.Date(c("2020-01-01", "2020-01-01")),
+    date_end = as.Date(c("2020-06-30", "2020-06-30"))
+  )
+  rq <- sampleTidy:::.rq_row(kind = "expired", expired = dup)
+  expect_equal(nrow(rq$candidates), 1L) # deduped, not 2
+  expect_equal(rq$candidates$rank, 1L)
+
+  # control: same feature but a DIFFERENT date range is a genuinely distinct
+  # expired period, not a duplicate - must NOT be deduped away.
+  distinct_dates <- tibble::tibble(
+    uuid_feature = c("f-9", "f-9"),
+    date_start = as.Date(c("2020-01-01", "2021-01-01")),
+    date_end = as.Date(c("2020-06-30", "2021-06-30"))
+  )
+  rq2 <- sampleTidy:::.rq_row(kind = "expired", expired = distinct_dates)
+  expect_equal(nrow(rq2$candidates), 2L)
+  expect_equal(rq2$candidates$rank, c(1L, 2L))
+})
+
+# --- F9: duplicate JSON diagnostics keys are rejected at .rq_row(), not
+# merely inside .rq_serialise_diagnostics() in isolation.
+
+test_that("F9: .rq_row() rejects diagnostics with duplicate JSON keys (checkmate::assert_list(names = 'unique'))", {
+  dup_diagnostics <- list(feature_raw = "a", feature_raw = "b") # a duplicate name, built directly
+  expect_error(
+    sampleTidy:::.rq_row(kind = "value_conflict", diagnostics = dup_diagnostics),
+    regexp = "unique"
+  )
+})
+
+# ==============================================================================
+# Round-3 adjudication (orchestrator, 2026-07-25): the CROSS-STATEMENT atomicity
+# guarantee, which round 3 accidentally left untested.
+#
+# History, because this is subtle and a future reader will otherwise "simplify"
+# it back into a vacuous test. `FB4` in test-review-queue-payload.R asserted
+# that a failing CHILD row leaves no review row and no candidate rows - parent
+# and children are one transaction (B-16.api). Its mechanism was
+# `candidates = c("ok1", NA_character_)`, which used to fail at INSERT on the
+# child table's NOT NULL.
+#
+# Round-3 finding H8 correctly moved that rejection to the CONSTRUCTOR, where
+# the cause is visible. That silently disarmed FB4: with the input rejected
+# before any DB write, the row counts are trivially unchanged and the block
+# passes while testing nothing. Worker W3 then proved, by removing the outer
+# `db_transaction()` in a scratch copy and observing IDENTICAL behaviour, that
+# the replacement duplicate-parent-uuid mechanism does not exercise atomicity
+# either: that failure hits `review_queue`'s OWN primary key on the first
+# statement, so the child insert never runs. (The orchestrator had proposed
+# that mechanism; W3 disproved it. Take the finding, not the attribution.)
+#
+# So: constructor validation has closed off every route to "child fails while
+# parent already succeeded" that is reachable through bad INPUT - which is a
+# good thing, and is exactly why the guarantee now needs a fault injected at
+# the SCHEMA instead. Dropping the child table makes the parent insert valid
+# and the child insert impossible, which is the real ordering under test.
+# Verified before writing this: the parent IS rolled back.
+# ==============================================================================
+
+test_that("B-16.api: a child-row insert failing AFTER a valid parent insert rolls the parent back (true cross-statement atomicity)", {
+  path <- seed_db()
+  con <- seed_con(path)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  # Fault injection at the schema, not the input: the parent statement stays
+  # entirely valid, and only the child statement can fail. This is the one
+  # remaining way to reach the parent-succeeds-child-fails ordering now that
+  # .rq_row() rejects bad candidates up front.
+  DBI::dbExecute(con, "DROP TABLE review_queue_candidate")
+  before <- DBI::dbGetQuery(con, "SELECT COUNT(*) AS n FROM review_queue")$n
+
+  expect_error(
+    review_queue_add(con, kind = "unknown_feature", candidates = c("f-0001", "f-0002")),
+    regexp = "review_queue_candidate"
+  )
+
+  # The assertion that matters: no ORPHAN PARENT. A non-transactional
+  # implementation leaves the review row behind with no candidates - a review
+  # item a human is asked to resolve with its choices silently missing.
+  after <- DBI::dbGetQuery(con, "SELECT COUNT(*) AS n FROM review_queue")$n
+  expect_identical(after, before)
+
+  # The DB-level constraint text must survive to the caller. db_append()'s old
+  # dbAppendTable() implementation destroyed it: the cleanup unregister fails
+  # once the transaction is aborted, and THAT secondary error propagated in
+  # place of the real one. Regressing it would re-mask every constraint
+  # violation in the package, so it is pinned here rather than left implicit.
+  expect_error(
+    review_queue_add(con, kind = "unknown_feature", candidates = c("f-0001")),
+    regexp = "rolled back"
+  )
+})

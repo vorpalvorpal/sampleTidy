@@ -53,6 +53,7 @@ correct_value(uuid_analysis, new_value, reason, actor)
 add_feature(...); add_analyte(...); add_project(...)
 db_append(con, table, df, actor, reason); db_update(...); db_delete(...)
 review_queue(con, status = "open")        # read
+review_queue_candidates(con, uuid_review) # read an item's candidates, rank order
 snapshot_db(db, dest_dir); prune_snapshots(dest_dir, keep_days)
 
 # plan 11 — the resolve API (A55). This IS the resolution API; the earlier

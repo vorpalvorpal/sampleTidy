@@ -98,7 +98,7 @@
   tibble::tibble(source_ref = character(0), kind = character(0),
                  subkind = character(0), payload = character(0), n_rows = integer(0),
                  source_hash = character(0), uuid_existing = character(0),
-                 uuid_alias = character(0))
+                 uuid_alias = character(0), candidates = list())
 }
 
 # ---- R-11.14: fold assembly's inline review flags into reconcile -----------
@@ -157,12 +157,40 @@
     uuid_existing = uuid_existing, uuid_alias = uuid_alias, candidates = candidates,
     expired = expired, diagnostics = diagnostics
   )
-  tibble::tibble(
+  row <- tibble::tibble(
     source_ref = paste(source_ref, collapse = ","), kind = kind,
     subkind = rq$review$subkind[[1]],
     payload = rq$review$payload[[1]], n_rows = n_rows, source_hash = source_hash,
     uuid_existing = rq$review$uuid_existing[[1]], uuid_alias = rq$review$uuid_alias[[1]]
   )
+  # PLAN-16 round-3 FG-3/R-16.23: `.rq_row()` builds `review_queue_candidate`
+  # child rows whenever `candidates=`/`expired=` is supplied, but until this
+  # fix this function threw them away (`rq$candidates` never appeared
+  # anywhere in the returned tibble) - no error, no warning. Carried through
+  # instead, as a `candidates` list-column (one element per row, always a
+  # tibble - 0 rows when neither argument was supplied, which is every one
+  # of the 11 call sites in this file today, so this is latent, not a
+  # behaviour change). `dplyr::bind_rows()` across a grouped producer's
+  # several `.rc_review_row()` calls keeps each row's own child rows
+  # distinct because they travel inside that row's own list element.
+  #
+  # NOT itself a full fix for persistence: `.rq_row()` mints its OWN
+  # `uuid_row` and stamps every child row's `uuid_review` with it, but
+  # `reconcile_event()`'s caller (`.ct_commit_review()`, R/commit.R) mints a
+  # FRESH `review_queue.uuid` at insert time and does not currently rewrite
+  # these child rows' `uuid_review` to match - so a caller that routes
+  # `row$candidates[[1]]` all the way to `.ct_commit_review()` today would
+  # still get orphaned rows if that function tried to insert them verbatim.
+  # RULING-F recorded this as the reason reconcile-side `unknown_feature`/
+  # `ambiguous` candidates deliberately still travel as `diagnostics$candidates`
+  # JSON rather than through this argument (see `.rc_feature_review()`) -
+  # unchanged here. Wiring `.ct_commit_review()` to rewrite `uuid_review` (the
+  # same pattern `.ct_rewrite_review_payloads()` already uses for
+  # `uuid_alias`) so a FUTURE caller (e.g. PLAN-15's expired-alias work) can
+  # actually persist real child rows is R/commit.R's job, out of this file's
+  # ownership - reported, not fixed, in the PLAN-16 Phase-7b round-3 report.
+  row$candidates <- list(rq$candidates)
+  row
 }
 
 #' The skip tibble's own typed constructor (PLAN-16 B-16.skips). The skip
@@ -283,7 +311,14 @@
   if (length(unique(cand$uuid_feature)) > 1 && !is.na(sample_date)) {
     feat <- registry$feature
     de <- feat$date_end[match(cand$uuid_feature, feat$uuid)]
-    live <- is.na(de) | as.Date(de) >= as.Date(sample_date)
+    # Round-3 H11: pin tz= explicitly (matches lines 508/1033's convention).
+    # No-op today (`de`/`sample_date` are already class Date, and
+    # as.Date.Date() ignores tz), but as.Date() WITHOUT tz= on a POSIXct
+    # input is the same silent-corruption class already fixed once at the
+    # driver boundary (.rq_row()'s `expired` check) - unwatched here except
+    # by the SKIPPED R-11.17 drift detector.
+    live <- is.na(de) | as.Date(de, tz = "Australia/Sydney") >=
+      as.Date(sample_date, tz = "Australia/Sydney")
     narrowed <- cand[live, , drop = FALSE]
     if (nrow(narrowed) >= 1) cand <- narrowed
   }
@@ -454,7 +489,13 @@
   if (!is.na(sample_date)) {
     feat <- registry$feature
     de <- feat$date_end[match(u, feat$uuid)]
-    if (!is.na(de) && as.Date(de) < as.Date(sample_date)) return(NA_character_)
+    # Round-3 H11: pin tz= explicitly, same reasoning as .rc_narrow_live()
+    # just above - a no-op on the current Date-typed columns, but the guard
+    # against a future POSIXct bound turning this into a silent NA.
+    if (!is.na(de) && as.Date(de, tz = "Australia/Sydney") <
+          as.Date(sample_date, tz = "Australia/Sydney")) {
+      return(NA_character_)
+    }
   }
   u
 }
@@ -1423,8 +1464,12 @@ reconcile_event <- function(event, con) {
   # (e.g. a producer with no candidate features leaves uuid_alias NA) -
   # `.rc_fill_missing_cols()` below backfills the rest so every producer's
   # tibble can be bound/selected uniformly regardless of which columns it set.
+  # `candidates` (round-3 FG-3/R-16.23) is a list-column every `.rc_review_row()`
+  # call now sets (see its own comment) - included here so reconcile_event()'s
+  # caller can see a producer's review_queue_candidate child rows rather than
+  # having them silently dropped a second time at this selection step.
   review_cols <- c("source_ref", "kind", "subkind", "payload", "source_hash",
-                    "uuid_existing", "uuid_alias")
+                    "uuid_existing", "uuid_alias", "candidates")
   skip_cols <- c("source_ref", "reason", "payload", "source_hash",
                   "existing_uuid", "kept_uuid_lab")
 
