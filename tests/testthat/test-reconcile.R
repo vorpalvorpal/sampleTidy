@@ -156,7 +156,17 @@ test_that("R-8.2: an ambiguous feature name queues review listing both candidate
   out <- reconcile_event(event, con)
   ambiguous <- out$review[out$review$kind == "unknown_feature" & out$review$source_ref == "r1", ]
   expect_equal(nrow(ambiguous), 1)
-  expect_true(grepl("f-0004", ambiguous$payload[[1]]) && grepl("f-0005", ambiguous$payload[[1]]))
+  # TRANSLATED 2026-07-26. Was:
+  #   expect_true(grepl("f-0004", ambiguous$payload[[1]]) &&
+  #               grepl("f-0005", ambiguous$payload[[1]]))
+  # Robin ruled candidates travel as typed review_queue_candidate rows, not as
+  # JSON in the payload, so the uuids are no longer in that string. Reading the
+  # child rows is also strictly stronger than the two greps: `expect_setequal`
+  # fails on a spurious THIRD candidate, which a pair of substring checks
+  # cannot see.
+  amb_cand <- ambiguous$candidates[[1]]
+  amb_cand <- amb_cand[!is.na(amb_cand$kind) & amb_cand$kind == "candidate", ]
+  expect_setequal(amb_cand$uuid_feature, c("f-0004", "f-0005"))
 })
 
 test_that("R-8.2: no fuzzy matching - a Levenshtein-1 miss stays unknown_feature", {
@@ -1093,8 +1103,14 @@ test_that("PLAN-15 A: an all-auto_assign=FALSE ambiguous key (T.DUAL) does NOT a
   rv <- out$review[out$review$kind == "unknown_feature" & grepl("r1", out$review$source_ref), ]
   expect_equal(nrow(rv), 1)
   expect_identical(rv$subkind[[1]], "ambiguous")
-  dg <- jsonlite::fromJSON(rv$payload[[1]])
-  expect_true("f-0004" %in% dg$candidates && "f-0005" %in% dg$candidates)
+  # TRANSLATED 2026-07-26. Was:
+  #   dg <- jsonlite::fromJSON(rv$payload[[1]])
+  #   expect_true("f-0004" %in% dg$candidates && "f-0005" %in% dg$candidates)
+  # Same reason as R-8.2 above: candidates are typed child rows now, not a JSON
+  # key. `expect_setequal` also pins that there are exactly these two.
+  dual_cand <- rv$candidates[[1]]
+  dual_cand <- dual_cand[!is.na(dual_cand$kind) & dual_cand$kind == "candidate", ]
+  expect_setequal(dual_cand$uuid_feature, c("f-0004", "f-0005"))
 })
 
 test_that("PLAN-15 A: the committed alias_key on a pending row is punctuation-preserving (matches migration format)", {

@@ -245,21 +245,21 @@
   # several `.rc_review_row()` calls keeps each row's own child rows
   # distinct because they travel inside that row's own list element.
   #
-  # NOT itself a full fix for persistence: `.rq_row()` mints its OWN
-  # `uuid_row` and stamps every child row's `uuid_review` with it, but
-  # `reconcile_event()`'s caller (`.ct_commit_review()`, R/commit.R) mints a
-  # FRESH `review_queue.uuid` at insert time and does not currently rewrite
-  # these child rows' `uuid_review` to match - so a caller that routes
-  # `row$candidates[[1]]` all the way to `.ct_commit_review()` today would
-  # still get orphaned rows if that function tried to insert them verbatim.
-  # RULING-F recorded this as the reason reconcile-side `unknown_feature`/
-  # `ambiguous` candidates deliberately still travel as `diagnostics$candidates`
-  # JSON rather than through this argument (see `.rc_feature_review()`) -
-  # unchanged here. Wiring `.ct_commit_review()` to rewrite `uuid_review` (the
-  # same pattern `.ct_rewrite_review_payloads()` already uses for
-  # `uuid_alias`) so a FUTURE caller (e.g. PLAN-15's expired-alias work) can
-  # actually persist real child rows is R/commit.R's job, out of this file's
-  # ownership - reported, not fixed, in the PLAN-16 Phase-7b round-3 report.
+  # PERSISTENCE IS NOW WIRED END TO END (updated 2026-07-26, PLAN-15
+  # P15-review-payload). `.rq_row()` mints its OWN `uuid_row` and stamps every
+  # child row's `uuid_review` with it, while `.ct_commit_review()`
+  # (`R/commit.R`) mints a FRESH `review_queue.uuid` at insert time; PLAN-16
+  # RULING-F therefore deferred routing reconcile's own candidates here,
+  # because the child rows would have been inserted orphaned. `.ct_commit_review()`
+  # now rewrites `uuid_review` to the parent row's ACTUAL inserted uuid (the
+  # same pattern `.ct_rewrite_review_payloads()` uses for `uuid_alias`), so
+  # the deferral has expired and Robin's 2026-07-26 ruling moves the producer:
+  # `.rc_feature_review()` and `.rc_self_precedence_notes()` pass real
+  # `candidates=`/`expired=` and set NO `diagnostics$candidates` key. Exactly
+  # ONE carrier per row - `review_queue_candidates()` (`R/mutate.R`) aborts on
+  # a row holding both. Its JSON READER arm stays: the live database holds 92
+  # historical orphan rows whose candidates are JSON and PLAN-16 ruled
+  # "preserve, do not convert".
   row$candidates <- list(rq$candidates)
   row
 }
@@ -449,6 +449,48 @@
   cand <- tibble::tibble(uuid_alias = hit$uuid, uuid_feature = hit$uuid_feature)
   cand <- .rc_narrow_live(cand, sample_date, registry)
   unique(cand$uuid_feature)
+}
+
+#' The EXPIRED (or not-yet-started) alias arms of one `feature_raw` (PLAN-15
+#' E.3): the exact complement of `.rc_feature_suggestions()`'s alias-side
+#' liveness filter, carrying each arm's own DATE bounds alongside its feature.
+#'
+#' "Expired" here means ALIAS-side: the arm's `date_start`/`date_end` do not
+#' admit `sample_date`. It is deliberately NOT feature-side expiry - closing an
+#' ALIAS is the deliberate curation act E.3 rules on, and an arm dropped only by
+#' `.rc_narrow_live()` (feature `date_end`) is a live mapping onto a
+#' decommissioned point, a different fact with a different remedy.
+#'
+#' Bounds are class `Date` by construction (`.rc_alias_bound()` -> S-15.5's
+#' absent-column-is-unbounded rule): `.rq_row()` REJECTS a POSIXct bound rather
+#' than coercing it, because `as.Date()` on a POSIXct is itself
+#' timezone-dependent. A NA `sample_date` narrows nothing (E.6), so no arm is
+#' expired and this returns zero rows.
+#'
+#' Dangling arms (`uuid_feature` NA) are excluded, matching
+#' `.rc_feature_suggestions()` - `review_queue_candidate.uuid_feature` is NOT
+#' NULL, so a dangling arm has nothing to name. They still hold the key with
+#' Layer 1 via `.rc_alias_rows_exist()`, which is date- and dangling-blind.
+#' @return `tibble(uuid_feature, date_start, date_end)`, 0+ rows.
+#' @keywords internal
+#' @noRd
+.rc_feature_expired <- function(feature_raw, sample_date, registry) {
+  empty <- tibble::tibble(uuid_feature = character(0),
+                          date_start = as.Date(character(0)),
+                          date_end = as.Date(character(0)))
+  key <- .rc_feature_key(feature_raw)
+  if (is.na(key)) return(empty)
+  fa <- registry$feature_alias
+  if (is.null(fa) || nrow(fa) == 0) return(empty)
+  hit <- fa[!is.na(fa$alias_key) & fa$alias_key == key & !is.na(fa$uuid_feature), , drop = FALSE]
+  if (nrow(hit) == 0) return(empty)
+  hit <- hit[!.rc_alias_live(hit, sample_date), , drop = FALSE]
+  if (nrow(hit) == 0) return(empty)
+  tibble::tibble(
+    uuid_feature = hit$uuid_feature,
+    date_start = .rc_alias_bound(hit, "date_start", nrow(hit)),
+    date_end = .rc_alias_bound(hit, "date_end", nrow(hit))
+  )
 }
 
 # ---- PLAN-15 B/C: layered site-aware resolution ----------------------------
@@ -696,6 +738,10 @@
   # folded `.rc_method_key` stays for method keys + intra-event dedup only.
   alias_key <- .rc_feature_key(rows$feature_raw)
   cand_list <- vector("list", n)
+  # PLAN-15 E.3, per row: the key's EXPIRED alias arms with their DATE bounds.
+  # Parallel to `cand_list` (the LIVE ones) and read the same way in
+  # `.rc_feature_review()` - the two are complements, never overlapping sets.
+  exp_list <- vector("list", n)
 
   # PLAN-15 B/C state, per row: the structural parse, the review-payload
   # suggestion token it yields, and the provenance reason a non-curated
@@ -745,8 +791,19 @@
     # PLAN-15 A: surface EVERY distinct candidate the key reaches (incl. the
     # all-`auto_assign=FALSE` ambiguous case the auto path drops) so review
     # carries a real suggestion instead of a blank unknown.
+    # PLAN-15 F.6, PINNED: the `length(sugg) > 1` gate that used to stand here
+    # discarded a LONE candidate outright, which is the highest-confidence
+    # signal the mechanism produces (5 live keys reach it via
+    # `.rc_narrow_live()` collapsing an ambiguity to one surviving arm) and
+    # the one case it threw away. Record the set at EVERY length; the count
+    # is what `.rc_feature_review()`'s precedence table branches on, so the
+    # count must survive to it rather than being pre-censored here.
     sugg <- .rc_feature_suggestions(rows$feature_raw[[i]], row_dates[[i]], registry)
-    if (length(sugg) > 1) cand_list[[i]] <- sugg
+    if (length(sugg) > 0) cand_list[[i]] <- sugg
+    # E.3: the same key's expired arms, as CONTEXT. Collected on the pending
+    # path only - a row that resolved has nothing to review.
+    exp_i <- .rc_feature_expired(rows$feature_raw[[i]], row_dates[[i]], registry)
+    if (nrow(exp_i) > 0) exp_list[[i]] <- exp_i
 
     # ---- Layer 2 (B): structural (site, point) --------------------------
     p <- .rc_parse_structural(alias_key[[i]], sites)
@@ -824,7 +881,7 @@
   kept <- rows[keep, , drop = FALSE]
 
   review <- dplyr::bind_rows(
-    .rc_feature_review(rows, status, cand_list, struct_site, struct_point, work_order),
+    .rc_feature_review(rows, status, cand_list, exp_list, struct_site, struct_point, work_order),
     .rc_self_precedence_notes(rows, uuid_feature, shadowed, work_order)
   )
   list(kept = kept, review = review)
@@ -840,6 +897,11 @@
 #' the row whose resolution it explains. `kind` stays `unknown_feature` -
 #' inventing a new top-level kind would read as a new class of work to every
 #' existing `review_queue` consumer (S-15.6).
+#'
+#' Carries `blocking = FALSE` and the shadowed features as CHILD ROWS, per the
+#' one precedence table documented on `.rc_feature_review()` below - see there
+#' for why the flag is not redundant with the `subkind` value and why the
+#' shadowed set travels through `candidates=` rather than a diagnostics key.
 #' @keywords internal
 #' @noRd
 .rc_self_precedence_notes <- function(rows, uuid_feature, shadowed, work_order) {
@@ -850,10 +912,13 @@
       source_ref = rows$source_ref[[i]], kind = "unknown_feature", n_rows = 1L,
       source_hash = rows$source_hash[[i]], work_order = work_order,
       subkind = "self_precedence_note",
+      # The shadowed arms ARE candidates a curator may later prefer, so they
+      # take the same typed carrier every other candidate set now takes.
+      candidates = shadowed[[i]],
       diagnostics = list(
         feature_raw = rows$feature_raw[[i]],
         resolved_feature = uuid_feature[[i]],
-        shadowed = shadowed[[i]]
+        blocking = FALSE
       )
     )
   })
@@ -900,9 +965,77 @@
 #' not guardable against by construction). Instead the NA-key rows are kept
 #' out of the string-keyed `split()` entirely and appended as their own
 #' group by row-index, so no sentinel string - safe or not - is needed.
+#'
+#' # THE `subkind` PRECEDENCE TABLE (S-15.6) - THE ONLY ONE IN THIS PACKAGE
+#'
+#' This is the single total order over the whole `unknown_feature` subkind
+#' vocabulary, folding PLAN-15 F.5, F.6, E.3 and E.7 into ONE pass. Do not
+#' start a second table anywhere: `.rc_self_precedence_notes()` above owns
+#' precedence 0 only because a note annotates a row that RESOLVED and this
+#' producer only ever sees `pending`/`held` rows - it is the same table.
+#'
+#' | # | subkind                | fires when                                   | blocking |
+#' |---|------------------------|----------------------------------------------|----------|
+#' | 0 | `self_precedence_note` | a live `self` arm won over >=1 shadowed arm  | FALSE    |
+#' | 1 | `ambiguous`            | >=2 LIVE candidate features                  | TRUE     |
+#' | 2 | `expired_alias`        | ZERO live arms and >=1 EXPIRED arm (E.3)     | TRUE     |
+#' | 3 | `suggestion`           | EXACTLY ONE live candidate feature (F.6)     | TRUE     |
+#' | 4 | `structural`           | no candidates at all, but a `(site, point)`  | TRUE     |
+#' | 5 | `NA`                   | nothing to say                               | TRUE     |
+#'
+#' Three things the table pins that prose kept getting wrong:
+#'
+#' * **"LIVE ARM" IS DATE-BOUNDS-ADMITS, `auto_assign`-BLIND.** It is the
+#'   `.rc_feature_suggestions()` count, NOT `.rc_feature_candidates()`'s
+#'   `auto_assign = TRUE`-filtered one. A key with one live `auto_assign=FALSE`
+#'   arm plus one expired arm has ONE live arm (-> `suggestion`) and ZERO
+#'   filtered candidates at the same time; both are true, and keying the table
+#'   off the filtered count would collapse it onto `expired_alias`. Ranks 1-3
+#'   are therefore mutually exclusive by construction (a count is one number),
+#'   which is what makes this a total order rather than a pile of overlapping
+#'   rules - the ordering shown is what a reader needs, not a runtime tiebreak.
+#' * **EXPIRY IS CONTEXT, NEVER THE SUBKIND, WHENEVER ANY LIVE ARM EXISTS.**
+#'   `expired_alias` fires at ZERO live arms only. The expired arms themselves
+#'   ride along at EVERY rank, so an `ambiguous` or `suggestion` row still
+#'   names them (E.3's "ambiguity is the actionable fact; expiry is context").
+#' * **`blocking` IS AN EXPLICIT BOOLEAN ON EVERY ROW, not an inference from
+#'   the subkind** (E.7/R2). Emitting it only on the note would leave "absent
+#'   means blocking" as the rule, i.e. the same hardcoded set of note-subkinds
+#'   the flag exists to abolish - so every row this file queues carries it, and
+#'   a reader branches on one field at any rank, including ranks added later.
+#'
+#' # CARRIERS: ONE PER ROW, NEVER BOTH
+#'
+#' Candidates and expired arms are TYPED CHILD ROWS (`.rc_review_row(candidates=,
+#' expired=)` -> `review_queue_candidate`), not a `diagnostics$candidates` JSON
+#' key. Robin's ruling, 2026-07-26, closing R-16.23's remaining half: PLAN-16's
+#' RULING-F deferred this only because `.ct_commit_review()` could not then
+#' rewrite a child row's `uuid_review` to the parent's actual inserted uuid; it
+#' now does (`R/commit.R`), so the deferral has expired. `review_queue_candidates()`
+#' (`R/mutate.R`) ABORTS on a row carrying both carriers, so a row must not be
+#' half-migrated - which is why NO branch below sets `diagnostics$candidates`.
+#' The JSON READER arm stays regardless: 92 historical orphan rows in the live
+#' database hold JSON candidates and PLAN-16 ruled "preserve, do not convert".
+#' Only the PRODUCER moved.
+#'
+#' # ORDER-INDEPENDENCE (F.5)
+#'
+#' Every group-level value is read across the WHOLE group, never off whichever
+#' row happened to sort first: `cand` is the UNION of `cand_list[g]` (the
+#' defect F.5 names - `cand_list[[g[[1]]]]` emitted BOTH candidates old-first
+#' and NONE new-first), `expired` the union of `exp_list[g]`, `struct_site` the
+#' first non-NA across the group. The group itself is then put in a canonical
+#' order by `source_ref` before `feature_raw` / `source_hash` / the `source_ref`
+#' vector are read off it, so the emitted payload is BYTE-IDENTICAL however the
+#' event presented its rows. Fixing `cand` alone would have left two different
+#' meanings of "the group's value" inside one payload, which is the actual
+#' finding; `source_ref` is order-dependent for exactly the same reason and is
+#' fixed the same way. `method = "radix"` pins C-locale collation, so the
+#' canonical order does not shift with the R session's locale.
 #' @keywords internal
 #' @noRd
-.rc_feature_review <- function(rows, status, cand_list, struct_site, struct_point, work_order) {
+.rc_feature_review <- function(rows, status, cand_list, exp_list, struct_site,
+                               struct_point, work_order) {
   idx <- which(status %in% c("pending", "held"))
   if (length(idx) == 0) return(.rc_proto_review())
 
@@ -914,38 +1047,49 @@
 
   out <- list()
   for (g in groups) {
+    # F.5: canonical, presentation-independent group order (see header).
+    g <- g[order(rows$source_ref[g], method = "radix")]
     refs <- rows$source_ref[g]
     fr <- rows$feature_raw[[g[[1]]]]
-    cand <- cand_list[[g[[1]]]]
+    # F.5: the UNION over the whole group, matching what `struct` below has
+    # always done - not `cand_list[[g[[1]]]]`, the first row's own set.
+    cand <- unique(unlist(cand_list[g], use.names = FALSE))
+    expired <- dplyr::bind_rows(exp_list[g])
     # STEP 1 (R-16.11): select the group's precedence INDEX once, then read
     # both parallel vectors at it - site and point can never come from
     # different rows of the group (the mis-JOIN R-16.12 warns against).
     gi <- g[!is.na(struct_site[g])]
     st_site  <- if (length(gi)) struct_site[[gi[[1]]]]  else NA_character_
     st_point <- if (length(gi)) struct_point[[gi[[1]]]] else NA_character_
-    # Precedence: an ambiguity is the actionable fact and wins the `subkind`;
-    # a structural parse (PLAN-15 B.7 - including the direct-boundary and
-    # assumed-site cases, which suggest but never resolve) is the fallback.
-    # PLAN-16 R-16.8/R-16.17: no k=v payload string; feature_raw/site/point/
-    # candidates are typed diagnostics keys, n_rows is a real column.
-    subkind <- if (!is.null(cand)) {
+    # The precedence table, in one expression. See the header block above for
+    # the full table and the three rules it pins.
+    n_live <- length(cand)
+    subkind <- if (n_live >= 2) {
       "ambiguous"
+    } else if (n_live == 1) {
+      "suggestion"
+    } else if (nrow(expired) > 0) {
+      "expired_alias"
     } else if (!is.na(st_site)) {
       "structural"
     } else {
       NA_character_
     }
-    diagnostics <- list(feature_raw = fr)
-    if (identical(subkind, "ambiguous")) {
-      diagnostics$candidates <- as.character(cand)
-    } else if (identical(subkind, "structural")) {
+    # PLAN-16 R-16.8/R-16.17: no k=v payload string; feature_raw/site/point are
+    # typed diagnostics keys, n_rows/subkind are real columns, and candidates/
+    # expired are real child rows.
+    diagnostics <- list(feature_raw = fr, blocking = TRUE)
+    if (identical(subkind, "structural")) {
       diagnostics$site <- st_site
       diagnostics$point <- st_point
     }
     out[[length(out) + 1]] <- .rc_review_row(
       source_ref = refs, kind = "unknown_feature",
       n_rows = length(g), source_hash = rows$source_hash[[g[[1]]]],
-      work_order = work_order, subkind = subkind, diagnostics = diagnostics
+      work_order = work_order, subkind = subkind,
+      candidates = if (n_live > 0) as.character(cand) else NULL,
+      expired = if (nrow(expired) > 0) expired else NULL,
+      diagnostics = diagnostics
     )
   }
   dplyr::bind_rows(out)
