@@ -96,24 +96,30 @@
 # "Re-ingest" presupposes an ingest, and the plan's own re-verification note
 # warns that "a partially-loaded work order would be silently blocked by this
 # guard" - the guard is only correct at work-order granularity because every
-# work order is WHOLLY present or WHOLLY absent. So the guard fires only for a
-# work order whose loaded state is wholly attributable to THIS pipeline, on
-# two pieces of positive DB evidence (neither a filename nor an
-# `ingest_file`-state check):
-#   * the work order's `project` row was itself REGISTERED by this pipeline -
-#     it carries a `change_log` insert row (`.ct_ensure_project()` ->
-#     `db_append()`). A project that predates the pipeline holds rows this
-#     pipeline did not write and whose completeness it cannot vouch for; an
-#     arriving file for it may well be the FIRST ingest of a work order that
-#     is only partially present, which is precisely the case the plan says
-#     must not be silently blocked.
-#   * at least one `asset` row under that project, whose hash is not one of
-#     this event's own files - an actual earlier ingest, under another name.
-# LIMITATION, REPORTED NOT PAPERED OVER: this makes the guard inert for a
-# work order loaded by the PRE-CUTOVER pipeline (legacy rows, pre-existing
-# project, no assets), which is a population F.10's rationale also names. The
-# criteria in test-commit.R pin the behaviour implemented here; extending the
-# guard to legacy-loaded work orders is a plan decision, not an implementer's.
+# work order is WHOLLY present or WHOLLY absent. So the guard fires only on
+# positive DB evidence of an earlier ingest (never a filename, never an
+# `ingest_file`-state check): at least one `asset` row under that work order's
+# project whose hash is not one of this event's own files.
+#
+# WHAT THIS DELIBERATELY NO LONGER REQUIRES (RULED BY ROBIN 2026-07-26).
+# The first cut also required the `project` row to have been registered by
+# THIS pipeline (a `change_log` insert from `.ct_ensure_project()`). That is
+# the stricter reading of "wholly ours", but measured read-only against the
+# live DB it covered 8 of the 423 loaded work orders - everything ingested
+# since the 2026-07-23 cutover and nothing before it - leaving the entire
+# legacy corpus, the population F.10's own rationale names, unguarded. The
+# condition was dropped, and with it `.ct_wo_project_pipeline_registered()` -
+# an uncalled, untested helper is worse than a recorded recipe. Should a
+# partial-load exemption ever need it, the predicate was: look the project up
+# by exact `name = ? AND type = 'Work order'`, then
+# `SELECT count(*) FROM change_log WHERE tbl = 'project' AND action =
+# 'insert' AND uuid_row = <that uuid>` and require it to be > 0.
+# RESIDUAL LIMITATION, REPORTED NOT PAPERED OVER: 99 of the 423 loaded work
+# orders (594 samples) carry no `asset` row at all, so there is no evidence of
+# a prior ingest to distinguish a re-download from a first load, and they stay
+# unguarded. Coverage is therefore 324 of 423, not all of them. Closing that
+# gap needs prior-ingest evidence that does not exist in the DB today; it is a
+# plan decision, not an implementer's.
 
 #' Every work order this event's files are RECORDED against (never parsed)
 #' @keywords internal
@@ -159,30 +165,6 @@
     params = list(work_order)
   )
   if (nrow(r) == 0) 0L else as.integer(r$n[[1]])
-}
-
-#' Was this work order's `project` row registered BY this pipeline?
-#'
-#' `.ct_ensure_project()` writes it through `db_append()`, which stamps a
-#' `change_log` `insert` row; a legacy / pre-cutover / fixture-seeded project
-#' has none. Exact-name lookup, never a parsed or prefix-matched one.
-#' @keywords internal
-#' @noRd
-.ct_wo_project_pipeline_registered <- function(con, work_order) {
-  proj <- DBI::dbGetQuery(
-    con, "SELECT uuid FROM project WHERE name = ? AND type = 'Work order'",
-    params = list(work_order)
-  )
-  if (nrow(proj) == 0) {
-    return(FALSE)
-  }
-  r <- DBI::dbGetQuery(
-    con,
-    "SELECT count(*) AS n FROM change_log
-      WHERE tbl = 'project' AND action = 'insert' AND uuid_row = ?",
-    params = list(proj$uuid[[1]])
-  )
-  nrow(r) > 0 && as.integer(r$n[[1]]) > 0
 }
 
 #' Hashes of files previously INGESTED (archived) against this work order.
@@ -274,7 +256,8 @@
   for (wo in wos) {
     n_samples <- .ct_wo_sample_count(con, wo)
     if (n_samples == 0) next           # first-time work order: never blocked
-    if (!.ct_wo_project_pipeline_registered(con, wo)) next  # not wholly ours
+    # NB: no `.ct_wo_project_pipeline_registered()` condition here - see the
+    # step-0b header. Requiring it left the legacy corpus unguarded.
     prior <- .ct_wo_prior_asset_hashes(con, wo, own_hashes)
     if (length(prior) == 0) next       # no prior ingest, so not a RE-ingest
 

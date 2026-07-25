@@ -464,15 +464,24 @@ test_that("R-11.8(a,c): two commits of the same still-unknown feature reuse ONE 
                         sample_datetime = as.POSIXct("2025-07-05 09:00:00", tz = "UTC"))
   commit_event(mk_commit_event(files1), mk_resolved(clean = clean1), con)
 
-  second <- add_second_reconciled_file(setup, "second_file.CSV")
+  # The SECOND commit goes to its own work order, NOT the seeded XX1234567.
+  # Not incidental tidying - do not move it back: PLAN-15 F.10's re-ingest
+  # guard blocks a second, differently-named file arriving against a work
+  # order that already holds samples, which is exactly the shape of a
+  # two-commit fixture sharing one work order. Nothing here is about work
+  # orders; alias reuse ACROSS work orders is the stronger property anyway,
+  # and every assertion below is unchanged.
+  second <- add_reconciled_file(setup, "second_file.CSV", work_order = "XX7654321")
   files2 <- tibble::tibble(hash = second$hash, filename = basename(second$path),
                            adapter = "esdat/1", rank = 3L, kept = TRUE)
   clean2 <- mk_p11_row(source_ref = "r1", source_hash = second$hash,
+                        work_order = "XX7654321",
                         feature_raw = "T.DEDUPE-FEAT", alias_key = key,
                         feature_pending = TRUE, uuid_feature_alias = NA_character_,
                         sample_date = as.Date("2025-07-06"),
                         sample_datetime = as.POSIXct("2025-07-06 09:00:00", tz = "UTC"))
-  commit_event(mk_commit_event(files2), mk_resolved(clean = clean2), con)
+  commit_event(mk_commit_event(files2, work_order = "XX7654321"),
+               mk_resolved(clean = clean2), con)
 
   aliases <- dangling_alias_row(con, key)
   expect_equal(nrow(aliases), 1)
@@ -635,16 +644,23 @@ test_that("R-11.8(f): a committing row's units_raw drift from an existing dangli
   lab_uuid <- matching$uuid[[1]]
   expect_identical(matching$units[[1]], "mg/L")
 
-  second <- add_second_reconciled_file(setup, "drift_file.CSV")
+  # Second commit on its own work order, NOT the seeded XX1234567 - same
+  # reason as R-11.8(a,c) above: PLAN-15 F.10's re-ingest guard blocks a
+  # second differently-named file against a work order that already holds
+  # samples. This block is about `lab_method` units drift and asserts nothing
+  # about work orders; no assertion changed when it moved.
+  second <- add_reconciled_file(setup, "drift_file.CSV", work_order = "XX7654321")
   files2 <- tibble::tibble(hash = second$hash, filename = basename(second$path),
                            adapter = "esdat/1", rank = 3L, kept = TRUE)
   clean2 <- mk_p11_row(source_ref = "r1", source_hash = second$hash,
+                        work_order = "XX7654321",
                         analyte_raw = "T.DRIFT-ANALYTE", method_raw = "T.DRIFT-METHOD",
                         analyte_pending = TRUE, uuid_lab = NA_character_, uuid_analyte = NA_character_,
                         units_raw = "g/L",
                         sample_date = as.Date("2025-07-12"),
                         sample_datetime = as.POSIXct("2025-07-12 09:00:00", tz = "UTC"))
-  commit_event(mk_commit_event(files2), mk_resolved(clean = clean2), con)
+  commit_event(mk_commit_event(files2, work_order = "XX7654321"),
+               mk_resolved(clean = clean2), con)
 
   dangling_after <- dangling_lab_method_rows(con, "ALS")
   matching_after <- dangling_after[!is.na(dangling_after$name) & .rc_method_key(dangling_after$name) == .rc_method_key("T.DRIFT-ANALYTE") &
@@ -1699,6 +1715,62 @@ test_that("R-15.32 (ACIRL false-split guard): a re-download of a loaded work ord
                           work_order = "2400-7538 01-01")
   commit_event(mk_commit_event(files_redl, work_order = "2400-7538 01-01"),
                reconcile_event(event_redl, con), con)
+
+  expect_equal(count_rows(con, "sample"), before_sample)
+  expect_equal(count_rows(con, "analysis"), before_analysis)
+  expect_gt(count_rows(con, "review_queue"), before_review)
+})
+
+test_that("R-15.32 (legacy work order): a re-download of a work order whose project row PREDATES this pipeline - samples present, no `change_log` project insert - is still blocked and routed to review", {
+  # This is the population the guard's first cut silently exempted, and it is
+  # the majority of the live DB: measured read-only 2026-07-26, only 8 of the
+  # 423 loaded work orders carried a pipeline `change_log` project insert (the
+  # post-2026-07-23-cutover ones), so requiring that insert left 415 work
+  # orders unguarded. Robin ruled the condition out on that measurement.
+  #
+  # WO XX1234567 is exactly the legacy shape: `seed_db()` writes project
+  # p-0001 with raw SQL, so it has samples but NO `change_log` insert, and
+  # `.ct_ensure_project()` finds it already there and never stamps one. The
+  # assertion below is what fails if the registration condition is ever
+  # restored - it is the only block in this file that pins the widening.
+  setup <- commit_test_setup()
+  con <- setup$con
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  legacy_registered <- DBI::dbGetQuery(con,
+    "SELECT count(*) AS n FROM change_log
+      WHERE tbl = 'project' AND action = 'insert' AND uuid_row = 'p-0001'")
+  expect_equal(legacy_registered$n[[1]], 0)   # the legacy shape, not an artefact
+
+  # A first ingest against the legacy work order: leaves an `asset` row (the
+  # prior-ingest evidence the guard still requires) under the pre-existing
+  # project.
+  files1 <- tibble::tibble(hash = setup$hash, filename = basename(setup$path),
+                           adapter = "esdat/1", rank = 3L, kept = TRUE)
+  event1 <- mk_event(mk_row(source_ref = "r1", source_hash = setup$hash,
+                             sample_datetime_raw = "01 Aug 2025 09:00"))
+  resolved1 <- reconcile_event(event1, con)
+  expect_equal(nrow(resolved1$clean), 1)      # sanity: the seed genuinely commits
+  commit_event(mk_commit_event(files1), resolved1, con)
+
+  still_unregistered <- DBI::dbGetQuery(con,
+    "SELECT count(*) AS n FROM change_log
+      WHERE tbl = 'project' AND action = 'insert' AND uuid_row = 'p-0001'")
+  expect_equal(still_unregistered$n[[1]], 0)  # committing did not register it
+
+  before_sample <- count_rows(con, "sample")
+  before_analysis <- count_rows(con, "analysis")
+  before_review <- count_rows(con, "review_queue")
+
+  # The re-download: same work order, same revision, a new filename, a row
+  # matching nothing already loaded.
+  redl <- add_reconciled_file(setup, "PROJ_A.ESDAT_XX1234567_0.Chemistry2e_v2.CSV",
+                               work_order = "XX1234567", revision = 0L)
+  files2 <- tibble::tibble(hash = redl$hash, filename = basename(redl$path),
+                           adapter = "esdat/1", rank = 3L, kept = TRUE)
+  event2 <- mk_event(mk_row(source_ref = "r1", source_hash = redl$hash,
+                             sample_datetime_raw = "03 Aug 2025 09:00"))
+  commit_event(mk_commit_event(files2), reconcile_event(event2, con), con)
 
   expect_equal(count_rows(con, "sample"), before_sample)
   expect_equal(count_rows(con, "analysis"), before_analysis)
