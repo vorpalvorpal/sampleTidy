@@ -327,7 +327,15 @@ test_that("R-10.6: NAMESPACE exports equal the CONTRACT-pinned public API exactl
     # CONTRACT A55 makes candidate choice the HUMAN's job. A reviewer cannot
     # choose among candidates the package can store but never show, so the
     # reader has to be on the public surface, not internal.
-    "review_queue_candidates"
+    "review_queue_candidates",
+    # PLAN-15 E.8, added 2026-07-26 and added to CONTRACT.md's public-API list
+    # in the same change. EXPORTED because E.8 pins it as public and it is an
+    # operator-run tool: a `dry_run` argument and a `db = st_config("live_db")`
+    # default are the A16 human-callable convention. The implementer added
+    # `@export` but deliberately did NOT run document(), leaving roxygen
+    # claiming an export the package did not deliver and man/ stale -- this
+    # closes that half-state rather than reverting it to internal.
+    "merge_identity_aliases"
   )
   actual <- getNamespaceExports("sampleTidy")
   expect_setequal(actual, pinned)

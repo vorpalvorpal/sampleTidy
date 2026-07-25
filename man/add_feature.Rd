@@ -46,3 +46,21 @@ Resolves its own connection via \code{with_db_write(st_config("live_db"))}
 (A16) - human-callable, no \code{con} argument. Thin wrapper over \code{db_append()}
 with a fresh \code{uuid::UUIDgenerate()} for the new row.
 }
+\details{
+PLAN-15 F.9/S-15.8: post-001, \code{sample.uuid_feature_alias} is the ONLY path
+from a sample to a feature, and migration 001 gave every then-existing
+feature a \code{kind = 'self'} alias. A feature created by this function alone
+would have none, making it permanently unreachable by its own name
+(\code{.rc_feature_candidates()}'s Layer-1 exact match finds zero candidates,
+forever and silently - the call still "succeeds") and inert to Work B
+Layer 2 (\code{.rc_self_alias()} returns \code{NA}, so a structural hit routes to
+REVIEW instead of committing). Fix: write the \code{feature} row AND its
+\code{kind = 'self'} \code{feature_alias} row inside ONE mutation-layer transaction
+(\code{db_transaction()}, the same participation mechanism \code{commit_event()}
+uses), each with its own \code{change_log} provenance row. A failure on the
+second write (the alias) rolls the first (the feature) back too - this is
+a single atomic unit, not two independent \code{with_db_write()} calls. The
+self alias is written already \code{confirmed_by = actor} and \code{auto_assign = TRUE} (the only combination Layer-1's exact match reaches - PLAN-15 test
+R-15.30), with \code{alias_key = .rc_feature_key(name)} matching migration
+001's \code{.mig001_normalize()} convention exactly.
+}
