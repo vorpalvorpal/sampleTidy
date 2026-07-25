@@ -696,6 +696,73 @@ test_that("R-11.9 (commit-side, D8): review payload carries a resolvable alias_u
   expect_false(grepl("alias_uuid", stored$payload[[1]], fixed = TRUE))
 })
 
+test_that("round-2 audit FF3: .ct_rewrite_review_payloads() links uuid_alias for a GROUPED review item (comma-joined source_ref, >=2 rows) as well as a single-row item, real reconcile_event() -> commit_event() end to end", {
+  setup <- commit_test_setup()
+  con <- setup$con
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  key_grouped <- .rc_feature_key("T.GROUPED-FF3")
+  key_single <- .rc_feature_key("T.SINGLE-FF3")
+
+  # Two rows share the SAME unresolved feature_raw (-> one GROUPED
+  # unknown_feature review item, source_ref = "g1,g2" per .rc_feature_review(),
+  # R/reconcile.R:669), plus one row with a DIFFERENT unresolved feature_raw
+  # (-> a single-row item) - all in the SAME real reconcile_event() so both
+  # arms are asserted from one .ct_rewrite_review_payloads() pass, per the
+  # FF3 finding's "assert both arms" instruction.
+  results <- dplyr::bind_rows(
+    mk_row(source_ref = "g1", source_hash = setup$hash, feature_raw = "T.GROUPED-FF3",
+           sample_datetime_raw = "10 Jul 2025 09:00"),
+    mk_row(source_ref = "g2", source_hash = setup$hash, feature_raw = "T.GROUPED-FF3",
+           sample_datetime_raw = "10 Jul 2025 10:00"),
+    mk_row(source_ref = "s1", source_hash = setup$hash, feature_raw = "T.SINGLE-FF3",
+           sample_datetime_raw = "10 Jul 2025 11:00")
+  )
+  event <- mk_event(results, work_order = setup$work_order)
+  out <- reconcile_event(event, con)
+
+  # Reproduction premise (task step 1): the grouped item's source_ref really
+  # is comma-joined, and this event produced exactly two unknown_feature
+  # review items (one grouped, one single).
+  expect_equal(nrow(out$review), 2)
+  grouped_review <- out$review[grepl(",", out$review$source_ref, fixed = TRUE), , drop = FALSE]
+  single_review <- out$review[!grepl(",", out$review$source_ref, fixed = TRUE), , drop = FALSE]
+  expect_equal(nrow(grouped_review), 1)
+  expect_equal(nrow(single_review), 1)
+  expect_identical(grouped_review$source_ref[[1]], "g1,g2")
+  expect_identical(single_review$source_ref[[1]], "s1")
+
+  files <- tibble::tibble(hash = setup$hash, filename = basename(setup$path),
+                          adapter = "esdat/1", rank = 3L, kept = TRUE)
+  resolved <- mk_resolved(clean = out$clean, review = out$review, skipped = out$skipped,
+                          counts = c(new = nrow(out$clean)))
+  commit_event(mk_commit_event(files, work_order = setup$work_order), resolved, con)
+
+  alias_grouped <- dangling_alias_row(con, key_grouped)
+  alias_single <- dangling_alias_row(con, key_single)
+  expect_equal(nrow(alias_grouped), 1)
+  expect_equal(nrow(alias_single), 1)
+
+  # `review_queue` has no `source_ref` column (FF1, separate finding) - tell
+  # the two committed rows apart by their `payload` diagnostics instead.
+  stored <- DBI::dbGetQuery(con,
+    "SELECT payload, uuid_alias FROM review_queue WHERE kind = 'unknown_feature' AND source_hash = ?",
+    params = list(setup$hash))
+  stored_grouped <- stored[grepl("T.GROUPED-FF3", stored$payload, fixed = TRUE), , drop = FALSE]
+  stored_single <- stored[grepl("T.SINGLE-FF3", stored$payload, fixed = TRUE), , drop = FALSE]
+  expect_equal(nrow(stored_grouped), 1)
+  expect_equal(nrow(stored_single), 1)
+
+  # The bug (pre-fix): the grouped item's uuid_alias stays NULL because the
+  # exact-string join never matches "g1,g2" against per-row keys "g1"/"g2".
+  # Each item must link to its OWN alias, never the other's (no mis-link).
+  expect_false(is.na(stored_grouped$uuid_alias[[1]]))
+  expect_identical(stored_grouped$uuid_alias[[1]], alias_grouped$uuid[[1]])
+  expect_false(is.na(stored_single$uuid_alias[[1]]))
+  expect_identical(stored_single$uuid_alias[[1]], alias_single$uuid[[1]])
+  expect_false(identical(stored_grouped$uuid_alias[[1]], stored_single$uuid_alias[[1]]))
+})
+
 # ---- R-11.16: quantified from parse_value(); write rl_high (F4) ------------
 
 test_that("R-11.16: a '>2000' row commits quantified = FALSE (from parse_value, never re-derived from below_detection) and a non-NA rl_high = 2000 (F4)", {

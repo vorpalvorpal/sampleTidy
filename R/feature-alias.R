@@ -244,15 +244,21 @@ confirm_feature_aliases <- function(uuid_alias, uuid_feature, confirmed_by,
         # (the winner's analysis uuid), never a diagnostics key. Vocabulary
         # is <thing>_<role> (role in {existing,incoming}), shared with the
         # reconcile `.rc` measurement producer's subkind='measurement' on
-        # value_existing/value_incoming. Unlike that producer, the incoming
-        # side here IS a real analysis row (`la`) - but its uuid is
-        # deliberately NOT surfaced as a diagnostics key (no uuid_new/
-        # uuid_incoming), to keep the shared vocabulary identical; it
-        # remains discoverable via change_log's "re-pointed" row above.
+        # value_existing/value_incoming/value_chr_existing/value_chr_incoming
+        # (round-2 FD4: the text side of a tri-state measurement is carried
+        # too, or a text-vs-text conflict is unadjudicable - two nulls).
+        # Unlike that producer, the incoming side here IS a real analysis
+        # row (`la`) - but its uuid is deliberately NOT surfaced as a
+        # diagnostics key (no uuid_new/uuid_incoming), to keep the shared
+        # vocabulary identical; it remains discoverable via change_log's
+        # "re-pointed" row above.
         review_row <- .rq_row(
           kind = "value_conflict", subkind = "alias_merge",
           uuid_existing = ex$uuid,
-          diagnostics = list(value_existing = ex$value, value_incoming = la$value)
+          diagnostics = list(
+            value_existing = ex$value, value_incoming = la$value,
+            value_chr_existing = ex$value_chr, value_chr_incoming = la$value_chr
+          )
         )$review
         db_append(
           con, "review_queue", review_row, actor = confirmed_by,

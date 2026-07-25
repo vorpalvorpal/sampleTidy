@@ -118,13 +118,17 @@ mk_collision_fixture <- function(con) {
 # sign round-trips byte-identical
 # ==============================================================================
 
-test_that("R-16.10: an analyte name with commas/apostrophes plus a synthetic |/= value round-trips byte-identical through JSON diagnostics (the criterion the plan exists for - RED against today's k=v payload)", {
+test_that("R-16.10: an analyte/value pair carrying comma, apostrophe, pipe, equals, DOUBLE QUOTE, BACKSLASH, tab, newline and a non-ASCII character round-trips byte-identical through JSON diagnostics, with the RAW STORED TEXT (not just the fromJSON()-parsed value) carrying correct JSON escaping (the criterion the plan exists for - RED against today's k=v payload, and RED again against a serialiser that silently strips the two characters JSON must escape)", {
   path <- seed_db()
   con <- seed_con(path)
   on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
 
-  hazard_analyte <- "2,2',3,3',4,4'-Hexachlorobiphenyl"   # real analyte name, live registry
-  hazard_value <- "a|b=c,d"                                 # synthetic: pipe + equals + comma
+  # Comma/apostrophe (original hazard) PLUS the two characters JSON escaping
+  # actually has to do work on (" and \\), plus a non-ASCII char - all kept,
+  # none traded away.
+  hazard_analyte <- "2,2',3,3',4,4'-Hexachlorobiphenyl \"technical\" C:\\lab\\ref \u00b5g/kg"
+  # Pipe/equals/comma (original hazard) PLUS a tab and an embedded newline.
+  hazard_value <- "a|b=c,d\ttab\nline"
 
   row <- mk_row(source_ref = "r1")
   row$needs_review <- TRUE
@@ -133,9 +137,9 @@ test_that("R-16.10: an analyte name with commas/apostrophes plus a synthetic |/=
   event <- mk_event(row)
 
   # REAL producer: reconcile_event()'s STAGE-0 fold-in (R-11.14) serialises
-  # this diagnostics list via the REAL .rc_serialise_payload()
-  # (R/reconcile.R:108-117) - the unescaped paste0() k=v joiner this whole
-  # plan exists to retire.
+  # this diagnostics list via the REAL .rq_row()/.rq_serialise_diagnostics()
+  # (R/db-schema.R) - the shared JSON policy point this whole plan exists to
+  # install in place of the deleted, unescaped paste0() k=v joiner.
   out <- reconcile_event(event, con)
   hit <- out$review[out$review$kind == "value_conflict", , drop = FALSE]
   expect_equal(nrow(hit), 1)
@@ -146,8 +150,51 @@ test_that("R-16.10: an analyte name with commas/apostrophes plus a synthetic |/=
   stored <- DBI::dbGetQuery(con, "SELECT payload FROM review_queue WHERE uuid = ?",
                              params = list(uuid_written))
   expect_equal(nrow(stored), 1)
+  raw <- stored$payload[[1]]
 
-  diagnostics <- tryCatch(jsonlite::fromJSON(stored$payload[[1]]), error = function(e) list())
+  # ---- raw-text assertions: a serialiser that silently DROPS " or \\ from a
+  # character value (rather than escaping it) still parses back to something
+  # via fromJSON() on the surviving characters, so the parsed-value check
+  # alone cannot see that mutant. Compare the raw stored TEXT against
+  # jsonlite's own correctly-escaped rendering of each hazard string, so a
+  # serialiser that mangles either character breaks this fragment match.
+  expected_analyte_json <- as.character(jsonlite::toJSON(hazard_analyte, auto_unbox = TRUE))
+  expected_value_json <- as.character(jsonlite::toJSON(hazard_value, auto_unbox = TRUE))
+  expect_true(grepl(expected_analyte_json, raw, fixed = TRUE))
+  expect_true(grepl(expected_value_json, raw, fixed = TRUE))
+
+  # Minimum bar named in the plan: the raw text must literally CONTAIN the
+  # escaped forms \" and \\ (2-character sequences: backslash+quote,
+  # backslash+backslash) - not the bare, unescaped " / \\ that a
+  # character-stripping serialiser would leave behind instead.
+  expect_true(grepl('\\"', raw, fixed = TRUE))
+  expect_true(grepl('\\\\', raw, fixed = TRUE))
+  expect_true(grepl('\\t', raw, fixed = TRUE))
+  expect_true(grepl('\\n', raw, fixed = TRUE))
+
+  diagnostics <- tryCatch(jsonlite::fromJSON(raw), error = function(e) list())
+  expect_identical(diagnostics$analyte, hazard_analyte)
+  expect_identical(diagnostics$value, hazard_value)
+})
+
+test_that("R-16.10 (skip carrier): .rq_skip() shares .rq_serialise_diagnostics() with .rq_row(), so the same hostile analyte/value round-trips byte-identical there too, with the raw payload text carrying correct JSON escaping", {
+  hazard_analyte <- "2,2',3,3',4,4'-Hexachlorobiphenyl \"technical\" C:\\lab\\ref \u00b5g/kg"
+  hazard_value <- "a|b=c,d\ttab\nline"
+
+  rq <- .rq_skip(existing_uuid = "an-0001",
+                 diagnostics = list(analyte = hazard_analyte, value = hazard_value))
+  raw <- rq$payload
+
+  expected_analyte_json <- as.character(jsonlite::toJSON(hazard_analyte, auto_unbox = TRUE))
+  expected_value_json <- as.character(jsonlite::toJSON(hazard_value, auto_unbox = TRUE))
+  expect_true(grepl(expected_analyte_json, raw, fixed = TRUE))
+  expect_true(grepl(expected_value_json, raw, fixed = TRUE))
+  expect_true(grepl('\\"', raw, fixed = TRUE))
+  expect_true(grepl('\\\\', raw, fixed = TRUE))
+  expect_true(grepl('\\t', raw, fixed = TRUE))
+  expect_true(grepl('\\n', raw, fixed = TRUE))
+
+  diagnostics <- tryCatch(jsonlite::fromJSON(raw), error = function(e) list())
   expect_identical(diagnostics$analyte, hazard_analyte)
   expect_identical(diagnostics$value, hazard_value)
 })
@@ -332,7 +379,8 @@ test_that("R-16.18: .rq_row() has no free-text payload argument and rejects a pr
   # (a named list) belongs must be REJECTED, not silently written through.
   if (has_ctor) {
     ctor <- get(".rq_row", mode = "function")
-    expect_error(ctor(kind = "value_conflict", diagnostics = "existing_uuid=an-0001,value=1"))
+    expect_error(ctor(kind = "value_conflict", diagnostics = "existing_uuid=an-0001,value=1"),
+                 regexp = "type 'list'")
   }
 })
 
@@ -482,9 +530,12 @@ test_that("FB3: an empty diagnostics list stores the JSON OBJECT \"{}\", never t
 })
 
 test_that("FA7: .rq_row()/.rq_skip() reject an UNNAMED diagnostics list (a hand-built k=v blob wrapped in list())", {
-  expect_error(.rq_row(kind = "x", diagnostics = list("existing_uuid=an-0001,value=1")))
-  expect_error(.rq_row(kind = "x", diagnostics = list("a=1", site = "T")))
-  expect_error(.rq_skip(diagnostics = list("existing_uuid=an-0001,value=1")))
+  expect_error(.rq_row(kind = "x", diagnostics = list("existing_uuid=an-0001,value=1")),
+               regexp = "[Mm]ust have names")
+  expect_error(.rq_row(kind = "x", diagnostics = list("a=1", site = "T")),
+               regexp = "[Mm]ust have names")
+  expect_error(.rq_skip(diagnostics = list("existing_uuid=an-0001,value=1")),
+               regexp = "[Mm]ust have names")
 })
 
 test_that("FB4: review_queue_add() with a failing child row leaves NO review row and NO candidate rows (parent+children are one transaction)", {
@@ -496,7 +547,8 @@ test_that("FB4: review_queue_add() with a failing child row leaves NO review row
   before_cand <- DBI::dbGetQuery(con, "SELECT COUNT(*) AS n FROM review_queue_candidate")$n
 
   expect_error(
-    review_queue_add(con, kind = "unknown_feature", candidates = c("ok1", NA_character_))
+    review_queue_add(con, kind = "unknown_feature", candidates = c("ok1", NA_character_)),
+    regexp = "NOT NULL constraint failed"
   )
 
   after_review <- DBI::dbGetQuery(con, "SELECT COUNT(*) AS n FROM review_queue")$n
