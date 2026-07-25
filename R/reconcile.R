@@ -89,6 +89,77 @@
 #' @noRd
 .rc_is_true_vec <- function(x) !is.na(x) & x
 
+# ---- PLAN-15 E.1/E.2: DATE bounds, never routed through POSIXct ------------
+#
+# Every bound in this file (`feature_alias.date_start`/`date_end`,
+# `feature.date_end`) is a DATE and every comparison happens at DATE
+# granularity. `as.Date()` on a POSIXct is TIMEZONE-DEPENDENT - it is the
+# silent-corruption bug already fixed once at the `.rq_row()` driver boundary
+# (a local Australia/Sydney timestamp before 10:00 truncates to the PREVIOUS
+# day in UTC) - so a POSIXct bound is REJECTED here rather than coerced, the
+# same ruling (Robin, 2026-07-25) `.rq_row()` follows. Coercing would make
+# this function silently PICK a day instead of storing the wrong one.
+
+#' Coerce a stored bound column to class `Date` without ever going through
+#' POSIXct (E.1/E.5). A DATE column already reads back as `Date` through the
+#' duckdb driver, so this is the identity in practice; the character branch
+#' covers an ISO string and the all-NA branch a typeless placeholder column.
+#' @keywords internal
+#' @noRd
+.rc_as_date_bound <- function(x, what = "date bound") {
+  if (is.null(x)) return(NULL)
+  if (inherits(x, "Date")) return(x)
+  if (all(is.na(x))) return(rep(as.Date(NA), length(x)))
+  if (is.character(x)) return(as.Date(x, format = "%Y-%m-%d"))
+  cli::cli_abort(
+    "{what} must be class Date (or an ISO 'YYYY-MM-DD' string); got class
+     {.cls {class(x)}}. Not auto-converted: as.Date() on a POSIXct is itself
+     timezone-dependent - the exact silent-corruption bug PLAN-15 E.1's
+     'DATE, not TIMESTAMP' rule exists to prevent.",
+    class = "sampletidy_error"
+  )
+}
+
+#' One alias bound column as a length-`n` `Date` vector.
+#'
+#' S-15.5: against a PRE-003 database `feature_alias` has NO `date_start` /
+#' `date_end` columns at all (the registry load is `SELECT *`, so they are
+#' ABSENT, not columns of NA). Absent means UNBOUNDED on that side and must
+#' never error - it is exactly today's behaviour.
+#' @keywords internal
+#' @noRd
+.rc_alias_bound <- function(fa, col, n) {
+  x <- if (col %in% names(fa)) fa[[col]] else NULL
+  if (is.null(x)) return(rep(as.Date(NA), n))
+  .rc_as_date_bound(x, what = paste0("feature_alias$", col))
+}
+
+#' Is each `feature_alias` row LIVE at `sample_date` (E.2)?
+#'
+#' `(date_start IS NULL OR date_start <= sample_date) AND
+#'  (date_end IS NULL OR date_end >= sample_date)`, both sides compared as
+#' DATE, `date_end` INCLUSIVE. A contradictory bound (`date_start > date_end`)
+#' satisfies neither half at any date, so the arm is never live - which is the
+#' point of ANDing the two halves rather than testing one side at a time.
+#'
+#' E.6/R-15.21: a NA `sample_date` is NO BASIS TO NARROW, so every arm stays
+#' live. This is handled EXPLICITLY, not left to the comparison: `NA >= x` is
+#' NA and NA in a filter DROPS the row, i.e. the exact opposite of "unchanged
+#' behaviour".
+#' @return logical vector, one element per row of `fa`.
+#' @keywords internal
+#' @noRd
+.rc_alias_live <- function(fa, sample_date) {
+  n <- if (is.null(fa)) 0L else nrow(fa)
+  if (n == 0) return(logical(0))
+  if (length(sample_date) != 1) return(rep(TRUE, n))
+  d <- .rc_as_date_bound(sample_date, what = "sample_date")
+  if (is.na(d)) return(rep(TRUE, n))          # E.6: no narrowing at all
+  ds <- .rc_alias_bound(fa, "date_start", n)
+  de <- .rc_alias_bound(fa, "date_end", n)
+  (is.na(ds) | ds <= d) & (is.na(de) | de >= d)
+}
+
 .rc_proto_skip <- function() {
   tibble::tibble(source_ref = character(0), reason = character(0),
                  payload = character(0), source_hash = character(0),
@@ -272,10 +343,18 @@
 #' against `feature_alias` (every feature has a self-alias, so a direct name
 #' match IS an alias hit). `feature_mask` is NO LONGER consulted (D9/PLAN-13).
 #'
-#' Rules: NA key -> zero rows (A44); only `auto_assign` aliases enter the set;
-#' a dangling alias (uuid_feature NA) is dropped (A44 registry-row guard); when
-#' more than one DISTINCT feature survives, narrow by `date_end` ONLY - keep
-#' features live at `sample_date` (NA date_end, or date_end >= sample_date).
+#' Rules: NA key -> zero rows (A44); the key's alias rows are first narrowed to
+#' those LIVE at `sample_date` (PLAN-15 E.2, alias-side bounds); only
+#' `auto_assign` aliases enter the set; a dangling alias (uuid_feature NA) is
+#' dropped (A44 registry-row guard); finally the surviving features are
+#' narrowed by the FEATURE's own `date_end`.
+#'
+#' The two date filters are SEPARATE and BOTH apply (E.2). The feature-side one
+#' is UNCONDITIONAL here - deliberately not `.rc_narrow_live()`, which fires
+#' only when >1 distinct feature survives: the alias-side filter can collapse
+#' the set to a single arm and thereby DISABLE the feature-side narrowing,
+#' resolving onto a decommissioned feature (reproducible on the shipped
+#' `T.REUSED` fixture). Same ruling as B.5, same reason.
 #'
 #' @return `tibble(uuid_alias, uuid_feature)` of survivors.
 #' @keywords internal
@@ -289,7 +368,12 @@
   if (is.na(key)) return(empty)
 
   fa <- registry$feature_alias
-  hit <- fa[!is.na(fa$alias_key) & fa$alias_key == key & .rc_is_true_vec(fa$auto_assign), , drop = FALSE]
+  hit <- fa[!is.na(fa$alias_key) & fa$alias_key == key, , drop = FALSE]
+  # E.2: live-at-sample_date, BEFORE the `auto_assign` filter and before any
+  # candidate is counted. NULL/NULL (and, pre-003, an absent column) is
+  # unbounded, so this is a no-op on every un-curated key.
+  hit <- hit[.rc_alias_live(hit, sample_date), , drop = FALSE]
+  hit <- hit[.rc_is_true_vec(hit$auto_assign), , drop = FALSE]
   # A44 registry-row guard: an alias that resolves to no feature is not a
   # candidate (its natural-key lookup for pending rows is a separate path,
   # R-11.5a).
@@ -298,8 +382,23 @@
 
   cand <- tibble::tibble(uuid_alias = hit$uuid, uuid_feature = hit$uuid_feature)
 
-  cand <- .rc_narrow_live(cand, sample_date, registry)
-  cand
+  .rc_narrow_live_feature(cand, sample_date, registry)
+}
+
+#' Narrow a candidate tibble to features live at `sample_date`, UNCONDITIONALLY
+#' (PLAN-15 B.5/E.2): every candidate whose FEATURE has expired is dropped, even
+#' when that empties the set. A NA `sample_date` narrows nothing (E.6/R-15.21).
+#' @keywords internal
+#' @noRd
+.rc_narrow_live_feature <- function(cand, sample_date, registry) {
+  if (nrow(cand) == 0 || length(sample_date) != 1) return(cand)
+  d <- .rc_as_date_bound(sample_date, what = "sample_date")
+  if (is.na(d)) return(cand)
+  feat <- registry$feature
+  de <- .rc_as_date_bound(feat$date_end[match(cand$uuid_feature, feat$uuid)],
+                          what = "feature$date_end")
+  if (is.null(de)) return(cand)          # no date_end column at all = unbounded
+  cand[is.na(de) | de >= d, , drop = FALSE]
 }
 
 #' Narrow a candidate tibble to features live at `sample_date` (date_end NA, or
@@ -330,7 +429,13 @@
 #' key - which migration-001 marks `auto_assign = FALSE` on every arm, e.g.
 #' `b.s01` -> B.S01 AND B.TS41 - still yields its distinct candidate features.
 #' These never auto-resolve; they populate the review payload so an operator can
-#' pick. Dangling (uuid_feature NA) aliases are excluded; date narrowing applies.
+#' pick. Dangling (uuid_feature NA) aliases are excluded; date narrowing applies
+#' on BOTH sides - the alias-side bound (E.2, so an EXPIRED arm is not offered
+#' as a live suggestion) and then the feature-side `.rc_narrow_live()`. The
+#' feature side stays CONDITIONAL here, unlike `.rc_feature_candidates()`: a
+#' suggestion is never auto-resolved, so the "resolve onto a defunct feature"
+#' hazard B.5/E.2 rules on cannot arise, and emptying an operator's candidate
+#' list is a loss, not a safety property.
 #' @return character vector of DISTINCT candidate `uuid_feature` (possibly empty).
 #' @keywords internal
 #' @noRd
@@ -339,6 +444,7 @@
   if (is.na(key)) return(character(0))
   fa <- registry$feature_alias
   hit <- fa[!is.na(fa$alias_key) & fa$alias_key == key & !is.na(fa$uuid_feature), , drop = FALSE]
+  hit <- hit[.rc_alias_live(hit, sample_date), , drop = FALSE]
   if (nrow(hit) == 0) return(character(0))
   cand <- tibble::tibble(uuid_alias = hit$uuid, uuid_feature = hit$uuid_feature)
   cand <- .rc_narrow_live(cand, sample_date, registry)
@@ -500,6 +606,39 @@
   u
 }
 
+#' SELF-PRECEDENCE (PLAN-15 E.2/E.7, rulings R1/R2): when a key reaches SEVERAL
+#' live candidate features and EXACTLY ONE of the surviving arms is the
+#' `kind = 'self'` alias, that arm WINS and the row resolves through it.
+#'
+#' A feature is always reachable by its own name: R1 turns every `self` arm on
+#' unconditionally, which is precisely what can push a key from one live arm to
+#' several, so without R2 the repair would push rows into review instead. The
+#' override is not silent - the caller emits a NON-BLOCKING note (E.7) naming
+#' the shadowed features.
+#'
+#' Not applicable, deliberately, when the surviving arms contain ZERO self arms
+#' (an ordinary ambiguity -> review, exactly as today) or MORE THAN ONE (two
+#' features claiming one name by their own names is a registry defect, not
+#' something to resolve arbitrarily).
+#' @return NULL when self-precedence does not apply, else
+#'   `list(uuid_alias, uuid_feature, shadowed)`.
+#' @keywords internal
+#' @noRd
+.rc_self_precedence <- function(cand, registry) {
+  if (length(unique(cand$uuid_feature)) < 2) return(NULL)
+  fa <- registry$feature_alias
+  if (is.null(fa) || nrow(fa) == 0 || !("kind" %in% names(fa))) return(NULL)
+  kind <- fa$kind[match(cand$uuid_alias, fa$uuid)]
+  is_self <- !is.na(kind) & kind == "self"
+  if (sum(is_self) != 1L) return(NULL)
+  i <- which(is_self)
+  list(
+    uuid_alias = cand$uuid_alias[[i]],
+    uuid_feature = cand$uuid_feature[[i]],
+    shadowed = setdiff(unique(cand$uuid_feature), cand$uuid_feature[[i]])
+  )
+}
+
 #' The target feature's SELF alias (B.6). `sample.uuid_feature_alias` is NOT
 #' NULL and the within-batch duplicate guard keys off it, so a structural hit
 #' with no alias to ride must go to REVIEW rather than commit a NA alias.
@@ -567,6 +706,8 @@
   struct_site <- rep(NA_character_, n)
   struct_point <- rep(NA_character_, n)
   resolution <- rep(NA_character_, n)
+  # E.7/R2: per row, the features a self arm SHADOWED (NULL = no override).
+  shadowed <- vector("list", n)
   feat_name <- function(u) {
     nm <- registry$feature$name[match(u, registry$feature$uuid)]
     if (length(nm) == 0 || is.na(nm)) u else nm
@@ -583,6 +724,18 @@
     if (length(distinct_feat) == 1) {
       uuid_feature[[i]] <- distinct_feat
       uuid_alias[[i]] <- cand$uuid_alias[[1]]
+      status[[i]] <- "hit"
+      next
+    }
+    # E.2/E.7 (R1/R2): several live arms, exactly one of them the feature's own
+    # `self` alias -> the self arm wins and the row RESOLVES, with a
+    # non-blocking note. Only reachable at >1 distinct live feature, so it can
+    # never turn an ordinary single-candidate hit into an annotated one.
+    sp <- .rc_self_precedence(cand, registry)
+    if (!is.null(sp)) {
+      uuid_feature[[i]] <- sp$uuid_feature
+      uuid_alias[[i]] <- sp$uuid_alias
+      shadowed[[i]] <- sp$shadowed
       status[[i]] <- "hit"
       next
     }
@@ -670,8 +823,41 @@
   keep <- status %in% c("hit", "pending")
   kept <- rows[keep, , drop = FALSE]
 
-  review <- .rc_feature_review(rows, status, cand_list, struct_site, struct_point, work_order)
+  review <- dplyr::bind_rows(
+    .rc_feature_review(rows, status, cand_list, struct_site, struct_point, work_order),
+    .rc_self_precedence_notes(rows, uuid_feature, shadowed, work_order)
+  )
   list(kept = kept, review = review)
+}
+
+#' The E.7/R2 self-precedence NOTES: one per row a self arm resolved over at
+#' least one shadowed feature.
+#'
+#' A note annotates a row that RESOLVED - it is not a blocker and not a
+#' worklist item, which is why it is built here rather than inside
+#' `.rc_feature_review()` (that producer only ever sees `pending`/`held` rows)
+#' and why it is emitted PER ROW rather than grouped: the annotation belongs to
+#' the row whose resolution it explains. `kind` stays `unknown_feature` -
+#' inventing a new top-level kind would read as a new class of work to every
+#' existing `review_queue` consumer (S-15.6).
+#' @keywords internal
+#' @noRd
+.rc_self_precedence_notes <- function(rows, uuid_feature, shadowed, work_order) {
+  idx <- which(!vapply(shadowed, is.null, logical(1)))
+  if (length(idx) == 0) return(.rc_proto_review())
+  out <- lapply(idx, function(i) {
+    .rc_review_row(
+      source_ref = rows$source_ref[[i]], kind = "unknown_feature", n_rows = 1L,
+      source_hash = rows$source_hash[[i]], work_order = work_order,
+      subkind = "self_precedence_note",
+      diagnostics = list(
+        feature_raw = rows$feature_raw[[i]],
+        resolved_feature = uuid_feature[[i]],
+        shadowed = shadowed[[i]]
+      )
+    )
+  })
+  dplyr::bind_rows(out)
 }
 
 #' The single site every RESOLVED row of this event sits in (C.1/C.3), or NA

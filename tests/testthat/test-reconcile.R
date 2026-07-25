@@ -3077,8 +3077,20 @@ test_that("R-15.9: a bounded two-arm key resolves via self-precedence to its own
   # value - the seam table pins the subkind grammar, not the top-level kind,
   # and this row is a HIT (not pending/held), a different case than every
   # existing `.rc_feature_review` payload today.
+  #
+  # TRANSLATED 2026-07-25 under PLAN-16 RULING A. This was authored against the
+  # pre-PLAN-16 k=v payload grammar as
+  #   grepl("subkind=self_precedence_note", out$review$payload)
+  # which PLAN-16 retired: `subkind` is now a typed review_queue column
+  # (db-schema.R:121, populated by .rq_row() at :589) and `payload` is JSON, so
+  # the old substring can never match again and this assertion was pinning a
+  # deleted grammar rather than the behaviour. The TOKEN is unchanged - only the
+  # carrier moved from a string clause to a column. `!is.na()` is load-bearing:
+  # `subkind == x` yields NA for rows with a NULL subkind, and NA in `[` indexing
+  # selects an all-NA row rather than dropping it.
   note <- out$review[grepl("inside_bound", out$review$source_ref, fixed = TRUE) &
-                        grepl("subkind=self_precedence_note", out$review$payload, fixed = TRUE), ]
+                        !is.na(out$review$subkind) &
+                        out$review$subkind == "self_precedence_note", ]
   expect_equal(nrow(note), 1)
 
   outside <- out$clean[out$clean$source_ref == "outside_bound", ]
