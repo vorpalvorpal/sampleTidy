@@ -85,9 +85,17 @@ Internal seams (not exported, stable for tests via `:::`):
 - Every function that skips/drops a row must return counts of what it skipped
   and why. Silent drops are defects.
 - New Imports allowed: `readxl`, `readr`, `xml2`, `stringr`,
-  `rlang`, `digest`, `uuid`, `fs` (Suggests: `withr`, `ellmer`, `processx`,
-  `sf`). Do not add others without a plan-change request. (`tidyr` was
-  pinned here but never used by any module - dropped in A47.)
+  `rlang`, `digest`, `uuid`, `fs`, `jsonlite` (Suggests: `withr`, `ellmer`,
+  `processx`, `sf`). Do not add others without a plan-change request.
+  (`tidyr` was pinned here but never used by any module - dropped in A47.)
+  (`jsonlite` added by plan-change request, Robin 2026-07-25. PLAN-16 stores
+  `review_queue.payload` as JSON and had added it to DESCRIPTION without
+  amending this list, claiming it was "a dependency already present" - it was
+  not, and R-10.6 was red as a result. Ratified rather than removed: it is
+  used at exactly ONE production call site, the single diagnostics
+  serialiser, and no other pinned Import offers JSON serialisation, so
+  removing it would mean hand-writing escaping and full-precision number
+  formatting - the defect class PLAN-16 exists to eliminate.)
 
 ## Existing DB schema (authoritative, from live monitoring.duckdb)
 

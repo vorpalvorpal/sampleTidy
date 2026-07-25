@@ -127,8 +127,12 @@ anyway.
 
    1. **Production code and committed views never read from the JSON remainder** — not with
       `json_extract`, not with a `LIKE` on serialised JSON, not by any path. All JSON
-      handling in package code and in tests is R-side via `jsonlite`, a dependency already
-      present. This is what R-16.6 enforces.
+      handling in package code and in tests is R-side via `jsonlite`. **Correction
+      (2026-07-25):** this originally read "a dependency already present", which was
+      false — `jsonlite` was NOT in the CONTRACT-pinned Imports and was added to
+      DESCRIPTION by this plan's own first commit, which is why R-10.6 (the Imports drift
+      guard) went red. Ratified by plan-change request, Robin 2026-07-25; CONTRACT.md's
+      pinned list now includes it. This is what R-16.6 enforces.
    2. **If a diagnostic field ever needs to be queried, promote it to a column via a
       migration — do not reach for `json_extract`.** This is the escape hatch, named so a
       future implementer does not read part 1 as a dead end. It is also the *better* move
