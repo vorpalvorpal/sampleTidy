@@ -411,6 +411,21 @@ test_that("R-7.3: an engineered sample_datetime_raw mismatch flags exactly one r
   # the unrelated row (XX1234567002) is not blocked/flagged
   clean_row <- event$results[event$results$lab_sample_id == "XX1234567002", ]
   expect_false(isTRUE(clean_row$needs_review[[1]]))
+
+  # cold-audit defect 4: the flagged row's review_payload must carry its
+  # candidate datetime strings under `datetime_candidates`, NOT the bare
+  # `candidates` key - that key name is `unknown_feature`'s (a DIFFERENT
+  # producer, R/reconcile.R `.rc_feature_review()`) for candidate FEATURE
+  # uuids, and `review_queue_candidates()` (R/mutate.R) reads `candidates`
+  # generically off ANY review row's payload, regardless of `kind`/`subkind`
+  # - reusing the name would have it silently return these datetime strings
+  # as though they were feature uuids.
+  flagged_row <- event$results[which(flagged)[[1]], ]
+  payload <- flagged_row$review_payload[[1]]
+  expect_identical(payload$subkind, "sample_datetime_mismatch")
+  expect_null(payload$candidates)
+  expect_true(!is.null(payload$datetime_candidates))
+  expect_setequal(payload$datetime_candidates, c("24 May 2025 11:45", "25 May 2025 09:00"))
 })
 
 # ---- R-7.4: multi-work-order ESdat partitioning -------------------------

@@ -698,8 +698,22 @@
 }
 
 #' Grouped `unknown_feature` review items (one per normalised feature_raw; the
-#' NA/blank key groups into a single sentinel item - A44). `source_hash` is the
+#' NA/blank key groups into a single item - A44). `source_hash` is the
 #' first of the group (seam S-4). Covers both committable-pending and held rows.
+#'
+#' The genuinely-NA/blank rows are NEVER folded into `split()` alongside the
+#' real keys via a string sentinel: an earlier version stuffed the literal
+#' string `"na"` into `grp_key` for NA rows, which collided with any row
+#' whose OWN `.rc_feature_key()` output IS `"na"` (feature codes `"NA"`,
+#' `"na"`, `"Na"` all fold there) - `split()` then merged a genuinely-missing
+#' row with a literal-"NA"-coded row into one blank review item, hiding the
+#' literal code from the operator. There is no string that is provably safe
+#' to use as a sentinel here: `.rc_feature_key()` trims only Unicode
+#' whitespace (`[\h\v]`), so a control byte like `\x01` is NOT stripped and
+#' would survive if `feature_raw` itself ever carried one (pathological, but
+#' not guardable against by construction). Instead the NA-key rows are kept
+#' out of the string-keyed `split()` entirely and appended as their own
+#' group by row-index, so no sentinel string - safe or not - is needed.
 #' @keywords internal
 #' @noRd
 .rc_feature_review <- function(rows, status, cand_list, struct_site, struct_point, work_order) {
@@ -707,8 +721,10 @@
   if (length(idx) == 0) return(.rc_proto_review())
 
   grp_key <- rows$alias_key[idx]
-  grp_key[is.na(grp_key)] <- "na"
-  groups <- split(idx, grp_key)
+  na_grp <- idx[is.na(grp_key)]
+  real_idx <- idx[!is.na(grp_key)]
+  groups <- split(real_idx, grp_key[!is.na(grp_key)])
+  if (length(na_grp)) groups <- c(groups, list(na_grp))
 
   out <- list()
   for (g in groups) {
@@ -1438,6 +1454,45 @@
   list(kept = rows[keep, , drop = FALSE], review = review)
 }
 
+#' Backfill columns missing from a reconcile-producer's `review`/`skipped`
+#' tibble before `reconcile_event()` selects a uniform column set across every
+#' producer (R-16.8/B-16.skips). A producer not yet routed through
+#' `.rq_row()`/`.rq_skip()` lacks the new typed columns entirely; add them
+#' rather than erroring on selection.
+#'
+#' Type-aware for `candidates` (PLAN-16 round-3 FG-3/R-16.23): that column is
+#' a LIST-column (one `review_queue_candidate` child tibble per row, or an
+#' empty tibble), not character. Backfilling it as `NA_character_` like every
+#' other column would leave a `<list>`/`<character>` mismatch that
+#' `dplyr::bind_rows()` across producers hard-errors on ("Can't combine
+#' <list> and <character>"). A missing `candidates` column is backfilled as a
+#' list of `NULL`, one element per row, so `bind_rows()` combines cleanly and
+#' `.ct_commit_review()`'s downstream `is.data.frame(cand_i)` check (R/commit.R)
+#' still behaves - `is.data.frame(NULL)` is FALSE, so a row backfilled this
+#' way is correctly treated as "no candidate child rows", the same outcome an
+#' explicit empty-tibble element already produces.
+#'
+#' As of this fix, EVERY `reconcile_event()` producer that reaches
+#' `add_review()` already sets `candidates` itself (every non-empty `review`
+#' tibble is either `.rc_proto_review()` or a `dplyr::bind_rows()` of one or
+#' more `.rc_review_row()` rows, and both already carry the column) - so the
+#' `candidates` branch below is LATENT under every caller today, not
+#' currently reachable. Fixed anyway: the column is structurally declared in
+#' `review_cols` (PLAN-16), so a future producer omitting it is one edit away
+#' and this is the cheap, correct backfill for that day.
+#' @keywords internal
+#' @noRd
+.rc_fill_missing_cols <- function(df, cols) {
+  for (col in setdiff(cols, names(df))) {
+    df[[col]] <- if (identical(col, "candidates")) {
+      vector("list", nrow(df))
+    } else {
+      NA_character_
+    }
+  }
+  df
+}
+
 # ---- top-level entry point --------------------------------------------------
 
 #' Reconcile one assembled event against the registry/analysis DB.
@@ -1483,13 +1538,6 @@ reconcile_event <- function(event, con) {
   skipped_acc <- list()
   review_acc <- list()
   count_acc <- list()
-
-  # A producer not yet routed through .rq_row()/.rq_skip() lacks the new
-  # typed columns entirely; add them as NA rather than erroring on selection.
-  .rc_fill_missing_cols <- function(df, cols) {
-    for (col in setdiff(cols, names(df))) df[[col]] <- NA_character_
-    df
-  }
 
   add_skip <- function(df) {
     if (nrow(df) == 0) return(invisible())

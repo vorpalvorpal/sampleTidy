@@ -268,6 +268,23 @@
 #' the wrong review row's `uuid_alias` - a mis-link, which is worse than the
 #' missing link this fix repairs, since `uuid_alias` is what a human uses to
 #' accept the alias (PLAN-15 `review_queue_close()`, R-16.21).
+#'
+#' Seam S-4 (`.rc_feature_review()`, R/reconcile.R) records only the FIRST
+#' group member's `source_hash` on a grouped review item, so when that first
+#' member's row is later dropped (e.g. an unparseable datetime) the item's
+#' own `source_hash` no longer matches ANY surviving `clean` row - the
+#' hash-keyed lookup above misses for every ref in the group even though the
+#' alias WAS materialised from a later group member in a different source
+#' file. `ref_unique_alias` below is a hash-agnostic fallback for exactly
+#' that miss: it maps `source_ref -> alias uuid` but ONLY for a ref that
+#' resolves to exactly ONE distinct alias uuid across ALL pending `clean`
+#' rows, regardless of which file (`source_hash`) it came from. A ref shared
+#' by two different files that resolved to two DIFFERENT aliases is
+#' therefore explicitly EXCLUDED from this map (ambiguous, not merely
+#' unmatched) rather than picking either candidate - preserving the
+#' anti-mis-link property the hash key exists for. This fallback is tried
+#' only after the hash-keyed lookup has already missed for every ref in the
+#' item.
 #' @keywords internal
 #' @noRd
 .ct_rewrite_review_payloads <- function(con, review, clean) {
@@ -288,6 +305,17 @@
   }
   amap <- stats::setNames(clean$uuid_feature_alias[pend], amap_keys)
 
+  # unique-or-nothing hash-agnostic fallback (see roxygen note above): a ref
+  # enters this map only when every pending clean row carrying that ref
+  # agrees on the alias uuid; an ambiguous ref (two files, two aliases) is
+  # left out entirely, so it can never be looked up below.
+  ref_split <- split(clean$uuid_feature_alias[pend], clean$source_ref[pend])
+  ref_unique_alias <- vapply(ref_split, function(x) {
+    ux <- unique(x)
+    if (length(ux) == 1) ux[[1]] else NA_character_
+  }, character(1))
+  ref_unique_alias <- ref_unique_alias[!is.na(ref_unique_alias)]
+
   for (i in seq_len(nrow(review))) {
     sr <- review$source_ref[[i]]
     if (is.na(sr)) next
@@ -299,8 +327,15 @@
       refs
     }
     hit <- keys[keys %in% names(amap)]
-    if (length(hit) == 0) next
-    au <- amap[[hit[[1]]]]
+    au <- NA_character_
+    if (length(hit) > 0) {
+      au <- amap[[hit[[1]]]]
+    } else if (use_hash) {
+      ref_hit <- refs[refs %in% names(ref_unique_alias)]
+      if (length(ref_hit) > 0) {
+        au <- ref_unique_alias[[ref_hit[[1]]]]
+      }
+    }
     if (is.na(au)) next
     row_uuid <- review$uuid[[i]]
     if (is.na(row_uuid)) next
@@ -751,7 +786,18 @@
     row <- rq$review
     row$uuid <- row_uuid
     row$created_at <- Sys.time()
-    row$payload <- review$payload[[i]]
+    # Guarded like `col_or_na()` above (subkind/uuid_existing/uuid_alias):
+    # an unconverted producer may hand this function a review tibble with no
+    # `payload` column at all. Deliberately NOT `col_or_na()` itself (which
+    # would default to NA_character_) - `.rq_row()` already stamped `row$payload`
+    # with `.rq_serialise_diagnostics(list())`'s `"{}"` (the JSON empty
+    # object, `.rq_row()`'s own sensible default for "no diagnostics"), so
+    # when `review` lacks the column the fix is to leave that default alone,
+    # not to overwrite it with NA - `review_queue.payload` should hold valid
+    # JSON, not NULL.
+    if ("payload" %in% names(review)) {
+      row$payload <- review$payload[[i]]
+    }
     db_append(con, "review_queue", row, actor = actor, reason = reason, source_hash = source_hash)
     review$uuid[[i]] <- row_uuid
 
