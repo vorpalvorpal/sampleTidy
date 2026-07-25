@@ -590,8 +590,13 @@
 #' Reads the typed `existing_uuid` column (R-16.14): `already_present`
 #' populates it directly (`.rq_skip()`, R/reconcile.R), so the regex that
 #' used to parse a bare-uuid `payload` as a pass-through fallback is retired
-#' - the equivalence (same uuid the regex used to recover) is asserted by
-#' the R-16.14 test, not assumed.
+#' - the equivalence (same uuid the regex used to recover, for the same
+#' input) is asserted by the "R-16.14: .ct_skip_existing_uuid() returns the
+#' analysis uuid a REAL reconcile_event() already_present skip carries"
+#' block in test-commit.R (PLAN-16 Phase-7b/FA5), not assumed. A skip tibble
+#' missing the column entirely (e.g. `.rc_qc_filter()`'s own output) is
+#' covered by the sibling block in the same file: this function returns
+#' `NA_character_`, not the old fallback's pass-through.
 #' @keywords internal
 #' @noRd
 .ct_skip_existing_uuid <- function(skipped, i) {
@@ -651,23 +656,38 @@
   if (!("uuid" %in% names(review))) {
     review$uuid <- NA_character_
   }
-  # PLAN-16: carry the typed columns reconcile now populates (subkind /
-  # uuid_existing / uuid_alias) through to review_queue -- reconcile moved this
-  # data OUT of the payload string and INTO real columns, so a commit-side
-  # writer that only copied `payload` would silently drop it. Defensive
-  # `%in%`: unconverted producers (still legacy-migration pending) may omit a
-  # column, in which case it stores NA rather than erroring.
+  # PLAN-16 Phase-7b (FB8): route through .rq_row() (B-16.api: "Both insert
+  # paths route through it") instead of hand-building the row inline, so this
+  # writer's column set/`status` default cannot drift from
+  # review_queue_add()'s. `.rq_row()` also carries the typed columns
+  # reconcile now populates (subkind / uuid_existing / uuid_alias) through to
+  # review_queue -- reconcile moved this data OUT of the payload string and
+  # INTO real columns, so a naive writer that only copied `payload` would
+  # silently drop it. Defensive `%in%`: unconverted producers (still
+  # legacy-migration pending) may omit a column, in which case it stores NA
+  # rather than erroring.
+  # Deliberately NOT overwriting: this function keeps generating its own
+  # per-row `uuid` (not the review tibble's) and takes `work_order` from the
+  # event, not the review row -- both passed straight into `.rq_row()`,
+  # mirroring how `review_queue_add()` passes `work_order` through rather
+  # than overwriting it after construction. Deliberately NOT writing child
+  # rows: reconcile-side candidates travel inside `diagnostics$candidates`,
+  # not as `review_queue_candidate` rows, because these producers run before
+  # any feature uuid exists (settled ruling).
   col_or_na <- function(nm, i) if (nm %in% names(review)) review[[nm]][[i]] else NA_character_
   for (i in seq_len(n)) {
     source_hash <- if ("source_hash" %in% names(review)) review$source_hash[[i]] else NA_character_
     row_uuid <- uuid::UUIDgenerate()
-    row <- tibble::tibble(
-      uuid = row_uuid, created_at = Sys.time(), kind = review$kind[[i]],
-      subkind = col_or_na("subkind", i), work_order = event$work_order,
-      source_hash = source_hash, payload = review$payload[[i]], status = "open",
+    rq <- .rq_row(
+      kind = review$kind[[i]], subkind = col_or_na("subkind", i),
+      work_order = event$work_order, source_hash = source_hash,
       uuid_existing = col_or_na("uuid_existing", i),
       uuid_alias = col_or_na("uuid_alias", i)
     )
+    row <- rq$review
+    row$uuid <- row_uuid
+    row$created_at <- Sys.time()
+    row$payload <- review$payload[[i]]
     db_append(con, "review_queue", row, actor = actor, reason = reason, source_hash = source_hash)
     review$uuid[[i]] <- row_uuid
   }

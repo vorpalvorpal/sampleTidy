@@ -417,7 +417,8 @@ test_that("R-16.3 review_queue_candidate FK on uuid_review is enforced: a dangli
       "INSERT INTO review_queue_candidate (uuid, uuid_review, uuid_feature, kind, rank)
        VALUES (?, ?, 'f-0001', 'candidate', 1)",
       params = list(uuid::UUIDgenerate(), uuid::UUIDgenerate()) # uuid_review has no parent row
-    )
+    ),
+    regexp = "Constraint Error|foreign key"
   )
 })
 
@@ -436,7 +437,8 @@ test_that("R-16.3 review_queue_candidate.uuid_feature is NOT NULL but carries NO
       "INSERT INTO review_queue_candidate (uuid, uuid_review, uuid_feature, kind, rank)
        VALUES (?, ?, NULL, 'candidate', 1)",
       params = list(uuid::UUIDgenerate(), parent_uuid)
-    )
+    ),
+    regexp = "NOT NULL"
   )
 
   # Half 2: the FK is absent by design. A syntactically valid but non-existent
@@ -470,20 +472,7 @@ test_that("R-16.4 review_queue_candidate order is preserved through a write/read
   con <- seed_con(db)
   withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
-  parent <- review_queue_add(con, kind = "unknown_feature")
-
-  write_candidates <- function(feature_uuids) {
-    DBI::dbExecute(con, "DELETE FROM review_queue_candidate WHERE uuid_review = ?", params = list(parent))
-    for (i in seq_along(feature_uuids)) {
-      DBI::dbExecute(
-        con,
-        "INSERT INTO review_queue_candidate (uuid, uuid_review, uuid_feature, kind, rank)
-         VALUES (?, ?, ?, 'candidate', ?)",
-        params = list(uuid::UUIDgenerate(), parent, feature_uuids[[i]], i)
-      )
-    }
-  }
-  read_order <- function() {
+  read_order <- function(parent) {
     DBI::dbGetQuery(
       con,
       "SELECT uuid_feature FROM review_queue_candidate WHERE uuid_review = ? ORDER BY rank",
@@ -491,11 +480,22 @@ test_that("R-16.4 review_queue_candidate order is preserved through a write/read
     )$uuid_feature
   }
 
-  write_candidates(c("f-0001", "f-0002"))
-  expect_equal(read_order(), c("f-0001", "f-0002"))
+  # Driven through the REAL writer (review_queue_add() -> .rq_row()), not
+  # test-supplied rank values -- a self-fulfilling fixture that writes its own
+  # `rank` and reads it back via ORDER BY rank tests DuckDB's ORDER BY, not
+  # whether the writer assigns rank in input order. Both vectors below are
+  # deliberately UNSORTED (sort(x) != x) so a rank-scrambling bug (e.g.
+  # `uuid_feature = sort(candidates)` in .rq_row()) cannot hide the way it did
+  # behind R-16.9's already-sorted c("f-0001", "f-0002") fixture.
+  candidates_1 <- c("f-0002", "f-0001")
+  stopifnot(!identical(sort(candidates_1), candidates_1))
+  parent_1 <- review_queue_add(con, kind = "unknown_feature", candidates = candidates_1)
+  expect_equal(read_order(parent_1), candidates_1)
 
-  write_candidates(c("f-0002", "f-0001"))
-  expect_equal(read_order(), c("f-0002", "f-0001"))
+  candidates_2 <- c("f-0003", "f-0005", "f-0004")
+  stopifnot(!identical(sort(candidates_2), candidates_2))
+  parent_2 <- review_queue_add(con, kind = "unknown_feature", candidates = candidates_2)
+  expect_equal(read_order(parent_2), candidates_2)
 })
 
 # --- R-16.5: the expired kind carries its date range; candidate does not --
@@ -508,20 +508,51 @@ test_that("R-16.5 kind='expired' round-trips date_start/date_end as DATE; kind='
 
   parent <- review_queue_add(con, kind = "value_conflict")
 
-  DBI::dbExecute(
-    con,
-    "INSERT INTO review_queue_candidate
-       (uuid, uuid_review, uuid_feature, kind, date_start, date_end, rank)
-     VALUES (?, ?, 'f-0001', 'expired', DATE '2020-01-01', DATE '2020-06-30', 1)",
-    params = list(uuid::UUIDgenerate(), parent)
+  # Build the child rows through the real constructor, .rq_row(), so the
+  # expired branch (kind='expired', the date columns, and the
+  # rank = n_candidates + seq_len(n_expired) offset) is actually exercised --
+  # a block that only hand-INSERTs both kinds pins the DDL, not the writer.
+  rq <- sampleTidy:::.rq_row(
+    kind = "value_conflict",
+    candidates = "f-0002",
+    expired = tibble::tibble(
+      uuid_feature = "f-0001",
+      date_start = as.Date("2020-01-01"),
+      date_end = as.Date("2020-06-30")
+    )
   )
-  DBI::dbExecute(
-    con,
-    "INSERT INTO review_queue_candidate
-       (uuid, uuid_review, uuid_feature, kind, date_start, date_end, rank)
-     VALUES (?, ?, 'f-0002', 'candidate', NULL, NULL, 2)",
-    params = list(uuid::UUIDgenerate(), parent)
-  )
+  cand <- rq$candidates
+  expect_equal(nrow(cand), 2L)
+
+  cand_built <- cand[cand$kind == "candidate", ]
+  expired_built <- cand[cand$kind == "expired", ]
+
+  expect_equal(cand_built$uuid_feature, "f-0002")
+  expect_true(is.na(cand_built$date_start))
+  expect_true(is.na(cand_built$date_end))
+  expect_equal(cand_built$rank, 1L)
+
+  expect_equal(expired_built$uuid_feature, "f-0001")
+  expect_equal(expired_built$date_start, as.Date("2020-01-01"))
+  expect_equal(expired_built$date_end, as.Date("2020-06-30"))
+  # the rank offset that keeps expired rows ordered AFTER candidates.
+  expect_equal(expired_built$rank, 2L)
+
+  # Write the constructor's own child rows (tied to the real parent uuid) and
+  # keep the existing DDL round-trip assertions on the read-back.
+  cand$uuid_review <- parent
+  for (i in seq_len(nrow(cand))) {
+    DBI::dbExecute(
+      con,
+      "INSERT INTO review_queue_candidate
+         (uuid, uuid_review, uuid_feature, kind, date_start, date_end, rank)
+       VALUES (?, ?, ?, ?, ?, ?, ?)",
+      params = list(
+        cand$uuid[[i]], cand$uuid_review[[i]], cand$uuid_feature[[i]], cand$kind[[i]],
+        cand$date_start[[i]], cand$date_end[[i]], cand$rank[[i]]
+      )
+    )
+  }
 
   expired_row <- DBI::dbGetQuery(
     con,
