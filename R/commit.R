@@ -48,6 +48,266 @@
   invisible(NULL)
 }
 
+# ---- step 0b: PLAN-15 F.10 work-order-level re-ingest guard -----------------
+#
+# WHY THIS IS A GUARD AND NOT A DEDUP: the legacy corpus cannot be matched by
+# the reuse path (`already_present` was 0 of 6,725 rows at cutover), and the
+# ruling that `sample.datetime` must not be touched forecloses the migration
+# that would have restored idempotency. So a re-download of an already-loaded
+# work order does NOT resolve to `already_present`; it commits a second,
+# duplicate copy of every measurement. "Never re-ingest a work order that is
+# already in the DB" is therefore a standing policy, and this is where it is
+# enforced instead of by operator discipline (which is what failed).
+#
+# ==== THE ACIRL WORK-ORDER TRAP, which this guard must survive BOTH WAYS ====
+# A `2400-*` ACIRL work-order number CANNOT be recovered from a filename.
+# Trying produces BOTH failure modes, each of which has one criterion here:
+#   * FALSE MERGE - a filename regex matching work order A ("2400-7538-02")
+#     inside work order B's filename ("2400-7538-02-01_ALS_Chemistry.CSV")
+#     collapses two genuinely different work orders into one, and B (a
+#     first-time load) gets blocked as a re-download of A. Real data damage.
+#   * FALSE SPLIT - a hyphen-only regex truncates the true work order
+#     "2400-7538 01-01" at the space down to "2400-7538", a string that was
+#     never loaded, so a real re-download sails straight past the guard.
+# The single implementation that survives both: **key on the RECORDED work
+# order and compare it by exact string equality, never parse one.** Every
+# work order below comes from `ingest_file.work_order` / `event$work_order`
+# (the value the router recorded), and every comparison is `p.name = ?`. No
+# `LIKE`, no prefix, no `sub()`, no `.st_guess_work_order_revision()` on the
+# incoming file. `file_meta()$work_order_guess` (`[A-Z]{2}\d{7}`) is
+# deliberately NOT consulted: it cannot represent either fixture above.
+#
+# ==== THE THREE PINNED EXEMPTIONS (plan F.10; not judgement calls) ==========
+# 1. A HIGHER-REVISION file for an already-loaded WO is EXEMPT and proceeds to
+#    the normal A12 supersede path - a corrected lab re-issue is the
+#    legitimate reason to re-ingest a loaded WO. Decided with
+#    `.rc_recorded_revision()` (R/reconcile.R), the same helper A12 itself
+#    uses, so the two cannot disagree about what "higher" means.
+# 2. Rows that resolve to `already_present` are EXEMPT - they are the
+#    idempotency mechanism. They never appear in `resolved$clean` at all
+#    (`.rc_three_way()` routes them to `skipped`), so a file whose rows all
+#    match is a no-op with nothing left to block; the guard's "at least one
+#    non-matching clean row" condition below expresses exactly that.
+# 3. What F.10 actually blocks is narrower than its title: a
+#    same-or-lower-revision file, under a different name, carrying rows that
+#    do NOT match existing samples.
+#
+# ==== "UNDER A DIFFERENT NAME": WHY PRIOR-INGEST EVIDENCE IS REQUIRED =======
+# "Re-ingest" presupposes an ingest, and the plan's own re-verification note
+# warns that "a partially-loaded work order would be silently blocked by this
+# guard" - the guard is only correct at work-order granularity because every
+# work order is WHOLLY present or WHOLLY absent. So the guard fires only for a
+# work order whose loaded state is wholly attributable to THIS pipeline, on
+# two pieces of positive DB evidence (neither a filename nor an
+# `ingest_file`-state check):
+#   * the work order's `project` row was itself REGISTERED by this pipeline -
+#     it carries a `change_log` insert row (`.ct_ensure_project()` ->
+#     `db_append()`). A project that predates the pipeline holds rows this
+#     pipeline did not write and whose completeness it cannot vouch for; an
+#     arriving file for it may well be the FIRST ingest of a work order that
+#     is only partially present, which is precisely the case the plan says
+#     must not be silently blocked.
+#   * at least one `asset` row under that project, whose hash is not one of
+#     this event's own files - an actual earlier ingest, under another name.
+# LIMITATION, REPORTED NOT PAPERED OVER: this makes the guard inert for a
+# work order loaded by the PRE-CUTOVER pipeline (legacy rows, pre-existing
+# project, no assets), which is a population F.10's rationale also names. The
+# criteria in test-commit.R pin the behaviour implemented here; extending the
+# guard to legacy-loaded work orders is a plan decision, not an implementer's.
+
+#' Every work order this event's files are RECORDED against (never parsed)
+#' @keywords internal
+#' @noRd
+.ct_event_work_orders <- function(con, event) {
+  wos <- as.character(event$work_order)
+  files <- event$files
+  if (!is.null(files) && nrow(files) > 0 && "hash" %in% names(files)) {
+    for (h in files$hash) {
+      if (is.na(h)) next
+      row <- DBI::dbGetQuery(con, "SELECT work_order FROM ingest_file WHERE hash = ?",
+                             params = list(h))
+      if (nrow(row) > 0) wos <- c(wos, as.character(row$work_order))
+    }
+  }
+  wos <- unique(wos[!is.na(wos) & nzchar(wos)])
+  wos
+}
+
+#' Hashes belonging to THIS event - never counted as prior-ingest evidence.
+#' @keywords internal
+#' @noRd
+.ct_own_hashes <- function(event, resolved) {
+  h <- c(
+    if (!is.null(event$files) && "hash" %in% names(event$files)) event$files$hash,
+    if (!is.null(event$results) && "source_hash" %in% names(event$results)) event$results$source_hash,
+    if (!is.null(resolved$clean) && "source_hash" %in% names(resolved$clean)) resolved$clean$source_hash,
+    if (!is.null(resolved$skipped) && "source_hash" %in% names(resolved$skipped)) resolved$skipped$source_hash
+  )
+  h <- as.character(h)
+  unique(h[!is.na(h)])
+}
+
+#' How many `sample` rows this work order already has (exact-name join).
+#' @keywords internal
+#' @noRd
+.ct_wo_sample_count <- function(con, work_order) {
+  r <- DBI::dbGetQuery(
+    con,
+    'SELECT count(*) AS n FROM "sample" s
+       JOIN project p ON p.uuid = s.uuid_project
+      WHERE p.name = ? AND p.type = \'Work order\'',
+    params = list(work_order)
+  )
+  if (nrow(r) == 0) 0L else as.integer(r$n[[1]])
+}
+
+#' Was this work order's `project` row registered BY this pipeline?
+#'
+#' `.ct_ensure_project()` writes it through `db_append()`, which stamps a
+#' `change_log` `insert` row; a legacy / pre-cutover / fixture-seeded project
+#' has none. Exact-name lookup, never a parsed or prefix-matched one.
+#' @keywords internal
+#' @noRd
+.ct_wo_project_pipeline_registered <- function(con, work_order) {
+  proj <- DBI::dbGetQuery(
+    con, "SELECT uuid FROM project WHERE name = ? AND type = 'Work order'",
+    params = list(work_order)
+  )
+  if (nrow(proj) == 0) {
+    return(FALSE)
+  }
+  r <- DBI::dbGetQuery(
+    con,
+    "SELECT count(*) AS n FROM change_log
+      WHERE tbl = 'project' AND action = 'insert' AND uuid_row = ?",
+    params = list(proj$uuid[[1]])
+  )
+  nrow(r) > 0 && as.integer(r$n[[1]]) > 0
+}
+
+#' Hashes of files previously INGESTED (archived) against this work order.
+#' @keywords internal
+#' @noRd
+.ct_wo_prior_asset_hashes <- function(con, work_order, own_hashes) {
+  if (!DBI::dbExistsTable(con, "asset")) {
+    return(character(0))
+  }
+  r <- DBI::dbGetQuery(
+    con,
+    "SELECT a.hash FROM asset a
+       JOIN project p ON p.uuid = a.uuid_project
+      WHERE p.name = ? AND p.type = 'Work order'",
+    params = list(work_order)
+  )
+  if (nrow(r) == 0) {
+    return(character(0))
+  }
+  h <- as.character(r$hash)
+  unique(h[!is.na(h) & !(h %in% own_hashes)])
+}
+
+#' The revision RECORDED for this event's own files (never filename-parsed).
+#' @keywords internal
+#' @noRd
+.ct_incoming_revision <- function(con, event, clean) {
+  revs <- integer(0)
+  files <- event$files
+  if (!is.null(files) && nrow(files) > 0 && "hash" %in% names(files)) {
+    for (h in files$hash) {
+      if (is.na(h)) next
+      row <- DBI::dbGetQuery(con, "SELECT revision FROM ingest_file WHERE hash = ?",
+                             params = list(h))
+      if (nrow(row) > 0 && !is.na(row$revision[[1]])) {
+        revs <- c(revs, as.integer(row$revision[[1]]))
+      }
+    }
+  }
+  if (length(revs) == 0 && !is.null(clean) && "revision" %in% names(clean) && nrow(clean) > 0) {
+    cr <- suppressWarnings(as.integer(clean$revision))
+    revs <- cr[!is.na(cr)]
+  }
+  if (length(revs) == 0) NA_integer_ else max(revs)
+}
+
+#' Clean rows that do NOT match an existing `sample` (exemptions 2 and 3)
+#'
+#' A `supersedes` row matched an existing analysis (hence an existing sample)
+#' and is the A12 path; `already_present` rows are not in `clean` at all. What
+#' is left is measured with `.ct_existing_sample_uuid()` - the same predicate
+#' commit itself uses - so the guard and the writer cannot disagree.
+#' @keywords internal
+#' @noRd
+.ct_unmatched_clean_rows <- function(con, clean) {
+  n <- if (is.null(clean)) 0L else nrow(clean)
+  if (n == 0) {
+    return(integer(0))
+  }
+  keys <- .ct_row_feature_keys(con, clean)
+  supers <- if ("supersedes" %in% names(clean)) clean$supersedes else rep(NA_character_, n)
+  out <- integer(0)
+  for (i in seq_len(n)) {
+    if (!is.na(supers[[i]])) next
+    hit <- .ct_existing_sample_uuid(
+      con, keys$pending[[i]], keys$match_feature[[i]], keys$alias_uuid[[i]],
+      clean$sample_date[[i]], clean$sample_datetime[[i]]
+    )
+    if (is.na(hit)) out <- c(out, i)
+  }
+  out
+}
+
+#' Decide F.10: `NULL` to proceed, or a one-row `review_queue` tibble to write
+#' INSTEAD of committing (R-15.31/R-15.32).
+#' @keywords internal
+#' @noRd
+.ct_reingest_guard <- function(con, event, resolved) {
+  clean <- resolved$clean
+  if (is.null(clean) || nrow(clean) == 0) {
+    return(NULL)                       # nothing to block (exemption 2's shape)
+  }
+  wos <- .ct_event_work_orders(con, event)
+  if (length(wos) == 0) {
+    return(NULL)
+  }
+  own_hashes <- .ct_own_hashes(event, resolved)
+
+  for (wo in wos) {
+    n_samples <- .ct_wo_sample_count(con, wo)
+    if (n_samples == 0) next           # first-time work order: never blocked
+    if (!.ct_wo_project_pipeline_registered(con, wo)) next  # not wholly ours
+    prior <- .ct_wo_prior_asset_hashes(con, wo, own_hashes)
+    if (length(prior) == 0) next       # no prior ingest, so not a RE-ingest
+
+    recorded_rev <- .rc_recorded_revision(con, wo, own_hashes)
+    incoming_rev <- .ct_incoming_revision(con, event, clean)
+    if (!is.na(recorded_rev) && !is.na(incoming_rev) && incoming_rev > recorded_rev) {
+      next                             # EXEMPTION 1: A12 supersede re-issue
+    }
+
+    unmatched <- .ct_unmatched_clean_rows(con, clean)
+    if (length(unmatched) == 0) next   # EXEMPTION 3: everything already matches
+
+    # payload built by .rq_row() -> jsonlite, never by concatenation.
+    rq <- .rq_row(
+      kind = "work_order_reingest", subkind = "blocked", work_order = wo,
+      source_hash = if (length(own_hashes) > 0) own_hashes[[1]] else NA_character_,
+      diagnostics = list(
+        work_order = wo,
+        n_samples_existing = n_samples,
+        n_prior_ingested_files = length(prior),
+        revision_recorded = recorded_rev,
+        revision_incoming = incoming_rev,
+        n_rows_blocked = length(unmatched),
+        n_rows_clean = nrow(clean)
+      )
+    )
+    row <- rq$review
+    row$source_ref <- NA_character_
+    return(row)
+  }
+  NULL
+}
+
 # ---- step 1: project ---------------------------------------------------------
 
 #' Look up the project row for `work_order`, creating one if absent (step 1)
@@ -87,6 +347,44 @@
   .rc_is_true_vec(clean[[col]])
 }
 
+#' The group-wide minimum `sample_date` for a NEW alias's `date_start`
+#' (PLAN-15 E.4 / seam S-15.7)
+#'
+#' ORDER-INDEPENDENCE IS THE POINT. `min()` over the whole group is a fold that
+#' cannot depend on presentation order, which is exactly what E.4 demands: two
+#' files of one event arriving in a different order must yield the IDENTICAL,
+#' permanent bound. Deliberately NOT `dates[[1]]` (`rows_k[[1]]`, first-in-file
+#' order) - that is the bug E.4 names.
+#'
+#' The value stays class `Date` end to end: `feature_alias.date_start` is a
+#' DATE column (E.1/E.5), `.rc_as_date_bound()` aborts on a POSIXct rather
+#' than coercing, and `as.Date()` on a POSIXct is timezone-dependent - so this
+#' must never round-trip through POSIXct. `min(Date)` returns a Date.
+#'
+#' All-NA (or an empty) group yields `NA_Date_`, i.e. an unbounded start, NOT
+#' `Inf` (which is what a bare `min(na.rm = TRUE)` returns on an empty set,
+#' with a warning, and which would be written as a nonsense bound).
+#' @keywords internal
+#' @noRd
+.ct_group_date_start <- function(dates) {
+  if (length(dates) == 0) {
+    return(as.Date(NA))
+  }
+  if (!inherits(dates, "Date")) {
+    # A non-Date sample_date column (a hand-built fixture, or an adapter that
+    # has not been through .st_parse_dates()) is NOT silently coerced here:
+    # as.Date() on a POSIXct picks a calendar day using the session timezone,
+    # which is the silent-corruption bug E.5/.rc_as_date_bound() exist to
+    # prevent. No bound is safer than a tz-dependent one.
+    return(as.Date(NA))
+  }
+  ok <- dates[!is.na(dates)]
+  if (length(ok) == 0) {
+    return(as.Date(NA))
+  }
+  min(ok)
+}
+
 #' Materialise a pending feature_alias per distinct `alias_key` (R-11.8, D8)
 #'
 #' D8 keeps reconcile read-only: the dangling alias is CREATED here, at commit.
@@ -97,6 +395,20 @@
 #' the number of distinct sample tuples that newly point at the alias in this
 #' event (PIN (c)); `first_seen`/`last_seen` are `Sys.time()` at materialisation.
 #' Returns `clean` with `uuid_feature_alias` filled for every pending row.
+#'
+#' PLAN-15 E.4 / seam S-15.7, the two halves of which pull in OPPOSITE
+#' directions and are both enforced below:
+#'   * the NEW-alias branch sets `date_start` = `min(sample_date)` over the
+#'     WHOLE `alias_key` group (`.ct_group_date_start()`), `date_end` NULL;
+#'   * the EXISTING-dangling branch must NOT touch either bound - it still
+#'     updates only `n_seen`/`last_seen`, even when the incoming row is dated
+#'     EARLIER than the recorded `date_start`. Re-ingest never mutates a
+#'     stored bound; an operator widens it with `confirm_feature_aliases()`.
+#'
+#' S-15.5: `date_start`/`date_end` may be ABSENT columns against a pre-003
+#' database, so they are added to the insert only when `feature_alias`
+#' actually has them - `db_append()` validates column names and would abort
+#' on a missing one.
 #' @keywords internal
 #' @noRd
 .ct_materialise_feature_aliases <- function(con, clean, event, actor, reason) {
@@ -111,6 +423,8 @@
   now <- Sys.time()
   keys <- clean$alias_key
   pend_idx <- which(pending)
+  alias_cols <- DBI::dbListFields(con, "feature_alias")
+  has_bounds <- all(c("date_start", "date_end") %in% alias_cols)
 
   for (uk in unique(keys[pend_idx])) {
     rows_k <- pend_idx[keys[pend_idx] == uk]
@@ -132,6 +446,9 @@
       alias_uuid <- existing$uuid[[1]]
       prev_n <- existing$n_seen[[1]]
       if (is.na(prev_n)) prev_n <- 0L
+      # E.4 / S-15.7: `changes` deliberately lists n_seen/last_seen ONLY. An
+      # earlier-dated incoming row must NOT widen (or otherwise touch)
+      # date_start, and nothing must touch date_end.
       db_update(
         con, "feature_alias", uuid = alias_uuid,
         changes = list(n_seen = as.integer(prev_n + incr), last_seen = now),
@@ -146,6 +463,12 @@
         confirmed_by = NA_character_,
         comments = NA_character_
       )
+      if (has_bounds) {
+        # E.4: valid from when the variant was FIRST seen across the whole
+        # group; date_end stays NULL (unbounded on that side).
+        row$date_start <- .ct_group_date_start(clean$sample_date[rows_k])
+        row$date_end <- as.Date(NA)
+      }
       db_append(con, "feature_alias", row, actor = actor, reason = reason,
                 source_hash = clean$source_hash[[first_i]])
     }
@@ -444,16 +767,29 @@
 #' datetime-equal candidate.
 #' @keywords internal
 #' @noRd
-.ct_find_or_create_sample <- function(con, pending, match_feature, alias_uuid,
-                                       sample_date, sample_datetime,
-                                       uuid_project, organisation, person, reason) {
+#' The READ-ONLY half of `.ct_find_or_create_sample()`: the uuid of an
+#' existing sample this measurement belongs to, or `NA_character_` if it
+#' would need a new one.
+#'
+#' Factored out (behaviour unchanged - `.ct_find_or_create_sample()` calls it)
+#' so PLAN-15 F.10's re-ingest guard can ask "does this row match an existing
+#' sample?" WITHOUT writing anything: the guard must decide before the
+#' transaction does any work, and a guard that reasoned about sample identity
+#' with its own second copy of the R-11.18/A62 predicate would be free to
+#' drift from the one commit actually uses.
+#' @keywords internal
+#' @noRd
+.ct_existing_sample_uuid <- function(con, pending, match_feature, alias_uuid,
+                                      sample_date, sample_datetime) {
   if (isTRUE(pending)) {
+    if (is.na(alias_uuid)) return(NA_character_)
     cand <- DBI::dbGetQuery(
       con,
       'SELECT uuid, datetime FROM "sample" WHERE uuid_feature_alias = ? AND CAST(date AS DATE) = ?',
       params = list(alias_uuid, as.character(sample_date))
     )
   } else {
+    if (is.na(match_feature)) return(NA_character_)
     cand <- DBI::dbGetQuery(
       con,
       'SELECT s.uuid, s.datetime FROM "sample" s
@@ -462,23 +798,34 @@
       params = list(match_feature, as.character(sample_date))
     )
   }
+  if (nrow(cand) == 0) {
+    return(NA_character_)
+  }
+  # Compare instants as epoch seconds so a tz-tagged incoming POSIXct and the
+  # driver's UTC-returned candidate never raise a spurious "inconsistent
+  # tzone" warning; equality of instants is tz-independent.
+  inc_dt <- as.numeric(sample_datetime)
+  cand_dt <- as.numeric(cand$datetime)
+  create_new <- !is.na(inc_dt) &&
+    all(!is.na(cand_dt)) &&
+    !any(cand_dt == inc_dt)
+  if (create_new) {
+    return(NA_character_)
+  }
+  if (!is.na(inc_dt)) {
+    match_dt <- !is.na(cand_dt) & (cand_dt == inc_dt)
+    if (any(match_dt)) cand <- cand[match_dt, , drop = FALSE]
+  }
+  cand$uuid[[1]]
+}
 
-  if (nrow(cand) > 0) {
-    # Compare instants as epoch seconds so a tz-tagged incoming POSIXct and the
-    # driver's UTC-returned candidate never raise a spurious "inconsistent
-    # tzone" warning; equality of instants is tz-independent.
-    inc_dt <- as.numeric(sample_datetime)
-    cand_dt <- as.numeric(cand$datetime)
-    create_new <- !is.na(inc_dt) &&
-      all(!is.na(cand_dt)) &&
-      !any(cand_dt == inc_dt)
-    if (!create_new) {
-      if (!is.na(inc_dt)) {
-        match_dt <- !is.na(cand_dt) & (cand_dt == inc_dt)
-        if (any(match_dt)) cand <- cand[match_dt, , drop = FALSE]
-      }
-      return(cand$uuid[[1]])
-    }
+.ct_find_or_create_sample <- function(con, pending, match_feature, alias_uuid,
+                                       sample_date, sample_datetime,
+                                       uuid_project, organisation, person, reason) {
+  hit <- .ct_existing_sample_uuid(con, pending, match_feature, alias_uuid,
+                                  sample_date, sample_datetime)
+  if (!is.na(hit)) {
+    return(hit)
   }
 
   new_uuid <- uuid::UUIDgenerate()
@@ -885,6 +1232,29 @@ commit_event <- function(event, resolved, con) {
   .ct_check_not_already_committed(con, event$files)
 
   db_transaction(con, function(con) {
+    # Step 0b (PLAN-15 F.10, R-15.31/R-15.32): a re-download of an
+    # already-ingested work order is routed to review INSTEAD of committed.
+    # Evaluated first, on reads only, so a blocked event writes no `sample` /
+    # `analysis` row at all - and inside the transaction, so the review item
+    # and the file-state move land atomically with everything else.
+    guard_row <- .ct_reingest_guard(con, event, resolved)
+    if (!is.null(guard_row)) {
+      blocked_review <- if (!is.null(resolved$review) && nrow(resolved$review) > 0) {
+        dplyr::bind_rows(resolved$review, guard_row)
+      } else {
+        guard_row
+      }
+      .ct_commit_review(con, blocked_review, event, .ct_actor, reason)
+      # already_present provenance still stands (exemption 2: those rows DID
+      # match, and their provenance link is not what F.10 is refusing).
+      .ct_record_already_present(con, resolved$skipped, .ct_actor, reason)
+      # F.17: an arriving deliverable is archived even when refused, so it is
+      # never lost; its files land on `needs_review`, not a terminal state.
+      .ct_archive_files(con, event)
+      .ct_set_file_states(con, event$files, 0L, nrow(blocked_review), reason)
+      return(invisible(NULL))
+    }
+
     uuid_project <- .ct_ensure_project(con, event$work_order, reason)
 
     clean <- resolved$clean
