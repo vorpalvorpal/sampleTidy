@@ -284,13 +284,25 @@ test_that("R-12.9: path_first_seen is still set exactly once across a no-clobber
 
 test_that("R-16.1 arm (a): ensure_schema() applies version 6 to a DB at version 4 with no version 5 defined", {
   ns <- asNamespace("sampleTidy")
-  migrations <- get(".st_schema_migrations", envir = ns)
-  base_versions <- vapply(migrations, function(m) m$version, integer(1))
-  # Sanity check on this arm's premise: no version 5 is defined in the
-  # shipped migration list yet (RULING E - PLAN-15 P6 is suspended until
-  # PLAN-16 lands). If this ever fails, the fixture assumption below needs
-  # revisiting, not a silent pass.
+  base_migrations <- get(".st_schema_migrations", envir = ns)
+  # Restore the real list unconditionally, pass or fail, before anything else
+  # in this arm can touch the namespace.
+  withr::defer(assignInNamespace(".st_schema_migrations", base_migrations, ns = "sampleTidy"))
+
+  # PLAN-15 D1 landed a REAL version 5 (review_queue.uuid_target) on
+  # 2026-07-26, so the shipped ladder no longer has the gap this arm is about.
+  # The premise was previously borrowed from the shipped list; it is now
+  # CONSTRUCTED, which is what it should always have been - the criterion is
+  # "a gap in the ladder does not stop later migrations", not "the shipped
+  # ladder happens to have a gap". Revisiting the fixture rather than letting
+  # it pass silently is what this arm's original note asked for.
+  # (Orchestrator adjudication, 2026-07-26.)
+  no_v5 <- Filter(function(m) m$version != 5L, base_migrations)
+  assignInNamespace(".st_schema_migrations", no_v5, ns = "sampleTidy")
+
+  base_versions <- vapply(no_v5, function(m) m$version, integer(1))
   expect_false(5L %in% base_versions)
+  expect_true(6L %in% base_versions)   # the gap is real and 6 is beyond it
 
   dir <- withr::local_tempdir()
   db <- file.path(dir, "p16-v6.duckdb")
@@ -312,7 +324,14 @@ test_that("R-16.1 arm (b): a migration arriving out of version order (5 added af
   # Phase-5 order-independence) file sees the injected fake version 5.
   withr::defer(assignInNamespace(".st_schema_migrations", base_migrations, ns = "sampleTidy"))
 
-  base_versions <- vapply(base_migrations, function(m) m$version, integer(1))
+  # As in arm (a): PLAN-15 D1 landed a real version 5 on 2026-07-26, so the
+  # "6 shipped, 5 has not arrived yet" starting point is now constructed
+  # rather than borrowed from the shipped ladder. The out-of-order sequence
+  # the criterion is about is unchanged.
+  no_v5 <- Filter(function(m) m$version != 5L, base_migrations)
+  assignInNamespace(".st_schema_migrations", no_v5, ns = "sampleTidy")
+
+  base_versions <- vapply(no_v5, function(m) m$version, integer(1))
   expect_true(6L %in% base_versions)
   expect_false(5L %in% base_versions)
 
@@ -334,7 +353,10 @@ test_that("R-16.1 arm (b): a migration arriving out of version order (5 added af
   # ensure_schema()'s closure actually reads - only assigning into the real
   # package namespace is visible to the function under test.
   v5 <- list(version = 5L, ddl = "CREATE TABLE IF NOT EXISTS p16_v5_probe (uuid VARCHAR)")
-  assignInNamespace(".st_schema_migrations", c(base_migrations, list(v5)), ns = "sampleTidy")
+  # Appended to `no_v5`, NOT to `base_migrations` - the latter now carries the
+  # real version 5, and appending to it would put TWO version-5 entries in the
+  # ladder and make the "applies 5 alone, exactly once" assertions meaningless.
+  assignInNamespace(".st_schema_migrations", c(no_v5, list(v5)), ns = "sampleTidy")
 
   con2 <- DBI::dbConnect(duckdb::duckdb(), db, read_only = FALSE) # re-open
   withr::defer(DBI::dbDisconnect(con2, shutdown = TRUE))

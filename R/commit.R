@@ -645,9 +645,16 @@
     if (is.na(au)) next
     row_uuid <- review$uuid[[i]]
     if (is.na(row_uuid)) next
+    # PLAN-15 F.15 D2: `uuid_target` is set from the SAME `au` this function
+    # already resolved for `uuid_alias` - this IS the moment (and the only
+    # moment) `amap`'s freshly-created feature_alias.uuid is available, per
+    # the ruling's correction above (reconcile-time it does not exist yet;
+    # commit-time it does). `uuid_alias` keeps being written too (unchanged,
+    # per D2/D2's own note): it is the only linkage pre-migration-5 rows will
+    # ever carry, so dropping it would strand them.
     db_update(
       con, "review_queue", uuid = row_uuid,
-      changes = list(uuid_alias = au),
+      changes = list(uuid_alias = au, uuid_target = au),
       actor = .ct_actor, reason = "commit_event: review alias rewrite"
     )
   }
