@@ -193,11 +193,41 @@
 )
 .hy_payload_word_pat <- "(?<![[:alnum:]_])payload(?![[:alnum:]_])"
 
+#' FE9 (Phase-7b round-2 audit): TRUE if `pd` contains a STRING-LITERAL INDEX
+#' access to "payload" (`row[["payload"]]` / `row["payload"]`) whose
+#' subscript span falls inside `[l1, l2]`. This is the shape that evaded the
+#' original bare-word scan below: `.hy_scrub_lines()` blanks every STR_CONST
+#' - including the `"payload"` literal sitting inside `[[ ]]` - so a payload
+#' reached this way (rather than via the bare identifier `payload` or a
+#' `$payload` access, both of which parse as a SYMBOL token and so survive
+#' scrubbing) left no trace in the scrubbed text for `.hy_payload_word_pat`
+#' to find. Detected STRUCTURALLY, never textually (a STR_CONST's contents
+#' are exactly what scrubbing removes): the STR_CONST node's immediate
+#' `expr` wrapper must be a sibling of an `LBB` (`[[`) or `LB` (`[`) bracket
+#' token under the same enclosing subscript expr.
+.hy_str_index_payload_present <- function(pd, l1, l2) {
+  if (is.null(pd) || nrow(pd) == 0) return(FALSE)
+  lits <- pd[pd$token == "STR_CONST" & pd$text %in% c('"payload"', "'payload'"), ]
+  if (nrow(lits) == 0) return(FALSE)
+  for (i in seq_len(nrow(lits))) {
+    if (lits$line1[i] < l1 || lits$line2[i] > l2) next
+    wrap <- pd[pd$id == lits$parent[i], ]
+    if (nrow(wrap) == 0) next
+    outer_id <- wrap$parent[1]
+    sibs <- pd[pd$parent == outer_id, ]
+    if (any(sibs$token %in% c("LBB", "LB"))) return(TRUE)
+  }
+  FALSE
+}
+
 #' For each top-level function in each source, flag it if its
 #' comment/string-scrubbed body contains BOTH a call to one of the five
-#' forbidden regex functions AND the bare identifier `payload` (covers a
-#' local var literally named `payload`, or a `x$payload` access - both
-#' known real sites use one of these two shapes; see file header).
+#' forbidden regex functions AND EITHER the bare identifier `payload`
+#' (covers a local var literally named `payload`, or a `x$payload` access)
+#' OR a string-literal-indexed access `x[["payload"]]`/`x["payload"]`
+#' (FE9 - the latter is invisible to the scrubbed-text word scan, since
+#' scrubbing blanks the STR_CONST it lives in; caught structurally via
+#' `.hy_str_index_payload_present()` instead).
 .hy_scan_regex_on_payload <- function(sources) {
   hits <- list()
   for (src in sources) {
@@ -209,8 +239,9 @@
       l2 <- min(spans$line2[i], length(scrubbed))
       if (l1 > l2 || l1 < 1) next
       chunk <- paste(scrubbed[l1:l2], collapse = "\n")
-      if (grepl(.hy_regex_fn_pat, chunk, perl = TRUE) &&
-          grepl(.hy_payload_word_pat, chunk, perl = TRUE)) {
+      has_payload <- grepl(.hy_payload_word_pat, chunk, perl = TRUE) ||
+        .hy_str_index_payload_present(src$pd, l1, l2)
+      if (grepl(.hy_regex_fn_pat, chunk, perl = TRUE) && has_payload) {
         hits[[length(hits) + 1]] <- list(path = src$path, line1 = l1, line2 = l2)
       }
     }
@@ -233,6 +264,47 @@ test_that("R-16.6: no sub()/gsub()/regmatches()/regexpr()/grepl() reads a payloa
     length(.hy_scan_regex_on_payload(list(decoy_violation))) >= 1,
     info = "positive control failed: a synthetic regmatches(payload, ...) call was not flagged - the scanner is matching nothing"
   )
+
+  # POSITIVE CONTROL (decoy), FE9: the SAME violation but reached via
+  # STRING-LITERAL INDEXING (`row[["payload"]]`) rather than the bare
+  # identifier - this is the shape that evaded the pre-fix scanner (the
+  # audit's "EVASION A": `v <- row[["payload"]]; sub(...)`, squarely inside
+  # R-16.6's wording, 0 hits before the fix above).
+  decoy_str_index <- .hy_source_from_text(paste(
+    "f <- function(row) {",
+    "  v <- row[[\"payload\"]]",
+    "  sub('existing_uuid=([^,]+)', '\\\\1', v)",
+    "}", sep = "\n"
+  ))
+  expect_true(
+    length(.hy_scan_regex_on_payload(list(decoy_str_index))) >= 1,
+    info = "positive control failed (FE9): a string-literal-indexed payload access (row[[\"payload\"]]) combined with sub() was not flagged"
+  )
+
+  # NEGATIVE CONTROL (nearest legitimate shape to the FE9 violation): a
+  # string-literal-indexed access to a DIFFERENT column, in a function that
+  # also happens to call a regex function on it, must NOT be flagged - the
+  # detector targets the literal "payload" specifically, not any bracketed
+  # string index.
+  decoy_str_index_other_col <- .hy_source_from_text(paste(
+    "f <- function(row) {",
+    "  v <- row[[\"kind\"]]",
+    "  sub('x=[^,]+', 'y', v)",
+    "}", sep = "\n"
+  ))
+  expect_length(.hy_scan_regex_on_payload(list(decoy_str_index_other_col)), 0)
+
+  # NEGATIVE CONTROL: a string-literal-indexed payload access with NO regex
+  # call anywhere in the same function must not be flagged either - the
+  # co-occurrence requirement still applies to the new detection path, not
+  # just presence of the index access alone.
+  decoy_str_index_no_regex <- .hy_source_from_text(paste(
+    "f <- function(row) {",
+    "  v <- row[[\"payload\"]]",
+    "  toupper(v)",
+    "}", sep = "\n"
+  ))
+  expect_length(.hy_scan_regex_on_payload(list(decoy_str_index_no_regex)), 0)
 
   # NEGATIVE CONTROLS: a comment merely MENTIONING the pattern, and a string
   # literal merely CONTAINING it as text, must not trip the scanner - a

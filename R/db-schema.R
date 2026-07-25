@@ -105,6 +105,16 @@
   # "FK on uuid_feature is enforced" test fails (not errors) rather than
   # passing - a provisional-oracle mismatch surfaced here per instruction,
   # not silently suppressed.
+  #
+  # Round-2 audit FD10(b): `rank NOT NULL` alone did not stop two candidate
+  # rows sharing one `(uuid_review, rank)` pair (a rank tie makes `ORDER BY
+  # rank` nondeterministic, defeating R-16.4's whole point). Added
+  # `UNIQUE (uuid_review, rank)` below. This AMENDS the existing version-6
+  # DDL in place rather than shipping a version 7 or a migration - safe ONLY
+  # because schema v6 has never been applied to any real database yet (every
+  # test database in this suite is built fresh, so there is nothing to
+  # migrate); do NOT take this as licence to hand-edit an already-applied
+  # migration version elsewhere in this ladder.
   list(
     version = 6L,
     ddl = "
@@ -119,7 +129,8 @@
         kind          VARCHAR NOT NULL,
         date_start    DATE,
         date_end      DATE,
-        rank          INTEGER NOT NULL
+        rank          INTEGER NOT NULL,
+        UNIQUE (uuid_review, rank)
       );"
   )
 )
@@ -361,11 +372,52 @@ ingest_file_set_route <- function(con, hash, adapter = NA_character_, tier = NA_
 # FA7) - an unnamed list (e.g. a hand-built k=v string wrapped in `list()`)
 # would otherwise serialise straight through, defeating the whole point of
 # routing through a typed carrier instead of free text.
+#
+# Round-2 audit FF8 + policy ruling: with `auto_unbox = TRUE`, a diagnostics
+# key's JSON SHAPE changes with its length - a length-1 value serialises as
+# a scalar (`"candidates":"f-0001"`) but length>=2 serialises as an array
+# (`"candidates":["f-0001","f-0002"]`). Every consumer would have to handle
+# both shapes, and the length-1 case (the COMMON one - e.g. PLAN-15 R-15.27's
+# "exactly ONE suggestion candidate") is exactly the one most likely to be
+# got wrong. `.RQ_PLURAL_DIAGNOSTIC_KEYS` is an explicit, greppable registry
+# of keys that are semantically plural regardless of how many elements they
+# happen to carry right now; any registered key is wrapped in `I()` before
+# serialisation so it ALWAYS emits a JSON array, at length 0, 1 and N alike.
+# Keys not in the registry keep auto_unbox's scalar-at-length-1 behaviour -
+# this does not disable auto_unbox globally, only overrides it for the
+# registered keys. A caller that has already wrapped its own value in `I()`
+# is honoured as-is (not double-wrapped).
+#
+# Seeded with the two keys Robin named directly: `candidates` (R-16.4's
+# multi-candidate review producers) and `source_ref` (`.rc_review_row()`,
+# R/reconcile.R - one element per folded source row, frequently exactly one).
+#
+# Round-2 remediation (worker W-G, 2026-07-25): two more keys registered by
+# policy ("semantically-PLURAL diagnostics keys always serialise as JSON
+# ARRAYS, at length 0 and 1 too"), reported when first found (round-2 audit)
+# and now added on Robin's instruction -
+#   - `adapters` (R/router.R, `adapter_tie` producer) - in practice always
+#     length>=2 (only reached when >1 adapter ties at the winning tier).
+#   - `units` (R/feature-alias.R, `units_drift` producer) - only reached when
+#     `length(drift_units) > 1`, so always length>=2 there too.
+# NEITHER PRODUCER CAN EMIT LENGTH 1 TODAY, so registering them changes no
+# current output (this is provably true for `adapters`/`units` right now,
+# unlike `candidates`/`source_ref` which do hit length 1 routinely). They are
+# registered anyway so that the day one of them CAN emit a single element,
+# the JSON shape does not silently flip from array to scalar under a
+# consumer that was never written to handle both.
+.RQ_PLURAL_DIAGNOSTIC_KEYS <- c("candidates", "source_ref", "adapters", "units")
+
 #' @keywords internal
 #' @noRd
 .rq_serialise_diagnostics <- function(diagnostics) {
   checkmate::assert_list(diagnostics, names = "unique")
   if (length(diagnostics) == 0L) return("{}")
+  for (key in intersect(names(diagnostics), .RQ_PLURAL_DIAGNOSTIC_KEYS)) {
+    if (!inherits(diagnostics[[key]], "AsIs")) {
+      diagnostics[[key]] <- I(diagnostics[[key]])
+    }
+  }
   as.character(jsonlite::toJSON(diagnostics, auto_unbox = TRUE, digits = NA, na = "null"))
 }
 
@@ -413,8 +465,51 @@ ingest_file_set_route <- function(con, hash, adapter = NA_character_, tier = NA_
                     uuid_alias = NA_character_, candidates = NULL, expired = NULL,
                     diagnostics = list()) {
   checkmate::assert_string(kind)
+  # Round-2 audit FD12: every scalar typed argument is validated, not just
+  # `kind`. Before this fix, a length>1 value (e.g. a caller accidentally
+  # handing a vector to `uuid_existing`) silently RECYCLED into a multi-row
+  # `review` tibble sharing one uuid/PK - a duplicate-PK expansion (proved:
+  # `uuid_existing = c("an-1","an-2")` produced a 2-row tibble with one
+  # `uuid`), not a truncation. A length-1-string check on every scalar makes
+  # that shape impossible to construct.
+  checkmate::assert_string(subkind, na.ok = TRUE)
+  checkmate::assert_string(work_order, na.ok = TRUE)
+  checkmate::assert_string(source_hash, na.ok = TRUE)
+  checkmate::assert_string(uuid_existing, na.ok = TRUE)
+  checkmate::assert_string(uuid_alias, na.ok = TRUE)
   if (!is.null(candidates)) checkmate::assert_character(candidates)
-  if (!is.null(expired)) checkmate::assert_data_frame(expired)
+  if (!is.null(expired)) {
+    checkmate::assert_data_frame(expired)
+    checkmate::assert_names(
+      names(expired), must.include = c("uuid_feature", "date_start", "date_end")
+    )
+    # Round-2 audit FD9: REJECT a non-Date bound rather than coercing it.
+    # Reproduced end to end through the real DuckDB driver: a POSIXct
+    # `date_start` looks plausible but is silently DATE-truncated at the
+    # driver boundary IN UTC, so a local Australia/Sydney timestamp before
+    # 10:00 stores the PREVIOUS day (`as.POSIXct("2022-03-04 09:00:00", tz =
+    # "Australia/Sydney")` -> stored `2022-03-03`). RULING (Robin,
+    # 2026-07-25), followed exactly: do NOT "fix" this by calling as.Date()
+    # on the incoming value here, because as.Date.POSIXct() is ITSELF
+    # timezone-dependent - that is the very bug, one layer up. Coercing
+    # would make this function silently PICK a day instead of storing the
+    # wrong one; rejecting forces the caller to convert deliberately, in a
+    # timezone the caller (not this generic constructor) actually knows.
+    for (expired_col in c("date_start", "date_end")) {
+      val <- expired[[expired_col]]
+      if (!inherits(val, "Date")) {
+        cli::cli_abort(
+          "expired${expired_col} must be class Date (NA allowed); got
+           class {.cls {class(val)}}. Not auto-converted: as.Date() on a
+           POSIXct bound is itself timezone-dependent (the exact silent-
+           corruption bug this check exists to prevent) - convert
+           explicitly with as.Date() before calling .rq_row(), choosing the
+           timezone deliberately.",
+          class = "sampletidy_error"
+        )
+      }
+    }
+  }
 
   uuid_row <- uuid::UUIDgenerate()
   created_at <- Sys.time()
@@ -425,6 +520,14 @@ ingest_file_set_route <- function(con, hash, adapter = NA_character_, tier = NA_
     work_order = work_order, source_hash = source_hash, payload = payload,
     status = "open", uuid_existing = uuid_existing, uuid_alias = uuid_alias
   )
+
+  # Round-2 audit FD10(a): dedup `candidates`, preserving FIRST-SEEN order
+  # (base R's unique() already does this), before rank is assigned. Without
+  # this, the same feature uuid could appear twice with different ranks -
+  # a fan-out inflation any count-only check would miss. `n_candidates`
+  # below is computed AFTER this dedup, so the `expired` block's rank offset
+  # (`n_candidates + seq_len(n_expired)`) stays a dense 1..n sequence.
+  if (!is.null(candidates)) candidates <- unique(candidates)
 
   child_parts <- list()
   n_candidates <- if (is.null(candidates)) 0L else length(candidates)
@@ -458,6 +561,12 @@ ingest_file_set_route <- function(con, hash, adapter = NA_character_, tier = NA_
   list(review = review, candidates = candidate_rows)
 }
 
+# Actor recorded on the change_log rows review_queue_add() now writes via
+# db_append() (round-2 FD6). Mirrors R/commit.R's `.ct_actor <- "pipeline"`
+# convention - this file cannot see that private binding (different file),
+# so it gets its own copy rather than exporting one across a plan boundary.
+.rq_actor <- "pipeline"
+
 # Append a review_queue item. Ops-table write shared by the router (adapter
 # ties) and later the assembly/reconcile stages (unknown feature/analyte/unit,
 # value conflicts). Centralised here so review_queue INSERTs never scatter as
@@ -472,6 +581,21 @@ ingest_file_set_route <- function(con, hash, adapter = NA_character_, tier = NA_
 # list(), i.e. "{}"): existing call sites keep writing their own payload
 # strings verbatim, while `subkind`/`uuid_existing`/`uuid_alias`/`candidates`
 # are the new, typed path (mirroring the review_queue column names 1:1).
+#
+# Round-2 audit FD6/FF9: this used to write both tables with raw
+# DBI::dbExecute() INSERTs, so it produced ZERO change_log rows while every
+# other writer of these two tables (db_append()'s tibble path,
+# .ct_commit_review() in R/commit.R) produced one change_log row per record
+# - two audit behaviours on the same tables. CONTRACT A32 requires writes to
+# go through the mutation layer, so both inserts below now call
+# `db_append()` (R/mutate.R) instead. `review_queue`/`review_queue_candidate`
+# are both already on `.st_mutate_allowlist`. Both calls stay inside the
+# SAME `db_transaction()` as before (FB4's atomicity, a round-1 fix) - the
+# outer `db_transaction(con, fn)` tags `con` before calling `fn`, and
+# `db_append()`'s own internal `db_transaction()` call detects that tag
+# (`.st_in_txn()`) and just runs inline instead of opening a second
+# transaction, exactly the hazard `.ct_ensure_project()` (R/commit.R)
+# already handles the same way for `add_project()`'s db_append() sibling.
 review_queue_add <- function(con, kind, work_order = NA_character_,
                              source_hash = NA_character_, payload = NA_character_,
                              uuid = NULL, created_at = NULL,
@@ -501,34 +625,21 @@ review_queue_add <- function(con, kind, work_order = NA_character_,
 
   # FB4: the parent review_queue row and its N review_queue_candidate child
   # rows are one atomic unit (B-16.api: a caller of .rq_row() cannot end up
-  # with one but not the other) - so all N+1 inserts run inside ONE
-  # db_transaction() (same idiom as db_append(), R/mutate.R:191/192). A
-  # failing child (e.g. a NOT NULL violation) now rolls the whole write back
-  # instead of leaving a truncated, mis-ranked candidate list committed.
+  # with one but not the other) - so both db_append() calls run inside ONE
+  # db_transaction(). A failing child (e.g. a NOT NULL violation) still rolls
+  # the whole write back instead of leaving a truncated, mis-ranked candidate
+  # list committed.
   db_transaction(con, function(con) {
-    DBI::dbExecute(
-      con,
-      "INSERT INTO review_queue
-         (uuid, created_at, kind, subkind, work_order, source_hash, payload,
-          status, uuid_existing, uuid_alias)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-      params = list(
-        review$uuid[[1]], review$created_at[[1]], review$kind[[1]], review$subkind[[1]],
-        review$work_order[[1]], review$source_hash[[1]], review$payload[[1]],
-        review$status[[1]], review$uuid_existing[[1]], review$uuid_alias[[1]]
-      )
+    db_append(
+      con, "review_queue", review, actor = .rq_actor,
+      reason = sprintf("review_queue_add(): kind=%s", kind),
+      source_hash = source_hash
     )
 
-    for (i in seq_len(nrow(cand))) {
-      DBI::dbExecute(
-        con,
-        "INSERT INTO review_queue_candidate
-           (uuid, uuid_review, uuid_feature, kind, date_start, date_end, rank)
-         VALUES (?, ?, ?, ?, ?, ?, ?)",
-        params = list(
-          cand$uuid[[i]], cand$uuid_review[[i]], cand$uuid_feature[[i]], cand$kind[[i]],
-          cand$date_start[[i]], cand$date_end[[i]], cand$rank[[i]]
-        )
+    if (nrow(cand) > 0L) {
+      db_append(
+        con, "review_queue_candidate", cand, actor = .rq_actor,
+        reason = sprintf("review_queue_add(): kind=%s candidates", kind)
       )
     }
 

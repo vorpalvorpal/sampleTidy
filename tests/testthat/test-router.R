@@ -83,7 +83,9 @@ test_that("R-3.5: a tie at the winning tier quarantines with reason adapter_tie 
   con <- seed_con(db)
   withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
-  path <- st_test_write_file(dir, "TIEFILE_0_XTAB.csv", content = "a,b\n1,2\n")
+  # ES1234567 matches .st_work_order_re ("[A-Z]{2}\\d{7}") so fm$work_order_guess
+  # is non-NA, giving us something concrete to assert on the typed work_order column.
+  path <- st_test_write_file(dir, "ES1234567_TIEFILE_0_XTAB.csv", content = "a,b\n1,2\n")
   result <- route_files(c(path), con)
 
   expect_equal(result$state[[1]], "quarantined")
@@ -91,8 +93,30 @@ test_that("R-3.5: a tie at the winning tier quarantines with reason adapter_tie 
 
   queue <- DBI::dbGetQuery(con, "SELECT * FROM review_queue WHERE kind = 'adapter_tie'")
   expect_equal(nrow(queue), 1)
-  expect_match(queue$payload[[1]], "tie_a", fixed = TRUE)
-  expect_match(queue$payload[[1]], "tie_b", fixed = TRUE)
+
+  # Typed columns.
+  expect_identical(queue$kind[[1]], "adapter_tie")
+  expect_true(is.na(queue$subkind[[1]]))
+  expect_identical(queue$work_order[[1]], "ES1234567")
+  expect_identical(queue$source_hash[[1]], result$hash[[1]])
+
+  # Raw stored payload TEXT (not run through the JSON parser) - so a
+  # serialisation-shape regression (e.g. the pipe-joined k=v grammar PLAN-16
+  # deletes, or a dropped `tier` diagnostic) cannot hide behind fromJSON()'s
+  # own normalisation.
+  expect_identical(
+    queue$payload[[1]],
+    '{"tier":"exact","adapters":["tie_a","tie_b"]}'
+  )
+
+  # Parsed JSON diagnostics: `tier` is a scalar and unboxes; `adapters` is a
+  # semantically-plural key and must always serialise as a JSON array
+  # (policy landing in R/db-schema.R during this same round - asserted here
+  # as the array shape per that policy, not as whatever happens to come back).
+  d <- jsonlite::fromJSON(queue$payload[[1]])
+  expect_identical(d$tier, "exact")
+  expect_length(d$adapters, 2L)
+  expect_identical(sort(d$adapters), c("tie_a", "tie_b"))
 })
 
 test_that("R-3.5: a file no adapter claims quarantines with reason unclaimed", {

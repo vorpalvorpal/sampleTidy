@@ -637,3 +637,193 @@ test_that("R-16.9 review_queue_add() and the raw db_append() tibble path write i
   expect_equal(cand_a, cand_b)
   expect_equal(cand_a$uuid_feature, candidate_features)
 })
+
+# ---------------------------------------------------------------------------
+# PLAN-16 Phase-7b round-2 remediation: FD6/FF9, FD9, FD10, FD12, FF8.
+# ---------------------------------------------------------------------------
+
+# --- FD12: .rq_row() validates every scalar typed argument, not just kind --
+
+test_that("FD12: .rq_row() rejects a length>1 value for any scalar typed argument (not just kind)", {
+  expect_error(
+    sampleTidy:::.rq_row(kind = "unknown_feature", uuid_existing = c("a", "b")),
+    regexp = "length 1"
+  )
+  expect_error(
+    sampleTidy:::.rq_row(kind = "unknown_feature", subkind = c("a", "b")),
+    regexp = "length 1"
+  )
+  expect_error(
+    sampleTidy:::.rq_row(kind = "unknown_feature", work_order = c("a", "b")),
+    regexp = "length 1"
+  )
+  expect_error(
+    sampleTidy:::.rq_row(kind = "unknown_feature", source_hash = c("a", "b")),
+    regexp = "length 1"
+  )
+  expect_error(
+    sampleTidy:::.rq_row(kind = "unknown_feature", uuid_alias = c("a", "b")),
+    regexp = "length 1"
+  )
+  # a length>1 argument must never reach a 2-row review tibble sharing one uuid.
+  expect_no_error(sampleTidy:::.rq_row(kind = "unknown_feature", uuid_existing = NA_character_))
+})
+
+# --- FD9: expired= is validated - a non-Date bound is rejected, not coerced -
+
+test_that("FD9: .rq_row(expired=) rejects a POSIXct date_start/date_end instead of silently truncating it", {
+  bad <- tibble::tibble(
+    uuid_feature = "f-0001",
+    date_start = as.POSIXct("2022-03-04 09:00:00", tz = "Australia/Sydney"),
+    date_end = as.POSIXct(NA)
+  )
+  expect_error(
+    sampleTidy:::.rq_row(kind = "expired", expired = bad),
+    regexp = "date_start.*Date"
+  )
+})
+
+test_that("FD9: .rq_row(expired=) rejects a data frame missing the columns it actually reads", {
+  bad <- tibble::tibble(uuid_feature = "f-0001") # no date_start/date_end
+  expect_error(
+    sampleTidy:::.rq_row(kind = "expired", expired = bad),
+    regexp = "date_start|date_end"
+  )
+})
+
+test_that("FD9: .rq_row(expired=) accepts a genuine Date bound (control - the guard is not over-broad)", {
+  ok <- tibble::tibble(
+    uuid_feature = "f-0001", date_start = as.Date("2020-01-01"), date_end = as.Date(NA)
+  )
+  expect_no_error(sampleTidy:::.rq_row(kind = "expired", expired = ok))
+})
+
+# --- FD10(a): candidate dedup, first-seen order, dense rank sequence -------
+
+test_that("FD10(a): review_queue_add() dedups repeated candidate feature uuids, preserving first-seen order with a dense rank sequence", {
+  dir <- withr::local_tempdir()
+  db <- seed_db(dir)
+  con <- seed_con(db)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  parent <- review_queue_add(con, kind = "unknown_feature", candidates = c("f-1", "f-1", "f-2", "f-1"))
+
+  rows <- DBI::dbGetQuery(
+    con,
+    "SELECT uuid_feature, rank FROM review_queue_candidate WHERE uuid_review = ? ORDER BY rank",
+    params = list(parent)
+  )
+  expect_equal(nrow(rows), 2L) # deduped, not 4
+  expect_equal(rows$uuid_feature, c("f-1", "f-2")) # first-seen order
+  expect_equal(rows$rank, c(1L, 2L)) # dense 1..n after dedup
+
+  # the expired offset must be recomputed off the DEDUPED count, not the raw input length.
+  rq <- sampleTidy:::.rq_row(
+    kind = "unknown_feature",
+    candidates = c("f-1", "f-1", "f-2"),
+    expired = tibble::tibble(
+      uuid_feature = "f-3", date_start = as.Date("2020-01-01"), date_end = as.Date("2020-06-30")
+    )
+  )
+  expect_equal(nrow(rq$candidates), 3L) # 2 deduped candidates + 1 expired
+  expired_row <- rq$candidates[rq$candidates$kind == "expired", ]
+  expect_equal(expired_row$rank, 3L) # 2 (deduped candidates), not 4 (raw input length)
+})
+
+# --- FD10(b): UNIQUE(uuid_review, rank) is enforced at the DB level --------
+
+test_that("FD10(b): review_queue_candidate has UNIQUE(uuid_review, rank), enforced by a real duplicate insert", {
+  dir <- withr::local_tempdir()
+  db <- seed_db(dir)
+  con <- seed_con(db)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  parent <- review_queue_add(con, kind = "value_conflict")
+  DBI::dbExecute(
+    con,
+    "INSERT INTO review_queue_candidate (uuid, uuid_review, uuid_feature, kind, rank)
+     VALUES (?, ?, 'f-1', 'candidate', 1)",
+    params = list(uuid::UUIDgenerate(), parent)
+  )
+
+  expect_error(
+    DBI::dbExecute(
+      con,
+      "INSERT INTO review_queue_candidate (uuid, uuid_review, uuid_feature, kind, rank)
+       VALUES (?, ?, 'f-2', 'candidate', 1)", # same (uuid_review, rank) pair
+      params = list(uuid::UUIDgenerate(), parent)
+    ),
+    regexp = "Constraint Error|unique constraint"
+  )
+})
+
+# --- FD6/FF9: review_queue_add() writes go through the mutation layer -----
+
+test_that("FD6/FF9: review_queue_add() writes one change_log row per record (parent + every candidate), via db_append() not raw dbExecute()", {
+  dir <- withr::local_tempdir()
+  db <- seed_db(dir)
+  con <- seed_con(db)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  before <- DBI::dbGetQuery(con, "SELECT COUNT(*) AS n FROM change_log")$n
+
+  parent <- review_queue_add(con, kind = "unknown_feature", candidates = c("f-1", "f-2"))
+
+  after <- DBI::dbGetQuery(con, "SELECT COUNT(*) AS n FROM change_log")$n
+  expect_equal(after - before, 3L) # 1 parent row + 2 candidate rows
+
+  parent_log <- DBI::dbGetQuery(
+    con, "SELECT COUNT(*) AS n FROM change_log WHERE uuid_row = ? AND tbl = 'review_queue'",
+    params = list(parent)
+  )$n
+  expect_equal(parent_log, 1L)
+
+  cand_uuids <- DBI::dbGetQuery(
+    con, "SELECT uuid FROM review_queue_candidate WHERE uuid_review = ?", params = list(parent)
+  )$uuid
+  cand_log <- DBI::dbGetQuery(
+    con,
+    "SELECT COUNT(*) AS n FROM change_log WHERE tbl = 'review_queue_candidate' AND uuid_row IN (?, ?)",
+    params = list(cand_uuids[[1]], cand_uuids[[2]])
+  )$n
+  expect_equal(cand_log, 2L)
+})
+
+# --- FF8: registered plural diagnostics keys always serialise as a JSON
+# array, at length 1 AND length 0/2 - asserted on the raw JSON TEXT (not
+# jsonlite::fromJSON(), whose own simplification would hide a scalar/array
+# difference). Non-registered keys keep auto_unbox's scalar-at-length-1
+# behaviour (a control, so the fix is not shown to have gone global).
+
+test_that("FF8: registered plural diagnostics keys (candidates, source_ref) always serialise as a JSON array, at length 1 and length 2", {
+  expect_identical(
+    sampleTidy:::.rq_serialise_diagnostics(list(candidates = "f-0001")),
+    '{"candidates":["f-0001"]}'
+  )
+  expect_identical(
+    sampleTidy:::.rq_serialise_diagnostics(list(candidates = c("f-0001", "f-0002"))),
+    '{"candidates":["f-0001","f-0002"]}'
+  )
+  expect_identical(
+    sampleTidy:::.rq_serialise_diagnostics(list(source_ref = "row1")),
+    '{"source_ref":["row1"]}'
+  )
+  expect_identical(
+    sampleTidy:::.rq_serialise_diagnostics(list(source_ref = c("row1", "row2"))),
+    '{"source_ref":["row1","row2"]}'
+  )
+})
+
+test_that("FF8: a NON-registered diagnostics key keeps auto_unbox's scalar-at-length-1 shape (control: the fix is scoped, not global)", {
+  expect_identical(
+    sampleTidy:::.rq_serialise_diagnostics(list(units_raw = "mg/L")),
+    '{"units_raw":"mg/L"}'
+  )
+})
+
+test_that("FF8: a caller that has already wrapped a plural key in I() is honoured, not double-wrapped", {
+  expect_identical(
+    sampleTidy:::.rq_serialise_diagnostics(list(candidates = I("f-0001"))),
+    '{"candidates":["f-0001"]}'
+  )
+})

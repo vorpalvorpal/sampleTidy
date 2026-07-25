@@ -158,6 +158,68 @@ db_transaction <- function(con, fn) {
   invisible(NULL)
 }
 
+# ---- constraint-error-preserving row insert (round-2 remediation) ----------
+#
+# DBI::dbAppendTable() on duckdb registers `df` as a temporary view, runs the
+# INSERT, then unregisters that view in an `on.exit()` (see
+# `duckdb:::.local(dbAppendTable, "duckdb_connection")`). Inside a
+# transaction, a constraint violation on the INSERT marks the transaction
+# "aborted"; the `on.exit()` unregister-cleanup THEN ALSO fails (because the
+# transaction is aborted), and it is that SECONDARY "TransactionContext Error:
+# Current transaction is aborted (please ROLLBACK) ... rapi_unregister_df"
+# which escapes `dbAppendTable()` - the PRIMARY constraint text (e.g. "NOT
+# NULL constraint failed: ...") is swallowed before `db_append()` ever sees
+# it. Reproduced directly against `review_queue_candidate` and confirmed
+# general (not table-specific). Atomicity is unaffected either way - this is
+# purely about which error message reaches the caller.
+#
+# Fix: do the same register/INSERT/unregister dance ourselves, but capture
+# the INSERT's error (if any) FIRST, always attempt the unregister cleanup
+# best-effort (`try(..., silent = TRUE)` - on an aborted transaction it is
+# EXPECTED to fail too, and that failure must never be allowed to overwrite
+# the real cause), then re-raise the captured primary error untouched. Chosen
+# over a parameterised row-by-row INSERT (rejected: it would change type
+# coercion/vectorised-insert behaviour for every existing db_append() caller,
+# where register+view is a byte-for-byte replica of what dbAppendTable()
+# itself already does - only the error path changes).
+#' @keywords internal
+#' @noRd
+.st_append_rows <- function(con, table, df) {
+  if (nrow(df) == 0) {
+    return(invisible(0L))
+  }
+
+  view_name <- paste0("_st_append_view_", gsub("-", "_", uuid::UUIDgenerate()))
+  duckdb::duckdb_register(con, view_name, df)
+
+  primary_err <- NULL
+  n <- tryCatch(
+    {
+      quoted_table <- DBI::dbQuoteIdentifier(con, table)
+      cols <- paste(DBI::dbQuoteIdentifier(con, names(df)), collapse = ", ")
+      sql <- paste0(
+        "INSERT INTO ", quoted_table, " (", cols, ") SELECT * FROM ",
+        DBI::dbQuoteIdentifier(con, view_name)
+      )
+      DBI::dbExecute(con, sql)
+    },
+    error = function(e) {
+      primary_err <<- e
+      NA_integer_
+    }
+  )
+
+  # Best-effort cleanup, deliberately outside the tryCatch above so it can
+  # never clobber `primary_err` with a secondary aborted-transaction error.
+  try(duckdb::duckdb_unregister(con, view_name), silent = TRUE)
+
+  if (!is.null(primary_err)) {
+    stop(primary_err)
+  }
+
+  invisible(n)
+}
+
 # ---- generic write door: db_append / db_update / db_delete -----------------
 
 #' Insert rows into a core/ops table, logging one `change_log` row per record
@@ -191,7 +253,7 @@ db_append <- function(con, table, df, actor, reason, source_hash = NA) {
 
   db_transaction(con, function(con) {
     at <- Sys.time()
-    DBI::dbAppendTable(con, table, df)
+    .st_append_rows(con, table, df)
 
     row_uuids <- if ("uuid" %in% names(df)) {
       as.character(df$uuid)

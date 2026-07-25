@@ -771,6 +771,137 @@ test_that("R-15.30/B3: a failure on the SECOND write of add_feature()'s atomic p
     info = "no change_log row may survive a rolled-back transaction")
 })
 
+# ---- W-F (round-2 remediation): db_append() surfaces the ORIGINAL DB error -
+#
+# `DBI::dbAppendTable()` on duckdb registers `df` as a temp view, INSERTs,
+# then unregisters the view in an `on.exit()`. A constraint violation on the
+# INSERT aborts the transaction; the `on.exit()` unregister-cleanup THEN ALSO
+# fails (because the transaction is aborted), and it is that SECONDARY
+# "TransactionContext Error: ... rapi_unregister_df" which used to escape -
+# the primary constraint text was swallowed before db_append() ever saw it.
+# Fix: `.st_append_rows()` does the register/INSERT/unregister dance itself,
+# captures the primary INSERT error first, and never lets a best-effort
+# cleanup failure overwrite it.
+
+test_that("W-F: db_append() surfaces the real NOT NULL constraint text, not the masked rapi_unregister_df cleanup error", {
+  path <- seed_db()
+  con <- seed_con(path)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  DBI::dbExecute(con, "INSERT INTO review_queue (uuid, created_at, kind, status) VALUES
+    ('rq-wf-1', CURRENT_TIMESTAMP, 'unknown_feature', 'open')")
+
+  before_cand <- DBI::dbGetQuery(con, "SELECT count(*) AS n FROM review_queue_candidate")$n
+  before_log <- count_change_log(con)
+
+  # uuid_feature is NOT NULL on review_queue_candidate (db-schema.R version-6
+  # DDL) - the exact defect scenario from the P16 Phase-7b brief.
+  bad_row <- tibble::tibble(
+    uuid = "rqc-wf-1", uuid_review = "rq-wf-1", uuid_feature = NA_character_,
+    kind = "candidate", rank = 1L
+  )
+
+  expect_error(
+    db_append(con, "review_queue_candidate", bad_row, actor = "tester", reason = "should fail"),
+    regexp = "NOT NULL constraint failed", class = "sampletidy_error"
+  )
+
+  # Non-vacuous: the pre-fix wrapper message never contained this text at
+  # all (only the secondary rapi_unregister_df error), so this assertion
+  # would fail before the fix and only passes now that the primary error
+  # reaches the caller.
+  err <- tryCatch(
+    db_append(con, "review_queue_candidate", bad_row, actor = "tester", reason = "should fail"),
+    error = function(e) e
+  )
+  expect_false(
+    grepl("rapi_unregister_df", conditionMessage(err), fixed = TRUE),
+    info = paste("secondary cleanup error leaked through instead of the primary cause:",
+                 conditionMessage(err))
+  )
+
+  # Atomicity: still zero row-count delta on the target table AND change_log.
+  after_cand <- DBI::dbGetQuery(con, "SELECT count(*) AS n FROM review_queue_candidate")$n
+  after_log <- count_change_log(con)
+  expect_equal(after_cand, before_cand)
+  expect_equal(after_log, before_log)
+})
+
+test_that("W-F: db_append() surfaces the real FOREIGN KEY constraint text, not the masked rapi_unregister_df cleanup error", {
+  path <- seed_db()
+  con <- seed_con(path)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  before_cand <- DBI::dbGetQuery(con, "SELECT count(*) AS n FROM review_queue_candidate")$n
+  before_log <- count_change_log(con)
+
+  # uuid_review REFERENCES review_queue(uuid) - no such review_queue row
+  # exists here, so this is a genuine FK violation, not the NOT NULL case
+  # above.
+  bad_row <- tibble::tibble(
+    uuid = "rqc-wf-2", uuid_review = "rq-does-not-exist", uuid_feature = "f-0001",
+    kind = "candidate", rank = 1L
+  )
+
+  expect_error(
+    db_append(con, "review_queue_candidate", bad_row, actor = "tester", reason = "should fail"),
+    regexp = "Constraint Error|foreign key", class = "sampletidy_error"
+  )
+
+  after_cand <- DBI::dbGetQuery(con, "SELECT count(*) AS n FROM review_queue_candidate")$n
+  after_log <- count_change_log(con)
+  expect_equal(after_cand, before_cand)
+  expect_equal(after_log, before_log)
+})
+
+test_that("W-F: db_append() success path is unaffected by the .st_append_rows() rewrite - rows and change_log provenance still land", {
+  path <- seed_db()
+  con <- seed_con(path)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  DBI::dbExecute(con, "INSERT INTO review_queue (uuid, created_at, kind, status) VALUES
+    ('rq-wf-3', CURRENT_TIMESTAMP, 'unknown_feature', 'open')")
+  before_log <- count_change_log(con)
+
+  good_row <- tibble::tibble(
+    uuid = "rqc-wf-3", uuid_review = "rq-wf-3", uuid_feature = "f-0001",
+    kind = "candidate", rank = 1L
+  )
+  db_append(con, "review_queue_candidate", good_row, actor = "tester", reason = "normal insert")
+
+  n <- DBI::dbGetQuery(con, "SELECT count(*) AS n FROM review_queue_candidate WHERE uuid = 'rqc-wf-3'")$n
+  expect_equal(n, 1)
+  after_log <- count_change_log(con)
+  expect_equal(after_log - before_log, 1)
+  log_row <- DBI::dbGetQuery(con, "SELECT * FROM change_log WHERE uuid_row = 'rqc-wf-3'")
+  expect_equal(nrow(log_row), 1)
+  expect_equal(log_row$action, "insert")
+})
+
+test_that("W-F: db_update() does NOT share the dbAppendTable masking hazard - a constraint violation already surfaces the real text (no code change needed here)", {
+  path <- seed_db()
+  con <- seed_con(path)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix, lon, lat) VALUES
+    ('f-wf-1', 'T.WF1', 'TestSite', 'surface', 'water', 150.0, -33.0)")
+  before_log <- count_change_log(con)
+
+  # feature.lon is DOUBLE NOT NULL (R-11.17); db_update() never calls
+  # DBI::dbAppendTable() (plain parameterised UPDATE), so it has no
+  # register/unregister step to mask the error - verified directly.
+  expect_error(
+    db_update(con, "feature", "f-wf-1", changes = list(lon = NA_real_),
+              actor = "tester", reason = "should fail"),
+    regexp = "NOT NULL constraint failed", class = "sampletidy_error"
+  )
+
+  after_log <- count_change_log(con)
+  expect_equal(after_log, before_log)
+  unchanged <- DBI::dbGetQuery(con, "SELECT lon FROM feature WHERE uuid = 'f-wf-1'")$lon
+  expect_equal(unchanged, 150.0)
+})
+
 test_that("R-12.6: a commit-time failure rolls back the whole call and aborts sampletidy_error, leaving no partial write (dbCommit() must sit inside the tryCatch)", {
   path <- seed_db()
   con <- seed_con(path)

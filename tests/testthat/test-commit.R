@@ -820,13 +820,23 @@ test_that("PLAN-16 Q2: a real reconcile_event() -> commit_event() stores source_
   expect_match(grouped_text, '"source_ref":\\["g1","g2"\\]')
   expect_match(grouped_text, '"n_rows":2')
 
-  # SINGLE: source_ref is a bare JSON string, NOT a one-element array - the
-  # auto_unbox policy .rq_serialise_diagnostics() pins, applied to the common
-  # case, so a reader does not have to handle both shapes for one source row.
-  expect_identical(diags$single$source_ref, "s1")
+  # SINGLE: source_ref is a ONE-ELEMENT ARRAY, not a bare JSON string.
+  #
+  # This assertion was the exact opposite when first written, and the reversal
+  # is a POLICY CHANGE, not an assertion tuned to match output. `source_ref` is
+  # a semantically PLURAL key, and it is now registered in
+  # `.RQ_PLURAL_DIAGNOSTIC_KEYS` (R/db-schema.R), so it serialises as an array
+  # at every length including 1 and 0. The original version pinned
+  # auto_unbox's default behaviour, which made the field change SHAPE with its
+  # length - array at 2, bare string at 1 - forcing every consumer to branch,
+  # and to get it wrong on the length-1 case, which is the common case. The
+  # same defect was reported independently against `candidates` (round-2
+  # finding FF8), which is what prompted deciding it once for all plural keys
+  # rather than per key. `n_rows` is genuinely scalar and still unboxes.
+  expect_identical(diags$single$source_ref, list("s1"))
   expect_identical(diags$single$n_rows, 1L)
   single_text <- stored$payload[grepl("T.SINGLE-Q2", stored$payload, fixed = TRUE)][[1]]
-  expect_match(single_text, '"source_ref":"s1"')
+  expect_match(single_text, '"source_ref":\\["s1"\\]')
   expect_match(single_text, '"n_rows":1')
 
   # n_rows is a JSON NUMBER, never a quoted string: the retired migration 006

@@ -15,7 +15,8 @@ review_queue(con, status = "open")
 a tibble of \code{review_queue} rows.
 }
 \description{
-Returns queue rows as a tibble with stable columns (all 10) even on a
+Returns queue rows as a tibble with stable columns (all 13) even on a
 zero-row result, since the \code{SELECT} names every column explicitly.
-\code{payload} is left as-is (JSON text).
+Entity/classification data lives in typed columns (\code{subkind}, \code{uuid_existing},
+\code{uuid_alias}); \code{payload} carries only the diagnostics JSON remainder.
 }
