@@ -200,7 +200,7 @@ test_that("R-8.2: a NA feature_raw is unknown (never a phantom hit into clean) -
   # suggestion for it (rather than treating it as unresolvable) would still
   # pass every assertion above. `feature_raw = NA` must never reach a
   # structural parse.
-  expect_false(grepl("subkind=structural", out$review$payload[[1]], fixed = TRUE))
+  expect_false(identical(out$review$subkind[[1]], "structural"))
 })
 
 # ---- R-8.3: analyte / method resolution ----------------------------------
@@ -249,7 +249,14 @@ test_that("R-8.3: CAS fallback finds the analyte but still queues (known_analyte
   hit <- out$review[out$review$source_ref == "r1", ]
   expect_equal(nrow(hit), 1)
   expect_identical(hit$kind, "unknown_analyte")
-  expect_true(grepl("known_analyte_no_method", hit$payload[[1]]) || grepl("known_analyte_no_method", paste(hit, collapse = " ")))
+  # PLAN-16 Phase-7 round 2 (FE7): this asserted grepl("known_analyte_no_method",
+  # payload) with a `|| grepl(tok, paste(hit, collapse=" "))` disjunct appended.
+  # The disjunct passed if the token appeared in ANY column, which is what kept the
+  # block green after PLAN-16 moved `known_analyte_no_method` OUT of the payload text
+  # and INTO the typed `subkind` column (R/reconcile.R:800) - the precise conjunct had
+  # silently become unsatisfiable. Assert the typed column, which is where the value
+  # now lives.
+  expect_identical(hit$subkind[[1]], "known_analyte_no_method")
 })
 
 test_that("R-8.3: a full analyte miss queues grouped by (analyte_raw, org)", {
@@ -364,6 +371,43 @@ test_that("R-8.4: text-only results pass through unconverted with quantified NA"
   # measurement, so no detection state is true of it. See PLAN-CHANGE-REQUESTS.
   expect_true(is.na(row$quantified))
   expect_equal(row$value_chr, "Clear, low flow")
+})
+
+test_that("FD4/R-16.20: a text-vs-text value_conflict carries BOTH text values in the payload, not two nulls", {
+  path <- seed_db()
+  con <- seed_con(path)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  # An existing TEXT-valued measurement (tri-state: value NULL, value_chr set,
+  # quantified NULL) on s-0001/T.S01, a fresh lab_method (lm-0001, pH Value,
+  # ALS) not already used on that sample.
+  DBI::dbExecute(con, "INSERT INTO analysis
+    (uuid, uuid_sample, uuid_lab, value, value_chr, quantified) VALUES
+    ('an-fd4-text', 's-0001', 'lm-0001', NULL, 'clear', NULL)")
+
+  # Incoming row: same feature/date/lab_method, a DIFFERENT text value
+  # (comma-bearing, the exact hazard class R-16.10 exists for). No revision
+  # recorded for this work order, so this cannot supersede - it must land in
+  # review as a genuine value_conflict, not silently skip.
+  event <- mk_event(mk_row(source_ref = "r1", analyte_raw = "pH Value", org = "ALS",
+                           method_raw = "EA005P: pH by PC Titrator", units_raw = "pH",
+                           value_raw = "turbid, brown", value_num = NA_real_,
+                           value_chr = "turbid, brown", below_detection = NA,
+                           rl = NA_real_, cas_number = NA_character_,
+                           lab_sample_id = "XX1234567001"))
+  out <- reconcile_event(event, con)
+
+  hit <- out$review[out$review$source_ref == "r1" & out$review$kind == "value_conflict", ]
+  expect_equal(nrow(hit), 1)
+  expect_identical(hit$subkind[[1]], "measurement")
+
+  d <- jsonlite::fromJSON(hit$payload[[1]])
+  # Both text values must be retrievable - the numeric value_existing/
+  # value_incoming keys are NA/null for a text-vs-text conflict, so without
+  # value_chr_existing/value_chr_incoming a reviewer sees two nulls and
+  # cannot tell 'clear' from 'turbid, brown'.
+  expect_identical(d$value_chr_existing, "clear")
+  expect_identical(d$value_chr_incoming, "turbid, brown")
 })
 
 # ---- R-11.16: quantified from parse_value(); write rl_high (F4) -----------
@@ -1359,7 +1403,9 @@ test_that("R-11.9: a genuinely novel unknown-feature string yields an item with 
   out <- reconcile_event(event, con)
   hit <- out$review[out$review$source_ref == "r1" & out$review$kind == "unknown_feature", ]
   expect_equal(nrow(hit), 1)
-  expect_false(grepl("guess=|best_guess=", hit$payload[[1]]))
+  d <- jsonlite::fromJSON(hit$payload[[1]])
+  expect_null(d$candidates)
+  expect_null(d$guess)
 })
 
 test_that("R-11.9: grouping is unchanged - one item per normalised feature_raw, the A44 NA sentinel still groups", {

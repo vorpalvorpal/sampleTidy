@@ -246,6 +246,28 @@
 #' ONLY representation of the alias uuid (R-16.21, RULING D): the JSON
 #' `payload` text itself is never touched by this rewrite. Non-pending /
 #' unmatched review rows pass through untouched.
+#'
+#' `clean$source_ref` is one ref per row, but `.rc_feature_review()` /
+#' `.rc_analyte_review()` (R/reconcile.R) build a GROUPED review item's
+#' `source_ref` as `paste(refs, collapse = ",")` - a comma-joined list over
+#' the whole group (FF3, round-2 audit). An exact-string join against `amap`
+#' therefore only ever matched a one-row item; every grouped item's
+#' `uuid_alias` stayed NULL although the alias row existed. The match below
+#' splits the review row's `source_ref` on `,` and looks up each individual
+#' ref instead - every ref in a group's `clean` rows was assigned the SAME
+#' alias uuid by `.ct_materialise_feature_aliases()` (one alias per
+#' `alias_key`), so any one hit is sufficient and the result cannot depend on
+#' group size or row order.
+#'
+#' `amap`'s key additionally folds in `source_hash` when both tibbles carry
+#' it (always true for a real `reconcile_event()` review/clean pair; some
+#' hand-built test fixtures omit it, so this degrades to `source_ref`-only
+#' rather than erroring). `source_ref` alone (e.g. `"row1"`, `"r1c11"`) is
+#' only unique WITHIN one source file; a commit event spanning more than one
+#' file could otherwise let two DIFFERENT items' refs collide and rewrite
+#' the wrong review row's `uuid_alias` - a mis-link, which is worse than the
+#' missing link this fix repairs, since `uuid_alias` is what a human uses to
+#' accept the alias (PLAN-15 `review_queue_close()`, R-16.21).
 #' @keywords internal
 #' @noRd
 .ct_rewrite_review_payloads <- function(con, review, clean) {
@@ -258,12 +280,27 @@
   if (!any(pend)) {
     return(review)
   }
-  amap <- stats::setNames(clean$uuid_feature_alias[pend], clean$source_ref[pend])
+  use_hash <- "source_hash" %in% names(clean) && "source_hash" %in% names(review)
+  amap_keys <- if (use_hash) {
+    paste(clean$source_hash[pend], clean$source_ref[pend], sep = "\x01")
+  } else {
+    clean$source_ref[pend]
+  }
+  amap <- stats::setNames(clean$uuid_feature_alias[pend], amap_keys)
 
   for (i in seq_len(nrow(review))) {
     sr <- review$source_ref[[i]]
-    if (is.na(sr) || !(sr %in% names(amap))) next
-    au <- amap[[sr]]
+    if (is.na(sr)) next
+    refs <- strsplit(sr, ",", fixed = TRUE)[[1]]
+    keys <- if (use_hash) {
+      sh <- review$source_hash[[i]]
+      if (is.na(sh)) character(0) else paste(sh, refs, sep = "\x01")
+    } else {
+      refs
+    }
+    hit <- keys[keys %in% names(amap)]
+    if (length(hit) == 0) next
+    au <- amap[[hit[[1]]]]
     if (is.na(au)) next
     row_uuid <- review$uuid[[i]]
     if (is.na(row_uuid)) next

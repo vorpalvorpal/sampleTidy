@@ -1261,6 +1261,7 @@
         source_ref = rows$source_ref[[i]], reason = "already_present",
         source_hash = rows$source_hash[[i]], existing_uuid = existing$analysis_uuid[[1]],
         diagnostics = list(value_existing = exist_value, value_incoming = inc_value,
+                           value_chr_existing = exist_chr, value_chr_incoming = inc_chr,
                            quantified_existing = exist_quant, quantified_incoming = inc_quant)
       )
       next
@@ -1277,16 +1278,20 @@
       # subkind, not a second grammar); uuid_existing is a real column, never
       # a diagnostics key. Vocabulary is <thing>_<role> (role in
       # {existing,incoming}), shared with .fa_merge_samples' subkind=
-      # 'alias_merge' on value_existing/value_incoming; quantified_*/
-      # revision_* are the reconcile-only permitted extras. uuid_incoming is
-      # deliberately ABSENT (not NA) - the incoming value is not yet a row
-      # and has no uuid to name.
+      # 'alias_merge' on value_existing/value_incoming/value_chr_existing/
+      # value_chr_incoming (round-2 FD4: the text side of a tri-state
+      # measurement is carried too, or a text-vs-text conflict is
+      # unadjudicable - two nulls); quantified_*/revision_* are the
+      # reconcile-only permitted extras. uuid_incoming is deliberately
+      # ABSENT (not NA) - the incoming value is not yet a row and has no
+      # uuid to name.
       review_list[[length(review_list) + 1]] <- .rc_review_row(
         source_ref = rows$source_ref[[i]], kind = "value_conflict", n_rows = 1L,
         source_hash = rows$source_hash[[i]], subkind = "measurement",
         uuid_existing = existing$analysis_uuid[[1]],
         diagnostics = list(
           value_existing = exist_value, value_incoming = inc_value,
+          value_chr_existing = exist_chr, value_chr_incoming = inc_chr,
           quantified_existing = exist_quant, quantified_incoming = inc_quant,
           revision_existing = recorded_rev, revision_incoming = incoming_rev
         )
