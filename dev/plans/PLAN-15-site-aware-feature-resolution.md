@@ -737,9 +737,20 @@ live one, goes to REVIEW — it does NOT fall through to Layer 2.**
 >   `date_end`-only bound is live back to the beginning of time and B.TS41's single
 >   sample would otherwise shadow 24 years of B.S01;
 > * no row has `date_start > date_end`;
-> * the two corrected proxy dates are present and are **2026-05-25** (`k.e02`→K.S06) and
+> * ~~the two corrected proxy dates are present and are **2026-05-25** (`k.e02`→K.S06) and
 >   **2026-05-04** (`b.s04`→B.S01) — NOT the plan's original literals and NOT the cold
->   audit's day-late replacements.
+>   audit's day-late replacements.~~
+>   **STALE — CORRECTED 2026-07-26. THE TABLE BELOW IS AUTHORITATIVE, NOT THIS BOX.**
+>   This bullet predates R5's reclassification of `k.e02`→K.S06 from rule 1 to rule 2,
+>   and the table strikes `2026-05-25` through twice for exactly that reason: K.E02 and
+>   K.S06 coexist for their whole lifespans and both end 2026-05-25, so ANY bound on the
+>   K.S06 arm also falls inside K.E02's range and the key would go to review at every
+>   date and never resolve. **That arm stays OPEN (`date_start` and `date_end` both
+>   NULL).** There is now only ONE corrected proxy date: **2026-05-04** (`b.s04`→B.S01).
+>   Implementing this bullet as written would put a bound on `k.e02`→K.S06 and break it.
+>   Recorded because this box nearly cost a false defect report against a correct
+>   migration on 2026-07-26 — the E.5 data test asserts the table's values, not this
+>   box's, and says so at the assertion.
 >
 > Without that second test the injection split converts an untestable migration into a
 > tested mechanism carrying untested data, which is a quieter failure than the one it

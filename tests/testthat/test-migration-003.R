@@ -371,3 +371,90 @@ test_that("E.5: .mig003_apply_bounds() aborts (catchable error) and writes NOTHI
   after <- .mig003_bounds_snapshot(con)
   expect_equal(after, before)
 })
+
+# ======================================================================
+# E.5 — the curated bounds table AS DATA (no database)
+# ======================================================================
+
+test_that("E.5: .mig003_e5_bounds() is exactly the nine curated rows, with rule-1 point bounds and no contradictory bound", {
+  mig <- .mig003_load()
+  b <- mig$.mig003_e5_bounds()
+
+  # WHY THIS TEST EXISTS. PLAN-15 E.5 pins it explicitly: splitting 003 into
+  # an entry point plus an injectable applier made the MECHANISM testable
+  # (every other block here drives `.mig003_fixture_bounds()`), but left the
+  # nine real curated rows exercised by nothing. The plan's own words: without
+  # this, the split "converts an untestable migration into a tested mechanism
+  # carrying untested data, which is a quieter failure than the one it
+  # replaces". These literals are hand-transcribed and are written to the LIVE
+  # alias registry, where a slipped date silently mis-annotates which arms get
+  # a self-precedence note.
+  #
+  # The rows are DATA, not derivable - E.5 says an implementer "must use
+  # exactly these literals and must not recompute them", so this test
+  # transcribes them independently from the plan's table rather than reading
+  # them back from the constant it is checking.
+
+  expect_identical(nrow(b), 9L)
+  expect_setequal(names(b), c("alias_key", "target_name", "date_start", "date_end"))
+
+  # A mixed-case key silently matches zero alias rows, and E.5's own abort
+  # would then fire on a correct migration. Cheap to assert, invisible if wrong.
+  expect_identical(b$alias_key, tolower(b$alias_key))
+
+  # Bounds must be DATE. `.rc_as_date_bound()` and `.rq_row()` both REJECT a
+  # POSIXct rather than coercing, because as.Date() on a POSIXct is itself
+  # timezone-dependent; a POSIXct leaking in here would be truncated in UTC.
+  expect_s3_class(b$date_start, "Date")
+  expect_s3_class(b$date_end, "Date")
+
+  expected <- data.frame(
+    alias_key   = c("b.s01", "b.ts02", "b.ts41", "b.s22", "b.s04",
+                    "b.s22", "k.e02", "b.ts18", "b.ts40"),
+    target_name = c("B.TS41", "B.TS27", "B.TMW15", "B.S06", "B.S01",
+                    "B.TS18", "K.S06", "B.S30", "B.TS39"),
+    date_start  = as.Date(c("2026-01-21", "2021-11-12", "2024-04-08", NA, NA,
+                            NA, NA, NA, NA)),
+    date_end    = as.Date(c("2026-01-21", "2021-11-12", "2024-04-08", NA,
+                            "2026-05-04", "2021-11-12", NA, "2021-11-12",
+                            "2024-04-08")),
+    stringsAsFactors = FALSE
+  )
+  expect_equal(b[order(b$alias_key, b$target_name), ],
+               expected[order(expected$alias_key, expected$target_name), ],
+               ignore_attr = "row.names")
+
+  # R5: a rule-1 arm gets a POINT bound, never an open-ended-back one. E.2's
+  # liveness rule makes a `date_end`-only arm live back to the beginning of
+  # time, so `b.s01`->B.TS41's SINGLE sample would shadow 24 years of B.S01 -
+  # measured in the plan at 178 of 186 samples vs 1 under a point bound. The
+  # constant carries no `rule` column, so the checkable form is: any row that
+  # sets `date_start` at all must close at the same day.
+  bounded <- !is.na(b$date_start)
+  expect_identical(b$date_start[bounded], b$date_end[bounded])
+
+  # A contradictory bound (start > end) can never be live - E.2 ANDs both
+  # halves - so such a row would silently apply nothing.
+  both <- !is.na(b$date_start) & !is.na(b$date_end)
+  expect_true(all(b$date_start[both] <= b$date_end[both]))
+
+  # E.6's restated count: SEVEN non-NULL `date_end` over the nine rows, not
+  # eight. `b.s22`->B.S06 (rule 2) and `k.e02`->K.S06 both stay open.
+  expect_identical(sum(!is.na(b$date_end)), 7L)
+
+  # The corrected proxy, and the one that is NOT a proxy any more.
+  #
+  # READ THE TABLE, NOT THE PROSE. E.5's guidance box still says "the two
+  # corrected proxy dates are 2026-05-25 (k.e02->K.S06) and 2026-05-04
+  # (b.s04->B.S01)". That box is STALE: the authoritative table below it
+  # strikes 2026-05-25 through twice, because R5 RECLASSIFIED k.e02->K.S06
+  # from rule 1 to rule 2. K.E02 and K.S06 coexist for their whole lifespans
+  # and both end 2026-05-25, so ANY bound on the K.S06 arm also falls inside
+  # K.E02's range and the key would go to review at every date and never
+  # resolve. It stays open. Asserting 2026-05-25 here would be transcribing
+  # the stale prose and would make a CORRECT migration fail.
+  expect_identical(b$date_end[b$alias_key == "b.s04" & b$target_name == "B.S01"],
+                   as.Date("2026-05-04"))
+  ke02 <- b$alias_key == "k.e02" & b$target_name == "K.S06"
+  expect_true(is.na(b$date_start[ke02]) && is.na(b$date_end[ke02]))
+})
