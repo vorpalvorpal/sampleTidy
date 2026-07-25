@@ -1467,6 +1467,26 @@ reconcile_event <- function(event, con) {
   # routes through .rq_row() (JSON diagnostics) instead of the now-deleted
   # .rc_serialise_payload() - the payload round-trips byte-identical because
   # jsonlite escapes by construction.
+  #
+  # PLAN-16 FF4 (Phase 7b round 2): assembly's `review_payload` list carries
+  # `kind`/`subkind` keys of its OWN (R/assemble.R:181-184/363-366) - those are
+  # NOT free-form diagnostics, they duplicate what this function already knows
+  # from `fr$review_kind[[i]]` and must become. Passing the list through whole
+  # left `review_queue.subkind` NULL while the JSON remainder disagreed with
+  # the typed `kind` column it sat beside. Hoist `subkind` into the typed
+  # argument and drop both keys from the serialised remainder before they ever
+  # reach `.rc_review_row()`.
+  #
+  # PLAN-16 FF5: the `foreign_work_order` subkind's payload also carries
+  # `work_order` (the FOREIGN work order named inside the file) under the same
+  # key name `commit_event()` uses for `review_queue.work_order` (the HOME
+  # work order the event was ingested under - `R/commit.R` always takes it
+  # from `event$work_order`, never from this diagnostics list; verified this
+  # IS two different facts sharing one name, not one fact duplicated). Rename
+  # the diagnostics key so a reader does not have to already know which is
+  # which. `home_work_order` is dropped here (not renamed): it is the exact
+  # same value `event$work_order` supplies as the typed column at commit, so
+  # keeping it under any name would just be a second copy of that column.
   if ("needs_review" %in% names(active)) {
     flagged <- .rc_is_true_vec(active$needs_review)
     if (any(flagged)) {
@@ -1474,9 +1494,15 @@ reconcile_event <- function(event, con) {
       stage0_rows <- lapply(seq_len(nrow(fr)), function(i) {
         diag <- fr$review_payload[[i]]
         if (is.null(diag)) diag <- list()
+        subkind <- diag$subkind
+        if (is.null(subkind)) subkind <- NA_character_
+        diag <- diag[setdiff(names(diag), c("kind", "subkind", "home_work_order"))]
+        if ("work_order" %in% names(diag)) {
+          names(diag)[names(diag) == "work_order"] <- "foreign_work_order"
+        }
         .rc_review_row(
           source_ref = fr$source_ref[[i]], kind = fr$review_kind[[i]], n_rows = 1L,
-          source_hash = fr$source_hash[[i]], diagnostics = diag
+          source_hash = fr$source_hash[[i]], subkind = subkind, diagnostics = diag
         )
       })
       stage0 <- dplyr::bind_rows(stage0_rows)

@@ -512,7 +512,14 @@ test_that("R-11.11 (D7/A63): a method seen with two different units surfaces the
   expect_gt(nrow(drift_review), 0)
   hit <- drift_review[grepl("lm-0009", drift_review$payload, fixed = TRUE), , drop = FALSE]
   expect_gt(nrow(hit), 0)
-  expect_true(grepl("mg/L", hit$payload[[1]], fixed = TRUE) && grepl("g/L", hit$payload[[1]], fixed = TRUE))
+  # FE8 (PLAN-16 Phase-7b round-2 audit): the original assertion
+  # `grepl("mg/L", ...) && grepl("g/L", ...)` was tautological - "g/L" is a
+  # substring of "mg/L", so the second conjunct is implied by the first and
+  # the whole thing reduces to grepl("mg/L", ...). Repointed at what the
+  # block name actually claims: BOTH distinct units must survive into the
+  # JSON payload's `units` array, not just one of them.
+  d <- jsonlite::fromJSON(hit$payload[[1]])
+  expect_setequal(d$units, c("mg/L", "g/L"))
 })
 
 test_that("R-11.11 (A63): a resolved (non-drifting) row is still converted exactly as today - all existing conversion behaviour stays green (conversion_constant, R-8.4-equivalent)", {

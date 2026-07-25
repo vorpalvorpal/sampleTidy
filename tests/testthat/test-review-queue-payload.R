@@ -25,12 +25,15 @@
 # test-feature-alias.R's fixture builder, needed to drive the REAL
 # `.fa_merge_samples()` value_conflict producer for R-16.19/R-16.20.
 #
-# FLAGGED NEW LOCAL HELPER (not in helper-db.R): `.p16_write_review_row()`,
-# a thin wrapper around the REAL `db_append()` mutation-layer writer that
-# mirrors `.ct_commit_review()`'s own per-row insert (R/commit.R:638-653)
-# exactly - i.e. the real downstream write path for a `reconcile_event()`
-# review row, not a hand-rolled `INSERT`. Defined locally per the brief
-# (do not edit helper-db.R).
+# `mk_commit_event()`/`mk_resolved()` are local, verbatim-shape copies of
+# test-commit.R's own builders of the same name (same no-cross-file-collision
+# convention as every other local helper in this file). Round-2 remediation
+# (FF12, worker W-G 2026-07-25): R-16.10 previously drove a test-local
+# `.p16_write_review_row()` that mirrored `.ct_commit_review()`'s insert by
+# hand and had already drifted (it wrote 6 columns, omitting
+# subkind/uuid_existing/uuid_alias) - so the plan's headline criterion never
+# exercised the real write path. `.p16_write_review_row()` is DELETED, not
+# kept alongside; R-16.10 now drives a genuine `commit_event()` call instead.
 
 # ---- local helpers (verbatim copies; see file header) ----------------------
 
@@ -97,20 +100,37 @@ mk_collision_fixture <- function(con) {
   invisible(NULL)
 }
 
-#' FLAGGED NEW LOCAL HELPER. Write ONE `reconcile_event()`-produced review row
-#' through the REAL `db_append()` mutation-layer writer, reproducing
-#' `.ct_commit_review()`'s own per-row insert shape (R/commit.R:638-653)
-#' exactly - the real downstream write path for a review item, not a
-#' hand-rolled `INSERT INTO review_queue`. Returns the written uuid.
-#' @keywords internal
-.p16_write_review_row <- function(con, review_row_1, work_order = "XX1234567") {
-  row <- tibble::tibble(
-    uuid = uuid::UUIDgenerate(), created_at = Sys.time(), kind = review_row_1$kind[[1]],
-    work_order = work_order, source_hash = review_row_1$source_hash[[1]],
-    payload = review_row_1$payload[[1]], status = "open"
+#' Local, verbatim-shape copy of test-commit.R's `mk_commit_event()`: the
+#' plan-07 event shape `commit_event()` expects. Needed here (FF12 fix) to
+#' drive R-16.10 through the REAL write path instead of a test-local
+#' reimplementation of `.ct_commit_review()`.
+mk_commit_event <- function(files, work_order = "XX1234567") {
+  list(
+    work_order = work_order, orphan = FALSE,
+    results = tibble::tibble(), samples = tibble::tibble(),
+    files = files,
+    report = list(n_results = 0L, n_by_sample_type = list(), n_ncp_foreign = 0L,
+                  skipped = tibble::tibble(hash = character(), source_ref = character(), reason = character()),
+                  warnings = character())
   )
-  db_append(con, "review_queue", row, actor = "test", reason = "P16-T-payload seam test")
-  row$uuid
+}
+
+#' Local, verbatim-shape copy of test-commit.R's `mk_resolved()`: the
+#' plan-08 `resolved` shape `commit_event()` expects.
+mk_resolved <- function(clean = tibble::tibble(), review = tibble::tibble(),
+                        skipped = tibble::tibble(), counts = c(new = nrow(clean))) {
+  list(clean = clean, review = review, skipped = skipped, counts = counts)
+}
+
+#' An empty `files` tibble in the shape `commit_event()`/`mk_commit_event()`
+#' expect (matching `mk_event()`'s own `files` column set above) - zero rows
+#' is enough to drive the review-item write path: `.ct_check_not_already_
+#' committed()`, `.ct_archive_files()` and `.ct_set_file_states()` all
+#' early-return on zero kept files, and `.ct_commit_review()` (step 5) does
+#' not depend on `files` at all.
+.p16_empty_files <- function() {
+  tibble::tibble(hash = character(), filename = character(),
+                 adapter = character(), rank = integer(), kept = logical())
 }
 
 # ==============================================================================
@@ -144,11 +164,11 @@ test_that("R-16.10: an analyte/value pair carrying comma, apostrophe, pipe, equa
   hit <- out$review[out$review$kind == "value_conflict", , drop = FALSE]
   expect_equal(nrow(hit), 1)
 
-  # REAL downstream writer: the exact row shape .ct_commit_review() inserts.
-  uuid_written <- .p16_write_review_row(con, hit)
+  # REAL downstream writer (FF12 fix): a genuine commit_event() call, not a
+  # test-local reimplementation of .ct_commit_review()'s insert.
+  commit_event(mk_commit_event(.p16_empty_files()), mk_resolved(review = hit), con)
 
-  stored <- DBI::dbGetQuery(con, "SELECT payload FROM review_queue WHERE uuid = ?",
-                             params = list(uuid_written))
+  stored <- DBI::dbGetQuery(con, "SELECT payload FROM review_queue WHERE kind = 'value_conflict'")
   expect_equal(nrow(stored), 1)
   raw <- stored$payload[[1]]
 
@@ -582,4 +602,65 @@ test_that("FB4: review_queue_add() with a failing child row leaves NO review row
   after_cand <- DBI::dbGetQuery(con, "SELECT COUNT(*) AS n FROM review_queue_candidate")$n
   expect_identical(after_review, before_review)
   expect_identical(after_cand, before_cand)
+})
+
+# ==============================================================================
+# Round-2 audit FD14/FE4: the public reader's typed columns were pinned by no
+# test. VERIFIED FIRST (worker W-G, 2026-07-25): R/mutate.R's review_queue()
+# SELECT already lists subkind/uuid_existing/uuid_alias (landed Phase-6,
+# commit 2a7ec53 "review_queue() returns typed columns") - so this is a
+# MISSING-TEST finding only, not a production defect, and no production code
+# changes alongside this test. Asserted through review_queue() ITSELF (not a
+# raw dbGetQuery), for a row written by a real production writer
+# (review_queue_add()), with both the TYPE and the VALUE of each column.
+# ==============================================================================
+
+test_that("FD14/FE4: review_queue()'s public reader returns subkind/uuid_existing/uuid_alias with the correct type and value, for a row written by review_queue_add()", {
+  path <- seed_db()
+  con <- seed_con(path)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  uuid_written <- review_queue_add(
+    con, kind = "value_conflict", subkind = "measurement",
+    uuid_existing = "an-0001", uuid_alias = "fa-0001"
+  )
+
+  rows <- review_queue(con)
+  hit <- rows[rows$uuid == uuid_written, , drop = FALSE]
+  expect_equal(nrow(hit), 1)
+
+  expect_true(is.character(hit$subkind))
+  expect_true(is.character(hit$uuid_existing))
+  expect_true(is.character(hit$uuid_alias))
+  expect_identical(hit$subkind[[1]], "measurement")
+  expect_identical(hit$uuid_existing[[1]], "an-0001")
+  expect_identical(hit$uuid_alias[[1]], "fa-0001")
+})
+
+# ==============================================================================
+# Task 4 (this round): register `adapters`/`units` in
+# `.RQ_PLURAL_DIAGNOSTIC_KEYS` (R/db-schema.R) and pin, on the RAW JSON TEXT
+# (not a jsonlite::fromJSON() result, whose own simplification would hide
+# exactly this scalar-vs-array difference), that every registered key
+# serialises as a JSON array even at length 1.
+# ==============================================================================
+
+test_that(".RQ_PLURAL_DIAGNOSTIC_KEYS: every registered plural diagnostics key serialises as a JSON ARRAY at length 1, asserted on the raw stored payload TEXT", {
+  path <- seed_db()
+  con <- seed_con(path)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  expect_true(all(c("candidates", "source_ref", "adapters", "units") %in% .RQ_PLURAL_DIAGNOSTIC_KEYS))
+
+  for (key in .RQ_PLURAL_DIAGNOSTIC_KEYS) {
+    diagnostics <- stats::setNames(list("only-one"), key)
+    uuid_written <- review_queue_add(con, kind = "unknown_feature", diagnostics = diagnostics)
+
+    stored <- DBI::dbGetQuery(con, "SELECT payload FROM review_queue WHERE uuid = ?",
+                               params = list(uuid_written))
+    raw <- stored$payload[[1]]
+    expected_array_fragment <- sprintf('"%s":["only-one"]', key)
+    expect_true(grepl(expected_array_fragment, raw, fixed = TRUE),
+                info = sprintf("key = %s, raw payload = %s", key, raw))
+  }
 })

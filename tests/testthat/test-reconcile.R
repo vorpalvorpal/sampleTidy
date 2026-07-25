@@ -1577,6 +1577,130 @@ test_that("R-11.14: a sample_datetime_mismatch-flagged row is held, not committe
   expect_true("dt_flagged" %in% out$review$source_ref)
 })
 
+# ---- PLAN-16 Phase 7b round 2 FF4/FF5: STAGE-0 fold-in typed columns -------
+#
+# FF4: assembly's `review_payload` list carries `kind`/`subkind` keys of its
+# own (R/assemble.R); the STAGE-0 fold used to pass the whole list through as
+# `diagnostics`, so `review_queue.subkind` stayed NULL while the JSON
+# remainder duplicated `kind`/`subkind`. Fixed by hoisting `subkind` into
+# `.rc_review_row()`'s typed argument and stripping both keys from the
+# serialised remainder.
+#
+# FF5: for `foreign_work_order`, the payload ALSO carried `work_order` (the
+# FOREIGN work order named inside the file) under the same key name
+# `commit_event()` uses for the typed `review_queue.work_order` column (the
+# HOME work order the event was ingested under, taken from `event$work_order`
+# - never from this diagnostics list). REPRODUCED: verified directly
+# (probe) that pre-fix the two carriers disagreed under one name
+# (payload.work_order = "FOREIGN999" vs review_queue.work_order =
+# "XX1234567" for the same row) - these are two DIFFERENT FACTS, not one
+# duplicated, so the fix renames the diagnostics key rather than picking a
+# winner. `home_work_order` (a pure duplicate of the future typed column,
+# verified byte-identical to `event$work_order`) is dropped rather than
+# renamed.
+
+test_that("PLAN-16 FF4: STAGE-0 foreign_work_order item promotes subkind to the typed column and the JSON payload no longer duplicates kind/subkind", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  parsed <- list(
+    "h-multi-ff4" = .rc_mk_parsed_entry(
+      results = dplyr::bind_rows(
+        .rc_mk_ir_result(source_hash = "h-multi-ff4", source_ref = "own_wo", work_order = "XX1234567",
+                         lab_sample_id = "XX1234567001", sample_type = "unknown"),
+        .rc_mk_ir_result(source_hash = "h-multi-ff4", source_ref = "foreign_wo", work_order = "ZZ0000002",
+                         lab_sample_id = "ZZ0000002001", sample_type = "Normal")
+      ),
+      meta = list(work_order_guess = "XX1234567")
+    )
+  )
+  asm <- assemble_events(parsed)
+  target <- Filter(function(e) "foreign_wo" %in% e$results$source_ref, asm$events)
+  event <- target[[1]]
+  out <- reconcile_event(event, con)
+
+  row <- out$review[out$review$source_ref == "foreign_wo", ]
+  expect_equal(nrow(row), 1)
+  # Typed column, not a grepl() on the payload string (before the fix this was NA).
+  expect_identical(row$subkind[[1]], "foreign_work_order")
+
+  parsed_payload <- jsonlite::fromJSON(row$payload[[1]])
+  expect_false("kind" %in% names(parsed_payload))
+  expect_false("subkind" %in% names(parsed_payload))
+})
+
+test_that("PLAN-16 FF4: STAGE-0 sample_datetime_mismatch item promotes subkind to the typed column, candidates survive, kind/subkind dropped from JSON", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  parsed <- list(
+    "h-chem2-ff4" = .rc_mk_parsed_entry(
+      results = .rc_mk_ir_result(source_hash = "h-chem2-ff4", source_ref = "dt_flagged", lab_sample_id = "XX1234567007", sample_type = "unknown"),
+      meta = list(work_order_guess = "XX1234567")
+    ),
+    "h-samp-c-ff4" = .rc_mk_parsed_entry(
+      samples = .rc_mk_ir_sample(source_hash = "h-samp-c-ff4", lab_sample_id = "XX1234567007", feature_raw = "T.S01",
+                                 sample_datetime_raw = "24 May 2025 11:45", sample_type = "Normal"),
+      meta = list(work_order_guess = "XX1234567")
+    ),
+    "h-samp-d-ff4" = .rc_mk_parsed_entry(
+      samples = .rc_mk_ir_sample(source_hash = "h-samp-d-ff4", lab_sample_id = "XX1234567007", feature_raw = "T.S01",
+                                 sample_datetime_raw = "25 May 2025 09:00", sample_type = "Normal"),
+      meta = list(work_order_guess = "XX1234567")
+    )
+  )
+  asm <- assemble_events(parsed)
+  event <- asm$events[[1]]
+
+  out <- reconcile_event(event, con)
+  row <- out$review[out$review$source_ref == "dt_flagged", ]
+  expect_equal(nrow(row), 1)
+  expect_identical(row$subkind[[1]], "sample_datetime_mismatch")
+
+  parsed_payload <- jsonlite::fromJSON(row$payload[[1]])
+  expect_false("kind" %in% names(parsed_payload))
+  expect_false("subkind" %in% names(parsed_payload))
+  expect_true("candidates" %in% names(parsed_payload))
+  expect_setequal(parsed_payload$candidates, c("24 May 2025 11:45", "25 May 2025 09:00"))
+})
+
+test_that("PLAN-16 FF5: committed review_queue.work_order (home) and the payload's foreign work order are different facts under different key names, both present", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  parsed <- list(
+    "h-multi-ff5" = .rc_mk_parsed_entry(
+      results = dplyr::bind_rows(
+        .rc_mk_ir_result(source_hash = "h-multi-ff5", source_ref = "own_wo", work_order = "XX1234567",
+                         lab_sample_id = "XX1234567001", sample_type = "unknown"),
+        .rc_mk_ir_result(source_hash = "h-multi-ff5", source_ref = "foreign_wo", work_order = "ZZ0000002",
+                         lab_sample_id = "ZZ0000002001", sample_type = "Normal")
+      ),
+      meta = list(work_order_guess = "XX1234567")
+    )
+  )
+  asm <- assemble_events(parsed)
+  target <- Filter(function(e) "foreign_wo" %in% e$results$source_ref, asm$events)
+  event <- target[[1]]
+  out <- reconcile_event(event, con)
+
+  commit_event(event, out, con)
+  rq <- review_queue(con)
+  rq <- rq[rq$source_hash == "h-multi-ff5" & rq$subkind == "foreign_work_order", ]
+  expect_equal(nrow(rq), 1)
+
+  # The typed column is the HOME work order the event was ingested under
+  # (commit_event() always takes it from event$work_order, never the review
+  # tibble - by design, verified at R/commit.R).
+  expect_identical(rq$work_order[[1]], event$work_order)
+  expect_identical(rq$work_order[[1]], "XX1234567")
+
+  # The payload carries the FOREIGN work order named inside the file, under
+  # an unambiguous key name - never the bare "work_order" name the typed
+  # column also uses, and never a second copy of the home value.
+  parsed_payload <- jsonlite::fromJSON(rq$payload[[1]])
+  expect_identical(parsed_payload$foreign_work_order, "ZZ0000002")
+  expect_false("work_order" %in% names(parsed_payload))
+  expect_false("home_work_order" %in% names(parsed_payload))
+})
+
 # ---- R-11.19: exact raw-name match first (A65 live defect) -----------------
 
 test_that("R-11.19: 'Standing Water Level' resolves to the row spelled exactly that way (lm-0010)", {
@@ -1765,6 +1889,33 @@ test_that("R-12.13: NA-safe key - two rows with an unresolved (NA) uuid_feature_
   expect_true("r2" %in% out$clean$source_ref)
   expect_false(any(out$review$kind == "batch_duplicate" & # PROVISIONAL ORACLE: R-12.13
                      out$review$source_ref %in% c("r1", "r2")))
+})
+
+# ---- PLAN-16 Phase 7b round 2 FF7: batch_duplicate names its OWN row too ---
+#
+# `.rc_review_row(source_ref = ...)` already promotes the LOSER's own
+# source_ref into both the typed `source_ref` column and `diagnostics$source_ref`
+# (Q2, 2026-07-25); `kept_source_ref` names the winner separately. The item is
+# therefore identifiable both ways, not just by the row it kept.
+
+test_that("PLAN-16 FF7: a batch_duplicate item's typed source_ref column AND its JSON payload identify the DROPPED row, while kept_source_ref still names the winner", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  event <- mk_event(mk_rows(
+    mk_row(source_ref = "BD_WINNER", lab_sample_id = "XX1234567002", feature_raw = "T.S02",
+           value_raw = "2.3", value_num = 2.3, below_detection = FALSE, rl = 0.1),
+    mk_row(source_ref = "BD_LOSER", lab_sample_id = "XX1234567002", feature_raw = "T.S02",
+           value_raw = "2.3", value_num = 2.3, below_detection = FALSE, rl = 0.1)
+  ))
+  out <- reconcile_event(event, con)
+
+  hit <- out$review[out$review$kind == "batch_duplicate", ]
+  expect_equal(nrow(hit), 1)
+  # Typed column: the item is about the row that was DROPPED, not the winner.
+  expect_identical(hit$source_ref[[1]], "BD_LOSER")
+
+  parsed_payload <- jsonlite::fromJSON(hit$payload[[1]])
+  expect_identical(parsed_payload$source_ref, "BD_LOSER")
+  expect_identical(parsed_payload$kept_source_ref, "BD_WINNER")
 })
 
 # =============================================================================
