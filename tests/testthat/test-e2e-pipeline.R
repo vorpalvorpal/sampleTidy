@@ -328,7 +328,20 @@ test_that("R-10.6: NAMESPACE exports equal the CONTRACT-pinned public API exactl
 test_that("R-10.6: DESCRIPTION Imports equal the CONTRACT-pinned set", {
   pinned <- c("checkmate", "cli", "DBI", "digest", "dplyr", "duckdb", "fs",
               "purrr", "readr", "readxl", "rlang", "stringr", "tibble",
-              "units", "uuid", "xml2")
+              "units", "uuid", "xml2",
+              # `jsonlite` added by PLAN-CHANGE REQUEST, Robin 2026-07-25, and
+              # added to CONTRACT.md's pinned list in the same change. This
+              # guard did its job: PLAN-16 put jsonlite into DESCRIPTION in its
+              # own first commit while claiming it was "a dependency already
+              # present" (it was not), and R-10.6 went red and stayed red
+              # through Phase 6 and two audit rounds because it sits outside
+              # the PLAN-16 file window. It is ratified rather than removed
+              # because it is used at exactly ONE production call site - the
+              # single diagnostics serialiser - and no other pinned Import
+              # offers JSON serialisation, so dropping it would mean
+              # hand-writing escaping and full-precision number formatting,
+              # which is the defect class PLAN-16 exists to eliminate.
+              "jsonlite")
   # Read the package's OWN metadata rather than walking up to the source
   # tree: under `R CMD check` the tests run from `sampleTidy.Rcheck/tests/
   # testthat`, where `../../DESCRIPTION` does not exist, so a path-walk makes
