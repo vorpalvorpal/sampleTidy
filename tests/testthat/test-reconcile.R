@@ -3390,9 +3390,17 @@ test_that("R-15.26: the review payload's candidate list is the UNION of the WHOL
   # failure this criterion exists to catch.
   expect_identical(rv_old_first$payload[[1]], rv_new_first$payload[[1]])   # byte-identical
 
-  dg <- jsonlite::fromJSON(rv_old_first$payload[[1]])
-  # order-INDEPENDENT: don't assume which of the two lands first in the union.
-  expect_setequal(dg$candidates, c("f-ord-a", "f-ord-b"))
+  # TRANSLATED 2026-07-26 under PLAN-16 RULING A (round-2 sweep). Was
+  #   dg <- jsonlite::fromJSON(rv_old_first$payload[[1]])
+  #   expect_setequal(dg$candidates, c("f-ord-a", "f-ord-b"))
+  # candidates no longer travel in the JSON diagnostics blob at all (Robin's
+  # ruling: feature-review candidates route to the typed child table, not
+  # JSON) - read the "candidate"-kind rows of the `candidates` list-column
+  # instead. Still order-INDEPENDENT, as before: don't assume which of the
+  # two lands first in the union.
+  cand_ord <- rv_old_first$candidates[[1]]
+  cand_ord <- cand_ord[!is.na(cand_ord$kind) & cand_ord$kind == "candidate", ]
+  expect_setequal(cand_ord$uuid_feature, c("f-ord-a", "f-ord-b"))
 })
 
 # ---- F.6: single-candidate suggestions are no longer discarded (R-15.27) --
@@ -3423,11 +3431,22 @@ test_that("R-15.27: exactly ONE suggestion candidate (fixture T.BORE -> f-0003 v
   rv <- out$review[out$review$kind == "unknown_feature" &
                       grepl("one_cand", out$review$source_ref, fixed = TRUE), ]
   expect_equal(nrow(rv), 1)
-  expect_true(grepl("subkind=suggestion", rv$payload[[1]], fixed = TRUE))
+  # TRANSLATED 2026-07-26 under PLAN-16 RULING A. Was
+  #   grepl("subkind=suggestion", rv$payload[[1]], fixed = TRUE)
+  # `subkind` is now a typed review_queue column (db-schema.R:121, populated
+  # by .rq_row() at :589); read it directly instead of grepping the retired
+  # k=v payload grammar.
+  expect_identical(rv$subkind[[1]], "suggestion")
   # Phase-5 round-5 audit A3: the criterion is the lone candidate (the SET),
   # not a substring - assert the SET, matching R-15.16's idiom.
-  dg <- jsonlite::fromJSON(rv$payload[[1]])
-  expect_true(setequal(dg$candidates, "f-0003"))
+  # TRANSLATED 2026-07-26 under PLAN-16 RULING A (round-2 sweep). Was
+  #   dg <- jsonlite::fromJSON(rv$payload[[1]])
+  #   expect_true(setequal(dg$candidates, "f-0003"))
+  # same substitution as the union test above: candidates live in the typed
+  # `candidates` list-column, not the JSON diagnostics blob.
+  cand_bore <- rv$candidates[[1]]
+  cand_bore <- cand_bore[!is.na(cand_bore$kind) & cand_bore$kind == "candidate", ]
+  expect_true(setequal(cand_bore$uuid_feature, "f-0003"))
   # Against TODAY's code this is `subkind=structural,site=T,point=BORE`
   # instead (the candidate was dropped by the >1 gate) - the failure this
   # criterion exists to catch, and the precedence-table link `suggestion` >
@@ -3481,12 +3500,23 @@ test_that("R-15.15: a key whose ONLY alias is EXPIRED lands in review with subki
   rv <- out$review[out$review$kind == "unknown_feature" &
                       grepl("expired_only", out$review$source_ref, fixed = TRUE), ]
   expect_equal(nrow(rv), 1)
-  expect_true(grepl("subkind=expired_alias", rv$payload[[1]], fixed = TRUE))
-  expect_true(grepl("expired=f-0007@2018-01-01..2019-12-31", rv$payload[[1]], fixed = TRUE))
-  # Against TODAY's code this is `subkind=structural,site=T,point=S7` instead
-  # (Layer 2 auto-resolution is already correctly gated by
-  # `.rc_alias_rows_exist()`, but nothing emits `subkind=expired_alias` yet).
-  expect_false(grepl("subkind=structural", rv$payload[[1]], fixed = TRUE))
+  # TRANSLATED 2026-07-26 under PLAN-16 RULING A. Was
+  #   grepl("subkind=expired_alias", rv$payload[[1]], fixed = TRUE)
+  # paired with expect_false(grepl("subkind=structural", ...)) below -
+  # `subkind` is a single-valued typed column, so pinning it to
+  # "expired_alias" already implies it is not "structural"; the negative is
+  # deleted as redundant per RULING A.
+  expect_identical(rv$subkind[[1]], "expired_alias")
+  # TRANSLATED 2026-07-26 under PLAN-16 RULING A. Was
+  #   grepl("expired=f-0007@2018-01-01..2019-12-31", rv$payload[[1]], fixed = TRUE)
+  # `expired=` named a k=v payload clause that no longer exists; the same
+  # fact now lives as one "expired"-kind row in the `candidates` list-column
+  # (reconcile.R:263, db-schema.R .rq_row()) with real Date bounds.
+  exp15 <- rv$candidates[[1]]
+  exp15_row <- exp15[!is.na(exp15$kind) & exp15$kind == "expired", ]
+  expect_identical(exp15_row$uuid_feature, "f-0007")
+  expect_identical(c(exp15_row$date_start, exp15_row$date_end),
+                    as.Date(c("2018-01-01", "2019-12-31")))
 
   ctrl <- out$clean[out$clean$source_ref == "no_alias_control", ]
   expect_false(ctrl$feature_pending)
@@ -3547,9 +3577,21 @@ test_that("R-15.16: payload emission at the expired-candidate count boundary - e
   rv_a <- out$review[out$review$kind == "unknown_feature" &
                         out$review$source_ref == "one_expired", ]
   expect_equal(nrow(rv_a), 1)
-  expect_true(grepl("subkind=expired_alias", rv_a$payload[[1]], fixed = TRUE))
-  expect_true(grepl("expired=f-0002@2018-01-01..2019-12-31", rv_a$payload[[1]], fixed = TRUE))
-  expect_false(grepl("subkind=ambiguous", rv_a$payload[[1]], fixed = TRUE))
+  # TRANSLATED 2026-07-26 under PLAN-16 RULING A. Was
+  #   grepl("subkind=expired_alias", rv_a$payload[[1]], fixed = TRUE)
+  # paired with expect_false(grepl("subkind=ambiguous", ...)) below - a
+  # single-valued typed column pinned to "expired_alias" already excludes
+  # "ambiguous"; the negative is deleted as redundant per RULING A.
+  expect_identical(rv_a$subkind[[1]], "expired_alias")
+  # TRANSLATED 2026-07-26 under PLAN-16 RULING A. Was
+  #   grepl("expired=f-0002@2018-01-01..2019-12-31", rv_a$payload[[1]], fixed = TRUE)
+  # same substitution as R-15.15 above: read the "expired"-kind row of the
+  # `candidates` list-column instead of a retired payload clause.
+  cand_tbl_a <- rv_a$candidates[[1]]
+  exp_row_a <- cand_tbl_a[!is.na(cand_tbl_a$kind) & cand_tbl_a$kind == "expired", ]
+  expect_identical(exp_row_a$uuid_feature, "f-0002")
+  expect_identical(c(exp_row_a$date_start, exp_row_a$date_end),
+                    as.Date(c("2018-01-01", "2019-12-31")))
   # round-3 B3: the `expect_false(subkind=suggestion)` assertion that lived
   # here (round-2 C4(a)) is deleted along with the live arm that motivated
   # it - this case has zero live arms, so `suggestion` was never a
@@ -3559,22 +3601,31 @@ test_that("R-15.16: payload emission at the expired-candidate count boundary - e
   rv_b <- out$review[out$review$kind == "unknown_feature" &
                         out$review$source_ref == "two_live_one_expired", ]
   expect_equal(nrow(rv_b), 1)
-  expect_true(grepl("subkind=ambiguous", rv_b$payload[[1]], fixed = TRUE))
-  expect_true(grepl("expired=f-0002@2018-01-01..2019-12-31", rv_b$payload[[1]], fixed = TRUE))
-  cand_str <- regmatches(rv_b$payload[[1]], regexpr("candidates=[^,]*", rv_b$payload[[1]]))
-  # Phase-5 round-5 audit A4: guard the length before `[[1]]` (see the
-  # matching comment above, R-15.27) - a missing `candidates=` clause must
-  # FAIL cleanly, never ERROR and abort the rest of this block.
-  expect_equal(length(cand_str), 1L)
-  cand_set <- if (length(cand_str) == 1L) {
-    strsplit(sub("candidates=", "", cand_str), "\\|")[[1]]
-  } else {
-    character(0)
-  }
-  # Against TODAY's code `candidates=` also lists the expired uuid_feature
-  # (f-0002) - the expired one belongs in `expired=` only, per the pinned
-  # grammar ("2 live + 1 expired emits ambiguous WITH an expired= clause").
-  expect_setequal(cand_set, c("f-exp16-live1", "f-exp16-live2"))
+  # TRANSLATED 2026-07-26 under PLAN-16 RULING A. Was
+  #   grepl("subkind=ambiguous", rv_b$payload[[1]], fixed = TRUE)
+  expect_identical(rv_b$subkind[[1]], "ambiguous")
+  # TRANSLATED 2026-07-26 under PLAN-16 RULING A. Was
+  #   grepl("expired=f-0002@2018-01-01..2019-12-31", rv_b$payload[[1]], fixed = TRUE)
+  # same substitution as R-15.15/the first R-15.16 case above.
+  cand_tbl_b <- rv_b$candidates[[1]]
+  exp_row_b <- cand_tbl_b[!is.na(cand_tbl_b$kind) & cand_tbl_b$kind == "expired", ]
+  expect_identical(exp_row_b$uuid_feature, "f-0002")
+  expect_identical(c(exp_row_b$date_start, exp_row_b$date_end),
+                    as.Date(c("2018-01-01", "2019-12-31")))
+  # TRANSLATED 2026-07-26 under PLAN-16 RULING A. Was a regmatches()/strsplit()
+  # parse of a retired `candidates=` payload clause (the length-guard against
+  # a missing/malformed clause no longer applies - subsetting a tibble never
+  # errors on a zero-row result). Read the "candidate"-kind rows of the
+  # `candidates` list-column directly, in rank order, and assert the SET of
+  # uuid_feature values - unchanged strength from the original
+  # expect_setequal() below.
+  cand_rows_b <- cand_tbl_b[!is.na(cand_tbl_b$kind) & cand_tbl_b$kind == "candidate", ]
+  cand_rows_b <- cand_rows_b[order(cand_rows_b$rank), ]
+  # Against TODAY's code the candidate set also lists the expired
+  # uuid_feature (f-0002) - the expired one belongs in the "expired"-kind
+  # rows only, per the pinned grammar ("2 live + 1 expired emits ambiguous
+  # WITH an expired candidate").
+  expect_setequal(cand_rows_b$uuid_feature, c("f-exp16-live1", "f-exp16-live2"))
 })
 
 test_that("R-15.46: a key holding exactly ONE live arm (auto_assign=FALSE) AND at least one EXPIRED arm, reconciled inside the live arm's bounds and outside the expired one's, emits subkind=suggestion (never subkind=expired_alias) AND carries an expired= clause naming the expired candidate - paired in the same test with a control on an otherwise-identical key whose live arm is removed, which DOES emit subkind=expired_alias (PLAN-15's 'LIVE CANDIDATE WAS OVERLOADED' ruling, 2026-07-24, round-3 PCR-1: 'live arm' throughout the precedence table means date-bounds-admit-the-sample-date, auto_assign-BLIND - expired_alias fires only at ZERO live arms, suggestion at EXACTLY ONE live auto_assign=FALSE arm; expiry is context, never the subkind, whenever any live arm exists)", {
@@ -3633,36 +3684,48 @@ test_that("R-15.46: a key holding exactly ONE live arm (auto_assign=FALSE) AND a
   # ignores expired arms whenever a live one exists would pass
   # subkind=suggestion alone without ever emitting the expired= clause - the
   # exact opposite of "expiry is context".
-  expect_true(grepl("subkind=suggestion", rv$payload[[1]], fixed = TRUE))
-  expect_false(grepl("subkind=expired_alias", rv$payload[[1]], fixed = TRUE))
-  # Phase-5 audit round 4 A3: a substring `grepl("candidates=f-1546-live", ...)`
-  # also passes on `candidates=f-1546-live|f-0002` (the expired uuid leaking
-  # into candidates= too) - exactly what the OVERLOADED ruling forbids
-  # ("expiry is context"). Parse the candidates= clause and assert the SET
-  # instead, matching R-15.16's idiom above.
-  cand_str <- regmatches(rv$payload[[1]], regexpr("candidates=[^,]*", rv$payload[[1]]))
-  # Phase-5 round-5 audit A4: guard the length before `[[1]]`. This is the
-  # site the delta names explicitly - a bare `[[1]]` on `character(0)` here
-  # would ERROR and abort the rest of this `test_that()` block, so the
-  # PAIRED CONTROL below (`expired_only_control`, the assertion that catches
-  # a hard-coded subkind) would never run.
-  expect_equal(length(cand_str), 1L)
-  cand_set <- if (length(cand_str) == 1L) {
-    strsplit(sub("candidates=", "", cand_str), "\\|")[[1]]
-  } else {
-    character(0)
-  }
-  expect_setequal(cand_set, "f-1546-live")
-  expect_true(grepl("expired=f-0002@2018-01-01..2019-12-31", rv$payload[[1]], fixed = TRUE))
+  # TRANSLATED 2026-07-26 under PLAN-16 RULING A. Was
+  #   grepl("subkind=suggestion", rv$payload[[1]], fixed = TRUE)
+  # paired with expect_false(grepl("subkind=expired_alias", ...)) below - a
+  # single-valued typed column pinned to "suggestion" already excludes
+  # "expired_alias"; the negative is deleted as redundant per RULING A.
+  expect_identical(rv$subkind[[1]], "suggestion")
+  # TRANSLATED 2026-07-26 under PLAN-16 RULING A. Was a regmatches()/strsplit()
+  # parse of a retired `candidates=` payload clause. Read the
+  # "candidate"-kind rows of the `candidates` list-column directly, in rank
+  # order - this is exactly the "expiry is context, not candidates" check
+  # the deleted comment above named: the expired uuid_feature must NOT
+  # appear in this subset.
+  cand_tbl_live <- rv$candidates[[1]]
+  cand_rows_live <- cand_tbl_live[!is.na(cand_tbl_live$kind) & cand_tbl_live$kind == "candidate", ]
+  cand_rows_live <- cand_rows_live[order(cand_rows_live$rank), ]
+  expect_setequal(cand_rows_live$uuid_feature, "f-1546-live")
+  # TRANSLATED 2026-07-26 under PLAN-16 RULING A. Was
+  #   grepl("expired=f-0002@2018-01-01..2019-12-31", rv$payload[[1]], fixed = TRUE)
+  # same substitution as R-15.15/R-15.16 above.
+  exp_row_live <- cand_tbl_live[!is.na(cand_tbl_live$kind) & cand_tbl_live$kind == "expired", ]
+  expect_identical(exp_row_live$uuid_feature, "f-0002")
+  expect_identical(c(exp_row_live$date_start, exp_row_live$date_end),
+                    as.Date(c("2018-01-01", "2019-12-31")))
 
   # PAIRED CONTROL: the same key shape with the live arm removed - a
   # hard-coded subkind fails this half.
   rv_ctrl <- out$review[out$review$kind == "unknown_feature" &
                            out$review$source_ref == "expired_only_control", ]
   expect_equal(nrow(rv_ctrl), 1)
-  expect_true(grepl("subkind=expired_alias", rv_ctrl$payload[[1]], fixed = TRUE))
-  expect_false(grepl("subkind=suggestion", rv_ctrl$payload[[1]], fixed = TRUE))
-  expect_true(grepl("expired=f-0002@2018-01-01..2019-12-31", rv_ctrl$payload[[1]], fixed = TRUE))
+  # TRANSLATED 2026-07-26 under PLAN-16 RULING A. Was
+  #   grepl("subkind=expired_alias", rv_ctrl$payload[[1]], fixed = TRUE)
+  # paired with expect_false(grepl("subkind=suggestion", ...)) below - a
+  # single-valued typed column pinned to "expired_alias" already excludes
+  # "suggestion"; the negative is deleted as redundant per RULING A.
+  expect_identical(rv_ctrl$subkind[[1]], "expired_alias")
+  # TRANSLATED 2026-07-26 under PLAN-16 RULING A. Was
+  #   grepl("expired=f-0002@2018-01-01..2019-12-31", rv_ctrl$payload[[1]], fixed = TRUE)
+  cand_tbl_ctrl <- rv_ctrl$candidates[[1]]
+  exp_row_ctrl <- cand_tbl_ctrl[!is.na(cand_tbl_ctrl$kind) & cand_tbl_ctrl$kind == "expired", ]
+  expect_identical(exp_row_ctrl$uuid_feature, "f-0002")
+  expect_identical(c(exp_row_ctrl$date_start, exp_row_ctrl$date_end),
+                    as.Date(c("2018-01-01", "2019-12-31")))
 })
 
 # ---- E.7: self-precedence note (R2) - blocking flag, commit, negative -----
@@ -3799,10 +3862,28 @@ test_that("R-15.45 (E.7): a key reaching a live SELF arm plus one live NON-self 
   note <- out$review[grepl("e7_self_wins", out$review$source_ref, fixed = TRUE), ]
   expect_equal(nrow(note), 1)
   expect_identical(note$kind, "unknown_feature")
-  expect_true(grepl("subkind=self_precedence_note", note$payload[[1]], fixed = TRUE))
-  expect_true(grepl("f-0003", note$payload[[1]], fixed = TRUE))
-  expect_true(grepl("blocking=FALSE", note$payload[[1]], fixed = TRUE))
-  expect_false(grepl("blocking=TRUE", note$payload[[1]], fixed = TRUE))
+  # TRANSLATED 2026-07-26 under PLAN-16 RULING A. Was
+  #   grepl("subkind=self_precedence_note", note$payload[[1]], fixed = TRUE)
+  # `subkind` is now a typed review_queue column; read it directly.
+  expect_identical(note$subkind[[1]], "self_precedence_note")
+  # TRANSLATED 2026-07-26 under PLAN-16 RULING A (round-2 sweep). Was
+  #   grepl("f-0003", note$payload[[1]], fixed = TRUE)
+  # candidate uuids no longer travel in payload text at all - read the
+  # "candidate"-kind rows of the `candidates` list-column instead.
+  cand_note <- note$candidates[[1]]
+  cand_note <- cand_note[!is.na(cand_note$kind) & cand_note$kind == "candidate", ]
+  expect_true("f-0003" %in% cand_note$uuid_feature)
+  # TRANSLATED 2026-07-26 under PLAN-16 RULING A (round-2 sweep). Was the
+  # paired
+  #   expect_true(grepl("blocking=FALSE", note$payload[[1]], fixed = TRUE))
+  #   expect_false(grepl("blocking=TRUE", note$payload[[1]], fixed = TRUE))
+  # unlike `subkind`, `blocking` is NOT a typed review_queue column - no
+  # ALTER adds it (db-schema.R:121-123 add only subkind/uuid_existing/
+  # uuid_alias) - it is a JSON diagnostics key, read via the idiom already
+  # used at lines 404/1096. The paired presence+absence collapses to the one
+  # positive check per RULING A.
+  d_note <- jsonlite::fromJSON(note$payload[[1]])
+  expect_false(d_note$blocking)
 
   # the SECOND case's review row is ALSO a self-precedence note - locking
   # the self_precedence_note > ambiguous link (S-15.6) against a shape where
@@ -3816,11 +3897,28 @@ test_that("R-15.45 (E.7): a key reaching a live SELF arm plus one live NON-self 
   # case above - not an NA/empty-safe guard.
   note_dual2 <- out$review[grepl("e7_dual2_self_wins", out$review$source_ref, fixed = TRUE), ]
   expect_equal(nrow(note_dual2), 1)
-  expect_true(grepl("subkind=self_precedence_note", note_dual2$payload[[1]], fixed = TRUE))
-  expect_false(grepl("subkind=ambiguous", note_dual2$payload[[1]], fixed = TRUE))
-  expect_true(grepl("f-e7dual2-opp1", note_dual2$payload[[1]], fixed = TRUE))
-  expect_true(grepl("f-e7dual2-opp2", note_dual2$payload[[1]], fixed = TRUE))
-  expect_true(grepl("blocking=FALSE", note_dual2$payload[[1]], fixed = TRUE))
+  # TRANSLATED 2026-07-26 under PLAN-16 RULING A. Was
+  #   grepl("subkind=self_precedence_note", note_dual2$payload[[1]], fixed = TRUE)
+  # paired with expect_false(grepl("subkind=ambiguous", ...)) below - a
+  # single-valued typed column pinned to "self_precedence_note" already
+  # excludes "ambiguous"; the negative is deleted as redundant per RULING A.
+  expect_identical(note_dual2$subkind[[1]], "self_precedence_note")
+  # TRANSLATED 2026-07-26 under PLAN-16 RULING A (round-2 sweep). Was two
+  # separate greps:
+  #   grepl("f-e7dual2-opp1", note_dual2$payload[[1]], fixed = TRUE)
+  #   grepl("f-e7dual2-opp2", note_dual2$payload[[1]], fixed = TRUE)
+  # read the "candidate"-kind rows of the `candidates` list-column and
+  # assert the SET in one call - stronger than the pair of greps, which
+  # could not catch a spurious third candidate.
+  cand_dual2 <- note_dual2$candidates[[1]]
+  cand_dual2 <- cand_dual2[!is.na(cand_dual2$kind) & cand_dual2$kind == "candidate", ]
+  expect_setequal(cand_dual2$uuid_feature, c("f-e7dual2-opp1", "f-e7dual2-opp2"))
+  # TRANSLATED 2026-07-26 under PLAN-16 RULING A (round-2 sweep). Was
+  #   grepl("blocking=FALSE", note_dual2$payload[[1]], fixed = TRUE)
+  # `blocking` is a JSON diagnostics key (see the matching comment above) -
+  # read it via jsonlite::fromJSON, not a payload substring.
+  d_dual2 <- jsonlite::fromJSON(note_dual2$payload[[1]])
+  expect_false(d_dual2$blocking)
 
   # negative control (review half): T.DUAL's row is ambiguous, never a
   # self-precedence note - completing R-15.45's plan-mandated pairing IN
@@ -3828,8 +3926,13 @@ test_that("R-15.45 (E.7): a key reaching a live SELF arm plus one live NON-self 
   # T.DUAL test, which asserts subkind only, never commit counts).
   note_ctrl <- out$review[grepl("e7_dual_negative_control", out$review$source_ref, fixed = TRUE), ]
   expect_equal(nrow(note_ctrl), 1)
-  expect_true(grepl("subkind=ambiguous", note_ctrl$payload[[1]], fixed = TRUE))
-  expect_false(grepl("subkind=self_precedence_note", note_ctrl$payload[[1]], fixed = TRUE))
+  # TRANSLATED 2026-07-26 under PLAN-16 RULING A. Was
+  #   grepl("subkind=ambiguous", note_ctrl$payload[[1]], fixed = TRUE)
+  # paired with expect_false(grepl("subkind=self_precedence_note", ...))
+  # below - a single-valued typed column pinned to "ambiguous" already
+  # excludes "self_precedence_note"; the negative is deleted as redundant
+  # per RULING A.
+  expect_identical(note_ctrl$subkind[[1]], "ambiguous")
 })
 
 # ---- cold-audit defect 2: .rc_fill_missing_cols() is type-aware for the
