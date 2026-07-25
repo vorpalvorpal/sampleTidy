@@ -269,22 +269,44 @@ test_that("R-16.6: no sub()/gsub()/regmatches()/regexpr()/grepl() reads a payloa
 
 .HY_SQL_JSON_PAT <- "(json_extract|json_valid|->>|->|\\bLIKE\\b|\\bSIMILAR\\s+TO\\b)"
 
+#' A literal must first look like SQL before the JSON-operator/`payload`
+#' co-occurrence check even considers it. Without this gate, `->` alone
+#' trips on any STR_CONST containing an arrow AND the word "payload" -
+#' including a plain human-readable message with no SQL in it at all, e.g.
+#' `reason = "... payload -> typed columns"` (the retired legacy migration
+#' once read exactly that; a prior worker "fixed" the trip
+#' by rewording the prose to "payload to typed columns" instead of fixing
+#' the scanner - the trap stayed armed for the next arrow). Chosen fix is
+#' option (a) from the brief: require a real SQL keyword (word-boundary,
+#' case-insensitive) to appear in the literal first. Rejected (b) (walk the
+#' parse tree to a DB call) as more machinery than the false-positive needs;
+#' rejected (c) (require the arrow adjacent to a quoted identifier/`$.`
+#' path) as harder to state precisely than "is this actually SQL" and no
+#' more robust against the real failure mode observed.
+.HY_SQL_KEYWORD_PAT <- "\\b(SELECT|FROM|WHERE|INSERT|UPDATE|DELETE|CREATE|ALTER|JOIN|VALUES)\\b"
+
+.hy_looks_like_sql <- function(lit) {
+  grepl(.HY_SQL_KEYWORD_PAT, lit, perl = TRUE, ignore.case = TRUE)
+}
+
 .hy_string_literals <- function(src) {
   pd <- src$pd
   if (is.null(pd) || nrow(pd) == 0) return(character(0))
   pd$text[pd$token == "STR_CONST"]
 }
 
-#' Flag every string literal (package SQL text lives inside R string
-#' literals - the corpus here is deliberately the OPPOSITE of the
-#' comment-scrub above: comments are excluded by only looking at STR_CONST
-#' tokens, and string content is exactly what is inspected) that contains
-#' BOTH a forbidden SQL-JSON operator/keyword AND the word `payload`.
+#' Flag every string literal that LOOKS LIKE SQL (`.hy_looks_like_sql()`;
+#' package SQL text lives inside R string literals - the corpus here is
+#' deliberately the OPPOSITE of the comment-scrub above: comments are
+#' excluded by only looking at STR_CONST tokens, and string content is
+#' exactly what is inspected) AND contains BOTH a forbidden SQL-JSON
+#' operator/keyword AND the word `payload`.
 .hy_scan_sql_json_on_payload <- function(sources) {
   hits <- list()
   for (src in sources) {
     for (lit in .hy_string_literals(src)) {
-      if (grepl(.HY_SQL_JSON_PAT, lit, perl = TRUE, ignore.case = TRUE) &&
+      if (.hy_looks_like_sql(lit) &&
+          grepl(.HY_SQL_JSON_PAT, lit, perl = TRUE, ignore.case = TRUE) &&
           grepl(.hy_payload_word_pat, lit, perl = TRUE)) {
         hits[[length(hits) + 1]] <- list(path = src$path, text = lit)
       }
@@ -311,6 +333,20 @@ test_that("R-16.6: no SQL-side JSON read (json_extract/json_valid/->/->>/LIKE/SI
     info = "positive control failed: a synthetic json_extract(payload, ...) SQL string was not flagged"
   )
 
+  # POSITIVE CONTROL (decoy): the bare `->` JSON operator (not json_extract)
+  # inside genuine SQL - the exact literal from the brief - must still be
+  # caught once it is wrapped in real SQL, proving the SQL-keyword gate
+  # narrows false positives without blinding the scanner to true ones.
+  decoy_arrow_violation <- .hy_source_from_text(paste(
+    "f <- function(con) {",
+    "  DBI::dbGetQuery(con, \"SELECT * FROM review_queue WHERE payload -> '$.site' = 'X'\")",
+    "}", sep = "\n"
+  ))
+  expect_true(
+    length(.hy_scan_sql_json_on_payload(list(decoy_arrow_violation))) >= 1,
+    info = "positive control failed: a genuine SQL string using the bare -> JSON operator on payload was not flagged"
+  )
+
   # NEGATIVE CONTROLS: a comment mentioning the pattern must not trip the
   # scanner, and a plain SELECT of the payload COLUMN (no JSON operator -
   # exactly R/mutate.R's sanctioned review_queue() reader) must not either.
@@ -321,6 +357,22 @@ test_that("R-16.6: no SQL-side JSON read (json_extract/json_valid/->/->>/LIKE/SI
     "}", sep = "\n"
   ))
   expect_length(.hy_scan_sql_json_on_payload(list(decoy_comment_only)), 0)
+
+  # NEGATIVE CONTROL (the defect this block fixes): a HUMAN-READABLE prose
+  # string containing an arrow and the word "payload" but no SQL at all must
+  # NOT be flagged - this is not SQL, so R-16.6 does not apply to it. The
+  # literal below is the real `reason = ...` message the retired legacy
+  # migration carried (dev/migrations/006, deleted 2026-07-25 once its rows
+  # were resolved), restored to its original "->" wording. It is kept
+  # verbatim BECAUSE it is a real-world example of the false-positive class,
+  # not because the file still exists.
+  decoy_prose_arrow <- .hy_source_from_text(paste(
+    "f <- function() {",
+    "  reason <- \"PLAN-16 B-16.migration: asset_content_unverified payload -> typed columns\"",
+    "  reason",
+    "}", sep = "\n"
+  ))
+  expect_length(.hy_scan_sql_json_on_payload(list(decoy_prose_arrow)), 0)
 
   real_hits <- .hy_scan_sql_json_on_payload(real_sources)
   info <- sprintf(
@@ -623,4 +675,153 @@ test_that("R-16.8: each of the 14 content-producing review-writing sites (11 enc
 
   info <- sprintf("sites not yet routed through .rq_row(): %s", paste(missing, collapse = "; "))
   expect_true(length(missing) == 0, info = info)
+})
+
+# ==== R-16.8, part 3: the sanctioned WRAPPERS THEMSELVES must still reach ==
+# ==== .rq_row() (or, for the skip-tibble carrier, .rq_skip()) =============
+#
+# Gap closed here: part 2 above only checks that the 11 content-producing
+# FUNCTIONS call a member of the sanctioned set - it never checks that the
+# sanctioned wrappers' OWN bodies still route onward. If `.rc_review_row()`
+# were later edited to hand-build a payload string instead of calling
+# `.rq_row()`, all 9 wrapper-routed sites would still pass part 2 above
+# (they call `.rc_review_row()`, which is still in the sanctioned set) while
+# the actual payload assembly silently regressed. This block walks one hop
+# further: does each sanctioned wrapper (other than the two TERMINALS,
+# below) itself call `.rq_row()` directly, or another sanctioned wrapper
+# that transitively does?
+
+#' TERMINAL sanctioned constructors for this transitivity check: `.rq_row()`
+#' (review_queue carrier) and, by the EXPLICIT B-16.skips exception, also
+#' `.rq_skip()` (skip-tibble carrier). `.rq_skip()` is not a violation for
+#' failing to reach `.rq_row()` - the skip tibble never becomes a
+#' `review_queue` row (it stays in-memory, feeding `commit_event()`
+#' directly) and per the sanctioned-set comment above (`.rc_skip_row`'s
+#' entry) is structurally incapable of routing through `.rq_row()` at all.
+#' `.rc_skip_row()` in turn calls `.rq_skip()`, not `.rq_row()` - the same
+#' carrier, the same exception - so this check treats "reaches `.rq_skip()`"
+#' as an equally valid destination, not a silent special case: it is a
+#' second, explicitly named TERMINAL, exactly like `.rq_row()`.
+#' Verified against current source (2026-07-25), not assumed: `.rq_skip()`
+#' (R/reconcile.R) calls `.rq_serialise_diagnostics()` directly - the SAME
+#' shared serialisation helper `.rq_row()` (R/db-schema.R) uses - but does
+#' NOT call `.rq_row()` itself. The sanity check inside the test below
+#' re-verifies this fact every run so the exception cannot go stale if a
+#' future refactor changes it.
+.HY_ROUTING_TERMINALS <- c(".rq_row", ".rq_skip")
+
+#' `name -> character vector of sanctioned names it calls`, built by
+#' scanning each sanctioned constructor's own named top-level span (as
+#' found in `sources`) for a call to any OTHER member of
+#' `.HY_SANCTIONED_ROW_CONSTRUCTORS`, using the same comment/string-scrubbed
+#' per-name detector (`.hy_call_pattern()`, R-16.7's helper) already used
+#' elsewhere in this file - never a loose name pattern.
+.hy_sanctioned_call_graph <- function(sources) {
+  edges <- stats::setNames(vector("list", length(.HY_SANCTIONED_ROW_CONSTRUCTORS)),
+                            .HY_SANCTIONED_ROW_CONSTRUCTORS)
+  for (nm in names(edges)) edges[[nm]] <- character(0)
+  for (src in sources) {
+    scrubbed <- .hy_scrub_lines(src)
+    spans <- .hy_named_top_level_spans(src)
+    for (nm in .HY_SANCTIONED_ROW_CONSTRUCTORS) {
+      span <- spans[[nm]]
+      if (is.null(span)) next
+      l2 <- min(span["line2"], length(scrubbed))
+      chunk <- paste(scrubbed[span["line1"]:l2], collapse = "\n")
+      called <- Filter(
+        function(other) other != nm && grepl(.hy_call_pattern(other), chunk, perl = TRUE),
+        .HY_SANCTIONED_ROW_CONSTRUCTORS
+      )
+      edges[[nm]] <- unique(c(edges[[nm]], called))
+    }
+  }
+  edges
+}
+
+#' TRUE if `start` reaches any name in `terminals` by following `edges`
+#' (breadth-first, cycle-safe via `visited`) - `start` itself counts if it
+#' IS a terminal.
+.hy_reaches <- function(start, edges, terminals) {
+  if (start %in% terminals) return(TRUE)
+  visited <- character(0)
+  queue <- edges[[start]]
+  while (length(queue) > 0) {
+    nm <- queue[1]
+    queue <- queue[-1]
+    if (nm %in% terminals) return(TRUE)
+    if (nm %in% visited) next
+    visited <- c(visited, nm)
+    queue <- c(queue, edges[[nm]])
+  }
+  FALSE
+}
+
+test_that("R-16.8: each sanctioned wrapper other than .rq_row() (and .rq_skip(), its B-16.skips-exempt skip-tibble counterpart) transitively reaches .rq_row() or .rq_skip() by calling another sanctioned constructor - closes the gap where part 2 above checks only the 11 content-producing FUNCTIONS, never the wrappers' own bodies", {
+  real_sources <- lapply(.hy_r_files(), .hy_source_from_file)
+  real_edges <- .hy_sanctioned_call_graph(real_sources)
+
+  # Sanity check on the exception itself (comment on .HY_ROUTING_TERMINALS):
+  # re-verify, every run, that .rq_skip() still does NOT call .rq_row() -
+  # if a future refactor makes it do so, the exception becomes unnecessary
+  # (though harmless) and this would be the signal to notice that drift.
+  expect_false(
+    ".rq_row" %in% real_edges[[".rq_skip"]],
+    info = paste(
+      ".rq_skip() now calls .rq_row() directly - the B-16.skips terminal",
+      "exception recorded on .HY_ROUTING_TERMINALS is stale; update the",
+      "comment (the exception may no longer be needed) rather than leaving",
+      "it as unexplained dead documentation"
+    )
+  )
+
+  # POSITIVE CONTROL (decoy): a synthetic 2-hop chain through ANOTHER
+  # sanctioned wrapper (.rc_review_row -> review_queue_add -> .rq_row) proves
+  # the walker follows routing more than one level deep, not merely a direct
+  # call - guards against a check that only re-derives part 2 above.
+  decoy_transitive <- .hy_source_from_text(paste(
+    ".rc_review_row <- function() { review_queue_add() }",
+    "review_queue_add <- function() { .rq_row() }",
+    ".rq_row <- function() { NULL }",
+    sep = "\n"
+  ))
+  edges_t <- .hy_sanctioned_call_graph(list(decoy_transitive))
+  expect_true(
+    .hy_reaches(".rc_review_row", edges_t, .HY_ROUTING_TERMINALS),
+    info = "positive control failed: a 2-hop chain through another sanctioned wrapper was not detected as routed"
+  )
+
+  # POSITIVE CONTROL (decoy): THE EXACT REGRESSION THIS BLOCK EXISTS TO
+  # CATCH - a wrapper edited to hand-build its payload, calling NO sanctioned
+  # constructor at all - must be flagged as NOT reaching a terminal.
+  decoy_regressed <- .hy_source_from_text(
+    ".rc_review_row <- function(x) {\n  payload <- paste0('k=', x)\n  payload\n}\n"
+  )
+  edges_r <- .hy_sanctioned_call_graph(list(decoy_regressed))
+  expect_false(
+    .hy_reaches(".rc_review_row", edges_r, .HY_ROUTING_TERMINALS),
+    info = "positive control failed: a hand-building regression of .rc_review_row() (no sanctioned call at all) was not flagged as unrouted"
+  )
+
+  # NEGATIVE CONTROL (exception encoding): a wrapper that reaches ONLY
+  # .rq_skip() (never .rq_row()) - .rc_skip_row()'s real shape - must still
+  # count as routed, because .rq_skip() is the sanctioned SKIP-tibble
+  # terminal (B-16.skips), not a violation.
+  decoy_via_skip <- .hy_source_from_text(
+    ".rc_skip_row <- function() { .rq_skip() }\n"
+  )
+  edges_s <- .hy_sanctioned_call_graph(list(decoy_via_skip))
+  expect_true(
+    .hy_reaches(".rc_skip_row", edges_s, .HY_ROUTING_TERMINALS),
+    info = "negative control failed: a wrapper reaching only .rq_skip() (the sanctioned skip-tibble terminal) was incorrectly treated as unrouted"
+  )
+
+  # THE REAL CHECK: every sanctioned wrapper except the two TERMINALS
+  # themselves must transitively reach a terminal in the real source tree.
+  to_check <- setdiff(.HY_SANCTIONED_ROW_CONSTRUCTORS, .HY_ROUTING_TERMINALS)
+  unrouted <- Filter(function(nm) !.hy_reaches(nm, real_edges, .HY_ROUTING_TERMINALS), to_check)
+  info <- sprintf(
+    "sanctioned wrapper(s) no longer transitively reach .rq_row()/.rq_skip(): %s",
+    paste(unrouted, collapse = "; ")
+  )
+  expect_true(length(unrouted) == 0, info = info)
 })
