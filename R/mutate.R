@@ -500,6 +500,24 @@ db_delete <- function(con, table, uuid = NULL, actor, reason, key = NULL) {
 #' (A16) - human-callable, no `con` argument. Thin wrapper over `db_append()`
 #' with a fresh `uuid::UUIDgenerate()` for the new row.
 #'
+#' PLAN-15 F.9/S-15.8: post-001, `sample.uuid_feature_alias` is the ONLY path
+#' from a sample to a feature, and migration 001 gave every then-existing
+#' feature a `kind = 'self'` alias. A feature created by this function alone
+#' would have none, making it permanently unreachable by its own name
+#' (`.rc_feature_candidates()`'s Layer-1 exact match finds zero candidates,
+#' forever and silently - the call still "succeeds") and inert to Work B
+#' Layer 2 (`.rc_self_alias()` returns `NA`, so a structural hit routes to
+#' REVIEW instead of committing). Fix: write the `feature` row AND its
+#' `kind = 'self'` `feature_alias` row inside ONE mutation-layer transaction
+#' (`db_transaction()`, the same participation mechanism `commit_event()`
+#' uses), each with its own `change_log` provenance row. A failure on the
+#' second write (the alias) rolls the first (the feature) back too - this is
+#' a single atomic unit, not two independent `with_db_write()` calls. The
+#' self alias is written already `confirmed_by = actor` and `auto_assign =
+#' TRUE` (the only combination Layer-1's exact match reaches - PLAN-15 test
+#' R-15.30), with `alias_key = .rc_feature_key(name)` matching migration
+#' 001's `.mig001_normalize()` convention exactly.
+#'
 #' @param name feature name.
 #' @param site site name.
 #' @param lon longitude, `DOUBLE NOT NULL` on the live schema.
@@ -530,8 +548,21 @@ add_feature <- function(name, site, lon, lat, flow = NA_character_,
     uuid = new_uuid, name = name, site = site, lon = lon, lat = lat,
     flow = flow, matrix = matrix, geom_wkt = geom_wkt, virtual = virtual
   )
+  now <- Sys.time()
+  alias_row <- tibble::tibble(
+    uuid = uuid::UUIDgenerate(), uuid_feature = new_uuid, name = name,
+    alias_key = .rc_feature_key(name), kind = "self", n_seen = 0L,
+    auto_assign = TRUE, first_seen = now, last_seen = now,
+    confirmed_by = actor,
+    comments = "Self alias created by add_feature() (PLAN-15 F.9/S-15.8)."
+  )
   with_db_write(
-    function(con) db_append(con, "feature", row, actor = actor, reason = reason),
+    function(con) {
+      db_transaction(con, function(con) {
+        db_append(con, "feature", row, actor = actor, reason = reason)
+        db_append(con, "feature_alias", alias_row, actor = actor, reason = reason)
+      })
+    },
     db = st_config("live_db")
   )
   invisible(new_uuid)
