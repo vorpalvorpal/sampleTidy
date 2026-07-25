@@ -17,9 +17,36 @@
 #    same uuids.
 #  - R-16.24: the two candidate carriers (review_queue_candidate child rows,
 #    and the JSON `candidates` diagnostics key RULING-F pins for
-#    reconcile-side producers) are told apart by PRESENCE, never guessed;
-#    a row using both at once is a producer defect and the reader aborts
-#    rather than silently pick a side.
+#    reconcile-side producers, e.g. `.rc_feature_review()`'s `unknown_feature`
+#    `ambiguous` items - real feature uuids, confirmed a genuine live-committed
+#    writer of that key) are told apart by PRESENCE, never guessed; a row
+#    using both at once is a producer defect and the reader aborts rather
+#    than silently pick a side.
+#
+#  PLAN-16 W-r4 history (2026-07-25), NOT re-litigated below, kept only so a
+#  future reader does not repeat the mistake: a first pass deleted this JSON
+#  arm on the (wrong) belief that no production path wrote FEATURE
+#  candidates to it - `.rc_feature_review()` (R/reconcile.R) does, for
+#  `unknown_feature`/`ambiguous` reviews, and `.ct_commit_review()`
+#  (R/commit.R) persists that payload verbatim. The arm is restored here,
+#  WITH four cold-audit fixes a second pass found in it (all four covered by
+#  dedicated blocks below):
+#   1. `diag[["candidates"]]`, never `diag$candidates` - `$` prefix-matches,
+#      so a stray `candidatesConsidered` key would be misread as the carrier
+#      (and could false-positive the both-carriers abort against real child
+#      rows).
+#   2. the JSON value is type-checked (`is.atomic()`) before
+#      `as.character()` - an array of JSON OBJECTS decodes to a data.frame,
+#      and `as.character()` on that deparses each COLUMN, not each row
+#      (`uuid_feature = 'c("f-1","f-2")'`, nrow == ncol). Refused outright now.
+#   3. a payload PRESENT but unparseable as JSON now aborts (producer
+#      defect) instead of being swallowed into "zero candidates" by a
+#      blanket `tryCatch` - only a genuinely absent/NA payload is a
+#      legitimate zero.
+#   4. a payload decoding to a JSON scalar (e.g. `"123"`) is guarded with
+#      `is.list()` before the key lookup, so it raises a `sampletidy_error`
+#      instead of dying on base R's "$ operator is invalid for atomic
+#      vectors".
 #
 # Also covers two more round-3 findings landed alongside this scope
 # (R/reconcile.R, same file this worker owns):
@@ -173,7 +200,7 @@ test_that("review_queue_candidates(): an unknown uuid_review returns zero rows, 
 # R-16.24: one carrier per item, discriminated by presence, never guessed
 # ==============================================================================
 
-test_that("R-16.24: a review item with neither carrier returns zero rows (not an error, not a guess)", {
+test_that("R-16.24: a review item with neither carrier (no child rows, default '{}' payload) returns zero rows (not an error, not a guess)", {
   path <- seed_db()
   con <- seed_con(path)
   on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
@@ -182,7 +209,7 @@ test_that("R-16.24: a review item with neither carrier returns zero rows (not an
   expect_equal(nrow(got), 0)
 })
 
-test_that("R-16.24: the JSON-carrier row a REAL reconcile_event() run produces is read back correctly via the fallback path, and the discriminator proves it actually fell back (zero review_queue_candidate rows exist for it)", {
+test_that("R-16.24: the JSON-carrier row a REAL reconcile_event() run produces is read back correctly via the fallback path, in the STORED order (not sorted), and the discriminator proves it actually fell back (zero review_queue_candidate rows exist for it)", {
   path <- seed_db()
   con <- seed_con(path)
   on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
@@ -190,7 +217,9 @@ test_that("R-16.24: the JSON-carrier row a REAL reconcile_event() run produces i
   # A real, unedited production run: RULING-F means this row's candidates
   # travel as diagnostics$candidates JSON, not as review_queue_candidate rows
   # (reconcile.R is read-only against the DB and never persists anything
-  # itself - see reconcile_event()'s own header comment).
+  # itself - see reconcile_event()'s own header comment). This is the exact
+  # path the W-r4 escalation confirmed is genuinely live: .rc_feature_review()
+  # (R/reconcile.R) writing real feature uuids to payload$candidates.
   out <- reconcile_event(mk_event(mk_row(source_ref = "r1", feature_raw = "T.AMBIG2")), con)
   amb <- out$review[out$review$source_ref == "r1" & out$review$kind == "unknown_feature", ]
   expect_equal(nrow(amb), 1)
@@ -207,7 +236,12 @@ test_that("R-16.24: the JSON-carrier row a REAL reconcile_event() run produces i
   )
 
   got <- review_queue_candidates(con, uuid_review)
-  expect_equal(sort(got$uuid_feature), c("f-0004", "f-0005"))
+  expect_equal(nrow(got), 2)
+  # Deliberately NOT sort()ed - the fixture's real order (f-0004 before
+  # f-0005, as .rc_feature_suggestions() emits it) is asserted exactly, so a
+  # rev() mutant on the JSON arm cannot survive against this block.
+  expect_identical(got$rank, c(1L, 2L))
+  expect_identical(got$uuid_feature, c("f-0004", "f-0005"))
   expect_identical(got$kind, rep("candidate", 2))
   expect_true(all(is.na(got$date_start)) && all(is.na(got$date_end)))
 
@@ -229,6 +263,73 @@ test_that("R-16.24: a review item carrying candidates in BOTH the child table AN
     diagnostics = list(candidates = c("f-0004", "f-0005"))
   )
   expect_error(review_queue_candidates(con, uuid_review), class = "sampletidy_error")
+})
+
+# ==============================================================================
+# PLAN-16 W-r4 cold-audit fixes: the four defects a second pass found in the
+# restored JSON arm, each pinned with a dedicated block.
+# ==============================================================================
+
+test_that("cold-audit fix 1: diag[[\"candidates\"]] is exact-match (never $, which prefix-matches) - a stray candidatesConsidered-only payload key is NOT read as the candidates carrier", {
+  path <- seed_db()
+  con <- seed_con(path)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  uuid_review <- review_queue_add(
+    con, kind = "adapter_tie", work_order = "XX1234567",
+    diagnostics = list(candidatesConsidered = c("f-0004", "f-0005"))
+  )
+  got <- review_queue_candidates(con, uuid_review)
+  expect_equal(nrow(got), 0)
+})
+
+test_that("cold-audit fix 1 (both-carriers false-positive guard): a stray candidatesConsidered JSON key alongside REAL child-table candidates does not trip the both-carriers abort", {
+  path <- seed_db()
+  con <- seed_con(path)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  uuid_review <- review_queue_add(
+    con, kind = "unknown_feature", subkind = "ambiguous", work_order = "XX1234567",
+    candidates = c("f-0004", "f-0005"),
+    diagnostics = list(candidatesConsidered = "f-9999")
+  )
+  got <- review_queue_candidates(con, uuid_review)
+  expect_identical(got$uuid_feature, c("f-0004", "f-0005"))
+})
+
+test_that("cold-audit fix 2: a JSON array of OBJECTS (decodes to a data.frame) is refused with a typed error, not silently deparsed via as.character() into garbage uuid_feature strings", {
+  path <- seed_db()
+  con <- seed_con(path)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  payload <- '{"candidates":[{"uuid_feature":"f-0004"},{"uuid_feature":"f-0005"}]}'
+  uuid_review <- review_queue_add(
+    con, kind = "unknown_feature", subkind = "ambiguous", work_order = "XX1234567",
+    payload = payload
+  )
+  expect_error(review_queue_candidates(con, uuid_review), class = "sampletidy_error")
+})
+
+test_that("cold-audit fix 3: a PRESENT but corrupt/truncated JSON payload aborts rather than silently reading back as zero candidates", {
+  path <- seed_db()
+  con <- seed_con(path)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  payload <- '{"candidates":["f-0004","f-0005"'
+  uuid_review <- review_queue_add(
+    con, kind = "unknown_feature", subkind = "ambiguous", work_order = "XX1234567",
+    payload = payload
+  )
+  expect_error(review_queue_candidates(con, uuid_review), class = "sampletidy_error")
+})
+
+test_that("cold-audit fix 4: a payload decoding to a JSON scalar aborts with a typed sampletidy_error, not base R's '$ operator is invalid for atomic vectors'", {
+  path <- seed_db()
+  con <- seed_con(path)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  uuid_review <- review_queue_add(
+    con, kind = "unknown_feature", subkind = "ambiguous", work_order = "XX1234567",
+    payload = "123"
+  )
+  expect_error(review_queue_candidates(con, uuid_review), class = "sampletidy_error")
+  err <- tryCatch(review_queue_candidates(con, uuid_review), error = function(e) e)
+  expect_true(inherits(err, "sampletidy_error"))
 })
 
 # ==============================================================================

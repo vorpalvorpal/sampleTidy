@@ -503,11 +503,47 @@ pin a shape, and the behavioural criteria are where the gate really is.
   and writing `c(B, A)` yields `B, A`. A test asserting only the SET of candidates does not
   satisfy this — order is the thing at risk.
 
-### R-16.5 The expired kind carries its date range
+### R-16.5 — RETIRED 2026-07-25 (Robin, Ruling 2). Asserts the expired arm as production-exercised;
+### it is not. NOT a coverage gap.
+> **Do not re-raise this as unbuilt work.** The child table `review_queue_candidate` has zero
+> production writers today: `review_queue_add()` takes no `expired=` argument, and no
+> `.rc_review_row()` call site (all 11, per `R/reconcile.R`) passes `candidates=`/`expired=`.
+> The one test that exercised this criterion (`test-db-schema.R`, R-16.5) drives the round-trip
+> by calling `sampleTidy:::.rq_row()` directly with a test-supplied `expired=` tibble — the
+> plumbing round-trips correctly, but no production code path ever builds that argument, so the
+> criterion's implicit claim of production coverage was false.
+>
+> Robin's ruling: **freeze**, do not build a producer now. `date_start`/`date_end` and the
+> `expired=` plumbing are KEPT — they are free to keep (the table does not exist in the live
+> DB) and are the named interface for PLAN-15's expired-alias work (R-15.15/R-15.16), the next
+> natural caller. See R-16.23's note below for the full picture, including why RULING-F's
+> original blocking rationale for routing candidates through the child table is now stale.
+>
+> The original text is preserved below for the record only.
+
 - a row with `kind = 'expired'` round-trips `date_start` and `date_end` as `DATE`; a row with
   `kind = 'candidate'` carries `NA` for both. Both halves required.
 
-### R-16.6 No production code reads a payload by SQL JSON
+### R-16.6 — RETIRED 2026-07-25 (Robin, Ruling 1). Superseded by `test-payload-lint.R`; NOT a
+### coverage gap.
+> **Do not re-raise this as unbuilt work.** `test-review-queue-hygiene.R` (1,237 lines,
+> 8 blocks, all scanners) was DELETED. A cold audit (slice K) proved its scanners both
+> **evadable** (a `sprintf`-built SQL string, one variable of indirection, and ~7 of 9
+> producing idioms all walked straight past them) and **false-positive-prone**
+> (`AND kind LIKE '%feature%'` on the `kind` column tripped R-16.6's own SQL-side scan RED).
+> The only enforcement this criterion ever had was that deleted scanner.
+>
+> The escaping PROPERTY it existed to guard is covered behaviourally, not by static scanning:
+> R-16.10's 14 producer-indexed blocks drive a hostile-byte round-trip through every real
+> writer, so a payload that was actually parsed/re-assembled by SQL-side JSON ops or R-side
+> regex would corrupt those bytes and fail there. `tests/testthat/test-payload-lint.R` is the
+> one residual cheap guard kept: a plain textual scan for a `payload` value built by
+> `paste0()`/`paste()`/`sprintf()`/`glue()` — deliberately not AST-based, deliberately not
+> claiming to catch indirection or non-literal SQL. **Phase 9 must report this as RETIRED, not
+> as unmet.**
+>
+> The original text is preserved below for the record only.
+
 - **The R-side regex ban is RETIRED (Robin, 2026-07-25).** It formerly listed `sub(`, `gsub(`,
   `regmatches(`, `regexpr(`, `grepl(` applied to a `payload` value in `R/`. Its purpose was to
   stop one specific dead end — hand-parsing the legacy k=v payload grammar — and that dead end
@@ -535,10 +571,35 @@ pin a shape, and the behavioural criteria are where the gate really is.
   (The former second exception — the migration's one-way parser for the 4 legacy rows — went
   away with migration 006 in `bc3d146`.)
 
-### R-16.7 .rc_serialise_payload is gone
+### R-16.7 — RETIRED 2026-07-25 (Robin, Ruling 1). Superseded by `test-payload-lint.R`; NOT a
+### coverage gap.
+> **Do not re-raise this as unbuilt work.** Same rationale as R-16.6's retirement note above:
+> its only enforcement was `test-review-queue-hygiene.R`'s comment/string-aware regex scan for
+> a call to `.rc_serialise_payload()`, deleted for being evadable and false-positive-prone.
+> The symbol's continued absence is a fact about `R/`, not something worth a bespoke scanner —
+> `test-payload-lint.R`'s general `payload`-concatenation guard, plus R-16.10's behavioural
+> round-trip coverage, are the residual protection. **Phase 9 must report this as RETIRED, not
+> as unmet.**
+>
+> The original text is preserved below for the record only.
+
 - the symbol does not exist in the package namespace, and no call site remains.
 
-### R-16.8 Every review-writing site routes through the structured constructor
+### R-16.8 — RETIRED 2026-07-25 (Robin, Ruling 1). Superseded by `test-payload-lint.R`; NOT a
+### coverage gap.
+> **Do not re-raise this as unbuilt work.** Same rationale as R-16.6/R-16.7's retirement notes
+> above: this criterion's per-site, structural `getParseData()` routing-coverage scan lived
+> entirely in `test-review-queue-hygiene.R`, deleted for being evadable (mutants F5/F6 survived
+> a green suite against it) and false-positive-prone. The escaping PROPERTY it guarded —
+> every review-writing site routes through the structured constructor rather than hand-building
+> a payload string — is now covered behaviourally by R-16.10's 14 producer-indexed hostile-byte
+> round-trip blocks against real writers, with `test-payload-lint.R`'s cheap textual scan as the
+> residual static guard against the regression actually likely to recur (a new hand-rolled
+> `payload <- paste0(...)`/`sprintf(...)` site). **Phase 9 must report this as RETIRED, not as
+> unmet.**
+>
+> The original text is preserved below for the record only.
+
 - no `paste0()`-assembled payload string survives in `R/reconcile.R`, `R/feature-alias.R`,
   `R/router.R` **or `R/commit.R`**; each of the 14 content-producing sites in
   `dev/tdd-run/p16-payload-prod-inventory.md` §1b is covered.
@@ -817,7 +878,22 @@ argument at all (B-16.api), so a hand-built string cannot be injected. R-16.18 p
 - These have no old-format coverage to translate, so they are new work — which is why they
   are named individually here rather than left to a general sweep.
 
-### R-16.18 The constructor accepts no free-text payload
+### R-16.18 — RETIRED 2026-07-25 (Robin, Ruling 1) for its CALL-SITE half only; NOT a coverage
+### gap.
+> **Do not re-raise this as unbuilt work.** R-16.18 had two halves (see the file's own dividing
+> line note at the top of `test-review-queue-hygiene.R`, now deleted): a CALL-SITE half — no
+> production path can supply a pre-serialised payload string — which lived in the deleted
+> scanner file, and a CONTENT/SHAPE half — the structured constructor's own signature has no
+> free-text parameter — which lives in `test-review-queue-payload.R` and is UNCHANGED and still
+> enforced. Only the call-site half is retired here, for the same evadable/false-positive-prone
+> reason as R-16.6/R-16.7/R-16.8 above. The constructor's fixed signature (B-16.api) is itself
+> the structural guarantee that no free-text string can be passed in; R-16.10's behavioural
+> round-trip coverage plus `test-payload-lint.R`'s textual guard are the residual protection
+> against a NEW hand-built site appearing elsewhere. **Phase 9 must report the call-site half as
+> RETIRED, not as unmet; the content/shape half remains MET as before.**
+>
+> The original text is preserved below for the record only.
+
 - the structured constructor has no argument that takes a pre-serialised payload string, and
   no production path allows one to be supplied. This is what makes the 15 hand-built test
   fixtures fail loudly rather than silently keep passing.
@@ -877,6 +953,25 @@ rather than record it as forward-looking schema.
   no error and no warning. All 11 current call sites pass neither, so this is latent today —
   but PLAN-15's expired-alias work (R-15.15/R-15.16) is the next natural caller and would lose
   data silently. Either carry the child rows through or `cli_abort()`; do not drop them.
+- **HALF CLOSED BY DECISION, not oversight (Robin, Ruling 2, 2026-07-25).** The plumbing above
+  is complete and tested end to end — `.rc_review_row()` carries `candidates`/`expired` through,
+  `.ct_commit_review()` rewrites the child rows' `uuid_review` to the actually-inserted parent
+  uuid at commit time, and R-16.22's reader retrieves them. What remains missing, by ruling
+  rather than by gap, is a genuine production CALLER: no current call site passes
+  `candidates=`/`expired=` (R-16.5, retired above, is the residual evidence — its only coverage
+  came from a test calling `.rq_row()` directly, not from a production path). Robin's ruling is
+  **freeze**: `review_queue_candidate` stays a real, tested, zero-writer table until PLAN-15
+  R-15.15/R-15.16 becomes its first genuine producer. Do not build a producer here to close this
+  out; that is PLAN-15's call.
+- **RULING-F's original blocking rationale is now STALE.** RULING-F (documented at
+  `R/reconcile.R:178-192`) held reconcile-side `unknown_feature`/`ambiguous` candidates back from
+  `candidates=` because `.ct_commit_review()` could not rewrite child rows' `uuid_review` to the
+  freshly-minted parent uuid at insert time, which would have orphaned them. That rewrite was
+  implemented this run (`R/commit.R`, ~lines 712-775, the R-16.23 fix mirroring
+  `.ct_rewrite_review_payloads()`'s existing `uuid_alias` rewrite pattern) and is tested end to
+  end. So routing `.rc_feature_review()`'s candidates through `candidates=` instead of
+  `diagnostics$candidates` JSON is now technically AVAILABLE — but whether to make that change is
+  PLAN-15's call, not blocked by any remaining plumbing gap here.
 
 ### R-16.24 One review item's candidates have one carrier
 - for any single review item, candidates live **either** in the JSON remainder **or** in

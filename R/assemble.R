@@ -178,9 +178,24 @@
       if (is.na(results$review_kind[[i]])) {
         results$review_kind[[i]] <- "value_conflict"
       }
+      # Cold-audit defect 4: named `candidates` until this fix, the exact key
+      # name `.rc_feature_review()` (R/reconcile.R) uses for `unknown_feature`/
+      # `ambiguous` review items' candidate FEATURE uuids. Reconcile's STAGE-0
+      # (R/reconcile.R, the `needs_review` handler just below this producer's
+      # sibling `foreign_work_order` payload) strips `kind`/`subkind`/
+      # `home_work_order` and renames `work_order` -> `foreign_work_order` from
+      # this same review_payload list before it reaches `.rq_row()`, but passed
+      # `candidates` through untouched - so a `value_conflict`/
+      # `sample_datetime_mismatch` item's candidate DATETIME STRINGS landed
+      # under the identical key a `review_queue_candidates()` reader (R/mutate.R)
+      # interprets as candidate FEATURE uuids. Renamed here, at the source,
+      # rather than special-cased in reconcile.R's STAGE-0 stripping - the same
+      # choice point the `work_order` -> `foreign_work_order` rename comment
+      # (R/reconcile.R) describes: "Rename the diagnostics key so a reader does
+      # not have to already know which is which."
       results$review_payload[[i]] <- list(
         kind = "value_conflict", subkind = "sample_datetime_mismatch",
-        candidates = unique(m_datetime[!is.na(m_datetime)])
+        datetime_candidates = unique(m_datetime[!is.na(m_datetime)])
       )
     }
 

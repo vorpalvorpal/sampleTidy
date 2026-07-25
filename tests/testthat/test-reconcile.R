@@ -1419,6 +1419,54 @@ test_that("R-11.9: grouping is unchanged - one item per normalised feature_raw, 
   expect_equal(nrow(hit), 1) # grouped, not one item per row
 })
 
+test_that("A44: a genuinely-missing feature_raw and a row whose feature code is the literal string 'NA' are NOT folded into one review item", {
+  # Both `.rc_feature_key(NA)` (the A44 guard) and `.rc_feature_key('NA')`
+  # (a real, punctuation-free key that folds to 'na') used to share the
+  # SAME string sentinel inside `.rc_feature_review()`'s `split()` grouping,
+  # merging a row with no feature at all into the same review item as a row
+  # whose feature code genuinely IS "NA" - hiding the literal code from the
+  # operator and blanking `diagnostics$feature_raw`.
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  event <- mk_event(mk_rows(
+    mk_row(source_ref = "r-missing", feature_raw = NA_character_, lab_sample_id = "XX1234567005"),
+    mk_row(source_ref = "r-litNA", feature_raw = "NA", lab_sample_id = "XX1234567006")
+  ))
+  out <- reconcile_event(event, con)
+  rv <- out$review[out$review$kind == "unknown_feature", ]
+  expect_equal(nrow(rv), 2) # two DISTINCT items, not one merged item
+
+  missing_item <- rv[rv$source_ref == "r-missing", ]
+  lit_item <- rv[rv$source_ref == "r-litNA", ]
+  expect_equal(nrow(missing_item), 1)
+  expect_equal(nrow(lit_item), 1)
+
+  d_missing <- jsonlite::fromJSON(missing_item$payload[[1]])
+  d_lit <- jsonlite::fromJSON(lit_item$payload[[1]])
+  expect_true(is.null(d_missing$feature_raw) || is.na(d_missing$feature_raw))
+  expect_identical(d_lit$feature_raw, "NA")
+  expect_false(identical(missing_item$source_ref[[1]], lit_item$source_ref[[1]]))
+})
+
+test_that("A44: case-variant literal feature codes 'na'/'Na' reach the same collision-prone key as 'NA' and still stay split from a genuinely-missing feature", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  event <- mk_event(mk_rows(
+    mk_row(source_ref = "r-missing2", feature_raw = NA_character_, lab_sample_id = "XX1234567007"),
+    mk_row(source_ref = "r-na-lower", feature_raw = "na", lab_sample_id = "XX1234567008"),
+    mk_row(source_ref = "r-na-mixed", feature_raw = "Na", lab_sample_id = "XX1234567009")
+  ))
+  out <- reconcile_event(event, con)
+  rv <- out$review[out$review$kind == "unknown_feature", ]
+  # 'na' and 'Na' both fold to the SAME .rc_feature_key ('na') and belong in
+  # ONE group together; the genuinely-missing row is a SECOND, separate group.
+  expect_equal(nrow(rv), 2)
+  missing_item <- rv[rv$source_ref == "r-missing2", ]
+  lit_item <- rv[grepl("r-na-lower", rv$source_ref), ]
+  expect_equal(nrow(lit_item), 1)
+  expect_true(grepl("r-na-lower", lit_item$source_ref[[1]]) && grepl("r-na-mixed", lit_item$source_ref[[1]]))
+  d_lit <- jsonlite::fromJSON(lit_item$payload[[1]])
+  expect_equal(d_lit$n_rows, 2)
+})
+
 test_that("R-11.9: an unknown_analyte item names the lab method and the CAS-suggested analyte", {
   path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
   event <- mk_event(mk_row(source_ref = "r1", analyte_raw = "Fluoride", org = "Internal",
@@ -1628,7 +1676,7 @@ test_that("PLAN-16 FF4: STAGE-0 foreign_work_order item promotes subkind to the 
   expect_false("subkind" %in% names(parsed_payload))
 })
 
-test_that("PLAN-16 FF4: STAGE-0 sample_datetime_mismatch item promotes subkind to the typed column, candidates survive, kind/subkind dropped from JSON", {
+test_that("PLAN-16 FF4: STAGE-0 sample_datetime_mismatch item promotes subkind to the typed column, datetime_candidates survive, kind/subkind dropped from JSON", {
   path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
 
   parsed <- list(
@@ -1658,8 +1706,16 @@ test_that("PLAN-16 FF4: STAGE-0 sample_datetime_mismatch item promotes subkind t
   parsed_payload <- jsonlite::fromJSON(row$payload[[1]])
   expect_false("kind" %in% names(parsed_payload))
   expect_false("subkind" %in% names(parsed_payload))
-  expect_true("candidates" %in% names(parsed_payload))
-  expect_setequal(parsed_payload$candidates, c("24 May 2025 11:45", "25 May 2025 09:00"))
+  # Cold-audit defect 4 (this fix): was pinned as "candidates" - the exact
+  # key name `unknown_feature`'s candidate FEATURE uuids use - which a
+  # `review_queue_candidates()` reader (R/mutate.R) would misinterpret as
+  # feature uuids. Renamed at the source (R/assemble.R) to `datetime_candidates`;
+  # this test's OLD assertion was pinning that collision, not a correct
+  # contract, so it is corrected rather than left as a regression guard for
+  # the wrong name.
+  expect_false("candidates" %in% names(parsed_payload))
+  expect_true("datetime_candidates" %in% names(parsed_payload))
+  expect_setequal(parsed_payload$datetime_candidates, c("24 May 2025 11:45", "25 May 2025 09:00"))
 })
 
 test_that("PLAN-16 FF5: committed review_queue.work_order (home) and the payload's foreign work order are different facts under different key names, both present", {
@@ -3762,4 +3818,44 @@ test_that("R-15.45 (E.7): a key reaching a live SELF arm plus one live NON-self 
   expect_equal(nrow(note_ctrl), 1)
   expect_true(grepl("subkind=ambiguous", note_ctrl$payload[[1]], fixed = TRUE))
   expect_false(grepl("subkind=self_precedence_note", note_ctrl$payload[[1]], fixed = TRUE))
+})
+
+# ---- cold-audit defect 2: .rc_fill_missing_cols() is type-aware for the
+#      `candidates` list-column ---------------------------------------------
+
+test_that("cold-audit defect 2: .rc_fill_missing_cols() backfills a missing `candidates` column as a list of NULL (one per row), not NA_character_", {
+  df <- tibble::tibble(source_ref = c("r1", "r2"), kind = c("unknown_unit", "unknown_unit"))
+  out <- .rc_fill_missing_cols(df, c("source_ref", "kind", "candidates"))
+
+  expect_true(is.list(out$candidates))
+  expect_false(is.character(out$candidates))
+  expect_length(out$candidates, 2)
+  expect_null(out$candidates[[1]])
+  expect_null(out$candidates[[2]])
+
+  # every non-list column is still backfilled the old way (NA_character_) -
+  # the fix must not change behaviour for any column but `candidates`.
+  df2 <- tibble::tibble(source_ref = "r1")
+  out2 <- .rc_fill_missing_cols(df2, c("source_ref", "kind", "subkind"))
+  expect_identical(out2$kind, NA_character_)
+  expect_identical(out2$subkind, NA_character_)
+})
+
+test_that("cold-audit defect 2: dplyr::bind_rows() over one df with a real `candidates` list-column and one backfilled by .rc_fill_missing_cols() combines cleanly (no 'Can't combine <list> and <character>' error)", {
+  real_cand <- tibble::tibble(uuid_feature = c("f-0001", "f-0002"))
+  with_col <- tibble::tibble(
+    source_ref = "r1", kind = "unknown_feature", candidates = list(real_cand)
+  )
+  missing_col <- tibble::tibble(source_ref = "r2", kind = "unknown_unit")
+  missing_col <- .rc_fill_missing_cols(missing_col, c("source_ref", "kind", "candidates"))
+
+  combined <- dplyr::bind_rows(with_col, missing_col)
+
+  expect_equal(nrow(combined), 2)
+  expect_true(is.list(combined$candidates))
+  expect_identical(combined$candidates[[1]], real_cand)
+  expect_null(combined$candidates[[2]])
+  # downstream shape .ct_commit_review() (R/commit.R) branches on directly.
+  expect_true(is.data.frame(combined$candidates[[1]]))
+  expect_false(is.data.frame(combined$candidates[[2]]))
 })

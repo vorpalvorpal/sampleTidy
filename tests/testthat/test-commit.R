@@ -763,6 +763,113 @@ test_that("round-2 audit FF3: .ct_rewrite_review_payloads() links uuid_alias for
   expect_false(identical(stored_grouped$uuid_alias[[1]], stored_single$uuid_alias[[1]]))
 })
 
+test_that("W-8b-f2: a two-file grouped unknown_feature review item still links uuid_alias when its FIRST member's row is dropped (seam S-4: .rc_feature_review() records only the first group member's source_hash, so the hash-keyed lookup misses for every ref and must fall back to the unique-or-nothing ref-only match)", {
+  setup <- commit_test_setup()
+  con <- setup$con
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  second <- add_second_reconciled_file(setup, "PROJ_A.ESDAT_XX1234567_0.Chemistry2b.CSV")
+
+  key <- .rc_feature_key("ZZ.X9-W8BF2")
+
+  # Two rows share ONE unresolved feature_raw (-> one grouped unknown_feature
+  # review item, source_ref = "r1,r2"), but come from TWO different source
+  # files. The first group member (setup$hash / r1) carries an unparseable
+  # datetime and is dropped before it reaches `clean`; the second (second$hash
+  # / r2) survives and is what actually materialises the alias at commit.
+  results <- dplyr::bind_rows(
+    mk_row(source_ref = "r1", source_hash = setup$hash, feature_raw = "ZZ.X9-W8BF2",
+           sample_datetime_raw = "not a date"),
+    mk_row(source_ref = "r2", source_hash = second$hash, feature_raw = "ZZ.X9-W8BF2",
+           sample_datetime_raw = "10 Jul 2025 09:00")
+  )
+  event <- mk_event(results, work_order = setup$work_order)
+  out <- reconcile_event(event, con)
+
+  uf <- out$review[out$review$kind == "unknown_feature", , drop = FALSE]
+  expect_equal(nrow(uf), 1)
+  expect_identical(uf$source_ref[[1]], "r1,r2")
+  # Reproduction premise: seam S-4 records only the FIRST group member's hash.
+  expect_identical(uf$source_hash[[1]], setup$hash)
+  expect_equal(nrow(out$clean), 1)
+  expect_identical(out$clean$source_hash[[1]], second$hash)
+
+  files <- tibble::tibble(hash = c(setup$hash, second$hash),
+                          filename = c(basename(setup$path), basename(second$path)),
+                          adapter = "esdat/1", rank = 3L, kept = TRUE)
+  resolved <- mk_resolved(clean = out$clean, review = out$review, skipped = out$skipped,
+                          counts = c(new = nrow(out$clean)))
+  commit_event(mk_commit_event(files, work_order = setup$work_order), resolved, con)
+
+  alias <- dangling_alias_row(con, key)
+  expect_equal(nrow(alias), 1)
+
+  stored <- DBI::dbGetQuery(con,
+    "SELECT uuid_alias FROM review_queue WHERE kind = 'unknown_feature' AND source_hash = ?",
+    params = list(setup$hash))
+  expect_equal(nrow(stored), 1)
+  # Pre-fix: this was NA - the hash-keyed lookup only ever tried
+  # setup$hash\x01r1 / setup$hash\x01r2, both misses, because the alias was
+  # materialised from second$hash's row.
+  expect_false(is.na(stored$uuid_alias[[1]]))
+  expect_identical(stored$uuid_alias[[1]], alias$uuid[[1]])
+})
+
+test_that("W-8b-f2 (guard, holds before AND after the fix - do not repin): the ref-only fallback is unique-or-nothing - two DIFFERENT source files sharing one source_ref value that resolve to DIFFERENT aliases leaves uuid_alias NULL rather than picking either candidate", {
+  # This guards the anti-mis-link property the source_hash key exists for. A
+  # mis-link (attaching the wrong alias to a review item) is worse than the
+  # missing link W-8b-f2 fixes above, because uuid_alias is what a human uses
+  # to accept the alias (review_queue_close(), R-16.21). Do NOT edit this
+  # test to expect a non-NULL uuid_alias if it starts "failing" - that would
+  # be re-introducing the hazard, not fixing a bug.
+  setup <- commit_test_setup()
+  con <- setup$con
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  key_a <- .rc_feature_key("AA.GUARD-W8BF2")
+  key_b <- .rc_feature_key("BB.GUARD-W8BF2")
+
+  files <- tibble::tibble(hash = setup$hash, filename = basename(setup$path),
+                          adapter = "esdat/1", rank = 3L, kept = TRUE)
+  # Two UNRELATED pending rows from two different files happen to share the
+  # same source_ref ("rX") - only plausible because source_ref is only
+  # unique WITHIN one source file. They resolve to two DIFFERENT aliases.
+  clean <- dplyr::bind_rows(
+    mk_p11_row(source_ref = "rX", source_hash = setup$hash,
+               feature_raw = "AA.GUARD-W8BF2", alias_key = key_a,
+               feature_pending = TRUE, uuid_feature_alias = NA_character_,
+               sample_date = as.Date("2025-07-11"),
+               sample_datetime = as.POSIXct("2025-07-11 09:00:00", tz = "UTC")),
+    mk_p11_row(source_ref = "rX", source_hash = "w8bf2-other-file-hash",
+               feature_raw = "BB.GUARD-W8BF2", alias_key = key_b,
+               feature_pending = TRUE, uuid_feature_alias = NA_character_,
+               sample_date = as.Date("2025-07-11"),
+               sample_datetime = as.POSIXct("2025-07-11 10:00:00", tz = "UTC"))
+  )
+  # The review row's OWN source_hash matches NEITHER clean row above, so the
+  # hash-keyed lookup misses for every ref and falls through to the
+  # hash-agnostic ref-only fallback - the only code path that could trigger
+  # the hazard this test guards against.
+  review <- tibble::tibble(
+    source_ref = "rX", kind = "unknown_feature", source_hash = "w8bf2-third-unrelated-hash",
+    payload = "rX,work_order=XX1234567,n_rows=1"
+  )
+  resolved <- mk_resolved(clean = clean, review = review)
+
+  commit_event(mk_commit_event(files, work_order = setup$work_order), resolved, con)
+
+  alias_a <- dangling_alias_row(con, key_a)
+  alias_b <- dangling_alias_row(con, key_b)
+  expect_equal(nrow(alias_a), 1)
+  expect_equal(nrow(alias_b), 1)
+  expect_false(identical(alias_a$uuid[[1]], alias_b$uuid[[1]]))
+
+  stored <- DBI::dbGetQuery(con,
+    "SELECT uuid_alias FROM review_queue WHERE kind = 'unknown_feature' AND source_hash = ?",
+    params = list("w8bf2-third-unrelated-hash"))
+  expect_equal(nrow(stored), 1)
+  expect_true(is.na(stored$uuid_alias[[1]]))
+})
+
 # ---- PLAN-16 Q2 (Robin 2026-07-25): source_ref/n_rows survive the commit
 #      boundary INSIDE diagnostics, because review_queue has no column for
 #      either one ---------------------------------------------------------
@@ -1203,6 +1310,33 @@ test_that("PLAN-16 FB8: subkind, uuid_existing and uuid_alias all survive a real
   expect_identical(stored$uuid_existing[[1]], "an-0001")
   expect_identical(stored$uuid_alias[[1]], "fa-0009")
   expect_identical(stored$status[[1]], "open")
+})
+
+test_that("cold-audit defect 1: a review tibble with no `payload` column at all commits with the valid JSON empty-object default, not NULL/an error (.ct_commit_review() unguarded `row$payload <- review$payload[[i]]` bypassed the col_or_na() guard every sibling column uses)", {
+  setup <- commit_test_setup()
+  con <- setup$con
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  files <- tibble::tibble(hash = setup$hash, filename = basename(setup$path),
+                          adapter = "esdat/1", rank = 3L, kept = TRUE)
+  # Deliberately NO `payload` column - the exact shape `review$payload` is
+  # NULL for, so `review$payload[[i]]` (pre-fix) throws "subscript out of
+  # bounds" rather than silently writing NA.
+  review <- tibble::tibble(
+    source_ref = "r1", kind = "unknown_unit", subkind = NA_character_,
+    source_hash = setup$hash
+  )
+  resolved <- mk_resolved(clean = tibble::tibble(), review = review)
+
+  commit_event(mk_commit_event(files), resolved, con)
+
+  stored <- DBI::dbGetQuery(con,
+    "SELECT payload FROM review_queue WHERE kind = 'unknown_unit' AND source_hash = ?",
+    params = list(setup$hash))
+  expect_equal(nrow(stored), 1)
+  # .rq_row()'s own default for "no diagnostics" - `.rq_serialise_diagnostics(list())`
+  # - is the JSON empty object, not NA/NULL.
+  expect_identical(stored$payload[[1]], "{}")
 })
 
 test_that("PLAN-16 round-3 R-16.23: .ct_commit_review() persists a real .rc_review_row() producer's `candidates` as review_queue_candidate rows - not discarded a second time - with uuid_review rewritten to the PARENT ROW'S ACTUAL INSERTED uuid (not the constructor's own uuid_row), read back in rank order via the exported review_queue_candidates() reader", {

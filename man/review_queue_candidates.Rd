@@ -19,7 +19,8 @@ rows, ascending by \code{rank}. For the child-table carrier, \code{kind} is
 arm's date bounds (\code{NA} for \code{"candidate"} rows). For the JSON-carrier
 fallback, \code{kind} is always \code{"candidate"} (that carrier predates the
 \code{expired} arm and never wrote one) and \code{date_start}/\code{date_end} are always
-\code{NA}; \code{rank} is the 1-based position in the stored JSON array.
+\code{NA}; \code{rank} is the 1-based position in the stored JSON array (order
+preserved, never sorted).
 }
 \description{
 \code{review_queue_candidate} was, until this criterion, written by tests and
@@ -32,10 +33,15 @@ A review item's ordered candidate feature uuids can travel in ONE of TWO
 carriers (R-16.24; RULING-F, \code{dev/tdd-run/run-state.md}): most producers
 embed the array in \code{review_queue.payload}'s \code{candidates} diagnostics key,
 because at the time they run there is no real \code{review_queue.uuid} yet to
-key a child row to (see \code{.rc_review_row()}, R/reconcile.R, for the exact
-timing gap). A producer that DOES have a real row uuid at write time -
-\code{review_queue_add()}'s \verb{candidates =} argument is the sanctioned one -
-persists them as \code{review_queue_candidate} rows instead.
+key a child row to (\code{.rc_feature_review()}, \code{R/reconcile.R}, is the
+confirmed real writer for \code{unknown_feature}/\code{ambiguous} reviews - see the
+W-r4 report for the earlier, wrong claim that nothing wrote FEATURE
+candidates there; \code{R/assemble.R}'s \code{sample_datetime_mismatch} writer uses
+the SAME key for sample DATETIME strings, a different fact entirely - a
+reader cannot tell the two apart by key name alone, only by which kind
+produced the row). A producer that DOES have a real row uuid at write
+time - \code{review_queue_add()}'s \verb{candidates =} argument is the sanctioned
+one - persists them as \code{review_queue_candidate} rows instead.
 
 The two carriers are told apart by PRESENCE, never by guessing: if
 \code{uuid_review} owns any \code{review_queue_candidate} row, that is the
@@ -46,4 +52,20 @@ item carrying candidates in BOTH places at once is a producer defect, not
 a value to silently pick one side of - this function aborts rather than
 guess which carrier is authoritative (R-16.24: "make it impossible to get
 silently wrong").
+
+Cold-audit fixes (PLAN-16 W-r4, restoring this arm after a first-pass
+deletion): (1) \code{diag[["candidates"]]}, never \code{diag$candidates} - \code{$}
+prefix-matches, so a stray \code{candidatesConsidered} key would be returned as
+the candidate list, or (worse) trip the both-carriers abort against
+legitimate child rows. (2) the JSON value is type-checked (\code{is.atomic()})
+before \code{as.character()} - an array of JSON objects deserialises to a
+data.frame, and \code{as.character()} on THAT deparses each column
+(\code{uuid_feature = 'c("f-1","f-2")'}, row count = field count), which this
+function now refuses outright instead of returning. (3) a payload that is
+present but fails to parse as JSON now aborts (a producer defect) rather
+than being swallowed into "no candidates" by a blanket \code{tryCatch} - only
+a genuinely absent/NA payload is legitimately zero JSON candidates. (4) a
+scalar-decoding payload (\code{"123"}, \code{"true"}) is guarded with \code{is.list()}
+before the \code{$}/\code{[[} lookup, so it aborts with a \code{sampletidy_error} instead
+of dying on base R's \verb{$ operator is invalid for atomic vectors}.
 }

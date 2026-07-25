@@ -671,10 +671,15 @@ review_queue <- function(con, status = "open") {
 #' carriers (R-16.24; RULING-F, `dev/tdd-run/run-state.md`): most producers
 #' embed the array in `review_queue.payload`'s `candidates` diagnostics key,
 #' because at the time they run there is no real `review_queue.uuid` yet to
-#' key a child row to (see `.rc_review_row()`, R/reconcile.R, for the exact
-#' timing gap). A producer that DOES have a real row uuid at write time -
-#' `review_queue_add()`'s `candidates =` argument is the sanctioned one -
-#' persists them as `review_queue_candidate` rows instead.
+#' key a child row to (`.rc_feature_review()`, `R/reconcile.R`, is the
+#' confirmed real writer for `unknown_feature`/`ambiguous` reviews - see the
+#' W-r4 report for the earlier, wrong claim that nothing wrote FEATURE
+#' candidates there; `R/assemble.R`'s `sample_datetime_mismatch` writer uses
+#' the SAME key for sample DATETIME strings, a different fact entirely - a
+#' reader cannot tell the two apart by key name alone, only by which kind
+#' produced the row). A producer that DOES have a real row uuid at write
+#' time - `review_queue_add()`'s `candidates =` argument is the sanctioned
+#' one - persists them as `review_queue_candidate` rows instead.
 #'
 #' The two carriers are told apart by PRESENCE, never by guessing: if
 #' `uuid_review` owns any `review_queue_candidate` row, that is the
@@ -686,6 +691,22 @@ review_queue <- function(con, status = "open") {
 #' guess which carrier is authoritative (R-16.24: "make it impossible to get
 #' silently wrong").
 #'
+#' Cold-audit fixes (PLAN-16 W-r4, restoring this arm after a first-pass
+#' deletion): (1) `diag[["candidates"]]`, never `diag$candidates` - `$`
+#' prefix-matches, so a stray `candidatesConsidered` key would be returned as
+#' the candidate list, or (worse) trip the both-carriers abort against
+#' legitimate child rows. (2) the JSON value is type-checked (`is.atomic()`)
+#' before `as.character()` - an array of JSON objects deserialises to a
+#' data.frame, and `as.character()` on THAT deparses each column
+#' (`uuid_feature = 'c("f-1","f-2")'`, row count = field count), which this
+#' function now refuses outright instead of returning. (3) a payload that is
+#' present but fails to parse as JSON now aborts (a producer defect) rather
+#' than being swallowed into "no candidates" by a blanket `tryCatch` - only
+#' a genuinely absent/NA payload is legitimately zero JSON candidates. (4) a
+#' scalar-decoding payload (`"123"`, `"true"`) is guarded with `is.list()`
+#' before the `$`/`[[` lookup, so it aborts with a `sampletidy_error` instead
+#' of dying on base R's `$ operator is invalid for atomic vectors`.
+#'
 #' @param con an open DBI connection.
 #' @param uuid_review the `review_queue.uuid` to look up.
 #' @return a tibble `(rank, uuid_feature, kind, date_start, date_end)`, 0+
@@ -694,7 +715,8 @@ review_queue <- function(con, status = "open") {
 #'   arm's date bounds (`NA` for `"candidate"` rows). For the JSON-carrier
 #'   fallback, `kind` is always `"candidate"` (that carrier predates the
 #'   `expired` arm and never wrote one) and `date_start`/`date_end` are always
-#'   `NA`; `rank` is the 1-based position in the stored JSON array.
+#'   `NA`; `rank` is the 1-based position in the stored JSON array (order
+#'   preserved, never sorted).
 #' @export
 review_queue_candidates <- function(con, uuid_review) {
   checkmate::assert_string(uuid_review)
@@ -707,22 +729,53 @@ review_queue_candidates <- function(con, uuid_review) {
       ORDER BY rank",
     params = list(uuid_review)
   )
+  has_child <- nrow(child) > 0L
 
   row <- DBI::dbGetQuery(
     con, "SELECT payload FROM review_queue WHERE uuid = ?",
     params = list(uuid_review)
   )
   payload <- if (nrow(row) == 0L) NA_character_ else row$payload[[1]]
+
   # jsonlite is the sanctioned R-side JSON path (PLAN-16, ratified 4de9fbd) -
-  # never a regex read of `payload` (R-16.6).
+  # never a regex read of `payload` (R-16.6). Cold-audit fix (3): a genuinely
+  # absent/NA payload is legitimately zero JSON candidates; a PRESENT payload
+  # that fails to parse is a producer defect and must abort, not silently
+  # read back as "no candidates" (which would also mask a genuine
+  # both-carriers row behind a corrupt JSON side).
   diag <- if (is.na(payload)) {
     list()
   } else {
-    tryCatch(jsonlite::fromJSON(payload), error = function(e) list())
+    tryCatch(
+      jsonlite::fromJSON(payload),
+      error = function(e) {
+        cli::cli_abort(
+          "review_queue_candidates(): review {.val {uuid_review}}'s payload
+           is not valid JSON ({conditionMessage(e)}) - cannot determine
+           whether it carries a {.val candidates} diagnostics key.",
+          class = "sampletidy_error"
+        )
+      }
+    )
   }
-  json_cand <- diag$candidates
+  # Cold-audit fix (4): a payload that decodes to a JSON scalar/array-of-
+  # scalars-at-top-level (e.g. `"123"`, `"[1,2,3]"`) is not a list, so
+  # `diag[["candidates"]]` below would die on base R's own
+  # "$ operator is invalid for atomic vectors" - guard explicitly and raise
+  # a typed error instead.
+  if (!is.list(diag)) {
+    cli::cli_abort(
+      "review_queue_candidates(): review {.val {uuid_review}}'s payload
+       decodes to a scalar/array JSON value at the top level
+       ({.cls {class(diag)}}), not an object - cannot look for a
+       {.val candidates} key.",
+      class = "sampletidy_error"
+    )
+  }
+  # Cold-audit fix (1): `[[` is exact-match; `$` prefix-matches and would
+  # return a stray `candidatesConsidered`-style key as the candidate list.
+  json_cand <- diag[["candidates"]]
   has_json <- !is.null(json_cand) && length(json_cand) > 0L
-  has_child <- nrow(child) > 0L
 
   if (has_child && has_json) {
     cli::cli_abort(
@@ -745,6 +798,21 @@ review_queue_candidates <- function(con, uuid_review) {
       rank = integer(), uuid_feature = character(), kind = character(),
       date_start = as.Date(character()), date_end = as.Date(character())
     ))
+  }
+
+  # Cold-audit fix (2): an array of JSON OBJECTS decodes to a data.frame, not
+  # an atomic vector - as.character() on a data.frame deparses each column
+  # rather than erroring, silently producing `uuid_feature = 'c("f-1",
+  # "f-2")'` with nrow == ncol(json_cand) instead of nrow == length of the
+  # original array. Refuse the shape outright rather than guess.
+  if (!is.atomic(json_cand)) {
+    cli::cli_abort(
+      "review_queue_candidates(): review {.val {uuid_review}}'s payload
+       {.val candidates} key does not decode to a simple array of uuids
+       ({.cls {class(json_cand)}}) - refusing to coerce an unexpected shape
+       into feature uuids.",
+      class = "sampletidy_error"
+    )
   }
 
   json_cand <- as.character(json_cand)
