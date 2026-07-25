@@ -220,6 +220,91 @@
   )
 }
 
+# ---- retain non-tabular deliverables (R-15.36, B-15.F17) -----------------
+
+#' Retain a work order's non-tabular deliverables (COA/COC/QC/QCI PDFs,
+#' `XTAB.XLS`, ...) that no adapter claims (R-15.36, B-15.F17)
+#'
+#' No adapter parses a PDF or a real (SpreadsheetML) `XTAB.XLS` (F.17), so
+#' `route_files()` quarantines every such sibling with reason `unclaimed` and
+#' gives it no `asset` row - harmless while `remove_ingested` defaulted
+#' `FALSE` (nothing was ever deleted), now load-bearing because it defaults
+#' `TRUE` (A13): the source would otherwise sit in the input directory
+#' forever with no archived copy and no link back to its work order, which
+#' is exactly the setup for a later manual "clean up the leftovers" sweep
+#' that deletes the only copy of a certificate of analysis.
+#'
+#' For every routed row still `quarantined`/`unclaimed` (deduped by hash),
+#' guesses the file's work order from its filename ([file_meta()]'s
+#' `work_order_guess` - NEVER inferred from a bare `2400-*` filename, which
+#' cannot be parsed reliably; only `ES#######`-shaped tokens are used, per
+#' `file_meta()`). A file whose work order cannot be guessed, or whose work
+#' order has no `project` row (i.e. no event for that work order committed
+#' in THIS run), is left alone - retaining a file with nothing to hang it
+#' off would satisfy "the bytes are kept" while failing "the file is
+#' discoverably attached to its work order" (B-15.F17's second, easy-to-miss
+#' obligation).
+#'
+#' Otherwise the file is archived via [archive_file()] (reused as-is: it
+#' already resolves the event's project from `event$work_order`, dedupes on
+#' content hash, and writes the `asset` row through the mutation layer) and
+#' its `ingest_file` row is force-transitioned (`reset = TRUE`, since
+#' `quarantined` is otherwise terminal) to `archived` - the same terminal
+#' state a tabular asset's source file reaches after commit, so
+#' `.ig_remove_verified()` picks it up unmodified and the run's
+#' `files_by_state` report no longer shows it as `quarantined`.
+#'
+#' @param con an open read-write DBI connection (already past
+#'   `.ig_reconcile_and_commit()`, so any committed event's `project` row
+#'   exists).
+#' @param routed the tibble returned by [route_files()].
+#' @return character vector of retained hashes (invisibly informative only;
+#'   callers do not currently use the return value).
+#' @keywords internal
+#' @noRd
+.ig_retain_siblings <- function(con, routed) {
+  retained <- character(0)
+
+  idx <- which(routed$state == "quarantined" &
+    !is.na(routed$reason) & routed$reason == "unclaimed")
+  if (length(idx) == 0) {
+    return(retained)
+  }
+
+  # Same hash-dedup discipline as `.ig_parse_claimed()` (A20/A46): a
+  # duplicate-download of the SAME bytes at a second path must not be
+  # archived/transitioned twice.
+  idx <- idx[!duplicated(routed$hash[idx])]
+
+  for (i in idx) {
+    path <- routed$path[[i]]
+    hash <- routed$hash[[i]]
+    if (is.na(hash) || !file.exists(path)) {
+      next
+    }
+
+    fm <- file_meta(path)
+    work_order <- fm$work_order_guess
+    if (is.na(work_order)) {
+      next
+    }
+
+    project_row <- DBI::dbGetQuery(
+      con, "SELECT uuid FROM project WHERE name = ?",
+      params = list(work_order)
+    )
+    if (nrow(project_row) == 0) {
+      next
+    }
+
+    archive_file(con, path, hash, event = list(work_order = work_order))
+    ingest_file_set_state(con, hash, "archived", reason = "retained_sibling", reset = TRUE)
+    retained <- c(retained, hash)
+  }
+
+  retained
+}
+
 # ---- remove switch (R-9.6, A13) ------------------------------------------
 
 #' Delete input files whose content hash has a *verified* archive copy
@@ -420,6 +505,16 @@ ingest_dir <- function(path, db = st_config("live_db"), dry_run = FALSE) {
       }
 
       outcome <- .ig_reconcile_and_commit(con, events, dry_run)
+
+      # R-15.36/B-15.F17: retain the non-tabular deliverables of a work
+      # order once (and only once) that work order has actually committed
+      # in this run (`.ig_retain_siblings()` needs the `project` row a
+      # commit creates). Skipped on `dry_run` - archiving is a core-table
+      # write, and `ingest_dir()`'s own contract is that a dry run makes
+      # ZERO core-table writes (see roxygen above).
+      if (!dry_run) {
+        .ig_retain_siblings(con, routed)
+      }
 
       # Capture the live terminal states now, while `con` is still open -
       # `with_db_write()` closes it on return (R-12.7/F13; see
