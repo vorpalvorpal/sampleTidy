@@ -408,3 +408,99 @@ test_that("R-16.19/R-16.20: both value_conflict producers (.rc subkind='measurem
   expect_true(all(c("value_existing", "value_incoming") %in% rc_shared))
   expect_true(all(c("value_existing", "value_incoming") %in% fa_keys))
 })
+
+# ==============================================================================
+# Phase-7b remediation (FB1/FB2/FB3/FB4/FA7): .rq_serialise_diagnostics()'s
+# fixed serialisation policy, driven through the REAL DuckDB driver so
+# jsonlite::fromJSON()'s own normalisation cannot hide a policy regression -
+# at least one assertion below reads the stored payload TEXT directly.
+# ==============================================================================
+
+test_that("FB1: a diagnostic near 1e-4 round-trips through the REAL driver byte-identically (jsonlite's default digits = 4 would round it to 0.0001)", {
+  path <- seed_db()
+  con <- seed_con(path)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  uuid_written <- review_queue_add(
+    con, kind = "value_conflict",
+    diagnostics = list(value_existing = 0.000123456, value_incoming = 0.000987654)
+  )
+
+  stored <- DBI::dbGetQuery(con, "SELECT payload FROM review_queue WHERE uuid = ?",
+                             params = list(uuid_written))
+  diagnostics <- jsonlite::fromJSON(stored$payload[[1]])
+  expect_identical(diagnostics$value_existing, 0.000123456)
+  expect_identical(diagnostics$value_incoming, 0.000987654)
+  # shape check: the raw stored text carries full precision, not "0.0001".
+  expect_true(grepl("0.000123456", stored$payload[[1]], fixed = TRUE))
+})
+
+test_that("FB2: NA_real_/NA_integer_ diagnostics serialise to JSON null and read back as NA (not the string \"NA\")", {
+  path <- seed_db()
+  con <- seed_con(path)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  uuid_written <- review_queue_add(
+    con, kind = "value_conflict",
+    diagnostics = list(value_existing = NA_real_, revision_existing = NA_integer_)
+  )
+
+  stored <- DBI::dbGetQuery(con, "SELECT payload FROM review_queue WHERE uuid = ?",
+                             params = list(uuid_written))
+  # shape check on the raw TEXT: null, never the quoted string "NA".
+  expect_true(grepl("\"value_existing\":null", stored$payload[[1]], fixed = TRUE))
+  expect_true(grepl("\"revision_existing\":null", stored$payload[[1]], fixed = TRUE))
+  expect_false(grepl("\"NA\"", stored$payload[[1]], fixed = TRUE))
+
+  # jsonlite::fromJSON() maps a bare top-level JSON `null` to R `NULL` (not
+  # `NA`) - that IS the correct, type-preserving reading (the field is simply
+  # absent, exactly like a JSON object with the key omitted), and the
+  # standard `if (is.null(x)) NA else x` coalesce recovers a true NA cleanly.
+  # The old bug is what this guards against: with the string "NA" instead,
+  # that same coalesce would silently keep the WRONG value ("NA", a string),
+  # not flag it as missing.
+  diagnostics <- jsonlite::fromJSON(stored$payload[[1]])
+  expect_true(is.null(diagnostics$value_existing))
+  expect_false(identical(diagnostics$value_existing, "NA"))
+  value_existing <- if (is.null(diagnostics$value_existing)) NA_real_ else diagnostics$value_existing
+  expect_true(is.na(value_existing))
+  expect_true(is.numeric(value_existing))
+})
+
+test_that("FB3: an empty diagnostics list stores the JSON OBJECT \"{}\", never toJSON()'s default JSON ARRAY \"[]\"", {
+  path <- seed_db()
+  con <- seed_con(path)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  uuid_written <- review_queue_add(con, kind = "unknown_feature", subkind = "structural")
+
+  stored <- DBI::dbGetQuery(con, "SELECT payload FROM review_queue WHERE uuid = ?",
+                             params = list(uuid_written))
+  # fromJSON() cannot distinguish "{}" from "[]" (both -> list()), so this
+  # MUST be asserted on the raw stored TEXT.
+  expect_identical(stored$payload[[1]], "{}")
+})
+
+test_that("FA7: .rq_row()/.rq_skip() reject an UNNAMED diagnostics list (a hand-built k=v blob wrapped in list())", {
+  expect_error(.rq_row(kind = "x", diagnostics = list("existing_uuid=an-0001,value=1")))
+  expect_error(.rq_row(kind = "x", diagnostics = list("a=1", site = "T")))
+  expect_error(.rq_skip(diagnostics = list("existing_uuid=an-0001,value=1")))
+})
+
+test_that("FB4: review_queue_add() with a failing child row leaves NO review row and NO candidate rows (parent+children are one transaction)", {
+  path <- seed_db()
+  con <- seed_con(path)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  before_review <- DBI::dbGetQuery(con, "SELECT COUNT(*) AS n FROM review_queue")$n
+  before_cand <- DBI::dbGetQuery(con, "SELECT COUNT(*) AS n FROM review_queue_candidate")$n
+
+  expect_error(
+    review_queue_add(con, kind = "unknown_feature", candidates = c("ok1", NA_character_))
+  )
+
+  after_review <- DBI::dbGetQuery(con, "SELECT COUNT(*) AS n FROM review_queue")$n
+  after_cand <- DBI::dbGetQuery(con, "SELECT COUNT(*) AS n FROM review_queue_candidate")$n
+  expect_identical(after_review, before_review)
+  expect_identical(after_cand, before_cand)
+})

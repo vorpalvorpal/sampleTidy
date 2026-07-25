@@ -138,9 +138,10 @@
 #' `review_queue`-shaped row). It gets the SAME tier rule instead: an entity
 #' reference (`existing_uuid`, `kept_uuid_lab`) is a real, typed argument/
 #' column, never folded into free text; anything else is `diagnostics`,
-#' serialised via `jsonlite::toJSON(auto_unbox = TRUE)` exactly like
-#' `.rq_row()` - no free-text `payload` argument here either (R-16.18's
-#' rule, applied to the second carrier). PURE - no DB access.
+#' serialised via `.rq_serialise_diagnostics()` (R/db-schema.R) - the ONE
+#' shared policy point exactly like `.rq_row()` uses - no free-text `payload`
+#' argument here either (R-16.18's rule, applied to the second carrier).
+#' PURE - no DB access.
 #' `already_present`'s `existing_uuid` is populated on EVERY call from that
 #' producer (R-16.14): it is the column `.ct_skip_existing_uuid()`'s retired
 #' regex fallback used to recover from a bare-uuid payload.
@@ -154,8 +155,7 @@
 #' @noRd
 .rq_skip <- function(existing_uuid = NA_character_, kept_uuid_lab = NA_character_,
                      diagnostics = list()) {
-  checkmate::assert_list(diagnostics)
-  payload <- as.character(jsonlite::toJSON(diagnostics, auto_unbox = TRUE))
+  payload <- .rq_serialise_diagnostics(diagnostics)
   list(payload = payload, existing_uuid = existing_uuid, kept_uuid_lab = kept_uuid_lab)
 }
 
@@ -1380,10 +1380,10 @@ reconcile_event <- function(event, con) {
   results <- event$results
 
   # PLAN-16: widened to carry the typed columns .rq_row()/.rq_skip() emit
-  # (R-16.8/B-16.skips). Producers not yet converted to the structured
-  # constructor (unknown_feature/unknown_analyte) simply leave these NA -
-  # `.rc_fill_missing_cols()` below backfills them so every producer's
-  # tibble can be bound/selected uniformly regardless of conversion status.
+  # (R-16.8/B-16.skips). Not every producer populates every typed column
+  # (e.g. a producer with no candidate features leaves uuid_alias NA) -
+  # `.rc_fill_missing_cols()` below backfills the rest so every producer's
+  # tibble can be bound/selected uniformly regardless of which columns it set.
   review_cols <- c("source_ref", "kind", "subkind", "payload", "source_hash",
                     "uuid_existing", "uuid_alias")
   skip_cols <- c("source_ref", "reason", "payload", "source_hash",

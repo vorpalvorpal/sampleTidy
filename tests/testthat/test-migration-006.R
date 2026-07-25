@@ -78,6 +78,14 @@
     lat DOUBLE NOT NULL
   )"
 
+# Minimal, empty corpus tables (Phase-7b audit, FC10) - `.mig006_backup_counts()`
+# now COUNTs `analysis`/`sample` too (not just `review_queue`/
+# `review_queue_candidate`), so this throwaway fixture needs them to exist,
+# even empty, for `mig006_backup()`'s verify step to run at all. No column
+# beyond `uuid` is needed - nothing in this unit reads their content.
+.rq006_analysis_ddl <- "CREATE TABLE analysis (uuid VARCHAR PRIMARY KEY)"
+.rq006_sample_ddl <- "CREATE TABLE \"sample\" (uuid VARCHAR PRIMARY KEY)"
+
 # Same columns as helper-corpus.R's own `asset` DDL (uuid PK + filename) -
 # the only two fields R-16.12's `uuid_existing`/JSON-remainder pairing needs
 # to exist and be resolvable against.
@@ -155,25 +163,33 @@
     uuid = "rq-a1", kind = "unknown_analyte", work_order = "ES1000001",
     subkind = NULL, candidates = NULL,
     source_ref = c("r1c1", "r2c1"),
-    payload = "r1c1,r2c1,analyte_raw=Sodium Adsorption Ratio,work_order=ES1000001,n_rows=2,org=ALS"
+    payload = "r1c1,r2c1,analyte_raw=Sodium Adsorption Ratio,work_order=ES1000001,n_rows=2,org=ALS",
+    # MC3 (Phase-7b audit): the exact key SET the migrated remainder must
+    # have - not merely "still has source_ref" - so a mutation that leaves
+    # the duplicated `work_order=` text in the remainder (instead of
+    # excluding it) is caught.
+    remainder_keys = c("source_ref", "analyte_raw", "n_rows", "org")
   ),
   list(
     uuid = "rq-a2", kind = "unknown_feature", work_order = "ES2616703",
     subkind = "ambiguous", candidates = c("feat-1", "feat-2"),
     source_ref = c("r10c11", "r12c11", "r55c11"),
-    payload = "r10c11,r12c11,r55c11,feature_raw=K.E02,work_order=ES2616703,n_rows=27,subkind=ambiguous,candidates=feat-1|feat-2"
+    payload = "r10c11,r12c11,r55c11,feature_raw=K.E02,work_order=ES2616703,n_rows=27,subkind=ambiguous,candidates=feat-1|feat-2",
+    remainder_keys = c("source_ref", "feature_raw", "n_rows")
   ),
   list(
     uuid = "rq-a3", kind = "unknown_feature", work_order = "ES2700001",
     subkind = "ambiguous", candidates = c("feat-3"),
     source_ref = c("r20c5", "r21c5"),
-    payload = "r20c5,r21c5,feature_raw=B.S09,work_order=ES2700001,n_rows=1,subkind=ambiguous,candidates=feat-3"
+    payload = "r20c5,r21c5,feature_raw=B.S09,work_order=ES2700001,n_rows=1,subkind=ambiguous,candidates=feat-3",
+    remainder_keys = c("source_ref", "feature_raw", "n_rows")
   ),
   list(
     uuid = "rq-a4", kind = "unknown_feature", work_order = "ES2800002",
     subkind = "ambiguous", candidates = c("feat-4"),
     source_ref = c("r30c2", "r31c2"),
-    payload = "r30c2,r31c2,feature_raw=T.OLD1,work_order=ES2800002,n_rows=3,subkind=ambiguous,candidates=feat-4"
+    payload = "r30c2,r31c2,feature_raw=T.OLD1,work_order=ES2800002,n_rows=3,subkind=ambiguous,candidates=feat-4",
+    remainder_keys = c("source_ref", "feature_raw", "n_rows")
   )
 )
 
@@ -193,13 +209,23 @@ seed_migration_006_db <- function(dir = NULL) {
   con <- DBI::dbConnect(duckdb::duckdb(), path, read_only = FALSE)
   on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
 
-  # feature/asset created BEFORE ensure_schema: once R-16.1's v6 lands in
-  # .st_schema_migrations, ensure_schema() applies v6 HERE too, and v6's
-  # review_queue_candidate.uuid_feature FK REFERENCES feature(uuid) - so
-  # feature must already exist when that DDL runs. ensure_schema does not
-  # create feature itself (it is a corpus table, not part of the ops schema).
+  # feature/asset created BEFORE ensure_schema. Historical note, corrected by
+  # the Phase-7b audit (FA8): earlier revisions of this comment claimed v6's
+  # `review_queue_candidate.uuid_feature` REFERENCES feature(uuid) as an FK -
+  # that FK was REMOVED by the R-16.3 Option-A ruling (there is no database
+  # FK on `uuid_feature`, which is exactly why `mig006_convert_kv_rows()`
+  # must VERIFY each `candidates=` uuid against `feature` itself, D1). The
+  # real reason `feature` must exist before this fixture's rows are written
+  # is R-16.13's OWN resolution check: the 4 candidate uuids referenced by
+  # `.rq006_kv_rows` below must resolve to LIVE `feature` rows for the
+  # migration to accept them, so those rows are inserted first. `asset` is
+  # here for the same reason (R-16.12's `uuid_asset` resolution check).
+  # ensure_schema does not create feature/asset itself (corpus tables, not
+  # part of the ops schema).
   DBI::dbExecute(con, .rq006_feature_ddl)
   DBI::dbExecute(con, .rq006_asset_ddl)
+  DBI::dbExecute(con, .rq006_analysis_ddl)
+  DBI::dbExecute(con, .rq006_sample_ddl)
 
   # review_queue + ops schema, from the REAL production function. Applies
   # schema_version 1-4 today; 1-6 once R-16.1's v6 DDL lands in Phase 6.
@@ -257,6 +283,37 @@ seed_migration_006_db <- function(dir = NULL) {
   path
 }
 
+# ---- Phase-7b audit (slice C) remediation test helpers --------------------
+# Small, direct-SQL mutators for planting exactly one grammar violation on an
+# already-seeded fixture DB, and read-only assertions for "did the whole
+# transaction actually roll back". None of these go through the mutation
+# layer - they exist to corrupt a row the way a hand-rolled legacy write
+# could have, not to exercise db_update()/db_append() themselves.
+
+.mig006_update_payload <- function(path, uuid, payload) {
+  con <- DBI::dbConnect(duckdb::duckdb(), path, read_only = FALSE)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  DBI::dbExecute(con, "UPDATE review_queue SET payload = ? WHERE uuid = ?", params = list(payload, uuid))
+}
+
+.mig006_update_work_order <- function(path, uuid, work_order) {
+  con <- DBI::dbConnect(duckdb::duckdb(), path, read_only = FALSE)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  DBI::dbExecute(con, "UPDATE review_queue SET work_order = ? WHERE uuid = ?", params = list(work_order, uuid))
+}
+
+.mig006_marker_present <- function(path) {
+  con <- DBI::dbConnect(duckdb::duckdb(), path, read_only = TRUE)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  nrow(DBI::dbGetQuery(con, "SELECT 1 AS x FROM schema_version WHERE version = 1006")) > 0
+}
+
+.mig006_all_unmigrated <- function(path) {
+  con <- DBI::dbConnect(duckdb::duckdb(), path, read_only = TRUE)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  all(is.na(DBI::dbGetQuery(con, "SELECT subkind FROM review_queue")$subkind))
+}
+
 # =============================================================================
 # R-16.12: the asset_content_unverified rows convert with no information loss
 # =============================================================================
@@ -282,7 +339,7 @@ test_that("R-16.12: asset_content_unverified rows convert row-by-row with no uui
   expect_true(all(is.na(before$uuid_existing)))
 
   snap_dir <- withr::local_tempdir()
-  mig$mig006_run(db = path, snapshot_dir = snap_dir, dry_run = FALSE)
+  mig$mig006_run(db = path, snapshot_dir = snap_dir, dry_run = FALSE, expect_asset = 5, expect_kv = 4)
 
   con <- DBI::dbConnect(duckdb::duckdb(), path, read_only = FALSE)
   withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
@@ -348,7 +405,7 @@ test_that("R-16.13: the 4 legacy k=v rows keep subkind, work_order and the sourc
   expect_true(all(is.na(before$subkind)))
 
   snap_dir <- withr::local_tempdir()
-  mig$mig006_run(db = path, snapshot_dir = snap_dir, dry_run = FALSE)
+  mig$mig006_run(db = path, snapshot_dir = snap_dir, dry_run = FALSE, expect_asset = 5, expect_kv = 4)
 
   con <- DBI::dbConnect(duckdb::duckdb(), path, read_only = FALSE)
   withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
@@ -391,6 +448,14 @@ test_that("R-16.13: the 4 legacy k=v rows keep subkind, work_order and the sourc
 
     remainder <- jsonlite::fromJSON(got$payload)
     expect_identical(remainder$source_ref, row$source_ref)
+
+    # MC3 (Phase-7b audit mutation spec): the migrated remainder's key SET
+    # must be EXACTLY the expected one - not merely "still contains
+    # source_ref" - so a mutation that leaves the duplicated `work_order=`
+    # text in the remainder (instead of excluding it, per the excluded-key
+    # set at `.mig006_parse_kv_payload()`) is caught here rather than
+    # surviving with 0 failures.
+    expect_setequal(names(remainder), row$remainder_keys)
   }
 })
 
@@ -399,7 +464,7 @@ test_that("R-16.13: the 3 candidates= rows yield exactly 4 distinct review_queue
   path <- seed_migration_006_db()
 
   snap_dir <- withr::local_tempdir()
-  mig$mig006_run(db = path, snapshot_dir = snap_dir, dry_run = FALSE)
+  mig$mig006_run(db = path, snapshot_dir = snap_dir, dry_run = FALSE, expect_asset = 5, expect_kv = 4)
 
   con <- DBI::dbConnect(duckdb::duckdb(), path, read_only = FALSE)
   withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
@@ -428,4 +493,295 @@ test_that("R-16.13: the 3 candidates= rows yield exactly 4 distinct review_queue
     SELECT COUNT(*) AS n FROM review_queue_candidate c
     JOIN feature f ON f.uuid = c.uuid_feature")$n
   expect_equal(resolved_n, 4L)
+})
+
+# =============================================================================
+# Phase-7b audit (slice C) remediation - FC11: every non-happy branch, plus
+# one block per refusal gate (D1/FC1, FC2, FC3, FC4, FC6, FC8, FC9, FC10,
+# FC12), each asserting the abort message NAMES the offending row.
+# =============================================================================
+
+test_that("FC11: dry_run leaves the DB byte-identical and writes no snapshot", {
+  mig <- .mig006_load()
+  path <- seed_migration_006_db()
+  before_hash <- unname(tools::md5sum(path))
+
+  snap_dir <- withr::local_tempdir()
+  result <- mig$mig006_run(db = path, snapshot_dir = snap_dir, dry_run = TRUE)
+
+  expect_equal(result$status, "dry_run")
+  expect_equal(result$n_asset, nrow(.rq006_asset_fixture))
+  expect_equal(result$n_kv, length(.rq006_kv_rows))
+  expect_equal(unname(tools::md5sum(path)), before_hash)
+  expect_equal(length(list.files(snap_dir)), 0L)
+  expect_false(.mig006_marker_present(path))
+})
+
+test_that("FC11: a second run returns already_migrated and converts nothing", {
+  mig <- .mig006_load()
+  path <- seed_migration_006_db()
+  snap_dir <- withr::local_tempdir()
+
+  first <- mig$mig006_run(db = path, snapshot_dir = snap_dir, dry_run = FALSE, expect_asset = 5, expect_kv = 4)
+  expect_equal(first$status, "migrated")
+
+  before_hash <- unname(tools::md5sum(path))
+  second <- mig$mig006_run(db = path, snapshot_dir = snap_dir, dry_run = FALSE, expect_asset = 5, expect_kv = 4)
+
+  expect_equal(second$status, "already_migrated")
+  expect_true(is.na(second$n_asset))
+  expect_true(is.na(second$n_kv))
+  expect_equal(unname(tools::md5sum(path)), before_hash)
+})
+
+test_that("FC11/MC4: a dangling candidates= uuid rolls back everything and writes no marker", {
+  mig <- .mig006_load()
+  path <- seed_migration_006_db()
+  .mig006_update_payload(
+    path, "rq-a3",
+    "r20c5,r21c5,feature_raw=B.S09,work_order=ES2700001,n_rows=1,subkind=ambiguous,candidates=feat-does-not-exist"
+  )
+
+  snap_dir <- withr::local_tempdir()
+  expect_error(
+    mig$mig006_run(db = path, snapshot_dir = snap_dir, dry_run = FALSE, expect_asset = 5, expect_kv = 4),
+    regexp = "feat-does-not-exist"
+  )
+  expect_true(.mig006_all_unmigrated(path))
+  expect_false(.mig006_marker_present(path))
+
+  con <- DBI::dbConnect(duckdb::duckdb(), path, read_only = TRUE)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+  expect_equal(nrow(DBI::dbGetQuery(con, "SELECT * FROM review_queue_candidate")), 0L)
+})
+
+test_that("FC11: a missing snapshot_dir aborts before any write", {
+  mig <- .mig006_load()
+  path <- seed_migration_006_db()
+  missing_dir <- file.path(withr::local_tempdir(), "does-not-exist")
+  before_hash <- unname(tools::md5sum(path))
+
+  expect_error(
+    mig$mig006_run(db = path, snapshot_dir = missing_dir, dry_run = FALSE, expect_asset = 5, expect_kv = 4)
+  )
+  expect_equal(unname(tools::md5sum(path)), before_hash)
+  expect_false(.mig006_marker_present(path))
+})
+
+test_that("D1/FC1: an unescaped comma inside a k=v value aborts naming the row, never guesses", {
+  mig <- .mig006_load()
+  path <- seed_migration_006_db()
+  # The FC1 reproduction: a comma-bearing analyte_raw value forges an unkeyed
+  # token AFTER the first k=v token - the live grammar always emits the
+  # unkeyed source_ref prefix first, so this shape catches every corruption
+  # case the audit could construct.
+  .mig006_update_payload(
+    path, "rq-a1",
+    "r1c1,r2c1,analyte_raw=1,2-Dichloroethane,work_order=ES1000001,n_rows=2,org=ALS"
+  )
+
+  snap_dir <- withr::local_tempdir()
+  expect_error(
+    mig$mig006_run(db = path, snapshot_dir = snap_dir, dry_run = FALSE, expect_asset = 5, expect_kv = 4),
+    regexp = "rq-a1"
+  )
+  # Whole transaction rolled back, not just the offending row - the asset
+  # rows (converted BEFORE the kv rows, inside the same db_transaction())
+  # are unmigrated too, and no marker was written.
+  expect_true(.mig006_all_unmigrated(path))
+  expect_false(.mig006_marker_present(path))
+})
+
+test_that("D1/FC4: a repeated key aborts naming the row", {
+  mig <- .mig006_load()
+  path <- seed_migration_006_db()
+  .mig006_update_payload(
+    path, "rq-a2",
+    "r10c11,feature_raw=first,feature_raw=second,work_order=ES2616703,subkind=ambiguous,candidates=feat-1"
+  )
+
+  snap_dir <- withr::local_tempdir()
+  expect_error(
+    mig$mig006_run(db = path, snapshot_dir = snap_dir, dry_run = FALSE, expect_asset = 5, expect_kv = 4),
+    regexp = "rq-a2"
+  )
+  expect_false(.mig006_marker_present(path))
+})
+
+test_that("D1/FC8: a key outside the known vocabulary aborts naming the row", {
+  mig <- .mig006_load()
+  path <- seed_migration_006_db()
+  .mig006_update_payload(path, "rq-a1", "r1c1,r2c1,totally_new_key=zzz,work_order=ES1000001")
+
+  snap_dir <- withr::local_tempdir()
+  expect_error(
+    mig$mig006_run(db = path, snapshot_dir = snap_dir, dry_run = FALSE, expect_asset = 5, expect_kv = 4),
+    regexp = "rq-a1"
+  )
+  expect_false(.mig006_marker_present(path))
+})
+
+test_that("D1/FC12: an empty candidates= value aborts naming the row, never vanishes silently", {
+  mig <- .mig006_load()
+  path <- seed_migration_006_db()
+  .mig006_update_payload(path, "rq-a2", "r10c11,subkind=ambiguous,candidates=,work_order=ES2616703")
+
+  snap_dir <- withr::local_tempdir()
+  expect_error(
+    mig$mig006_run(db = path, snapshot_dir = snap_dir, dry_run = FALSE, expect_asset = 5, expect_kv = 4),
+    regexp = "rq-a2"
+  )
+  expect_false(.mig006_marker_present(path))
+})
+
+test_that("FC2: a zero-row run against an already-migrated DB refuses to write the marker", {
+  mig <- .mig006_load()
+  path <- seed_migration_006_db()
+  snap_dir <- withr::local_tempdir()
+
+  first <- mig$mig006_run(db = path, snapshot_dir = snap_dir, dry_run = FALSE, expect_asset = 5, expect_kv = 4)
+  expect_equal(first$status, "migrated")
+
+  # Wipe the marker by hand (e.g. the marker row was deleted, or the run is
+  # pointed at the wrong DB) - the DB itself is now fully converted, so a
+  # re-run would convert 0 rows and, pre-fix, would report "migrated" anyway.
+  con <- DBI::dbConnect(duckdb::duckdb(), path, read_only = FALSE)
+  DBI::dbExecute(con, "DELETE FROM schema_version WHERE version = 1006")
+  DBI::dbDisconnect(con, shutdown = TRUE)
+
+  expect_error(
+    mig$mig006_run(db = path, snapshot_dir = snap_dir, dry_run = FALSE, expect_asset = 5, expect_kv = 4),
+    regexp = "expected 5"
+  )
+  expect_false(.mig006_marker_present(path))
+})
+
+test_that("FC3: a work_order column that disagrees with the payload's work_order= aborts naming the row", {
+  mig <- .mig006_load()
+  path <- seed_migration_006_db()
+  .mig006_update_work_order(path, "rq-a1", "ES_WRONG_COLUMN")
+
+  snap_dir <- withr::local_tempdir()
+  expect_error(
+    mig$mig006_run(db = path, snapshot_dir = snap_dir, dry_run = FALSE, expect_asset = 5, expect_kv = 4),
+    regexp = "rq-a1"
+  )
+  expect_false(.mig006_marker_present(path))
+})
+
+test_that("FC5/FC7: an asset payload without exactly the three expected keys aborts naming the row", {
+  mig <- .mig006_load()
+
+  # missing filename
+  path1 <- seed_migration_006_db()
+  .mig006_update_payload(path1, "rq-b1", '{"uuid_asset":"asset-b1","state":"s"}')
+  expect_error(
+    mig$mig006_run(db = path1, snapshot_dir = withr::local_tempdir(), dry_run = FALSE, expect_asset = 5, expect_kv = 4),
+    regexp = "rq-b1"
+  )
+  expect_false(.mig006_marker_present(path1))
+
+  # a 4th key
+  path2 <- seed_migration_006_db()
+  .mig006_update_payload(
+    path2, "rq-b2",
+    '{"uuid_asset":"asset-b2","filename":"AAA_alpha_LabReport.pdf","state":"s","detected_hash":"h"}'
+  )
+  expect_error(
+    mig$mig006_run(db = path2, snapshot_dir = withr::local_tempdir(), dry_run = FALSE, expect_asset = 5, expect_kv = 4),
+    regexp = "rq-b2"
+  )
+  expect_false(.mig006_marker_present(path2))
+})
+
+test_that("FC6: a NULL payload aborts naming the row, in both dry_run and the real run", {
+  mig <- .mig006_load()
+  path <- seed_migration_006_db()
+  .mig006_update_payload(path, "rq-a1", NA_character_)
+
+  snap_dir <- withr::local_tempdir()
+  expect_error(
+    mig$mig006_run(db = path, snapshot_dir = snap_dir, dry_run = TRUE),
+    regexp = "rq-a1"
+  )
+  expect_equal(length(list.files(snap_dir)), 0L)
+
+  expect_error(
+    mig$mig006_run(db = path, snapshot_dir = snap_dir, dry_run = FALSE, expect_asset = 5, expect_kv = 4),
+    regexp = "rq-a1"
+  )
+  expect_false(.mig006_marker_present(path))
+})
+
+test_that("FC9: source_ref is always a JSON array, never a bare string or {}", {
+  mig <- .mig006_load()
+  path <- seed_migration_006_db()
+
+  con <- DBI::dbConnect(duckdb::duckdb(), path, read_only = FALSE)
+  # cardinality 0: no unkeyed tokens at all.
+  review_queue_add(con, kind = "unknown_feature", payload = "subkind=ambiguous,candidates=feat-1", uuid = "rq-fc9-0")
+  # cardinality 1: exactly one unkeyed token - the singleton auto_unbox() was
+  # collapsing to a bare JSON string.
+  review_queue_add(con, kind = "unknown_feature", payload = "r1c1,subkind=ambiguous,candidates=feat-1", uuid = "rq-fc9-1")
+  DBI::dbDisconnect(con, shutdown = TRUE)
+
+  snap_dir <- withr::local_tempdir()
+  mig$mig006_run(db = path, snapshot_dir = snap_dir, dry_run = FALSE, expect_asset = 5, expect_kv = 6)
+
+  con2 <- DBI::dbConnect(duckdb::duckdb(), path, read_only = TRUE)
+  withr::defer(DBI::dbDisconnect(con2, shutdown = TRUE))
+  got0 <- DBI::dbGetQuery(con2, "SELECT payload FROM review_queue WHERE uuid = 'rq-fc9-0'")$payload
+  got1 <- DBI::dbGetQuery(con2, "SELECT payload FROM review_queue WHERE uuid = 'rq-fc9-1'")$payload
+
+  # simplifyVector = FALSE is load-bearing here: a JSON ARRAY parses to an R
+  # list; a bare JSON STRING parses to a length-1 character vector. Default
+  # simplification would hide the exact type distinction FC9 exists to fix.
+  parsed0 <- jsonlite::fromJSON(got0, simplifyVector = FALSE)
+  parsed1 <- jsonlite::fromJSON(got1, simplifyVector = FALSE)
+  expect_true(is.list(parsed0$source_ref))
+  expect_equal(length(parsed0$source_ref), 0L)
+  expect_true(is.list(parsed1$source_ref))
+  expect_equal(length(parsed1$source_ref), 1L)
+  expect_identical(parsed1$source_ref[[1]], "r1c1")
+})
+
+test_that("FC10: .mig006_backup_counts() detects a lost asset table, not just review_queue counts", {
+  mig <- .mig006_load()
+  path <- seed_migration_006_db()
+
+  con <- DBI::dbConnect(duckdb::duckdb(), path, read_only = FALSE)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  before <- mig$.mig006_backup_counts(con)
+  expect_true(all(
+    c("asset", "feature", "analysis", "sample", "change_log", "review_queue_digest") %in% names(before)
+  ))
+  expect_equal(before$asset, nrow(.rq006_asset_fixture))
+
+  DBI::dbExecute(con, "DELETE FROM asset")
+  after <- mig$.mig006_backup_counts(con)
+
+  # A backup that lost every asset row must NOT verify identical to the live
+  # counts - the pre-fix version compared ONLY review_queue/
+  # review_queue_candidate counts, so this exact loss was invisible.
+  expect_false(identical(before, after))
+  expect_equal(after$asset, 0L)
+  expect_identical(before$review_queue, after$review_queue)
+})
+
+test_that("MC4: an unresolvable uuid_asset aborts and rolls back everything, naming the row", {
+  mig <- .mig006_load()
+  path <- seed_migration_006_db()
+  .mig006_update_payload(
+    path, "rq-b3",
+    '{"uuid_asset":"asset-does-not-exist","filename":"ZZZ_omega_Chain.pdf","state":"s"}'
+  )
+
+  snap_dir <- withr::local_tempdir()
+  expect_error(
+    mig$mig006_run(db = path, snapshot_dir = snap_dir, dry_run = FALSE, expect_asset = 5, expect_kv = 4),
+    regexp = "asset-does-not-exist"
+  )
+  expect_true(.mig006_all_unmigrated(path))
+  expect_false(.mig006_marker_present(path))
 })

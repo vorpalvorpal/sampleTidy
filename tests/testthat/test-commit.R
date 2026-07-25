@@ -927,6 +927,134 @@ test_that("R-8.7/A63: a re-ingested reading under a conversion_constant method i
   expect_false("r1" %in% out$review$source_ref)
 })
 
+# ---- PLAN-16 R-16.14 (FA5): .ct_skip_existing_uuid()'s load-bearing half ---
+#
+# The R-16.14 block in test-review-queue-payload.R only asserts half 1 (the
+# tibble column reconcile populates). Half 2 - "the replacement must return
+# the same uuid the regex returned FOR THE SAME INPUT" - had NO test calling
+# `.ct_skip_existing_uuid()` at all; the coverage credited to it actually
+# lived in the R-9.2 "already_present" block above, driven by a fixture
+# (`existing_uuid = "an-0001"`) rather than by production. These two blocks
+# close that gap by driving `.ct_skip_existing_uuid()` on the skip tibble a
+# REAL `reconcile_event()`/`.rc_qc_filter()` produces.
+
+test_that("R-16.14: .ct_skip_existing_uuid() returns the analysis uuid a REAL reconcile_event() already_present skip carries, and drives a real commit_event() provenance row from it", {
+  setup <- commit_test_setup()
+  con <- setup$con
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  # Step 1: store a Fluoride-as-F reading via a REAL commit_event() (same
+  # fixture as the R-8.7/A63 block above) so a KNOWN analysis.uuid exists.
+  files <- tibble::tibble(hash = setup$hash, filename = basename(setup$path),
+                          adapter = "esdat/1", rank = 3L, kept = TRUE)
+  clean <- mk_clean_row(
+    source_ref = "c1", source_hash = setup$hash,
+    uuid_feature = "f-0001", uuid_lab = "lm-0012", uuid_analyte = "a-0002",
+    analyte_raw = "Fluoride as F", method_raw = "EK040P: Fluoride by PC Titrator",
+    units_raw = "mg/L", value_raw = "3", value_num = 3, value_converted = 3000,
+    below_detection = FALSE,
+    sample_date = as.Date("2025-05-24"),
+    sample_datetime = as.POSIXct("2025-05-24 11:45:00", tz = "Australia/Sydney")
+  )
+  commit_event(mk_commit_event(files), mk_resolved(clean = clean), con)
+  existing_uuid <- DBI::dbGetQuery(con, "SELECT uuid FROM analysis WHERE uuid_lab = 'lm-0012'")$uuid[[1]]
+
+  # Step 2: re-ingest the IDENTICAL reading via a REAL reconcile_event() -
+  # production's already_present skip producer (R/reconcile.R ~1260) is what
+  # populates `existing_uuid`, not this test.
+  second <- add_second_reconciled_file(setup, "PROJ_A.ESDAT_XX1234567_0.Chemistry2f.CSV")
+  event <- mk_event(mk_row(
+    source_ref = "r1", source_hash = second$hash, analyte_raw = "Fluoride as F",
+    cas_number = "16984-48-8", method_raw = "EK040P: Fluoride by PC Titrator",
+    org = "ALS", units_raw = "mg/L", value_raw = "3", value_num = 3,
+    below_detection = FALSE, rl = 0.1,
+    sample_datetime_raw = "24 May 2025 11:45"
+  ))
+  out <- reconcile_event(event, con)
+  expect_true("r1" %in% out$skipped$source_ref)
+  expect_identical(out$skipped$reason[out$skipped$source_ref == "r1"], "already_present")
+
+  i <- which(out$skipped$source_ref == "r1")
+  expect_identical(.ct_skip_existing_uuid(out$skipped, i), existing_uuid)
+
+  # Drive a REAL commit_event() on this REAL skip tibble (not a hand-built
+  # fixture) and assert the provenance change_log row lands on the uuid
+  # .ct_skip_existing_uuid() returned.
+  second_files <- tibble::tibble(hash = second$hash, filename = basename(second$path),
+                                 adapter = "esdat/1", rank = 3L, kept = TRUE)
+  resolved <- mk_resolved(clean = tibble::tibble(), skipped = out$skipped,
+                          counts = c(already_present = 1))
+  commit_event(mk_commit_event(second_files, work_order = setup$work_order), resolved, con)
+
+  prov <- DBI::dbGetQuery(con, sprintf(
+    "SELECT * FROM change_log WHERE uuid_row = '%s' AND action = 'provenance' AND source_hash = '%s'",
+    existing_uuid, second$hash))
+  expect_equal(nrow(prov), 1)
+})
+
+test_that("R-16.14: a skip tibble missing the existing_uuid column (e.g. .rc_qc_filter()'s own output, R/reconcile.R:194-200) makes .ct_skip_existing_uuid() return NA, and commit_event() skips the provenance row entirely rather than erroring", {
+  # .rc_qc_filter() is a real production function (reconcile_event() itself
+  # backfills the column for its OWN return value via .rc_fill_missing_cols(),
+  # so this shape only surfaces one function earlier - exactly where FA5
+  # says it is constructible today).
+  qc <- .rc_qc_filter(tibble::tibble(
+    source_ref = "qc1", sample_type = "LCS", source_hash = "qc-hash"
+  ))
+  expect_false("existing_uuid" %in% names(qc$skipped))
+  expect_identical(.ct_skip_existing_uuid(qc$skipped, 1), NA_character_)
+
+  setup <- commit_test_setup()
+  con <- setup$con
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  files <- tibble::tibble(hash = setup$hash, filename = basename(setup$path),
+                          adapter = "esdat/1", rank = 3L, kept = TRUE)
+  # A skip tibble shaped like .rc_qc_filter()'s (no existing_uuid column) but
+  # forced to reason = "already_present" so it reaches
+  # .ct_record_already_present()'s loop - it must skip the row silently, not
+  # error, matching the retired regex fallback's replacement.
+  skipped <- tibble::tibble(source_ref = "qc1", source_hash = setup$hash,
+                            reason = "already_present")
+  resolved <- mk_resolved(clean = tibble::tibble(), skipped = skipped, counts = c(already_present = 1))
+  # Scoped to tbl='analysis'/action='provenance' - the exact write
+  # .ct_record_already_present() makes - so commit_event()'s OWN incidental
+  # change_log traffic (e.g. .ct_ensure_project() inserting a new project row
+  # on this work order's first commit) does not confound the assertion.
+  before <- nrow(DBI::dbGetQuery(con, "SELECT * FROM change_log WHERE tbl = 'analysis' AND action = 'provenance'"))
+  commit_event(mk_commit_event(files), resolved, con)
+  after <- nrow(DBI::dbGetQuery(con, "SELECT * FROM change_log WHERE tbl = 'analysis' AND action = 'provenance'"))
+  expect_equal(after, before)
+})
+
+# ---- PLAN-16 FB8: .ct_commit_review()'s typed columns survive the commit
+#      boundary (routes through .rq_row(), B-16.api: "Both insert paths
+#      route through it") ------------------------------------------------
+
+test_that("PLAN-16 FB8: subkind, uuid_existing and uuid_alias all survive a real commit_event() -> .ct_commit_review() write, not just uuid_alias", {
+  setup <- commit_test_setup()
+  con <- setup$con
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  files <- tibble::tibble(hash = setup$hash, filename = basename(setup$path),
+                          adapter = "esdat/1", rank = 3L, kept = TRUE)
+  review <- tibble::tibble(
+    source_ref = "r1", kind = "value_conflict", subkind = "measurement",
+    source_hash = setup$hash, payload = '{"value_existing":1,"value_incoming":2}',
+    uuid_existing = "an-0001", uuid_alias = "fa-0009"
+  )
+  resolved <- mk_resolved(clean = tibble::tibble(), review = review)
+
+  commit_event(mk_commit_event(files), resolved, con)
+
+  stored <- DBI::dbGetQuery(con,
+    "SELECT subkind, uuid_existing, uuid_alias, status FROM review_queue WHERE kind = 'value_conflict' AND source_hash = ?",
+    params = list(setup$hash))
+  expect_equal(nrow(stored), 1)
+  expect_identical(stored$subkind[[1]], "measurement")
+  expect_identical(stored$uuid_existing[[1]], "an-0001")
+  expect_identical(stored$uuid_alias[[1]], "fa-0009")
+  expect_identical(stored$status[[1]], "open")
+})
+
 test_that("R-11.16: a qualitative text row commits quantified = NA, not FALSE (the tri-state survives the write)", {
   # Ruled by Robin 2026-07-23. `isTRUE()` maps NA to FALSE, which silently
   # recorded "this is not a measurement" as "below detection". In the live

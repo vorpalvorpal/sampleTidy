@@ -339,6 +339,36 @@ ingest_file_set_route <- function(con, hash, adapter = NA_character_, tier = NA_
   invisible(NULL)
 }
 
+# PLAN-16 Phase-7b (FB1/FB2/FB3): the ONE place a diagnostics list becomes a
+# JSON payload string, shared by BOTH review_queue carriers - `.rq_row()`
+# just below and `.rq_skip()` (R/reconcile.R) - so the serialisation POLICY
+# cannot drift between the two copies again (that duplication was itself the
+# defect vector: all three bugs below were present in both copies).
+#  - `digits = NA`: full numeric precision. jsonlite's default is
+#    `digits = 4`, meaning 4 DECIMAL PLACES, so a real lab measurement near
+#    1e-4 (the normal case for this data) is silently rounded away (~19%
+#    error observed).
+#  - `na = "null"`: `NA_real_`/`NA_integer_` must serialise to JSON `null`.
+#    jsonlite's default instead emits the JSON STRING `"NA"`, indistinguishable
+#    from a genuine text result and flipping numeric -> character across the
+#    boundary; this lands on the DOMINANT branch (R/reconcile.R's
+#    `value_conflict` producer reaches review precisely when a revision is NA).
+#  - an empty diagnostics list emits `"{}"` (a JSON OBJECT), never
+#    `toJSON()`'s own default `"[]"` (a JSON ARRAY): migration 006's
+#    `startsWith(payload, "{")` legacy-row guard relies on this to tell a
+#    correctly-written structured row from a legacy k=v row apart.
+# Also validates: `diagnostics` must be a list with UNIQUE NAMES (R-16.18/
+# FA7) - an unnamed list (e.g. a hand-built k=v string wrapped in `list()`)
+# would otherwise serialise straight through, defeating the whole point of
+# routing through a typed carrier instead of free text.
+#' @keywords internal
+#' @noRd
+.rq_serialise_diagnostics <- function(diagnostics) {
+  checkmate::assert_list(diagnostics, names = "unique")
+  if (length(diagnostics) == 0L) return("{}")
+  as.character(jsonlite::toJSON(diagnostics, auto_unbox = TRUE, digits = NA, na = "null"))
+}
+
 # PLAN-16 (B-16.api): the single structured constructor every review_queue
 # producer routes through instead of hand-building a payload string.
 # PURE - no DB access, no side effects beyond generating a uuid/timestamp for
@@ -354,8 +384,8 @@ ingest_file_set_route <- function(con, hash, adapter = NA_character_, tier = NA_
 # the comma/pipe/equals injection hazard (R-16.10) and the nesting bug
 # (R-16.11) structurally impossible for callers that build a diagnostics list
 # and let it flow through here. Within `.rq_row()`, `diagnostics` is the only
-# free-form carrier, serialised via jsonlite::toJSON(auto_unbox = TRUE),
-# which escapes by construction.
+# free-form carrier, serialised through `.rq_serialise_diagnostics()` (the one
+# shared policy point, see its own comment just above).
 # CARVE-OUT, not an oversight: `review_queue_add()` immediately below keeps
 # its OWN pre-existing free-text `payload` argument (R-16.9 requires it be
 # byte-identical to the raw db_append() tibble path) and overrides
@@ -383,13 +413,12 @@ ingest_file_set_route <- function(con, hash, adapter = NA_character_, tier = NA_
                     uuid_alias = NA_character_, candidates = NULL, expired = NULL,
                     diagnostics = list()) {
   checkmate::assert_string(kind)
-  checkmate::assert_list(diagnostics)
   if (!is.null(candidates)) checkmate::assert_character(candidates)
   if (!is.null(expired)) checkmate::assert_data_frame(expired)
 
   uuid_row <- uuid::UUIDgenerate()
   created_at <- Sys.time()
-  payload <- as.character(jsonlite::toJSON(diagnostics, auto_unbox = TRUE))
+  payload <- .rq_serialise_diagnostics(diagnostics)
 
   review <- tibble::tibble(
     uuid = uuid_row, created_at = created_at, kind = kind, subkind = subkind,
@@ -470,31 +499,41 @@ review_queue_add <- function(con, kind, work_order = NA_character_,
   cand <- rq$candidates
   if (nrow(cand) > 0L) cand$uuid_review <- uuid
 
-  DBI::dbExecute(
-    con,
-    "INSERT INTO review_queue
-       (uuid, created_at, kind, subkind, work_order, source_hash, payload,
-        status, uuid_existing, uuid_alias)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-    params = list(
-      review$uuid[[1]], review$created_at[[1]], review$kind[[1]], review$subkind[[1]],
-      review$work_order[[1]], review$source_hash[[1]], review$payload[[1]],
-      review$status[[1]], review$uuid_existing[[1]], review$uuid_alias[[1]]
-    )
-  )
-
-  for (i in seq_len(nrow(cand))) {
+  # FB4: the parent review_queue row and its N review_queue_candidate child
+  # rows are one atomic unit (B-16.api: a caller of .rq_row() cannot end up
+  # with one but not the other) - so all N+1 inserts run inside ONE
+  # db_transaction() (same idiom as db_append(), R/mutate.R:191/192). A
+  # failing child (e.g. a NOT NULL violation) now rolls the whole write back
+  # instead of leaving a truncated, mis-ranked candidate list committed.
+  db_transaction(con, function(con) {
     DBI::dbExecute(
       con,
-      "INSERT INTO review_queue_candidate
-         (uuid, uuid_review, uuid_feature, kind, date_start, date_end, rank)
-       VALUES (?, ?, ?, ?, ?, ?, ?)",
+      "INSERT INTO review_queue
+         (uuid, created_at, kind, subkind, work_order, source_hash, payload,
+          status, uuid_existing, uuid_alias)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
       params = list(
-        cand$uuid[[i]], cand$uuid_review[[i]], cand$uuid_feature[[i]], cand$kind[[i]],
-        cand$date_start[[i]], cand$date_end[[i]], cand$rank[[i]]
+        review$uuid[[1]], review$created_at[[1]], review$kind[[1]], review$subkind[[1]],
+        review$work_order[[1]], review$source_hash[[1]], review$payload[[1]],
+        review$status[[1]], review$uuid_existing[[1]], review$uuid_alias[[1]]
       )
     )
-  }
+
+    for (i in seq_len(nrow(cand))) {
+      DBI::dbExecute(
+        con,
+        "INSERT INTO review_queue_candidate
+           (uuid, uuid_review, uuid_feature, kind, date_start, date_end, rank)
+         VALUES (?, ?, ?, ?, ?, ?, ?)",
+        params = list(
+          cand$uuid[[i]], cand$uuid_review[[i]], cand$uuid_feature[[i]], cand$kind[[i]],
+          cand$date_start[[i]], cand$date_end[[i]], cand$rank[[i]]
+        )
+      )
+    }
+
+    invisible(NULL)
+  })
 
   invisible(uuid)
 }
