@@ -134,11 +134,354 @@ mk_resolved <- function(clean = tibble::tibble(), review = tibble::tibble(),
 }
 
 # ==============================================================================
-# R-16.10 (THE HEADLINE): a value containing a comma, a pipe or an equals
-# sign round-trips byte-identical
-# ==============================================================================
+# R-16.10 (THE HEADLINE, round-3 TABLE-DRIVEN REWRITE): a value containing
+# hostile bytes round-trips byte-for-byte through EVERY content-producing
+# review_queue producer, not just one or two of them. Round 3 found this
+# verified on only 2 of the 14 producers inventoried in
+# `dev/tdd-run/p16-payload-prod-inventory.md` Section 1b - the coverage gap
+# that let slice I's mutant F5 hand-roll an unescaped `sprintf()` payload
+# inside `.rc_feature_review()`'s `structural` branch and emit INVALID JSON
+# for a quoted `feature_raw` against a fully green suite. Every producer
+# below (Robin's ruling: a PROPERTY of every producer, not one verified site)
+# is driven through its REAL production entry point -
+# `reconcile_event()`/`confirm_feature_aliases()`/`confirm_analyte_methods()`/
+# `route_files()` - never a hand-built tibble standing in for one, with the
+# SAME shared hostile byte set: comma, apostrophe, pipe, `=`, `"`, `\`, tab,
+# newline, non-ASCII. Two producers cannot carry hostile content at all
+# (explained explicitly at their own table entries below, not silently
+# dropped) - #6 `method_duplicate` (no free-text diagnostics field exists)
+# and #10's own coverage is retained from round 2 rather than duplicated;
+# see the individual `test_that()` names below for the 1/14..14/14 count.
 
-test_that("R-16.10: an analyte/value pair carrying comma, apostrophe, pipe, equals, DOUBLE QUOTE, BACKSLASH, tab, newline and a non-ASCII character round-trips byte-identical through JSON diagnostics, with the RAW STORED TEXT (not just the fromJSON()-parsed value) carrying correct JSON escaping (the criterion the plan exists for - RED against today's k=v payload, and RED again against a serialiser that silently strips the two characters JSON must escape)", {
+# The shared hazard strings. Neither starts/ends with whitespace - both
+# `.rc_feature_key()` and `parse_value()` trim LEADING/TRAILING whitespace
+# before classification, so an edge char there would test `trimws()`, not
+# JSON escaping.
+P16_HAZARD  <- "haz,1'2|3=4\"5\\6\t7\n8µend"
+P16_HAZARD2 <- "haz,B'C|D=E\"F\\G\tH\nIµend2"
+# The real analyte name from the live registry (R-16.10's own instruction:
+# use it for at least one case). Already carries a comma and two apostrophes
+# - a genuine specimen of the hazard class, not a synthetic stand-in.
+P16_REAL_ANALYTE <- "2,2',3,3',4,4'-Hexachlorobiphenyl"
+
+#' Assert that `raw` (the LITERAL stored payload TEXT) contains the correctly
+#' escaped JSON rendering of `expected`, AND that `jsonlite::fromJSON(raw)`
+#' reads `key` back byte-identical to `expected`. Two independent checks (the
+#' original R-16.10 test's own reasoning, preserved here): a serialiser that
+#' silently DROPS a hazard character instead of escaping it can still parse
+#' back to something via `fromJSON()` on the surviving characters, so the
+#' parsed-value check alone cannot see that mutant - the raw-text containment
+#' check can.
+#' @keywords internal
+.p16_assert_hazard <- function(raw, key, expected) {
+  expected_json <- as.character(jsonlite::toJSON(expected, auto_unbox = TRUE))
+  testthat::expect_true(grepl(expected_json, raw, fixed = TRUE),
+                        info = sprintf("key=%s raw=%s", key, raw))
+  parsed <- tryCatch(jsonlite::fromJSON(raw), error = function(e) list())
+  testthat::expect_identical(parsed[[key]], expected)
+}
+
+test_that("R-16.10 property (1/14 - .rc_feature_review, bare/unmatched subkind): feature_raw carrying every hostile byte round-trips through reconcile_event()", {
+  path <- seed_db()
+  con <- seed_con(path)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  event <- mk_event(mk_row(source_ref = "r1", feature_raw = P16_HAZARD,
+                           lab_sample_id = "XX9999991001",
+                           sample_datetime_raw = "08 Jun 2025 09:00"))
+  out <- reconcile_event(event, con)
+  hit <- out$review[out$review$kind == "unknown_feature", , drop = FALSE]
+  expect_equal(nrow(hit), 1)
+  .p16_assert_hazard(hit$payload[[1]], "feature_raw", P16_HAZARD)
+})
+
+test_that("R-16.10 property (2/14 - .rc_analyte_review CAS-suggested branch): analyte_raw carrying every hostile byte round-trips, subkind='known_analyte_no_method'", {
+  path <- seed_db()
+  con <- seed_con(path)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  # No lab_method row for (hazard text, Internal); CAS 16984-48-8 -> a-0002
+  # exists (verbatim setup from test-reconcile.R's own R-8.3 CAS-fallback
+  # fixture, hazard text substituted for the plain analyte_raw).
+  event <- mk_event(mk_row(source_ref = "r1", analyte_raw = P16_HAZARD, org = "Internal",
+                           cas_number = "16984-48-8", method_raw = NA_character_))
+  out <- reconcile_event(event, con)
+  hit <- out$review[out$review$kind == "unknown_analyte" &
+                       !is.na(out$review$subkind) &
+                       out$review$subkind == "known_analyte_no_method", , drop = FALSE]
+  expect_equal(nrow(hit), 1)
+  .p16_assert_hazard(hit$payload[[1]], "analyte_raw", P16_HAZARD)
+})
+
+test_that("R-16.10 property (3/14 - .rc_analyte_review miss/ambiguous branch): the REAL live-registry analyte name \"2,2',3,3',4,4'-Hexachlorobiphenyl\" round-trips", {
+  path <- seed_db()
+  con <- seed_con(path)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  event <- mk_event(mk_row(source_ref = "r1", analyte_raw = P16_REAL_ANALYTE, org = "ALS",
+                           cas_number = NA_character_))
+  out <- reconcile_event(event, con)
+  hit <- out$review[out$review$kind == "unknown_analyte" &
+                       is.na(out$review$subkind), , drop = FALSE]
+  expect_equal(nrow(hit), 1)
+  .p16_assert_hazard(hit$payload[[1]], "analyte_raw", P16_REAL_ANALYTE)
+})
+
+test_that("R-16.10 property (4/14 - .rc_resolve_units_values, unknown_unit): units_raw carrying every hostile byte round-trips", {
+  path <- seed_db()
+  con <- seed_con(path)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  event <- mk_event(mk_row(source_ref = "r1", units_raw = P16_HAZARD))
+  out <- reconcile_event(event, con)
+  hit <- out$review[out$review$kind == "unknown_unit", , drop = FALSE]
+  expect_equal(nrow(hit), 1)
+  .p16_assert_hazard(hit$payload[[1]], "units_raw", P16_HAZARD)
+})
+
+test_that("R-16.10 property (5/14 - .rc_resolve_datetime, parse_error): sample_datetime_raw carrying every hostile byte round-trips", {
+  path <- seed_db()
+  con <- seed_con(path)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  event <- mk_event(mk_row(source_ref = "r1", sample_datetime_raw = P16_HAZARD))
+  out <- reconcile_event(event, con)
+  hit <- out$review[out$review$kind == "parse_error", , drop = FALSE]
+  expect_equal(nrow(hit), 1)
+  .p16_assert_hazard(hit$payload[[1]], "sample_datetime_raw", P16_HAZARD)
+})
+
+test_that("R-16.10 property (6/14 - .rc_method_preference, method_duplicate): NOT DRIVEN WITH HOSTILE BYTES - this producer genuinely has no free-text diagnostics field", {
+  # method_duplicate's SKIP row carries exactly one piece of content:
+  # kept_uuid_lab, a real TYPED column (R/reconcile.R ~1107-1110) populated
+  # from `lab_method.uuid` - an internally-generated identifier, never free
+  # text a source file controls. `.rc_skip_row()` is called with no
+  # `diagnostics` argument at all for this producer, so
+  # `.rq_serialise_diagnostics(list())` always emits the fixed literal "{}" -
+  # there is no field in this producer's shape for a hostile byte to travel
+  # through, so the byte-round-trip property is VACUOUSLY true here, not
+  # silently skipped. Driven through the real production path anyway (the
+  # proven R-8.6 fixture, verbatim from R-16.17's own method_duplicate test)
+  # to confirm that "{}" claim rather than asserting it from the sidelines.
+  path <- seed_db()
+  con <- seed_con(path)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  event <- mk_event(mk_rows(
+    mk_row(source_ref = "r1", lab_sample_id = "XX1234567002", feature_raw = "T.S02",
+           method_raw = "EK040P: Fluoride by PC Titrator",
+           value_raw = "2.3", value_num = 2.3, below_detection = FALSE, rl = 0.1),
+    mk_row(source_ref = "r2", lab_sample_id = "XX1234567002", feature_raw = "T.S02",
+           method_raw = "EK040T: Fluoride by alt method",
+           value_raw = "2.5", value_num = 2.5, below_detection = FALSE, rl = 0.5)
+  ))
+  out <- reconcile_event(event, con)
+  hit <- out$skipped[out$skipped$reason == "method_duplicate", , drop = FALSE]
+  expect_equal(nrow(hit), 1)
+  expect_identical(hit$payload[[1]], "{}")
+})
+
+test_that("R-16.10 property (7/14 - .rc_three_way, already_present skip): a text value carrying every hostile byte round-trips as BOTH value_chr_existing and value_chr_incoming", {
+  path <- seed_db()
+  con <- seed_con(path)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  # A fresh sample/analysis (own work order, not any FIXTURES.md-pinned one)
+  # with a TEXT-valued (quantified=NULL) existing result carrying P16_HAZARD.
+  DBI::dbExecute(con, "INSERT INTO project (uuid, name, type) VALUES ('p-9701', 'GH9701234', 'Work order')")
+  DBI::dbExecute(con, "INSERT INTO \"sample\" (uuid, uuid_feature_alias, uuid_project, date, organisation) VALUES
+    ('s-9701', 'fa-0002', 'p-9701', TIMESTAMP '2025-06-01 00:00:00', 'ALS')")
+  DBI::dbExecute(con, "INSERT INTO analysis (uuid, uuid_sample, uuid_lab, value, value_chr, quantified, rl_low) VALUES
+    ('an-9701', 's-9701', 'lm-0002', NULL, ?, NULL, 0.1)", params = list(P16_HAZARD))
+
+  # Incoming row: SAME text value (P16_HAZARD) -> .rc_values_equal() ->
+  # already_present. feature_raw 'T.S02' resolves via fa-0002's self alias
+  # (helper-db.R:303); method 'EK040P: Fluoride by PC Titrator'/ALS -> lm-0002.
+  event <- mk_event(mk_row(source_ref = "r1", work_order = "GH9701234",
+                           feature_raw = "T.S02", analyte_raw = "Fluoride",
+                           method_raw = "EK040P: Fluoride by PC Titrator",
+                           cas_number = NA_character_, units_raw = "mg/L",
+                           value_raw = P16_HAZARD, value_num = NA_real_,
+                           value_chr = P16_HAZARD, below_detection = FALSE, rl = 0.1,
+                           sample_datetime_raw = "01 Jun 2025"))
+  out <- reconcile_event(event, con)
+  hit <- out$skipped[out$skipped$reason == "already_present", , drop = FALSE]
+  expect_equal(nrow(hit), 1)
+  raw <- hit$payload[[1]]
+  .p16_assert_hazard(raw, "value_chr_existing", P16_HAZARD)
+  .p16_assert_hazard(raw, "value_chr_incoming", P16_HAZARD)
+})
+
+test_that("R-16.10 property (8/14 - .rc_three_way, value_conflict subkind='measurement'): TWO DISTINCT hostile-byte text values (existing vs incoming) both round-trip", {
+  path <- seed_db()
+  con <- seed_con(path)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  DBI::dbExecute(con, "INSERT INTO project (uuid, name, type) VALUES ('p-9801', 'GH9801234', 'Work order')")
+  DBI::dbExecute(con, "INSERT INTO \"sample\" (uuid, uuid_feature_alias, uuid_project, date, organisation) VALUES
+    ('s-9801', 'fa-0002', 'p-9801', TIMESTAMP '2025-06-01 00:00:00', 'ALS')")
+  DBI::dbExecute(con, "INSERT INTO analysis (uuid, uuid_sample, uuid_lab, value, value_chr, quantified, rl_low) VALUES
+    ('an-9801', 's-9801', 'lm-0002', NULL, ?, NULL, 0.1)", params = list(P16_HAZARD))
+
+  # Incoming carries a DIFFERENT hostile text (P16_HAZARD2) -> not A14-equal
+  # -> no recorded revision on this fresh work order (A12) -> value_conflict.
+  event <- mk_event(mk_row(source_ref = "r1", work_order = "GH9801234",
+                           feature_raw = "T.S02", analyte_raw = "Fluoride",
+                           method_raw = "EK040P: Fluoride by PC Titrator",
+                           cas_number = NA_character_, units_raw = "mg/L",
+                           value_raw = P16_HAZARD2, value_num = NA_real_,
+                           value_chr = P16_HAZARD2, below_detection = FALSE, rl = 0.1,
+                           sample_datetime_raw = "01 Jun 2025"))
+  out <- reconcile_event(event, con)
+  hit <- out$review[out$review$kind == "value_conflict" &
+                       !is.na(out$review$subkind) &
+                       out$review$subkind == "measurement", , drop = FALSE]
+  expect_equal(nrow(hit), 1)
+  raw <- hit$payload[[1]]
+  .p16_assert_hazard(raw, "value_chr_existing", P16_HAZARD)
+  .p16_assert_hazard(raw, "value_chr_incoming", P16_HAZARD2)
+})
+
+test_that("R-16.10 property (9/14 - .rc_batch_duplicate): the winner's source_ref, carrying every hostile byte, round-trips as kept_source_ref", {
+  path <- seed_db()
+  con <- seed_con(path)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  event <- mk_event(mk_rows(
+    mk_row(source_ref = P16_HAZARD, lab_sample_id = "XX1234567002", feature_raw = "T.S02",
+           value_raw = "2.3", value_num = 2.3, below_detection = FALSE, rl = 0.1),
+    mk_row(source_ref = "loser-ref", lab_sample_id = "XX1234567002", feature_raw = "T.S02",
+           value_raw = "2.3", value_num = 2.3, below_detection = FALSE, rl = 0.1)
+  ))
+  out <- reconcile_event(event, con)
+  hit <- out$review[out$review$source_ref == "loser-ref" & out$review$kind == "batch_duplicate", , drop = FALSE]
+  expect_equal(nrow(hit), 1)
+  .p16_assert_hazard(hit$payload[[1]], "kept_source_ref", P16_HAZARD)
+})
+
+test_that("R-16.10 property (11/14 - .fa_merge_samples, subkind='alias_merge'): TWO DISTINCT hostile-byte text values (existing vs incoming) round-trip through confirm_feature_aliases()'s real merge path", {
+  path <- seed_db()
+  con <- seed_con(path)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  DBI::dbExecute(con, "INSERT INTO feature_alias
+    (uuid, uuid_feature, name, alias_key, kind, n_seen, auto_assign,
+     first_seen, last_seen, confirmed_by) VALUES
+    (?, NULL, ?, ?, 'pending', 0, FALSE, TIMESTAMP '2025-08-01 08:00:00',
+     TIMESTAMP '2025-08-01 08:00:00', NULL)",
+    params = list("fa-9711", "T.HAZ711", "t.haz711"))
+  DBI::dbExecute(con, "INSERT INTO feature_alias
+    (uuid, uuid_feature, name, alias_key, kind, n_seen, auto_assign,
+     first_seen, last_seen, confirmed_by) VALUES
+    (?, NULL, ?, ?, 'pending', 0, FALSE, TIMESTAMP '2025-08-01 08:00:00',
+     TIMESTAMP '2025-08-01 08:00:00', NULL)",
+    params = list("fa-9712", "T.HAZ712", "t.haz712"))
+  DBI::dbExecute(con, "INSERT INTO \"sample\"
+    (uuid, uuid_feature_alias, uuid_project, date, datetime, organisation, person) VALUES
+    ('s-9711', 'fa-9711', 'p-0001', TIMESTAMP '2025-08-01 00:00:00', TIMESTAMP '2025-08-01 09:00:00', 'ALS', NULL),
+    ('s-9712', 'fa-9712', 'p-0001', TIMESTAMP '2025-08-01 00:00:00', TIMESTAMP '2025-08-01 14:00:00', 'ACIRL', 'J. Smith')")
+  DBI::dbExecute(con, "INSERT INTO analysis
+    (uuid, uuid_sample, uuid_lab, value, value_chr, quantified, rl_low) VALUES
+    ('an-9711', 's-9711', 'lm-0002', NULL, ?, NULL, 0.1),
+    ('an-9712', 's-9712', 'lm-0002', NULL, ?, NULL, 0.1)",
+    params = list(P16_HAZARD, P16_HAZARD2))
+
+  # fa-9711 confirmed FIRST (no override) -> winner; fa-9712 confirmed SECOND
+  # with override=TRUE -> loser (verbatim precedence pattern from
+  # mk_collision_fixture's own an-w2/an-l2 case above).
+  confirm_feature_aliases("fa-9711", "f-0002", confirmed_by = "alice", db = path)
+  confirm_feature_aliases("fa-9712", "f-0002", confirmed_by = "alice", override = TRUE, db = path)
+
+  fa_hit <- DBI::dbGetQuery(con, "SELECT * FROM review_queue WHERE kind = 'value_conflict' AND subkind = 'alias_merge'")
+  expect_equal(nrow(fa_hit), 1)
+  raw <- fa_hit$payload[[1]]
+  .p16_assert_hazard(raw, "value_chr_existing", P16_HAZARD)
+  .p16_assert_hazard(raw, "value_chr_incoming", P16_HAZARD2)
+})
+
+test_that("R-16.10 property (12/14 - .am_confirm_one_method, units_drift): TWO DISTINCT hostile-byte historical unit strings both round-trip via confirm_analyte_methods()'s real change_log drift scan", {
+  path <- seed_db()
+  con <- seed_con(path)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  # lm-0008 is dangling (uuid_analyte NULL, R-11.11 fixture). Two distinct
+  # historical `units` values on its change_log -> drift detected.
+  DBI::dbExecute(con, "INSERT INTO change_log (uuid, \"at\", actor, action, tbl, uuid_row, field, old, new, reason, source_hash) VALUES
+    (?, ?, 'tester', 'update', 'lab_method', 'lm-0008', 'units', NULL, ?, 'p16 fixture', NULL)",
+    params = list(uuid::UUIDgenerate(), Sys.time(), P16_HAZARD))
+  DBI::dbExecute(con, "INSERT INTO change_log (uuid, \"at\", actor, action, tbl, uuid_row, field, old, new, reason, source_hash) VALUES
+    (?, ?, 'tester', 'update', 'lab_method', 'lm-0008', 'units', NULL, ?, 'p16 fixture', NULL)",
+    params = list(uuid::UUIDgenerate(), Sys.time(), P16_HAZARD2))
+
+  confirm_analyte_methods(uuid_lab = "lm-0008", uuid_analyte = "a-0003",
+                          confirmed_by = "tester", db = path)
+
+  hit <- DBI::dbGetQuery(con, "SELECT payload FROM review_queue WHERE kind = 'units_drift'")
+  expect_equal(nrow(hit), 1)
+  raw <- hit$payload[[1]]
+  parsed <- tryCatch(jsonlite::fromJSON(raw), error = function(e) list())
+  expect_true(setequal(parsed$units, c(P16_HAZARD, P16_HAZARD2)))
+  expect_true(grepl(as.character(jsonlite::toJSON(P16_HAZARD, auto_unbox = TRUE)), raw, fixed = TRUE))
+  expect_true(grepl(as.character(jsonlite::toJSON(P16_HAZARD2, auto_unbox = TRUE)), raw, fixed = TRUE))
+})
+
+test_that("R-16.10 property (13/14 - .am_confirm_one_method, unknown_unit): a hostile-byte units_from string round-trips via confirm_analyte_methods()'s real conversion-failure path", {
+  path <- seed_db()
+  con <- seed_con(path)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  # lm-0009 is dangling (uuid_analyte NULL, R-11.11 fixture); its recorded
+  # `units` is overwritten with the hostile string DIRECTLY - fixture setup
+  # simulating a hostile unit string arriving from source data, not exercised
+  # via the mutation layer (the code under test is confirm_analyte_methods()'s
+  # conversion-failure branch, not this setup UPDATE).
+  DBI::dbExecute(con, "UPDATE lab_method SET units = ? WHERE uuid = 'lm-0009'", params = list(P16_HAZARD))
+
+  confirm_analyte_methods(uuid_lab = "lm-0009", uuid_analyte = "a-0002",
+                          confirmed_by = "tester", db = path)
+
+  hit <- DBI::dbGetQuery(con, "SELECT payload FROM review_queue WHERE kind = 'unknown_unit'")
+  expect_equal(nrow(hit), 1)
+  .p16_assert_hazard(hit$payload[[1]], "units_from", P16_HAZARD)
+})
+
+test_that("R-16.10 property (14/14 - router.R adapter_tie): a hostile-byte adapter id round-trips through route_files()'s real tie-quarantine path", {
+  clear_adapters()
+  withr::defer({ clear_adapters(); register_builtin_adapters() })
+  register_adapter(list(
+    id = P16_HAZARD, version = "1.0",
+    match = function(fm) if (grepl("HAZTIE", fm$filename)) "exact" else "no",
+    parse = function(path, file_meta) list(results = ir_results(), samples = ir_samples(), report = list())
+  ))
+  register_adapter(list(
+    id = "p16_normal_tie", version = "1.0",
+    match = function(fm) if (grepl("HAZTIE", fm$filename)) "exact" else "no",
+    parse = function(path, file_meta) list(results = ir_results(), samples = ir_samples(), report = list())
+  ))
+
+  dir <- withr::local_tempdir()
+  db <- seed_db(dir)
+  con <- seed_con(db)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  path <- st_test_write_file(dir, "ES1234567_HAZTIE_0_XTAB.csv", content = "a,b\n1,2\n")
+  result <- route_files(c(path), con)
+  expect_equal(result$state[[1]], "quarantined")
+  expect_equal(result$reason[[1]], "adapter_tie")
+
+  hit <- DBI::dbGetQuery(con, "SELECT payload FROM review_queue WHERE kind = 'adapter_tie'")
+  expect_equal(nrow(hit), 1)
+  raw <- hit$payload[[1]]
+  parsed <- tryCatch(jsonlite::fromJSON(raw), error = function(e) list())
+  expect_true(P16_HAZARD %in% parsed$adapters)
+  expect_true(grepl(as.character(jsonlite::toJSON(P16_HAZARD, auto_unbox = TRUE)), raw, fixed = TRUE))
+})
+
+# ---- producer 10/14: assembly's STAGE-0 inline review-flag fold-in, plus the
+# shared .rq_skip() carrier - RETAINED FROM ROUND 2 (these are the "2 of 14"
+# round 3 found already covered; not duplicated above). ------------------------
+
+test_that("R-16.10 (10/14 - reconcile_event()'s STAGE-0 fold-in of assembly's inline review flags): an analyte/value pair carrying comma, apostrophe, pipe, equals, DOUBLE QUOTE, BACKSLASH, tab, newline and a non-ASCII character round-trips byte-identical through JSON diagnostics, with the RAW STORED TEXT (not just the fromJSON()-parsed value) carrying correct JSON escaping (the criterion the plan exists for - RED against today's k=v payload, and RED again against a serialiser that silently strips the two characters JSON must escape)", {
   path <- seed_db()
   con <- seed_con(path)
   on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
@@ -197,7 +540,7 @@ test_that("R-16.10: an analyte/value pair carrying comma, apostrophe, pipe, equa
   expect_identical(diagnostics$value, hazard_value)
 })
 
-test_that("R-16.10 (skip carrier): .rq_skip() shares .rq_serialise_diagnostics() with .rq_row(), so the same hostile analyte/value round-trips byte-identical there too, with the raw payload text carrying correct JSON escaping", {
+test_that("R-16.10 (shared serialiser, not one of the 14 producer sites): .rq_skip() shares .rq_serialise_diagnostics() with .rq_row(), so the same hostile analyte/value round-trips byte-identical there too, with the raw payload text carrying correct JSON escaping", {
   hazard_analyte <- "2,2',3,3',4,4'-Hexachlorobiphenyl \"technical\" C:\\lab\\ref \u00b5g/kg"
   hazard_value <- "a|b=c,d\ttab\nline"
 
@@ -502,6 +845,32 @@ test_that("R-16.19/R-16.20: both value_conflict producers (.rc subkind='measurem
   expect_identical(as.integer(rc_diag$n_rows), 1L)
   # ...and the feature-alias producer must NOT invent them.
   expect_false(any(c("source_ref", "n_rows") %in% fa_keys))
+
+  # F8 (Phase-7b round-3 remediation): `extras_permitted` above is a PERMIT
+  # list - it allows the four reconcile-only vocabulary keys to be present,
+  # but nothing before this point REQUIRED them, so slice I could delete all
+  # four from the producer and this block stayed green. Positive pinning,
+  # mirroring the source_ref/n_rows pattern immediately above: presence AND
+  # value, not just permitted absence, so a future deletion fails here again.
+  expect_true(all(c("quantified_existing", "quantified_incoming",
+                    "revision_existing", "revision_incoming") %in% rc_keys))
+  # This fixture's incoming/existing values are both genuine numeric readings
+  # (600 / 0.5, both parsed quantified=TRUE) - both keys must carry TRUE.
+  expect_identical(rc_diag$quantified_existing, TRUE)
+  expect_identical(rc_diag$quantified_incoming, TRUE)
+  # revision_existing is genuinely NA in this fixture (A12's "no recorded
+  # revision" scenario): NA_integer_ serialises to JSON null (FB2's policy),
+  # so the correctly round-tripped reading is a PRESENT key whose value is
+  # NULL (not a missing key, not the string "NA" - see FB2 above).
+  expect_true("revision_existing" %in% names(rc_diag))
+  expect_true(is.null(rc_diag$revision_existing))
+  expect_true(is.numeric(rc_diag$revision_incoming))
+  expect_identical(as.integer(rc_diag$revision_incoming), 5L)
+  # ...and the feature-alias producer must NOT invent any of the four either
+  # (it has no revision/quantified concept - both analyses are already
+  # committed rows, not incoming-vs-recorded-revision comparisons).
+  expect_false(any(c("quantified_existing", "quantified_incoming",
+                     "revision_existing", "revision_incoming") %in% fa_keys))
 })
 
 # ==============================================================================
@@ -585,7 +954,7 @@ test_that("FA7: .rq_row()/.rq_skip() reject an UNNAMED diagnostics list (a hand-
                regexp = "[Mm]ust have names")
 })
 
-test_that("FB4: review_queue_add() with a failing child row leaves NO review row and NO candidate rows (parent+children are one transaction)", {
+test_that("FB4a (pre-write rejection, Phase-7b round-3): .rq_row()'s candidates validation (W1's landed change) rejects an NA element and, separately, an empty-string element BEFORE any DB write - review_queue and review_queue_candidate counts are unchanged either way", {
   path <- seed_db()
   con <- seed_con(path)
   on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
@@ -595,13 +964,64 @@ test_that("FB4: review_queue_add() with a failing child row leaves NO review row
 
   expect_error(
     review_queue_add(con, kind = "unknown_feature", candidates = c("ok1", NA_character_)),
-    regexp = "NOT NULL constraint failed"
+    regexp = "[Cc]ontains missing values"
+  )
+  expect_error(
+    review_queue_add(con, kind = "unknown_feature", candidates = c("ok1", "")),
+    regexp = "at least 1 character"
   )
 
   after_review <- DBI::dbGetQuery(con, "SELECT COUNT(*) AS n FROM review_queue")$n
   after_cand <- DBI::dbGetQuery(con, "SELECT COUNT(*) AS n FROM review_queue_candidate")$n
   expect_identical(after_review, before_review)
   expect_identical(after_cand, before_cand)
+})
+
+test_that("FB4b (transactional atomicity - FB4's original subject, mechanism updated for W1's stricter constructor): a failing SECOND review_queue_add() call that reaches the real DB insert leaves NO extra review_queue or review_queue_candidate rows behind", {
+  path <- seed_db()
+  con <- seed_con(path)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  # W1's .rq_row() validation (checkmate::assert_character(any.missing=FALSE,
+  # min.chars=1L), landed on BOTH `candidates` and `expired$uuid_feature` -
+  # Round-3 audit H9) now rejects every previously-reachable bad-CHILD-
+  # content trigger BEFORE either db_append() call runs (see FB4a above) - so
+  # the pre-round-3 "NA candidate reaches the DB and fails the CHILD insert
+  # while the PARENT has already succeeded" scenario is no longer reachable
+  # through review_queue_add()'s public surface at all. Confirmed empirically
+  # (not assumed): a scratchpad copy of R/db-schema.R with the outer
+  # db_transaction() wrapper removed reproduces IDENTICAL counts for this
+  # scenario, because the failure below occurs on review_queue's OWN primary
+  # key - the FIRST statement inside the transaction - so the child db_append()
+  # is never even attempted, with or without the wrapper. A single failing
+  # INSERT is trivially atomic on its own; this scenario does not exercise
+  # "child fails after parent already succeeded" cross-statement rollback.
+  # See this worker's report for the full non-vacuousness finding, escalated
+  # separately - the remaining public-surface mechanism below is real and
+  # worth keeping (it guards against an orphaned-children regression on a
+  # parent-uuid collision), but it is a NARROWER guarantee than FB4's
+  # original name claimed.
+  u <- review_queue_add(con, kind = "unknown_feature", candidates = c("f-0001", "f-0002"))
+  mid_review <- DBI::dbGetQuery(con, "SELECT COUNT(*) AS n FROM review_queue")$n
+  mid_cand <- DBI::dbGetQuery(con, "SELECT COUNT(*) AS n FROM review_queue_candidate")$n
+  expect_equal(mid_review, 1)
+  expect_equal(mid_cand, 2)
+
+  cond <- tryCatch(
+    review_queue_add(con, kind = "unknown_feature", uuid = u, candidates = c("f-0003", "f-0004")),
+    error = function(e) e
+  )
+  expect_s3_class(cond, "error")
+  # Assert on the DB-LEVEL constraint text surviving intact (not just the
+  # outer "Mutation transaction failed" wrapper) - this is R/mutate.R's own
+  # error-unmasking fix; a regression there would re-mask the real cause.
+  expect_true(grepl("Duplicate key", conditionMessage(cond), fixed = TRUE))
+  expect_true(grepl("primary key constraint", conditionMessage(cond), fixed = TRUE))
+
+  after_review <- DBI::dbGetQuery(con, "SELECT COUNT(*) AS n FROM review_queue")$n
+  after_cand <- DBI::dbGetQuery(con, "SELECT COUNT(*) AS n FROM review_queue_candidate")$n
+  expect_identical(after_review, mid_review)
+  expect_identical(after_cand, mid_cand)
 })
 
 # ==============================================================================

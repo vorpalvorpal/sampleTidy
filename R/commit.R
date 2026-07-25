@@ -707,11 +707,38 @@
   # per-row `uuid` (not the review tibble's) and takes `work_order` from the
   # event, not the review row -- both passed straight into `.rq_row()`,
   # mirroring how `review_queue_add()` passes `work_order` through rather
-  # than overwriting it after construction. Deliberately NOT writing child
-  # rows: reconcile-side candidates travel inside `diagnostics$candidates`,
-  # not as `review_queue_candidate` rows, because these producers run before
-  # any feature uuid exists (settled ruling).
+  # than overwriting it after construction.
+  #
+  # PLAN-16 round-3 R-16.23 (this fix): a reconcile-side `candidates`
+  # list-column (`.rc_review_row()`, R/reconcile.R) IS now written, when
+  # present and non-empty, as `review_queue_candidate` child rows -- most
+  # reconcile producers still deliberately route candidates through
+  # `diagnostics$candidates` JSON instead (RULING-F: e.g. an ambiguous
+  # `unknown_feature` item, whose feature uuids exist before any review row
+  # does), but a producer that DOES call `.rc_review_row(candidates = ...)`/
+  # `expired = ...)` must not have that data silently dropped a second time
+  # here, the way it used to be dropped inside `.rc_review_row()` itself
+  # before FG-3.
+  #
+  # The uuid mismatch this must handle: `.rq_row()` (inside `.rc_review_row()`)
+  # mints its OWN `uuid_row` and stamps every child row's `uuid_review` with
+  # it, at reconcile time -- long before this function mints the FRESH
+  # `review_queue.uuid` (`row_uuid` below) the parent row is actually
+  # inserted under. A child row carrying the constructor's uuid would be an
+  # orphan referencing a `review_queue.uuid` that was never inserted, and
+  # `review_queue_candidate.uuid_review` has a real FK to `review_queue(uuid)`
+  # -- so the insert would fail outright. Every child row's `uuid_review` is
+  # therefore overwritten with `row_uuid` immediately before it is persisted,
+  # exactly the `cand$uuid_review <- uuid` rewrite `review_queue_add()`
+  # (R/db-schema.R) already does for its own `candidates=` argument, and the
+  # same "rewrite-to-the-actually-inserted-parent-uuid-before-persisting"
+  # shape `.ct_rewrite_review_payloads()` below uses for `uuid_alias`.
+  # `db_append()` (the sanctioned mutation-layer write path, A32/B-16.api;
+  # NOT a raw DBI table-append call) keeps the write inside this same
+  # `db_transaction()` call, so parent and children commit or roll back as
+  # one unit.
   col_or_na <- function(nm, i) if (nm %in% names(review)) review[[nm]][[i]] else NA_character_
+  has_candidates_col <- "candidates" %in% names(review)
   for (i in seq_len(n)) {
     source_hash <- if ("source_hash" %in% names(review)) review$source_hash[[i]] else NA_character_
     row_uuid <- uuid::UUIDgenerate()
@@ -727,6 +754,17 @@
     row$payload <- review$payload[[i]]
     db_append(con, "review_queue", row, actor = actor, reason = reason, source_hash = source_hash)
     review$uuid[[i]] <- row_uuid
+
+    if (has_candidates_col) {
+      cand_i <- review$candidates[[i]]
+      if (is.data.frame(cand_i) && nrow(cand_i) > 0) {
+        cand_i$uuid_review <- row_uuid
+        db_append(
+          con, "review_queue_candidate", cand_i, actor = actor,
+          reason = paste0(reason, ": review candidates"), source_hash = source_hash
+        )
+      }
+    }
   }
   review
 }

@@ -319,7 +319,15 @@ test_that("R-10.6: NAMESPACE exports equal the CONTRACT-pinned public API exactl
     # PLAN-15 curation API, added 2026-07-23. The pin is a deliberate gate on
     # the public surface, so new exports belong here explicitly.
     "pending_features", "pending_analytes",
-    "confirm_feature_aliases", "confirm_analyte_methods"
+    "confirm_feature_aliases", "confirm_analyte_methods",
+    # PLAN-16 R-16.22, added 2026-07-25 (Robin's ruling) and added to
+    # CONTRACT.md's public-API list in the same change. Required to be
+    # EXPORTED: round 3 found `review_queue_candidate` had no reader anywhere
+    # in `R/` - rows were written and nothing could read them back - while
+    # CONTRACT A55 makes candidate choice the HUMAN's job. A reviewer cannot
+    # choose among candidates the package can store but never show, so the
+    # reader has to be on the public surface, not internal.
+    "review_queue_candidates"
   )
   actual <- getNamespaceExports("sampleTidy")
   expect_setequal(actual, pinned)

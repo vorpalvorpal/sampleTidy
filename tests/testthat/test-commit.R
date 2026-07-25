@@ -1205,6 +1205,89 @@ test_that("PLAN-16 FB8: subkind, uuid_existing and uuid_alias all survive a real
   expect_identical(stored$status[[1]], "open")
 })
 
+test_that("PLAN-16 round-3 R-16.23: .ct_commit_review() persists a real .rc_review_row() producer's `candidates` as review_queue_candidate rows - not discarded a second time - with uuid_review rewritten to the PARENT ROW'S ACTUAL INSERTED uuid (not the constructor's own uuid_row), read back in rank order via the exported review_queue_candidates() reader", {
+  setup <- commit_test_setup()
+  con <- setup$con
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  # Real resolution against the real seeded registry - T.AMBIG2 -> f-0004/
+  # f-0005, the same fixture the sibling worker drove in
+  # test-review-queue-candidate.R's R-16.22/R-16.23 block.
+  registry <- .rc_load_registry(con)
+  cand <- .rc_feature_candidates("T.AMBIG2", as.Date(NA), registry)
+  expect_equal(sort(cand$uuid_feature), c("f-0004", "f-0005"))
+
+  # The real producer: .rc_review_row() (R/reconcile.R), unedited - the
+  # function FG-3 fixed to stop discarding `rq$candidates`. Its OWN
+  # `uuid_row` (minted inside .rq_row()) is deliberately NOT the
+  # review_queue.uuid this test reads back under below - closing that exact
+  # mismatch is this file's job.
+  review_row <- .rc_review_row(
+    source_ref = "r1", kind = "unknown_feature", n_rows = 1L,
+    source_hash = setup$hash, subkind = "ambiguous", candidates = cand$uuid_feature
+  )
+  constructor_uuid_review <- review_row$candidates[[1]]$uuid_review[[1]]
+
+  files <- tibble::tibble(hash = setup$hash, filename = basename(setup$path),
+                          adapter = "esdat/1", rank = 3L, kept = TRUE)
+  resolved <- mk_resolved(clean = tibble::tibble(), review = review_row)
+
+  commit_event(mk_commit_event(files), resolved, con)
+
+  stored_review <- DBI::dbGetQuery(
+    con, "SELECT uuid FROM review_queue WHERE kind = 'unknown_feature' AND source_hash = ?",
+    params = list(setup$hash)
+  )
+  expect_equal(nrow(stored_review), 1)
+  actual_uuid <- stored_review$uuid[[1]]
+
+  # The crux: commit_event() mints a FRESH review_queue.uuid at insert time,
+  # different from .rq_row()'s own constructor-time uuid_row.
+  expect_false(identical(actual_uuid, constructor_uuid_review))
+
+  got <- review_queue_candidates(con, actual_uuid)
+  expect_equal(nrow(got), 2)
+  expect_identical(got$rank, c(1L, 2L))
+  expect_identical(got$uuid_feature, cand$uuid_feature)
+  expect_identical(got$kind, c("candidate", "candidate"))
+
+  # Pins the rewrite itself: every persisted child row's uuid_review equals
+  # the parent row's ACTUAL uuid, not the constructor's discarded one.
+  child_uuid_review <- DBI::dbGetQuery(
+    con, "SELECT DISTINCT uuid_review FROM review_queue_candidate WHERE uuid_review = ?",
+    params = list(actual_uuid)
+  )$uuid_review
+  expect_equal(child_uuid_review, actual_uuid)
+
+  # No orphaned child rows under the discarded constructor uuid (would be an
+  # FK violation had they been inserted verbatim; also proves the rewrite
+  # actually ran rather than merely not crashing).
+  orphans <- DBI::dbGetQuery(
+    con, "SELECT count(*) AS n FROM review_queue_candidate WHERE uuid_review = ?",
+    params = list(constructor_uuid_review)
+  )$n
+  expect_equal(orphans, 0)
+})
+
+test_that("PLAN-16 round-3 R-16.23: a review tibble with no `candidates` column at all (every pre-existing hand-built test fixture / not-yet-routed producer) still commits cleanly and writes zero review_queue_candidate rows - the fix must not require every caller to carry the column", {
+  setup <- commit_test_setup()
+  con <- setup$con
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  files <- tibble::tibble(hash = setup$hash, filename = basename(setup$path),
+                          adapter = "esdat/1", rank = 3L, kept = TRUE)
+  review <- tibble::tibble(
+    source_ref = "r1", kind = "unknown_unit", subkind = NA_character_,
+    source_hash = setup$hash, payload = '{"units_raw":"banana/L"}'
+  )
+  resolved <- mk_resolved(clean = tibble::tibble(), review = review)
+
+  commit_event(mk_commit_event(files), resolved, con)
+
+  n_child <- count_rows(con, "review_queue_candidate")
+  expect_equal(n_child, 0)
+})
+
 test_that("R-11.16: a qualitative text row commits quantified = NA, not FALSE (the tri-state survives the write)", {
   # Ruled by Robin 2026-07-23. `isTRUE()` maps NA to FALSE, which silently
   # recorded "this is not a measurement" as "below detection". In the live
