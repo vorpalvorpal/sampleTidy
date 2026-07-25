@@ -113,19 +113,53 @@
 #' columns (`source_ref`, `n_rows`) that `.rq_row()` itself does not carry.
 #' `diagnostics` is the ONLY free-form carrier - serialised to JSON by
 #' `.rq_row()`, never hand-glued k=v text (R-16.10/R-16.18).
+#'
+#' `source_ref` takes a character VECTOR: one element per source row folded
+#' into this review item (grouped producers pass several, everything else
+#' passes one). The `source_ref` COLUMN is the comma-joined rendering, kept
+#' for backwards compatibility; `diagnostics$source_ref` gets the vector
+#' itself, which is why the vector is the argument and the join is done here
+#' rather than at the call sites. A ref containing a literal comma is
+#' therefore still ambiguous in the column but exact in the diagnostics.
+#'
+#' Q2 (Robin, 2026-07-25): `source_ref` and `n_rows` are ALSO written into
+#' `diagnostics`, under the same two key names retired migration 006 used to
+#' write, so a row this package writes is not poorer than a migrated row was.
+#' Two deliberate differences from the migration: `n_rows` stays the integer
+#' it already is here (the migration could only recover the string it had
+#' parsed out of k=v text), and these two keys are placed FIRST, ahead of the
+#' caller's, so the serialised JSON key order is deterministic rather than
+#' dependent on which producer happened to build the list.
 #' @keywords internal
 #' @noRd
 .rc_review_row <- function(source_ref, kind, n_rows, source_hash, subkind = NA_character_,
                            work_order = NA_character_, uuid_existing = NA_character_,
                            uuid_alias = NA_character_, candidates = NULL, expired = NULL,
                            diagnostics = list()) {
+  # A caller supplying either reserved key would otherwise produce a
+  # duplicate name that `.rq_row()`'s assert_list(names = "unique") rejects
+  # with a message pointing at the wrong function. Fail here, where the cause
+  # is visible, instead of silently overwriting one of the two values.
+  reserved <- intersect(c("source_ref", "n_rows"), names(diagnostics))
+  if (length(reserved) > 0) {
+    cli::cli_abort(
+      paste0(
+        ".rc_review_row(): {.arg diagnostics} must not supply {.val {reserved}} - ",
+        "these keys are set from this function's own {.arg source_ref}/{.arg n_rows} arguments."
+      ),
+      class = "sampletidy_error"
+    )
+  }
+  diagnostics <- c(list(source_ref = source_ref, n_rows = n_rows), diagnostics)
+
   rq <- .rq_row(
     kind = kind, subkind = subkind, work_order = work_order, source_hash = source_hash,
     uuid_existing = uuid_existing, uuid_alias = uuid_alias, candidates = candidates,
     expired = expired, diagnostics = diagnostics
   )
   tibble::tibble(
-    source_ref = source_ref, kind = kind, subkind = rq$review$subkind[[1]],
+    source_ref = paste(source_ref, collapse = ","), kind = kind,
+    subkind = rq$review$subkind[[1]],
     payload = rq$review$payload[[1]], n_rows = n_rows, source_hash = source_hash,
     uuid_existing = rq$review$uuid_existing[[1]], uuid_alias = rq$review$uuid_alias[[1]]
   )
@@ -666,7 +700,7 @@
       diagnostics$point <- st_point
     }
     out[[length(out) + 1]] <- .rc_review_row(
-      source_ref = paste(refs, collapse = ","), kind = "unknown_feature",
+      source_ref = refs, kind = "unknown_feature",
       n_rows = length(g), source_hash = rows$source_hash[[g[[1]]]],
       work_order = work_order, subkind = subkind, diagnostics = diagnostics
     )
@@ -814,7 +848,7 @@
       org <- rows$org[[g[[1]]]]
       # subkind deliberately NA - no new vocabulary invented here.
       out[[length(out) + 1]] <- .rc_review_row(
-        source_ref = paste(refs, collapse = ","), kind = "unknown_analyte",
+        source_ref = refs, kind = "unknown_analyte",
         n_rows = length(g), source_hash = rows$source_hash[[g[[1]]]],
         subkind = NA_character_,
         diagnostics = list(analyte_raw = ar, org = org)

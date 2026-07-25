@@ -763,6 +763,79 @@ test_that("round-2 audit FF3: .ct_rewrite_review_payloads() links uuid_alias for
   expect_false(identical(stored_grouped$uuid_alias[[1]], stored_single$uuid_alias[[1]]))
 })
 
+# ---- PLAN-16 Q2 (Robin 2026-07-25): source_ref/n_rows survive the commit
+#      boundary INSIDE diagnostics, because review_queue has no column for
+#      either one ---------------------------------------------------------
+
+test_that("PLAN-16 Q2: a real reconcile_event() -> commit_event() stores source_ref and n_rows in the committed payload's diagnostics - as a JSON ARRAY plus n_rows=2 for a GROUPED item and a scalar plus n_rows=1 for a single-row item", {
+  setup <- commit_test_setup()
+  con <- setup$con
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  # Same shape as the FF3 fixture above: two rows sharing one unresolved
+  # feature_raw (-> ONE grouped review item over two source rows) plus one row
+  # with a different unresolved feature_raw (-> a single-row item). The grouped
+  # arm is the load-bearing one: it is the only case where source_ref is
+  # plural, so it is the only case that can tell a real vector apart from a
+  # comma-joined string that merely looks like one.
+  results <- dplyr::bind_rows(
+    mk_row(source_ref = "g1", source_hash = setup$hash, feature_raw = "T.GROUPED-Q2",
+           sample_datetime_raw = "10 Jul 2025 09:00"),
+    mk_row(source_ref = "g2", source_hash = setup$hash, feature_raw = "T.GROUPED-Q2",
+           sample_datetime_raw = "10 Jul 2025 10:00"),
+    mk_row(source_ref = "s1", source_hash = setup$hash, feature_raw = "T.SINGLE-Q2",
+           sample_datetime_raw = "10 Jul 2025 11:00")
+  )
+  event <- mk_event(results, work_order = setup$work_order)
+  out <- reconcile_event(event, con)
+  expect_equal(nrow(out$review), 2)
+
+  files <- tibble::tibble(hash = setup$hash, filename = basename(setup$path),
+                          adapter = "esdat/1", rank = 3L, kept = TRUE)
+  resolved <- mk_resolved(clean = out$clean, review = out$review, skipped = out$skipped,
+                          counts = c(new = nrow(out$clean)))
+  commit_event(mk_commit_event(files, work_order = setup$work_order), resolved, con)
+
+  stored <- DBI::dbGetQuery(con,
+    "SELECT payload FROM review_queue WHERE kind = 'unknown_feature' AND source_hash = ?",
+    params = list(setup$hash))
+  expect_equal(nrow(stored), 2)
+
+  # Parse with simplifyVector = FALSE so a length-1 array and a scalar stay
+  # DISTINGUISHABLE: jsonlite's default simplification would collapse both to a
+  # length-1 character vector and the array-vs-scalar assertion would be
+  # vacuous. Read the raw TEXT too, so a driver-side or parser-side
+  # normalisation cannot fake either shape.
+  diags <- lapply(stored$payload, jsonlite::fromJSON, simplifyVector = FALSE)
+  names(diags) <- vapply(stored$payload, function(p) {
+    if (grepl("T.GROUPED-Q2", p, fixed = TRUE)) "grouped" else "single"
+  }, character(1))
+  expect_setequal(names(diags), c("grouped", "single"))
+
+  # GROUPED: source_ref is a two-element array, in source order, and n_rows
+  # reports 2 - the count of folded source rows, not 1 (the review item count).
+  expect_identical(diags$grouped$source_ref, list("g1", "g2"))
+  expect_identical(diags$grouped$n_rows, 2L)
+  grouped_text <- stored$payload[grepl("T.GROUPED-Q2", stored$payload, fixed = TRUE)][[1]]
+  expect_match(grouped_text, '"source_ref":\\["g1","g2"\\]')
+  expect_match(grouped_text, '"n_rows":2')
+
+  # SINGLE: source_ref is a bare JSON string, NOT a one-element array - the
+  # auto_unbox policy .rq_serialise_diagnostics() pins, applied to the common
+  # case, so a reader does not have to handle both shapes for one source row.
+  expect_identical(diags$single$source_ref, "s1")
+  expect_identical(diags$single$n_rows, 1L)
+  single_text <- stored$payload[grepl("T.SINGLE-Q2", stored$payload, fixed = TRUE)][[1]]
+  expect_match(single_text, '"source_ref":"s1"')
+  expect_match(single_text, '"n_rows":1')
+
+  # n_rows is a JSON NUMBER, never a quoted string: the retired migration 006
+  # could only recover the string it had parsed out of k=v text, and a quoted
+  # value here would mean the count has gone back to travelling as text.
+  expect_no_match(grouped_text, '"n_rows":"')
+  expect_no_match(single_text, '"n_rows":"')
+})
+
 # ---- R-11.16: quantified from parse_value(); write rl_high (F4) ------------
 
 test_that("R-11.16: a '>2000' row commits quantified = FALSE (from parse_value, never re-derived from below_detection) and a non-NA rl_high = 2000 (F4)", {

@@ -449,12 +449,39 @@ test_that("R-16.19/R-16.20: both value_conflict producers (.rc subkind='measurem
   # (quantified_*/revision_*) are the ONLY permitted difference.
   rc_keys <- sort(names(rc_diag))
   fa_keys <- sort(names(fa_diag))
+  # `source_ref`/`n_rows` are reconcile-only BOOKKEEPING, added to diagnostics
+  # under Q2 (Robin, 2026-07-25). They are exempt from the cross-producer
+  # comparison for a verified reason, not to make this block pass: the
+  # `review_queue` TABLE has no source_ref or n_rows column (R/db-schema.R
+  # v3 DDL), so for a reconcile row these two values exist only on the
+  # in-memory tibble and were being DROPPED at the commit boundary - which is
+  # what Q2 fixes. `.fa_merge_samples()` has no source-row concept at all: it
+  # compares two already-committed analyses, so there is no incoming ref to
+  # record and no row count to report. Absent there is correct, not missing.
   extras_permitted <- c("quantified_existing", "quantified_incoming",
-                        "revision_existing", "revision_incoming")
+                        "revision_existing", "revision_incoming",
+                        "source_ref", "n_rows")
   rc_shared <- setdiff(rc_keys, extras_permitted)
   expect_true(setequal(rc_shared, fa_keys))
   expect_true(all(c("value_existing", "value_incoming") %in% rc_shared))
   expect_true(all(c("value_existing", "value_incoming") %in% fa_keys))
+
+  # Q2, pinned POSITIVELY: widening `extras_permitted` above without asserting
+  # what was exempted would be a pure weakening. The reconcile producer must
+  # actually CARRY both keys, `source_ref` must be the fixture's own ref (so a
+  # constant or a dropped value cannot pass), and `n_rows` must arrive as a
+  # NUMBER - the retired migration could only ever recover the string it had
+  # parsed out of k=v text, so a string here would mean the value is
+  # travelling as text again. NOTE: `rc_diag` is parsed from the IN-MEMORY
+  # reconcile tibble, not from the DB - the commit-boundary round-trip for
+  # these keys is asserted separately in test-commit.R, because review_queue
+  # has no source_ref/n_rows column for them to land in.
+  expect_true(all(c("source_ref", "n_rows") %in% rc_keys))
+  expect_identical(rc_diag$source_ref, "r1")
+  expect_true(is.numeric(rc_diag$n_rows))
+  expect_identical(as.integer(rc_diag$n_rows), 1L)
+  # ...and the feature-alias producer must NOT invent them.
+  expect_false(any(c("source_ref", "n_rows") %in% fa_keys))
 })
 
 # ==============================================================================

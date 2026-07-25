@@ -4,9 +4,13 @@
 # routes through the structured constructor `.rq_row()`, no hand-built
 # `paste0()`/`sprintf()` payload string survives).
 #
-# NEW FILE. Scope: R-16.6, R-16.7, R-16.8 ONLY. R-16.9/R-16.10/R-16.11/
-# R-16.14/R-16.17/R-16.18/R-16.19/R-16.20 (payload CONTENT/SHAPE criteria)
-# belong to test-review-queue-payload.R - do not duplicate them here.
+# Scope: R-16.6, R-16.7, R-16.8, plus the CALL-SITE half of R-16.18 (added
+# 2026-07-25 under Q1 - see its section at the foot of this file). R-16.9/
+# R-16.10/R-16.11/R-16.14/R-16.17/R-16.19/R-16.20 and R-16.18's CONTENT/SHAPE
+# half belong to test-review-queue-payload.R - do not duplicate them here.
+# The dividing line is the assertion's subject, not its criterion number: a
+# scan of `R/` for a forbidden construct lives here; an assertion about what a
+# stored payload contains lives there. R-16.18 has one of each.
 #
 # RED BY DESIGN: `R/` still contains `.rc_serialise_payload()` (a live call
 # site), thirteen hand-built `paste0()`/`sprintf()` payload sites, and two
@@ -824,4 +828,134 @@ test_that("R-16.8: each sanctioned wrapper other than .rq_row() (and .rq_skip(),
     paste(unrouted, collapse = "; ")
   )
   expect_true(length(unrouted) == 0, info = info)
+})
+
+# ==== R-16.18: no PRODUCTION call site supplies a free-text `payload=` ======
+#
+# Q1 (Robin, 2026-07-25). R-16.18's clause is "no production path allows a
+# free-text payload to be supplied". The ruling was to KEEP
+# `review_queue_add()`'s `payload=` argument - tests legitimately drive it, to
+# prove the constructor's output is what a caller would otherwise hand-build -
+# and to ENFORCE the clause by scanning instead. Keeping the argument and
+# asserting nothing production-side uses it is strictly stronger than deleting
+# it: deletion moves the hazard (a caller reintroduces a local `paste0()` and
+# writes it via db_append()), whereas the scan fails on the reintroduction.
+#
+# This is the ONE part of R-16.18 that lives in this file rather than in
+# test-review-queue-payload.R (see the header note): it is a call-site scan of
+# `R/`, structurally identical to R-16.7's and R-16.8's, not an assertion about
+# a payload's CONTENT or SHAPE. The content/shape half stays where it was.
+
+#' AST scan: does any call to `fn_name` pass a named argument `arg_name`?
+#'
+#' Parent-scoped by construction, which is the whole point: the `SYMBOL_SUB`
+#' must be a DIRECT child of the call expression, so a nested
+#' `review_queue_add(diagnostics = list(payload = x))` - where the
+#' `payload =` belongs to `list()` - is correctly not a hit. Handles
+#' `fn(...)` and `pkg::fn(...)` identically, because in both the
+#' `SYMBOL_FUNCTION_CALL`'s parent is the callee-position expr whose own
+#' parent is the call expr.
+.hy_scan_named_arg_at_call <- function(sources, fn_name, arg_name) {
+  hits <- list()
+  for (src in sources) {
+    pd <- src$pd
+    if (is.null(pd) || nrow(pd) == 0) next
+    fcall <- pd[pd$token == "SYMBOL_FUNCTION_CALL" & pd$text == fn_name, ]
+    for (i in seq_len(nrow(fcall))) {
+      wrap <- pd[pd$id == fcall$parent[i], ]
+      if (nrow(wrap) == 0) next
+      args <- pd[pd$parent == wrap$parent[1] & pd$token == "SYMBOL_SUB" & pd$text == arg_name, ]
+      if (nrow(args) == 0) next
+      hits[[length(hits) + 1]] <- list(path = src$path, line1 = args$line1[1])
+    }
+  }
+  hits
+}
+
+#' The indirect-call escape hatch. An AST scan keyed on
+#' `SYMBOL_FUNCTION_CALL` cannot see `do.call("review_queue_add", ...)` or
+#' `get("review_queue_add")(...)`, so the function's own name appearing as a
+#' STRING LITERAL in `R/` is treated as a finding in its own right: today
+#' there are none, and if one is ever added it must be a conscious decision
+#' rather than a silent bypass of the scan above.
+.hy_scan_name_as_string <- function(sources, fn_name) {
+  hits <- list()
+  quoted <- c(paste0("\"", fn_name, "\""), paste0("'", fn_name, "'"))
+  for (src in sources) {
+    pd <- src$pd
+    if (is.null(pd) || nrow(pd) == 0) next
+    lits <- pd[pd$token == "STR_CONST" & pd$text %in% quoted, ]
+    for (i in seq_len(nrow(lits))) {
+      hits[[length(hits) + 1]] <- list(path = src$path, line1 = lits$line1[i])
+    }
+  }
+  hits
+}
+
+test_that("R-16.18: no file under R/ passes a free-text `payload=` to review_queue_add() - the argument is retained for tests but no production path supplies one (AST, parent-scoped, plus an indirect-call check)", {
+  real_sources <- lapply(.hy_r_files(), .hy_source_from_file)
+
+  # POSITIVE CONTROLS: both call spellings of the real violation.
+  decoy_plain <- .hy_source_from_text(
+    "f <- function(con, x) {\n  review_queue_add(con, kind = 'unknown_feature', payload = paste0('k=', x))\n}\n"
+  )
+  decoy_ns <- .hy_source_from_text(
+    "f <- function(con, x) {\n  sampleTidy::review_queue_add(con, payload = x)\n}\n"
+  )
+  expect_true(
+    length(.hy_scan_named_arg_at_call(list(decoy_plain), "review_queue_add", "payload")) >= 1,
+    info = "positive control failed: `review_queue_add(..., payload = paste0(...))` was not flagged - the scan matches nothing"
+  )
+  expect_true(
+    length(.hy_scan_named_arg_at_call(list(decoy_ns), "review_queue_add", "payload")) >= 1,
+    info = "positive control failed: the `pkg::review_queue_add(payload = )` spelling was not flagged"
+  )
+
+  # NEGATIVE CONTROLS. The nested one is the load-bearing case: `payload` as a
+  # key INSIDE a diagnostics list is the sanctioned structured route, and a
+  # scan that flagged it would be unusable.
+  decoy_nested <- .hy_source_from_text(
+    "f <- function(con, x) {\n  review_queue_add(con, kind = 'k', diagnostics = list(payload = x))\n}\n"
+  )
+  decoy_other_fn <- .hy_source_from_text(
+    "f <- function(x) {\n  some_other_writer(payload = x)\n}\n"
+  )
+  decoy_clean <- .hy_source_from_text(
+    "f <- function(con, x) {\n  review_queue_add(con, kind = 'k', diagnostics = list(v = x))\n}\n"
+  )
+  decoy_text <- .hy_source_from_text(
+    "f <- function(con) {\n  # review_queue_add(con, payload = 'k=v') is forbidden\n  msg <- \"review_queue_add(payload = 'k=v')\"\n  review_queue_add(con, kind = 'k')\n}\n"
+  )
+  expect_length(.hy_scan_named_arg_at_call(list(decoy_nested), "review_queue_add", "payload"), 0)
+  expect_length(.hy_scan_named_arg_at_call(list(decoy_other_fn), "review_queue_add", "payload"), 0)
+  expect_length(.hy_scan_named_arg_at_call(list(decoy_clean), "review_queue_add", "payload"), 0)
+  expect_length(.hy_scan_named_arg_at_call(list(decoy_text), "review_queue_add", "payload"), 0)
+
+  # THE REAL CHECK.
+  real_hits <- .hy_scan_named_arg_at_call(real_sources, "review_queue_add", "payload")
+  expect_true(
+    length(real_hits) == 0,
+    info = sprintf(
+      "production code supplies a free-text payload= to review_queue_add() (%d site(s)): %s",
+      length(real_hits),
+      paste(vapply(real_hits, function(h) sprintf("%s:%d", basename(h$path), h$line1), character(1)),
+            collapse = "; ")
+    )
+  )
+
+  # And the indirect route stays closed.
+  string_ctl <- .hy_source_from_text("f <- function(con, x) {\n  do.call(\"review_queue_add\", list(con, payload = x))\n}\n")
+  expect_true(
+    length(.hy_scan_name_as_string(list(string_ctl), "review_queue_add")) >= 1,
+    info = "positive control failed: `do.call(\"review_queue_add\", ...)` was not flagged by the indirect-call check"
+  )
+  indirect <- .hy_scan_name_as_string(real_sources, "review_queue_add")
+  expect_true(
+    length(indirect) == 0,
+    info = sprintf(
+      "\"review_queue_add\" appears as a string literal in R/ (%s) - an indirect call would bypass the AST scan above; justify it or remove it",
+      paste(vapply(indirect, function(h) sprintf("%s:%d", basename(h$path), h$line1), character(1)),
+            collapse = "; ")
+    )
+  )
 })
