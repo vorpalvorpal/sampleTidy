@@ -676,6 +676,18 @@ confirm_feature_aliases <- function(uuid_alias, uuid_feature = NULL, confirmed_b
     action <- "merged"
   }
 
+  # PLAN-15 F.15 D5: `uuid_alias`'s own review item (a pending-feature
+  # commit's `unknown_feature` row, if it raised one) is resolved by THIS
+  # confirmation - close it, on the SAME `con` already inside
+  # confirm_feature_aliases()'s db_transaction() (R/mutate.R:97), so an abort
+  # anywhere later in a multi-alias call rolls this close back too (R-15.43).
+  # Do NOT open a new connection or wrap this in its own with_db_write(). A
+  # no-op (D6) for the common case of an alias that never had a review item.
+  review_queue_close(
+    con, uuid_target = uuid_alias, resolution = "confirmed",
+    resolved_by = confirmed_by
+  )
+
   tibble::tibble(
     uuid_alias = uuid_alias, uuid_feature = uuid_feature,
     n_samples = n_samples, action = action, uuid_self_arm = self_arm

@@ -68,6 +68,25 @@
         source_hash VARCHAR
       )"
   ),
+  # PLAN-15 F.15 "THE PINNED DESIGN" (ruling (a), 2026-07-24, D1): the
+  # linkage column a review item needs to be closeable
+  # (review_queue_close(), D4 below) once the confirmation that raised it
+  # resolves. Generic (`kind` says which table it points at - see D1's
+  # kind -> table map in the plan); nullable, no FK (review_queue is an ops
+  # table observing the registry, not owning it - a FK here would block
+  # deletes on the table it only observes). MUST be inserted here, BEFORE
+  # the version-6 entry below: version 6's own comment records that it
+  # "applies immediately after an as-yet-unapplied version 5 on the live
+  # DB" - version 5 is a deliberately reserved, not-yet-applied slot, and
+  # `ensure_schema()` applies migrations in list order, so this entry must
+  # sit before version 6 in this list, not merely have a lower `version`
+  # number. Do NOT retro-edit the version = 3L CREATE TABLE above: a
+  # database already at version >= 3 never re-runs it, so editing it in
+  # place would make fresh and already-migrated databases diverge.
+  list(
+    version = 5L,
+    ddl = "ALTER TABLE review_queue ADD COLUMN IF NOT EXISTS uuid_target VARCHAR"
+  ),
   # PLAN-16 (B-16.ddl): 6a adds the three typed review_queue columns
   # (subkind/uuid_existing/uuid_alias - uuid-prefixed, following the table's
   # own convention, not the payload's key order); 6b creates the
@@ -687,8 +706,17 @@ review_queue_add <- function(con, kind, work_order = NA_character_,
                              uuid = NULL, created_at = NULL,
                              subkind = NA_character_, uuid_existing = NA_character_,
                              uuid_alias = NA_character_, candidates = NULL,
-                             diagnostics = list()) {
+                             diagnostics = list(), uuid_target = NA_character_) {
   checkmate::assert_string(kind)
+  # PLAN-15 F.15 D3: `uuid_target` is the generic linkage column
+  # (review_queue_close() closes on it). Existing callers pass nothing and
+  # keep working: when NA (the default), the column is left OUT of the
+  # INSERT entirely (mirrors the `payload` override below) rather than
+  # written as an explicit NULL - so a caller running against a
+  # pre-migration-5 database (no `uuid_target` column yet) never trips a
+  # "column does not exist" error merely by NOT asking for the new
+  # behaviour.
+  .rq_assert_char_scalar(uuid_target, "uuid_target")
   # Round-3 audit H10: `payload`/`created_at`/`uuid` were the one untyped
   # door left in this function - every other argument already routes through
   # `.rq_row()`'s checkmate guards, but these three are consumed BEFORE that
@@ -717,6 +745,7 @@ review_queue_add <- function(con, kind, work_order = NA_character_,
   review$uuid <- uuid
   review$created_at <- created_at
   if (!is.na(payload)) review$payload <- payload
+  if (!is.na(uuid_target)) review$uuid_target <- uuid_target
 
   cand <- rq$candidates
   if (nrow(cand) > 0L) cand$uuid_review <- uuid
@@ -745,4 +774,63 @@ review_queue_add <- function(con, kind, work_order = NA_character_,
   })
 
   invisible(uuid)
+}
+
+#' Close every OPEN `review_queue` row pointing at `uuid_target` (PLAN-15
+#' F.15 D4)
+#'
+#' Symmetric with `review_queue_add()` and for the same reason: so
+#' `review_queue` UPDATEs never scatter as raw SQL across the package.
+#' `UPDATE`s every row with `status = 'open'` and the given `uuid_target` to
+#' `status = 'resolved'`, stamping `resolution`/`resolved_by`/`resolved_at`.
+#' `'resolved'` is the pinned terminal status (D4) - nothing wrote
+#' `review_queue.status` before this function existed, so there is no other
+#' value to honour, and `'resolved'` is what `resolution`/`resolved_by`/
+#' `resolved_at` were named for. Idempotent: a row already `resolved` no
+#' longer matches `status = 'open'`, so a second identical call closes zero
+#' rows.
+#'
+#' D6 (the NA trap): a missing/`NA`/zero-length `uuid_target` returns early
+#' and closes NOTHING, without erroring. This is NOT relying on SQL's own
+#' `= NULL` semantics (which never match) - it is a deliberate R-side guard,
+#' because the moment anything ever writes the literal string `"NA"` into
+#' `uuid_target`, an interpolated `NA_character_` would stop being safely
+#' unmatched by accident.
+#'
+#' @param con an open read-write DBI connection.
+#' @param uuid_target the `review_queue.uuid_target` value to close; a
+#'   missing/`NA`/zero-length value closes nothing (D6).
+#' @param resolution free-text resolution stored on every closed row.
+#' @param resolved_by who resolved it.
+#' @return integer count of rows closed, invisibly.
+#'
+#' NOT EXPORTED, deliberately - symmetric with `review_queue_add()`, which is
+#' internal too. An `@export` tag here would be a booby trap: NAMESPACE does
+#' not list it today, so the package builds fine, but the next
+#' `devtools::document()` would add the export and turn R-10.6 ("NAMESPACE
+#' exports equal the CONTRACT-pinned public API exactly") red for a reason
+#' that has nothing to do with whatever that run was about.
+#' @keywords internal
+#' @noRd
+review_queue_close <- function(con, uuid_target, resolution, resolved_by) {
+  # A length-0 or NA target closes nothing (D6). A LONGER vector is neither -
+  # it falls through to `assert_string()` and fails loudly, which is the
+  # honest outcome; guarding it with `||` alone would raise R >= 4.3's
+  # "invalid length argument" from the `is.na()` vector instead of a message
+  # naming the argument.
+  if (length(uuid_target) == 0L || (length(uuid_target) == 1L && is.na(uuid_target))) {
+    return(invisible(0L))
+  }
+  checkmate::assert_string(uuid_target)
+  checkmate::assert_string(resolution)
+  checkmate::assert_string(resolved_by)
+
+  n <- DBI::dbExecute(
+    con,
+    "UPDATE review_queue
+        SET status = 'resolved', resolution = ?, resolved_by = ?, resolved_at = ?
+      WHERE uuid_target = ? AND status = 'open'",
+    params = list(resolution, resolved_by, Sys.time(), uuid_target)
+  )
+  invisible(n)
 }

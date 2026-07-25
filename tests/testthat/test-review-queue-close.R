@@ -110,16 +110,28 @@ test_that("R-15.38: ensure_schema() on a pre-version-5 database adds uuid_target
   con <- seed_con(db_path)
   on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
 
-  # Force a genuinely pre-version-5 database. Written to be a no-op TODAY (the
-  # column and the marker do not exist yet) and to actually undo migration 5 once
-  # D1 lands - otherwise seed_db()'s own ensure_schema() applies the migration
-  # during setup and this test can never observe the transition it exists to check.
+  # Force a genuinely pre-version-5 database - otherwise seed_db()'s own
+  # ensure_schema() applies the migration during setup and this test can never
+  # observe the transition it exists to check.
+  #
+  # THE CHILD TABLE MUST GO FIRST, AND THAT IS NOT OPTIONAL (orchestrator,
+  # 2026-07-26). DuckDB 1.4.1 refuses to ALTER a table any FK references at
+  # all - reproduced in isolation on a two-table toy schema: dropping an
+  # UNRELATED column from the parent raises "Dependency Error: Cannot alter
+  # entry ... because there are entries that depend on it", and neither
+  # IF EXISTS nor CASCADE suppresses it. PLAN-16's version-6 migration gives
+  # review_queue exactly such a dependant (review_queue_candidate.uuid_review
+  # REFERENCES review_queue(uuid)). The DROP below was silently a no-op while
+  # `uuid_target` did not exist (IF EXISTS short-circuits before the dependency
+  # check); the moment D1 landed it began to ERROR. Both version markers are
+  # cleared so ensure_schema() re-applies 5 AND 6, restoring the child table
+  # rather than leaving the fixture DB half-migrated.
+  DBI::dbExecute(con, "DROP TABLE IF EXISTS review_queue_candidate")
   DBI::dbExecute(con, "ALTER TABLE review_queue DROP COLUMN IF EXISTS uuid_target")
-  DBI::dbExecute(con, "DELETE FROM schema_version WHERE version = 5")
+  DBI::dbExecute(con, "DELETE FROM schema_version WHERE version IN (5, 6)")
 
-  # DO NOT DELETE THE TWO STATEMENTS ABOVE. They look redundant today because
-  # migration 5 does not exist yet - that is exactly why they are there. Without
-  # them this test silently stops testing R-15.38 the moment D1 lands.
+  # DO NOT DELETE THE THREE STATEMENTS ABOVE - without them this test silently
+  # stops testing R-15.38.
   #
   # review_queue_add() is the sanctioned pre-migration-5 writer (it never sets
   # uuid_target), so this row stands in for a row written before the migration ran.
@@ -401,10 +413,20 @@ test_that("R-15.43 (transactional arm): when a MULTI-alias confirmation aborts o
   # whose SECOND aborts. `db_transaction()` (R/mutate.R:97) rolls the whole
   # thing back, so the first item must return to 'open'.
   #
-  # This is the assertion that FAILS if `review_queue_close()` is called on its
-  # own connection / its own `with_db_write()` instead of on the `con` already
-  # inside the confirmation's transaction. No fault injection or instrumentation
-  # needed - the ordering of `purrr::map()` over `uuid_alias` supplies it.
+  # WHAT THIS ARM DOES AND DOES NOT PIN - both measured by mutation, 2026-07-26,
+  # not argued. Stated because the first version of this note overclaimed.
+  #   KILLS: closing on a SEPARATE connection (`DBI::dbConnect()` /
+  #     its own `with_db_write()`), which autocommits outside the enclosing
+  #     transaction and so survives the rollback. Mutant applied, this block
+  #     and ONLY this block went red.
+  #   DOES NOT KILL: hoisting the close to run immediately AFTER the
+  #     transaction commits. Mutant applied, whole file stayed green - on an
+  #     abort that implementation never reaches the close either, so no
+  #     black-box assertion can separate it from the correct one. Telling
+  #     those two apart needs a fault injected BETWEEN the commit and the
+  #     close, which is out of reach from here.
+  # So: in-transaction placement is still partly a code-review property. That
+  # is a real limit of this arm, recorded rather than papered over.
   setup <- rq_commit_setup()
   con <- setup$con
   on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
