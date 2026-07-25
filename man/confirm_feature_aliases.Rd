@@ -6,17 +6,22 @@
 \usage{
 confirm_feature_aliases(
   uuid_alias,
-  uuid_feature,
+  uuid_feature = NULL,
   confirmed_by,
   override = FALSE,
-  db = st_config("live_db")
+  db = st_config("live_db"),
+  kind = NULL,
+  date_start = NULL,
+  date_end = NULL
 )
 }
 \arguments{
 \item{uuid_alias}{character vector of \code{feature_alias.uuid}.}
 
 \item{uuid_feature}{character vector of \code{feature.uuid}, same length as
-\code{uuid_alias}. \code{NA} is rejected (a feature must exist).}
+\code{uuid_alias}. \code{NA} is rejected (a feature must exist). OMIT it entirely
+(the \code{NULL} default) for a bounds-only call: the stored \code{uuid_feature}
+is then left untouched and no feature is re-picked (E.4).}
 
 \item{confirmed_by}{who is confirming - mandatory, no default (A55).}
 
@@ -24,6 +29,15 @@ confirm_feature_aliases(
 rows on the same (feature, date)) is merged rather than aborted (D5).}
 
 \item{db}{path to the DuckDB file; defaults to \code{st_config("live_db")}.}
+
+\item{kind}{the relationship being confirmed, one of \code{self},
+\code{historical_code}, \code{mask_long}, \code{descriptive}, \code{transcription_error}
+(F.19). Never supply it for an identity mapping - that arm is \code{self} by
+construction and passing a \code{kind} alongside it is an error, not a silent
+override.}
+
+\item{date_start, date_end}{validity bounds (E.4). \code{NULL} leaves the stored
+bound alone, \code{as.Date(NA)} clears it, a real \code{Date} sets it.}
 }
 \value{
 \code{invisible(tibble(uuid_alias, uuid_feature, n_samples, action))}.
@@ -33,4 +47,18 @@ Sets \code{feature_alias.uuid_feature} for one or more aliases, vectorised.
 Runs inside one \code{with_db_write()} transaction, entirely through the
 mutation layer. See PLAN-11 R-11.10 for the full contract (collision
 check, D5 override semantics, C15 kind rule, C14 merge pins).
+}
+\details{
+PLAN-15 E.4 adds \code{date_start} / \code{date_end} validity bounds and a
+bounds-only call (\code{uuid_feature} omitted); PLAN-15 F.19 adds \code{kind} and
+stops an identity mapping (\code{alias_key == lower(feature.name)}) from
+minting a second arm alongside the feature's own \code{self} arm.
+
+THE E.4 SENTINEL SCHEME (pinned in PLAN-15 B-15.E4, ratified 2026-07-24):
+\code{NULL} - the default, and what every pre-E.4 caller gets for free - leaves
+the stored bound ALONE; \code{as.Date(NA)} CLEARS it; a real \code{Date} SETS it.
+Bare \code{NA} is deliberately not a sentinel here: on \code{uuid_feature} it is
+already spoken for as "reject". Bounds are DATE, never POSIXct - a
+POSIXct bound is rejected rather than silently truncated at the driver
+boundary.
 }

@@ -61,11 +61,25 @@ snapshot_db(db, dest_dir); prune_snapshots(dest_dir, keep_days)
 # the UI presents and executes, the human decides, the API records the human
 # as confirmed_by. An LLM-driven UI may propose, never confirm.
 confirm_feature_aliases(uuid_alias, uuid_feature, confirmed_by,
-                        override = FALSE, db = st_config("live_db"))
+                        override = FALSE, db = st_config("live_db"),
+                        kind = NULL, date_start = NULL, date_end = NULL)
 confirm_analyte_methods(uuid_lab, uuid_analyte, confirmed_by,
                         db = st_config("live_db"))
 pending_features(con); pending_analytes(con)   # dangling backlog readers
+
+# plan 15 E.8 — registry hygiene, added 2026-07-26. EXPORTED because it is an
+# operator-run tool (a `dry_run` argument and a `db` default are the
+# human-callable A16 convention), and E.8 pins it as public. Merges a
+# duplicate identity arm into the feature's self arm, deletes the duplicate,
+# and repoints dependent samples.
+merge_identity_aliases(db = st_config("live_db"), actor, dry_run = FALSE)
 ```
+
+`confirm_feature_aliases()`'s `kind` defaults to `transcription_error` on a
+non-identity confirmation (Robin's ruling 2026-07-26, overriding PCR-5's
+non-identity half — see the comment at `R/feature-alias.R`'s `is_identity`
+branch). `kind` is provenance only: the sole production branch on it anywhere
+is `kind == "self"`.
 
 Internal seams (not exported, stable for tests via `:::`):
 `file_meta()`, `route_files()`, `assemble_events()`, `reconcile_event()`,

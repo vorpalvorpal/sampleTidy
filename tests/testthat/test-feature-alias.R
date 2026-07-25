@@ -662,12 +662,11 @@ test_that("R-15.37: confirming an identity-mapped pending alias (alias_key == lo
   after_self <- feature_alias_row(con, "fa-9601")
   expect_identical(after_self$confirmed_by[[1]], "alice")
 
-  # (c) a genuine NON-identity alias (key != lower(feature.name)) requires
-  # an explicit `kind` argument (PCR-5/F.19, ruled 2026-07-24): passing one
-  # round-trips onto the row, AND omitting it on this non-identity branch is
-  # a mandatory error - no default. Phase-5 audit C5: a bare negative
+  # (c) a genuine NON-identity alias (key != lower(feature.name)) accepts an
+  # explicit `kind`, which round-trips onto the row rather than being
+  # overridden or silently invented. Phase-5 audit C5: a bare negative
   # (`expect_false(kind == "transcription_error")`) is satisfied by ANY
-  # OTHER silently-invented kind, so both halves are asserted for real.
+  # OTHER silently-invented kind, so the positive form is asserted.
   DBI::dbExecute(con, "INSERT INTO feature_alias
     (uuid, uuid_feature, name, alias_key, kind, n_seen, auto_assign,
      first_seen, last_seen, confirmed_by) VALUES
@@ -677,15 +676,37 @@ test_that("R-15.37: confirming an identity-mapped pending alias (alias_key == lo
   non_identity <- feature_alias_row(con, "fa-9603")
   expect_identical(non_identity$kind[[1]], "historical_code") # round-tripped, not invented
 
+  # (d) OMITTING `kind` on the non-identity branch DEFAULTS to
+  # `transcription_error`; it is NOT an error.
+  #
+  # RULED BY ROBIN 2026-07-26, overriding PCR-5's non-identity half. PCR-5
+  # (F.19, 2026-07-24) said omission here must abort with no default, and this
+  # block asserted that. It contradicted R-11.10 (test-feature-alias.R:126),
+  # green since PLAN-11, which pins the same shape SUCCEEDING with exactly this
+  # default - fa-0010 ('t.s09' -> f-0002 'T.S02') is non-identity too, so no
+  # discriminator separates the two fixtures. PCR-5 was aimed at F.19's
+  # IDENTITY branch and the non-identity half came along uncosted.
+  #
+  # Resolved in favour of the shipped behaviour because a transcription variant
+  # IS the honest majority case for a pending non-identity alias, and because
+  # `kind` is provenance only: the sole production branch on it anywhere is
+  # `kind == "self"` (reconcile.R:632,653). Nothing reads historical_code vs
+  # transcription_error - not reconcile, not commit, not migration 002, not
+  # merge_identity_aliases(). Making omission an error would have broken a
+  # shipped public API to protect a field with no reader.
+  #
+  # Residual, accepted: a `descriptive` or `mask_long` name (a sheet writing
+  # "Downstream Cripple Creek" for B.S01) confirmed without `kind` is labelled
+  # a typo when nobody mistyped. An operator who cares passes `kind`.
   DBI::dbExecute(con, "INSERT INTO feature_alias
     (uuid, uuid_feature, name, alias_key, kind, n_seen, auto_assign,
      first_seen, last_seen, confirmed_by) VALUES
     ('fa-9604', NULL, 'ZIDENTMISPELL2', 'zidentmispell2', 'pending', 0, FALSE,
      TIMESTAMP '2025-09-01 08:00:00', TIMESTAMP '2025-09-01 08:00:00', NULL)")
-  expect_error(
-    confirm_feature_aliases("fa-9604", "f-9601", confirmed_by = "alice"),
-    class = "sampletidy_error"
-  )
+  confirm_feature_aliases("fa-9604", "f-9601", confirmed_by = "alice")
+  defaulted <- feature_alias_row(con, "fa-9604")
+  expect_identical(defaulted$kind[[1]], "transcription_error")
+  expect_identical(defaulted$uuid_feature[[1]], "f-9601")
 })
 
 # ======================================================================
