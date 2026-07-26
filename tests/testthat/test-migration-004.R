@@ -288,6 +288,161 @@ test_that("004-view-repair: mig004_run() throws (and commits no 1004 marker) whe
 })
 
 # =============================================================================
+# Phase 7b round 3, S1: the count oracle used to cover v_measurement_epa
+# ONLY - re-introducing the F.12(a) case defect on v_measurement_gas_report
+# (Phase-7a mutation S-M1-GAP) used to SURVIVE the full suite. Reproduce the
+# exact mutation and require it to now be caught.
+# =============================================================================
+
+test_that("004-view-repair (S1): a re-introduced F.12(a) case defect on v_measurement_gas_report is caught by the verify gate, not just v_measurement_epa", {
+  mig1 <- .mig001_load()
+  mig4 <- .mig004_load()
+
+  path <- seed_pre_migration_db()
+  con0 <- pre_migration_con(path)
+  .seed_004_epa_case_fixture(con0)
+  DBI::dbDisconnect(con0, shutdown = TRUE)
+  mig1$mig001_run(db = path, snapshot_dir = withr::local_tempdir(), dry_run = FALSE)
+
+  # Phase-7a mutation S-M1-GAP, reproduced verbatim: the gas_report literal
+  # regresses to lowercase, so UPPER(fm.variant) = 'gas_report' matches
+  # nothing (feature_mask.variant is always stored/compared uppercase).
+  mig4$.mig004_variant_literal[["v_measurement_gas_report"]] <- "gas_report"
+
+  snap_dir <- withr::local_tempdir()
+  err <- tryCatch(
+    mig4$mig004_run(db = path, snapshot_dir = snap_dir, dry_run = FALSE),
+    error = function(e) e
+  )
+  expect_s3_class(err, "sampletidy_error")
+
+  con <- pre_migration_con(path)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+  marker_n <- DBI::dbGetQuery(con, "SELECT count(*) n FROM schema_version WHERE version = 1004")$n
+  expect_equal(marker_n, 0)
+})
+
+# =============================================================================
+# Phase 7b round 3, S2: a count-EQUALITY gate alone passes vacuously at
+# 0 == 0 on a genuinely variant-free database - indistinguishable from a
+# rebuild that silently regressed to matching nothing. Make that a hard
+# failure.
+# =============================================================================
+
+test_that("004-view-repair (S2): a genuinely variant-free view (independent base-table oracle == 0) is a HARD FAILURE, not a silent pass", {
+  mig1 <- .mig001_load()
+  mig4 <- .mig004_load()
+
+  path <- seed_pre_migration_db()
+  con0 <- pre_migration_con(path)
+  .seed_004_epa_case_fixture(con0)
+  # Remove the ONLY 'long' feature_mask row in this fixture - v_measurement_long
+  # is base-truthfully empty here, not a defect, just an empty variant.
+  DBI::dbExecute(con0, "DELETE FROM feature_mask WHERE variant = 'long'")
+  DBI::dbDisconnect(con0, shutdown = TRUE)
+  mig1$mig001_run(db = path, snapshot_dir = withr::local_tempdir(), dry_run = FALSE)
+
+  snap_dir <- withr::local_tempdir()
+  err <- tryCatch(
+    mig4$mig004_run(db = path, snapshot_dir = snap_dir, dry_run = FALSE),
+    error = function(e) e
+  )
+  expect_s3_class(err, "sampletidy_error")
+  expect_match(conditionMessage(err), "ZERO", fixed = TRUE)
+
+  con <- pre_migration_con(path)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+  marker_n <- DBI::dbGetQuery(con, "SELECT count(*) n FROM schema_version WHERE version = 1004")$n
+  expect_equal(marker_n, 0)
+})
+
+# =============================================================================
+# Phase 7b round 3, S3: .mig004_base_n() must not be a hand-copy of the
+# view's own FROM/JOIN clause (the old EPA-only oracle's flaw) - it agrees
+# with an independently-written base-table query for every variant, on real
+# fixture data.
+# =============================================================================
+
+test_that("004-view-repair (S3): .mig004_base_n() is an independently-computed oracle - agrees with a hand-written base-table query for every variant", {
+  mig1 <- .mig001_load()
+  mig4 <- .mig004_load()
+  path <- .run_001_then_004(mig1, mig4)
+
+  con <- pre_migration_con(path)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  for (literal in c("EPA", "OLD", "GAS_REPORT", "LONG")) {
+    base_n <- mig4$.mig004_base_n(con, literal)
+    hand_n <- DBI::dbGetQuery(con, sprintf("
+      SELECT COUNT(*) n
+      FROM analysis a
+      JOIN \"sample\" s ON a.uuid_sample = s.uuid
+      JOIN feature_alias fa ON fa.uuid = s.uuid_feature_alias
+      JOIN feature f ON fa.uuid_feature = f.uuid
+      JOIN feature_mask fm ON fm.uuid_feature = f.uuid AND UPPER(fm.variant) = '%s'
+    ", literal))$n
+    expect_equal(base_n, as.integer(hand_n))
+    expect_gt(base_n, 0L)
+  }
+})
+
+# =============================================================================
+# Phase 7b round 3, S4: .mig004_verify_views() must iterate .mig004_five_views
+# (the ONE canonical view list), not names(.mig004_expected_view_cols) - a
+# view added to the former and forgotten in the latter used to be silently
+# never verified.
+# =============================================================================
+
+test_that("004-view-repair (S4): .mig004_verify_views() iterates .mig004_five_views - a view present there but missing from .mig004_expected_view_cols is a hard internal-consistency failure, not silently skipped", {
+  mig1 <- .mig001_load()
+  mig4 <- .mig004_load()
+  path <- .run_001_then_004(mig1, mig4)
+
+  con <- pre_migration_con(path)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  mig4$.mig004_five_views <- c(mig4$.mig004_five_views, "v_measurement_bogus")
+  err <- tryCatch(mig4$.mig004_verify_views(con), error = function(e) e)
+  expect_s3_class(err, "sampletidy_error")
+  expect_match(conditionMessage(err), "drifted", fixed = TRUE)
+})
+
+# =============================================================================
+# Phase 7b round 3, S5: mig004_run() used to issue a raw
+# `DBI::dbExecute(con, "BEGIN TRANSACTION")` outside its own tryCatch, with
+# manual ROLLBACK/COMMIT - replaced with db_transaction() (R/mutate.R),
+# mirroring mig003_run(). The wrapped error message (only produced by
+# db_transaction()'s own rollback handler) is the observable discriminator.
+# =============================================================================
+
+test_that("004-view-repair (S5): mig004_run()'s rollback path runs through db_transaction(), not a raw un-caught BEGIN TRANSACTION", {
+  mig1 <- .mig001_load()
+  mig4 <- .mig004_load()
+
+  path <- seed_pre_migration_db()
+  con0 <- pre_migration_con(path)
+  .seed_004_epa_case_fixture(con0)
+  DBI::dbDisconnect(con0, shutdown = TRUE)
+  mig1$mig001_run(db = path, snapshot_dir = withr::local_tempdir(), dry_run = FALSE)
+
+  mig4$.mig004_rebuild_views <- function(con) invisible(NULL)
+
+  snap_dir <- withr::local_tempdir()
+  err <- tryCatch(
+    mig4$mig004_run(db = path, snapshot_dir = snap_dir, dry_run = FALSE),
+    error = function(e) e
+  )
+  expect_s3_class(err, "sampletidy_error")
+  # db_transaction()'s own wrapper message (R/mutate.R) - only present if the
+  # transaction genuinely runs through db_transaction(), not a raw
+  # BEGIN/tryCatch/stop(e), which used to re-throw the inner error verbatim.
+  expect_match(
+    conditionMessage(err), "Mutation transaction failed and was rolled back",
+    fixed = TRUE
+  )
+})
+
+# =============================================================================
 # Phase 7b round 2, item 2: no schema_version-exists guard - mirrors 003's.
 # =============================================================================
 

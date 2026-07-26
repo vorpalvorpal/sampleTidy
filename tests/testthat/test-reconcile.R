@@ -224,6 +224,35 @@ test_that("R-8.2: a NA feature_raw is unknown (never a phantom hit into clean) -
   expect_false(identical(out$review$subkind[[1]], "structural"))
 })
 
+test_that("PLAN-7b round-3 finding 7: a feature-side HELD row's review item carries subkind = 'held', distinguishable from a PENDING row with nothing to say (both used to emit subkind=NA and were indistinguishable in review_queue despite OPPOSITE commit dispositions)", {
+  path <- seed_db()
+  con <- seed_con(path)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  # 'feature_raw = "."' folds to nothing (A44) -> HELD, dropped from clean.
+  # 'QQNOSITE' is a genuine unknown -> PENDING, commits dangling. Both used
+  # to reach `.rc_feature_review()`'s NA-key branch (subkind = NA) despite
+  # opposite dispositions (auditor probes/p6.R).
+  event <- mk_event(mk_rows(
+    mk_row(source_ref = "r_held", feature_raw = ".", lab_sample_id = "XX9999979020",
+           sample_datetime_raw = "20 Jun 2025 09:00"),
+    mk_row(source_ref = "r_pending", feature_raw = "QQNOSITE", lab_sample_id = "XX9999979021",
+           sample_datetime_raw = "20 Jun 2025 09:00")
+  ))
+  out <- reconcile_event(event, con)
+
+  expect_false("r_held" %in% out$clean$source_ref)
+  expect_true("r_pending" %in% out$clean$source_ref)
+
+  held <- out$review[out$review$kind == "unknown_feature" & out$review$source_ref == "r_held", ]
+  expect_equal(nrow(held), 1)
+  expect_identical(held$subkind[[1]], "held")
+
+  pending <- out$review[out$review$kind == "unknown_feature" & out$review$source_ref == "r_pending", ]
+  expect_equal(nrow(pending), 1)
+  expect_true(is.na(pending$subkind[[1]]))
+})
+
 # ---- R-8.3: analyte / method resolution ----------------------------------
 
 test_that("R-8.3: org-scoped analyte name hit resolves", {
@@ -349,6 +378,90 @@ test_that("D1/D2 (PLAN-7b round-2): closing the analyte-side registry poison loo
   expect_equal(poisoned_after, 1)   # only the ONE seeded above - none minted anew
 })
 
+test_that("T1.1 (PLAN-7b round-3): .rc_lab_method_candidates() guards the FOLDED method key on ALL THREE conjuncts, not just the name conjunct D1 fixed - a punctuation-only method_raw (or a registry row whose OWN method folds to nothing) must never phantom-splice an all-NA row over the real candidates", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  # --- conjunct A: incoming method_raw folds to NA ("-", a routine
+  # lab-spreadsheet placeholder). lm-0002/lm-0004 are the seeded
+  # duplicate-method Fluoride/ALS pair, both resolving to the SAME analyte
+  # (a-0002) - a punctuation-only method_raw carries no disambiguating
+  # information, so narrowing must be SKIPPED (not attempted against a NA
+  # key), leaving both real candidates for the uuid_analyte-uniqueness check
+  # below to resolve cleanly. Pre-fix: `mkey <- NA`; the raw `!is.na(method_raw)`
+  # gate ("-" is non-NA) let narrowing proceed, `TRUE & NA` logical
+  # subsetting spliced one all-NA phantom row per candidate, `cand` became
+  # all-NA, and the row incorrectly came out "dangling_method"/uuid_lab=NA
+  # (auditor-verified directly on this exact call).
+  reg <- .rc_load_registry(con)
+  res_a <- .rc_resolve_one_analyte("Fluoride", "ALS", "-", reg)
+  expect_identical(res_a$status, "resolved")
+  expect_identical(res_a$uuid_analyte, "a-0002")
+  expect_false(is.na(res_a$uuid_lab))
+
+  # --- conjunct B: a REGISTRY row whose own `method` folds to nothing -----
+  # 'Nitrate' (uppercase-varied incoming name so the exact-match branch,
+  # which is raw case-sensitive, cannot fire and the folded path is forced)
+  # has one poisoned candidate (method='-') and one real one. Pre-fix, the
+  # poisoned row's raw `!is.na(cand$method)` guard passed ("-" is non-NA),
+  # but `.rc_method_key(cand$method) == mkey` went NA -> phantom-spliced
+  # into `narrowed` alongside the real match, `unique(uuid_analyte)` gained
+  # a spurious NA and the row came out "ambiguous" instead of resolved.
+  DBI::dbExecute(con, "INSERT INTO lab_method (uuid, uuid_analyte, name, method, organisation) VALUES
+    ('lm-poison-method', NULL, 'Nitrate', '-', 'ALS'),
+    ('lm-real-nitrate', 'a-0001', 'Nitrate', 'NOX: Nitrate by discrete analyser', 'ALS')")
+  reg2 <- .rc_load_registry(con)
+  res_b <- .rc_resolve_one_analyte("NITRATE", "ALS", "NOX: Nitrate by discrete analyser", reg2)
+  expect_identical(res_b$status, "resolved")
+  expect_identical(res_b$uuid_analyte, "a-0001")
+  expect_identical(res_b$uuid_lab, "lm-real-nitrate")
+
+  # --- conjunct C: the `org` PARAMETER itself is NA -----------------------
+  # Unreachable through .rc_resolve_one_analyte() in production
+  # (`:1244` returns "miss" on `is.na(org)` first), but
+  # `.rc_lab_method_candidates()` must not be silently unsafe to call this
+  # way either - `lm$organisation == NA` is `NA` for every row regardless of
+  # the `!is.na(lm$organisation)` column guard, which only guards the
+  # COLUMN, not the parameter.
+  cand_na_org <- .rc_lab_method_candidates("Fluoride", NA_character_, NA_character_, reg)
+  expect_equal(nrow(cand_na_org), 0)
+})
+
+test_that("PLAN-7b round-3 finding 5: an analyte-side HELD row's review item actually carries subkind = 'held' (asserted by zero tests before this - mutation R-M1-GAP, which turns the literal into NA_character_, survived the whole suite)", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  event <- mk_event(mk_row(source_ref = "r1", analyte_raw = "--", cas_number = NA_character_,
+                           lab_sample_id = "XX9999979009", sample_datetime_raw = "20 Jun 2025 09:00"))
+  out <- reconcile_event(event, con)
+  hit <- out$review[out$review$source_ref == "r1", ]
+  expect_equal(nrow(hit), 1)
+  expect_identical(hit$kind, "unknown_analyte")
+  expect_identical(hit$subkind[[1]], "held")
+})
+
+test_that("PLAN-7b round-3 finding 6: the analyte-side HELD group is keyed by ORG, like every other unknown_analyte group - holds from DIFFERENT orgs must not collapse into one review item that names only the first member's org", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  event <- mk_event(mk_rows(
+    mk_row(source_ref = "r_als", org = "ALS", analyte_raw = "--", cas_number = NA_character_,
+           lab_sample_id = "XX9999979010", sample_datetime_raw = "20 Jun 2025 09:00"),
+    mk_row(source_ref = "r_acirl", org = "ACIRL", analyte_raw = "...", cas_number = NA_character_,
+           lab_sample_id = "XX9999979011", sample_datetime_raw = "20 Jun 2025 09:00"),
+    mk_row(source_ref = "r_acirl2", org = "ACIRL", analyte_raw = NA_character_, cas_number = NA_character_,
+           lab_sample_id = "XX9999979012", sample_datetime_raw = "20 Jun 2025 09:00")
+  ))
+  out <- reconcile_event(event, con)
+  held <- out$review[out$review$kind == "unknown_analyte" & out$review$subkind == "held", ]
+  # Pre-fix: ONE item, n_rows=3, diagnostics naming only the first member's
+  # org (ACIRL) - the ALS hold invisible. Post-fix: TWO items, one per org.
+  expect_equal(nrow(held), 2)
+  payloads <- lapply(held$payload, jsonlite::fromJSON)
+  orgs <- vapply(payloads, function(p) p$org, character(1))
+  expect_setequal(orgs, c("ALS", "ACIRL"))
+  n_by_org <- stats::setNames(vapply(payloads, function(p) p$n_rows, numeric(1)), orgs)
+  expect_equal(unname(n_by_org["ALS"]), 1)
+  expect_equal(unname(n_by_org["ACIRL"]), 2)
+})
+
 test_that("D4 (PLAN-7b round-2): .rc_analyte_review()'s GROUP order is radix-pinned, not the R session's LC_COLLATE - mirrors PLAN-7b item 7's fix for .rc_feature_review(), which this sibling producer never received", {
   rows <- tibble::tibble(
     source_ref = c("r_underscore", "r_dot"),
@@ -406,6 +519,28 @@ test_that("D5 (PLAN-7b round-2): .rc_analyte_review()'s within-GROUP order (and 
   # radix: 'rAA' sorts before 'rZZ'.
   expect_identical(out_zz_first$source_ref, "rAA,rZZ")
   expect_identical(out_zz_first$source_hash, "hAA")
+})
+
+test_that("PLAN-7b round-3 finding 9: .rc_radix_sort_named() (extracted from reconcile_event()'s `counts` assembly, D7) is radix-pinned against a SYNTHETIC key set that DOES diverge under this platform's collations - the real qc_<UPPER> vocabulary does not diverge yet, which had left the D7 pin both latent and unobserved by any test", {
+  x <- stats::setNames(c(1L, 2L), c("qc_type_a", "qc_type.a"))
+
+  run_order <- function(locale) {
+    withr::with_locale(c(LC_COLLATE = locale), names(.rc_radix_sort_named(x)))
+  }
+
+  # Establish the divergence is REAL on this platform before pinning against
+  # it (same idiom as D4/item 7).
+  sort_c <- sort(c("qc_type_a", "qc_type.a"))
+  sort_en <- withr::with_locale(c(LC_COLLATE = "en_US.UTF-8"),
+                                 sort(c("qc_type_a", "qc_type.a")))
+  skip_if_not(!identical(sort_c, sort_en),
+              "this platform's C and en_US.UTF-8 collations agree here - cannot demonstrate the divergence")
+
+  order_c <- run_order("C")
+  order_en <- run_order("en_US.UTF-8")
+  expect_identical(order_c, order_en)
+  # radix: '.' (0x2E) < '_' (0x5F) -> "qc_type.a" sorts first.
+  expect_identical(order_c, c("qc_type.a", "qc_type_a"))
 })
 
 # ---- R-8.4: units & value -------------------------------------------------
@@ -733,6 +868,35 @@ test_that("R-8.6: a tied rl_low keeps the higher value", {
   expect_false("r1" %in% out$clean$source_ref)
 })
 
+test_that("PLAN-7b round-3 finding 10: .rc_method_preference()'s tie-break is a TOTAL order (source_ref), not presentation order - the D5/F.5 sibling fix this producer never received. A FULL tie on (rl_low, value_num) used to fall through to `order()`'s stable original-index order, so the winner flipped depending on which row was presented first", {
+  path <- seed_db()
+  con <- seed_con(path)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  DBI::dbExecute(con, "INSERT INTO lab_method (uuid, uuid_analyte, name, method, organisation, rl_low) VALUES
+    ('lm-0002c', 'a-0002', 'Fluoride', 'EK040P: Fluoride by PC Titrator (tie2)', 'ALS', 0.1)")
+
+  mk_pair <- function(a_first) {
+    a <- mk_row(source_ref = "a_row", lab_sample_id = "XX1234567002", feature_raw = "T.S02",
+                method_raw = "EK040P: Fluoride by PC Titrator", value_raw = "2.3", value_num = 2.3,
+                below_detection = FALSE, rl = 0.1)
+    z <- mk_row(source_ref = "z_row", lab_sample_id = "XX1234567002", feature_raw = "T.S02",
+                method_raw = "EK040P: Fluoride by PC Titrator (tie2)", value_raw = "2.3", value_num = 2.3,
+                below_detection = FALSE, rl = 0.1)
+    rows <- if (a_first) mk_rows(a, z) else mk_rows(z, a)
+    reconcile_event(mk_event(rows), con)
+  }
+
+  out1 <- mk_pair(TRUE)   # presented a_row, z_row
+  out2 <- mk_pair(FALSE)  # presented z_row, a_row
+
+  # Both keys fully tie (same rl_low 0.1, same value_num 2.3); source_ref
+  # ("a_row" < "z_row") must decide, identically, in BOTH presentations.
+  expect_true("a_row" %in% out1$clean$source_ref)
+  expect_false("z_row" %in% out1$clean$source_ref)
+  expect_true("a_row" %in% out2$clean$source_ref)
+  expect_false("z_row" %in% out2$clean$source_ref)
+})
+
 # ---- R-8.7: three-way outcome vs DB ----------------------------------------
 
 test_that("R-8.7: a fresh row is new/clean", {
@@ -925,6 +1089,30 @@ test_that("D12 (PLAN-7b round-2): .rc_find_existing() picks the INSTANT-MATCHING
                                 sample_datetime = inc_dt, uuid_lab = "lm-0002")
   expect_false(is.null(existing))
   expect_identical(existing$analysis_uuid[[1]], "an-multiB")
+})
+
+test_that("PLAN-7b round-3 finding 8: D6's `ORDER BY a.uuid` is actually EXERCISED - two candidates sharing (feature, date, lab) with datetime IS NULL and an NA incoming instant (D11's 'unprovable' shape, which never narrows) pick the LOWER uuid deterministically, not DB insertion/physical-row order", {
+  path <- seed_db()
+  con <- seed_con(path)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  # Insert the alphabetically LATER uuid FIRST - a physical-row-order pick
+  # (no ORDER BY) would return it first; the ORDER BY must override
+  # insertion order. Neither candidate's stored datetime is provable
+  # against an NA incoming instant (D11), so `cand[1, ]` after the query's
+  # own ORDER BY decides.
+  DBI::dbExecute(con, "INSERT INTO \"sample\" (uuid, uuid_feature_alias, uuid_project, date, datetime, organisation) VALUES
+    ('s-ord-zz', 'fa-0002', 'p-0001', TIMESTAMP '2025-05-25 00:00:00', NULL, 'ALS'),
+    ('s-ord-aa', 'fa-0002', 'p-0001', TIMESTAMP '2025-05-25 00:00:00', NULL, 'ALS')")
+  DBI::dbExecute(con, "INSERT INTO analysis (uuid, uuid_sample, uuid_lab, value, quantified, rl_low) VALUES
+    ('an-zz', 's-ord-zz', 'lm-0002', 50, TRUE, 0.1),
+    ('an-aa', 's-ord-aa', 'lm-0002', 60, TRUE, 0.1)")
+
+  existing <- .rc_find_existing(con, resolved_feature = "f-0002", uuid_feature_alias = NA_character_,
+                                feature_pending = FALSE, sample_date = as.Date("2025-05-25"),
+                                sample_datetime = as.POSIXct(NA), uuid_lab = "lm-0002")
+  expect_false(is.null(existing))
+  expect_identical(existing$analysis_uuid[[1]], "an-aa")
 })
 
 test_that("D3/R-15.33 (deferred to F.11, BLOCKED ON F.13 - PLAN-15:1965): a reuse match finds a LEGACY-CONVENTION row ('date' at 13:00/14:00 UTC, 'datetime' at the real instant), paired with the modern-convention control", {
@@ -2003,6 +2191,51 @@ test_that("PLAN-16 FF5: committed review_queue.work_order (home) and the payload
   expect_identical(parsed_payload$foreign_work_order, "ZZ0000002")
   expect_false("work_order" %in% names(parsed_payload))
   expect_false("home_work_order" %in% names(parsed_payload))
+})
+
+test_that("PLAN-7b round-3 G-A site 2: STAGE-0 reads review_payload's subkind via EXACT match only - R's `$` prefix-matches on lists, so a sibling key like `subkind_detail` (no exact `subkind` key) must NOT be misread as subkind and re-emitted a second time into the JSON diagnostics", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  parsed <- list(
+    "h-chem-ga" = .rc_mk_parsed_entry(
+      results = .rc_mk_ir_result(source_hash = "h-chem-ga", source_ref = "flagged", lab_sample_id = "XX1234567007", sample_type = "unknown"),
+      meta = list(work_order_guess = "XX1234567")
+    ),
+    "h-samp-ga1" = .rc_mk_parsed_entry(
+      samples = .rc_mk_ir_sample(source_hash = "h-samp-ga1", lab_sample_id = "XX1234567007", feature_raw = "T.S01",
+                                 sample_datetime_raw = "24 May 2025 11:45", sample_type = "Normal"),
+      meta = list(work_order_guess = "XX1234567")
+    ),
+    "h-samp-ga2" = .rc_mk_parsed_entry(
+      samples = .rc_mk_ir_sample(source_hash = "h-samp-ga2", lab_sample_id = "XX1234567007", feature_raw = "T.S01",
+                                 sample_datetime_raw = "25 May 2025 09:00", sample_type = "Normal"),
+      meta = list(work_order_guess = "XX1234567")
+    )
+  )
+  # Two DIFFERENT sample-source datetimes join to the SAME lab_sample_id -
+  # assembly's real sample_datetime_mismatch flag (same fixture shape as the
+  # FF4 test above), so "flagged" is flagged by the REAL adapter path, not
+  # hand-set.
+  asm <- assemble_events(parsed)
+  event <- asm$events[[1]]
+  i <- which(event$results$source_ref == "flagged")
+  expect_true(isTRUE(event$results$needs_review[[i]]))
+  # Simulate an ADAPTER-controlled payload carrying NO exact "subkind" key,
+  # only a same-prefixed sibling - verified directly: `list(subkind_detail =
+  # "oops")$subkind` returns `"oops"`, R's `$` prefix-matching on lists.
+  event$results$review_payload[[i]] <- list(subkind_detail = "oops")
+
+  out <- reconcile_event(event, con)
+  row <- out$review[out$review$source_ref == "flagged", ]
+  expect_equal(nrow(row), 1)
+  # Pre-fix: `diag$subkind` misread "oops" from `subkind_detail` and the
+  # typed column carried it.
+  expect_true(is.na(row$subkind[[1]]))
+  # `subkind_detail` itself is untouched real diagnostics (setdiff() only
+  # ever strips the EXACT name "subkind") - it must survive in the JSON,
+  # not be silently eaten by the fix either.
+  parsed_payload <- jsonlite::fromJSON(row$payload[[1]])
+  expect_identical(parsed_payload$subkind_detail, "oops")
 })
 
 # ---- R-11.19: exact raw-name match first (A65 live defect) -----------------
@@ -4795,4 +5028,58 @@ test_that("PLAN-7b item 8 REVERSED (Robin, 2026-07-26): `blocking` stays SCOPED 
   hit_uf <- out_uf$review[out_uf$review$source_ref == "r1" & out_uf$review$kind == "unknown_feature", ]
   expect_equal(nrow(hit_uf), 1)
   expect_true("blocking" %in% names(diag_of(hit_uf)))
+})
+
+test_that("round-3 [GENERALIZE]: every order() in reconcile.R pins method='radix'", {
+  # D4/D7 pin radix as the locale-independent sort. Round 3's sibling grep found
+  # three sites that had drifted off it - .rc_site_registry()'s secondary key and
+  # the two uuid tie-breaks - all CHARACTER keys, so all locale-dependent.
+  # This is observable in the project's own locale, not a hypothetical one:
+  # under en_AU.UTF-8, order(c("ax","Bx")) is ax,Bx while radix is Bx,ax.
+  reg <- list(feature = data.frame(
+    site = c("ax", "Bx", "Longer Site"), stringsAsFactors = FALSE))
+  got <- .rc_site_registry(reg)
+
+  # Longest first (the registry is matched longest-first, so this must hold).
+  expect_identical(got[[1]], "Longer Site")
+
+  # WHY THERE IS NO BEHAVIOURAL ASSERTION ON THE TIE-BREAK ORDER, and why the
+  # structural guard below is not belt-and-braces but the ONLY detector:
+  #
+  # testthat runs with LC_COLLATE=C. Under C collation `order(x)` and
+  # `order(x, method = "radix")` are BY DEFINITION identical, so no fixture can
+  # tell a radix-pinned sort from a locale-dependent one from inside this
+  # suite. I checked rather than assumed: `expect_identical(got[2:3],
+  # c("Bx","ax"))` PASSES against the un-pinned code, because in C collation
+  # "Bx" sorts before "ax" either way. Outside testthat, in the project's own
+  # en_AU.UTF-8, the same call returns "ax","Bx" - the bug is real, it is
+  # simply invisible here.
+  #
+  # Consequence worth knowing: EVERY locale-collation defect in this codebase
+  # is behaviourally untestable in this suite, so the D4/D7 radix pins can only
+  # be defended structurally. Do not "strengthen" this test by adding an order
+  # assertion - one was tried and was decorative.
+  expect_identical(Sys.getlocale("LC_COLLATE"), "C")
+
+  # Structural guard so the next drift is caught at the source, not by a
+  # behavioural test someone has to think to write. This is the [GENERALIZE]
+  # half: pin the PATTERN, not just the three sites fixed today.
+  src <- readLines(test_path("..", "..", "R", "reconcile.R"), warn = FALSE)
+  # COMMENT only: the default also blanks STR_CONST, which would blank the
+  # `"radix"` this guard matches on and report every correctly-pinned call as
+  # a violation. Comments still must go - a commented-out order() is not code.
+  src <- .st_strip_source_noise(src, "R/reconcile.R", tokens = "COMMENT")
+  hits <- grep("\\border\\(", src, value = TRUE)
+  bad <- hits[!grepl('method\\s*=\\s*"radix"', hits)]
+  # A multi-line order() call carries `method = "radix"` on a continuation
+  # line; join those to the following line before judging.
+  if (length(bad) > 0) {
+    idx <- which(!grepl('method\\s*=\\s*"radix"', hits))
+    bad <- bad[vapply(idx, function(i) {
+      j <- which(src == hits[[i]])[[1]]
+      !grepl('method\\s*=\\s*"radix"', paste(src[j:min(j + 2, length(src))], collapse = " "))
+    }, logical(1))]
+  }
+  expect_identical(bad, character(0),
+    info = "every order() in R/reconcile.R must pin method = 'radix' (D4/D7)")
 })

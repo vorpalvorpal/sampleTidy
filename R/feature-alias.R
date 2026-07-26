@@ -125,13 +125,25 @@
   # missing step - so detection differs: a `feature_alias` row that STILL
   # EXISTS, `uuid_feature IS NULL`, and is named as the `old` value of a
   # COMPLETED "sample re-pointed off the redundant arm" `change_log` row
-  # (byte-matched reason PREFIXES, shared with `merge_identity_aliases()`'s
-  # own repoint, so this one guard catches both producers). A row with no
-  # such trail is an ordinary unconfirmed pending alias - not torn - and is
-  # left alone. Only queried when `feature_alias`/`sample` both exist: the
-  # FK-only fixtures this guard also protects (e.g.
-  # `confirm_analyte_methods()`'s analyte/lab_method/analysis chain) declare
-  # neither table, and this state cannot occur there.
+  # (byte-matched reason prefix `identity alias: sample re-pointed from the
+  # redundant arm %`). A row with no such trail is an ordinary unconfirmed
+  # pending alias - not torn - and is left alone. Only queried when
+  # `feature_alias`/`sample` both exist: the FK-only fixtures this guard also
+  # protects (e.g. `confirm_analyte_methods()`'s analyte/lab_method/analysis
+  # chain) declare neither table, and this state cannot occur there.
+  #
+  # Phase-7b round-3 A5 (CONFIRMED-BY-ORCH, probe3_torn_guard.R; mutation
+  # A-M9-GAP SURVIVED): this arm covers ONLY the F.19 post-pass above. It
+  # CANNOT catch a torn `merge_identity_aliases()` (E.8) run - every E.8
+  # loser has a non-NULL `uuid_feature` by construction
+  # (`.fa_identity_duplicates()` joins `d.uuid_feature = s.uuid_feature`), so
+  # `fa.uuid_feature IS NULL` never matches it, and a prior `OR cl.reason
+  # LIKE 'merge_identity_aliases(): ...'` clause here was unreachable dead
+  # SQL - deleted. That is not a gap: `merge_identity_aliases()`'s own
+  # docstring (`:1118-1121`) documents that an interruption anywhere in its
+  # loop is recoverable by simply re-running, so this guard is not needed
+  # for that producer. Do NOT widen this predicate to try to cover E.8 too -
+  # it would block E.8's own documented recovery-by-re-run.
   if (DBI::dbExistsTable(con, "feature_alias") && DBI::dbExistsTable(con, "sample")) {
     orphaned <- DBI::dbGetQuery(
       con,
@@ -143,10 +155,7 @@
            SELECT 1 FROM change_log cl
             WHERE cl.tbl = 'sample' AND cl.field = 'uuid_feature_alias'
               AND cl.action = 'update' AND cl.old = fa.uuid
-              AND (
-                cl.reason LIKE 'identity alias: sample re-pointed from the redundant arm %'
-                OR cl.reason LIKE 'merge_identity_aliases(): sample re-pointed from redundant identity arm %'
-              )
+              AND cl.reason LIKE 'identity alias: sample re-pointed from the redundant arm %'
          )
       "
     )
@@ -427,6 +436,23 @@ confirm_feature_aliases <- function(uuid_alias, uuid_feature = NULL, confirmed_b
             con, from = out$uuid_alias[[i]], to = out$uuid_self_arm[[i]],
             actor = confirmed_by
           )
+          # Phase-7b round-3 A11 (CONFIRMED-BY-ORCH, probe7_orphan_review.R):
+          # a `sample_collision` row opened EARLIER IN THIS SAME CALL (the
+          # self-collision block above, `uuid_alias = uuid_target =
+          # out$uuid_alias[[i]]`) survives the DELETE below pointing at a
+          # `feature_alias.uuid` that no longer exists - an operator cannot
+          # look it up. Re-key every OPEN review row still referencing the
+          # redundant arm onto the surviving self arm BEFORE the delete, via
+          # the mutation layer (never a raw dbExecute()). This does NOT
+          # interact with the `review_queue_close(kind = "unknown_feature")`
+          # call above (`:948`): that close already ran, inside the
+          # transaction that just committed, filtered to a DIFFERENT kind
+          # (round-2 item 1) - it cannot sweep a `sample_collision` row
+          # either before or after this re-key.
+          .fa_rekey_open_reviews(
+            con, from = out$uuid_alias[[i]], to = out$uuid_self_arm[[i]],
+            actor = confirmed_by
+          )
           db_delete(
             con, "feature_alias", out$uuid_alias[[i]], actor = confirmed_by,
             reason = paste0(
@@ -548,6 +574,66 @@ confirm_feature_aliases <- function(uuid_alias, uuid_feature = NULL, confirmed_b
   invisible(length(samples))
 }
 
+#' Is `alias` an F.19 IDENTITY mapping onto `uuid_feature` (`alias_key ==
+#' .rc_feature_key(feature.name)`), and if so, does a pre-existing DISTINCT
+#' `kind = 'self'` arm already carry that key for the same feature (the arm
+#' this identity mapping would flip rather than become)?
+#'
+#' The one place that computes F.19 identity / self-arm status - shared by
+#' `.fa_confirm_one_alias()`'s non-bounds-only branch (which needs
+#' `is_identity` for the kind-conflict check and `self_arm` to decide flip-
+#' vs-mint) AND the R1 own-name-reachability guard on BOTH branches via
+#' `.fa_target_is_self()` below (Phase-7b round-3 A2: the two guard copies
+#' had drifted because each recomputed this independently).
+#'
+#' `uuid_feature = NA` (a bounds-only call on a still-dangling/pending alias
+#' with no `uuid_feature` of its own yet) is definitionally not identity -
+#' there is no feature to compare the key against.
+#' @keywords internal
+#' @noRd
+.fa_identity_info <- function(con, alias, uuid_feature) {
+  if (is.na(uuid_feature)) {
+    return(list(is_identity = FALSE, self_arm = NA_character_))
+  }
+  feature <- DBI::dbGetQuery(con, "SELECT * FROM feature WHERE uuid = ?", params = list(uuid_feature))
+  if (nrow(feature) == 0 || is.na(feature$name[[1]])) {
+    return(list(is_identity = FALSE, self_arm = NA_character_))
+  }
+  # Phase-7b round-2 item 4: `.rc_feature_key()`, not plain `tolower()` -
+  # Unicode-whitespace-aware, matching how `alias_key` was itself produced.
+  is_identity <- identical(alias$alias_key[[1]], .rc_feature_key(feature$name[[1]]))
+  self_arm <- NA_character_
+  if (is_identity) {
+    arms <- DBI::dbGetQuery(
+      con,
+      "SELECT * FROM feature_alias
+        WHERE uuid_feature = ? AND alias_key = ? AND kind = 'self'
+        ORDER BY uuid",
+      params = list(uuid_feature, alias$alias_key[[1]])
+    )
+    if (nrow(arms) > 0 && !identical(arms$uuid[[1]], alias$uuid[[1]])) {
+      self_arm <- arms$uuid[[1]]
+    }
+  }
+  list(is_identity = is_identity, self_arm = self_arm)
+}
+
+#' The R1 own-name-reachability predicate itself: is `alias` this feature's
+#' `self` arm, already or about to become one - (a) it already carries
+#' `kind == 'self'`, (b) an identity mapping is about to FLIP an existing
+#' self arm (`info$self_arm` resolved), or (c) an identity mapping is about
+#' to BECOME the feature's self arm for the first time (`info$is_identity`
+#' true, no pre-existing self arm found)? `info` comes from
+#' `.fa_identity_info()` - pass ONE call's result in; do not recompute it
+#' here, or the two guard sites (`.fa_confirm_one_alias()`'s bounds-only and
+#' non-bounds-only branches) can drift apart again exactly as they did before
+#' Phase-7b round-3 A2.
+#' @keywords internal
+#' @noRd
+.fa_target_is_self <- function(alias, info) {
+  identical(alias$kind[[1]], "self") || !is.na(info$self_arm) || info$is_identity
+}
+
 #' Confirm exactly one (uuid_alias, uuid_feature) pair. `uuid_feature = NULL`
 #' is the E.4 bounds-only call.
 #' @keywords internal
@@ -585,19 +671,31 @@ confirm_feature_aliases <- function(uuid_alias, uuid_feature = NULL, confirmed_b
     # Phase-7b round-2 item 3: the R1 self-arm bound guard below (Phase-7b
     # item 6) lives further down this function, PAST this branch's own
     # `return()` - so a bounds-only call on a row that already carries
-    # `kind = 'self'` never reached it. Hoisted here: this is case (a) of
-    # that guard's own three-way split (a direct re-confirm of an already-
-    # self row), the only one of the three a bounds-only call can even
-    # reach - cases (b)/(c) both require picking a feature/identity, which a
-    # bounds-only call by construction never does.
-    if (identical(alias$kind[[1]], "self")) {
+    # `kind = 'self'` never reached it. Hoisted here.
+    #
+    # Phase-7b round-3 A2 (CONFIRMED-BY-ORCH, probe5_boundsonly_identity.R):
+    # this used to test ONLY `kind == 'self'`, on the claim that cases (b)/(c)
+    # of the guard below "require picking a feature/identity, which a
+    # bounds-only call by construction never does" - false: the row's OWN
+    # `uuid_feature` is already in hand whenever it has one, so identity IS
+    # computable here too. A mislabelled arm carrying the feature's own name
+    # (`kind` something other than 'self', `uuid_feature` already set to the
+    # matching feature) was reachable by that name BEFORE a bounds-only call
+    # and unreachable AFTER - the exact R1 violation this guard exists to
+    # prevent, just missed on this branch. Now shares `.fa_target_is_self()`
+    # with the non-bounds-only copy at `:764` so the pair cannot drift again;
+    # `alias$uuid_feature[[1]]` may be `NA` for a still-dangling/pending
+    # alias, in which case the shared helper is definitionally FALSE and only
+    # the `kind == 'self'` disjunct (case (a)) can fire, exactly as before.
+    bounds_only_info <- .fa_identity_info(con, alias, alias$uuid_feature[[1]])
+    if (.fa_target_is_self(alias, bounds_only_info)) {
       cli::cli_abort(
         paste0(
           "Cannot set a validity bound on alias '", uuid_alias, "' via a bounds-only ",
-          "call: it is feature '", alias$uuid_feature[[1]], "'s 'self' arm. R1 pins a ",
-          "feature's own-name reachability as unconditional; bounding the self arm would ",
-          "make it unreachable by its own name outside the window, and auto_assign staying ",
-          "TRUE on a self arm means nothing downstream could detect it."
+          "call: it is (or is functionally) feature '", alias$uuid_feature[[1]], "'s 'self' ",
+          "arm. R1 pins a feature's own-name reachability as unconditional; bounding the ",
+          "self arm would make it unreachable by its own name outside the window, and ",
+          "auto_assign staying TRUE on a self arm means nothing downstream could detect it."
         ),
         class = "sampletidy_error"
       )
@@ -666,9 +764,25 @@ confirm_feature_aliases <- function(uuid_alias, uuid_feature = NULL, confirmed_b
   # invent a winner (no "which sample is pre-existing" contract exists for
   # two samples arriving via the same alias) - it opens a review item via the
   # existing `review_queue_add()` and lets the confirmation proceed.
+  #
+  # Phase-7b round-3 A3 (CONFIRMED-BY-ORCH, probe2_sample_collision.R:
+  # 1 -> 2 -> 3 open rows across 3 re-confirms of the identical pair,
+  # `override = TRUE` included): R-11.10 pins re-confirmation as IDEMPOTENT,
+  # but this loop ran on EVERY confirm with no already-open check, so a
+  # routine re-confirm (or an override retry) opened another identical
+  # `sample_collision` row every time. `.fa_self_collision_already_open()`
+  # skips the add when an open row for this exact (uuid_alias, sample pair)
+  # already exists; a genuinely NEW pair (a third sample landing on the same
+  # date, say) still opens its own row.
   self_collisions <- .fa_find_self_collisions(con, uuid_alias)
   if (nrow(self_collisions) > 0) {
     for (i in seq_len(nrow(self_collisions))) {
+      if (.fa_self_collision_already_open(
+        con, uuid_alias,
+        self_collisions$uuid_a[[i]], self_collisions$uuid_b[[i]]
+      )) {
+        next
+      }
       review_queue_add(
         con, kind = "sample_collision", subkind = "same_alias",
         uuid_alias = uuid_alias, uuid_target = uuid_alias,
@@ -710,44 +824,21 @@ confirm_feature_aliases <- function(uuid_alias, uuid_feature = NULL, confirmed_b
   # function that produced alias_key in the first place` - the string is the
   # feature's own name, spelled correctly. Definitionally not a transcription
   # error, and the arm that already carries it is the feature's `self` arm
-  # (R1).
-  #
-  # Phase-7b round-2 item 4: plain `tolower(feature$name[[1]])` diverges from
-  # `alias_key`, which is always produced by `.rc_feature_key()` =
-  # `trimws(tolower(normalise_lab_text(x)), whitespace = "[\\h\\v]")` -
-  # Unicode-whitespace-aware, not just ASCII-lowercasing. A feature name
-  # carrying a trailing non-breaking space (or any other `\h`/`\v` character)
-  # then never matches its own identity alias here: `is_identity` comes back
-  # FALSE, F.19 mints a SECOND arm for a name that IS the feature's own
-  # (mislabelled `transcription_error`, PLAN-15 F.2's defect class re-
-  # entering at the identity boundary), and `.fa_identity_duplicates()`
-  # below is blind to the duplicate it just created for the same reason.
-  # `.rc_feature_key()` is the one true fold; use it here too.
-  is_identity <- !is.na(feature$name[[1]]) &&
-    identical(alias$alias_key[[1]], .rc_feature_key(feature$name[[1]]))
-
-  self_arm <- NA_character_
-  if (is_identity) {
-    if (!is.null(kind)) {
-      cli::cli_abort(
-        paste0(
-          "Alias '", uuid_alias, "' is an identity mapping onto feature '", uuid_feature,
-          "' (alias_key == lower(feature.name)), which is 'self' by construction; ",
-          "passing kind = '", kind, "' alongside it is an error, not an override."
-        ),
-        class = "sampletidy_error"
-      )
-    }
-    arms <- DBI::dbGetQuery(
-      con,
-      "SELECT * FROM feature_alias
-        WHERE uuid_feature = ? AND alias_key = ? AND kind = 'self'
-        ORDER BY uuid",
-      params = list(uuid_feature, alias$alias_key[[1]])
+  # (R1). Computed by `.fa_identity_info()` - the one place this is computed,
+  # shared with the R1 guard below AND with the bounds-only branch's copy of
+  # that guard (Phase-7b round-3 A2).
+  identity_info <- .fa_identity_info(con, alias, uuid_feature)
+  is_identity <- identity_info$is_identity
+  self_arm <- identity_info$self_arm
+  if (is_identity && !is.null(kind)) {
+    cli::cli_abort(
+      paste0(
+        "Alias '", uuid_alias, "' is an identity mapping onto feature '", uuid_feature,
+        "' (alias_key == lower(feature.name)), which is 'self' by construction; ",
+        "passing kind = '", kind, "' alongside it is an error, not an override."
+      ),
+      class = "sampletidy_error"
     )
-    if (nrow(arms) > 0 && !identical(arms$uuid[[1]], uuid_alias)) {
-      self_arm <- arms$uuid[[1]]
-    }
   }
 
   # Phase-7b item 6: R1 pins own-name reachability as UNCONDITIONAL. A bound
@@ -759,10 +850,10 @@ confirm_feature_aliases <- function(uuid_alias, uuid_feature = NULL, confirmed_b
   # re-confirm with bounds); (b) an identity mapping is about to FLIP an
   # existing self arm (`self_arm` resolved above); (c) an identity mapping is
   # about to BECOME the feature's self arm for the first time (`is_identity`
-  # true, no pre-existing self arm found).
+  # true, no pre-existing self arm found). `.fa_target_is_self()` is the same
+  # predicate the bounds-only branch's copy of this guard calls (A2).
   if (length(bounds) > 0) {
-    target_is_self <- identical(alias$kind[[1]], "self") || !is.na(self_arm) || is_identity
-    if (target_is_self) {
+    if (.fa_target_is_self(alias, identity_info)) {
       cli::cli_abort(
         paste0(
           "Cannot set a validity bound on alias '", uuid_alias, "': it is (or is ",
@@ -943,6 +1034,81 @@ confirm_feature_aliases <- function(uuid_alias, uuid_feature = NULL, confirmed_b
     ',
     params = list(uuid_alias, uuid_alias)
   )
+}
+
+#' Is there already an OPEN `sample_collision`/`same_alias` review row for
+#' this exact (uuid_alias, sample pair)? (Phase-7b round-3 A3.) `payload`
+#' carries the pair as JSON (`.rq_row()`'s `diagnostics` -> `payload`
+#' contract) - decoded in R rather than matched with SQL JSON functions, so
+#' this never has to track `.rq_serialise_diagnostics()`'s exact escaping.
+#' `uuid_a`/`uuid_b` are always the `.fa_find_self_collisions()` pair order
+#' (`s2.uuid > s1.uuid`), so a re-confirm on the SAME dangling alias always
+#' re-derives the identical pair and this always matches it - a genuinely
+#' NEW pair (e.g. a third same-date sample landing on the alias) still opens
+#' its own row.
+#' @keywords internal
+#' @noRd
+.fa_self_collision_already_open <- function(con, uuid_alias, uuid_a, uuid_b) {
+  rows <- DBI::dbGetQuery(
+    con,
+    "SELECT payload FROM review_queue
+      WHERE kind = 'sample_collision' AND subkind = 'same_alias'
+        AND uuid_target = ? AND status = 'open'",
+    params = list(uuid_alias)
+  )
+  if (nrow(rows) == 0) {
+    return(FALSE)
+  }
+  for (p in rows$payload) {
+    diag <- tryCatch(jsonlite::fromJSON(p), error = function(e) NULL)
+    if (is.null(diag)) next
+    if (identical(as.character(diag$uuid_sample_a), uuid_a) &&
+        identical(as.character(diag$uuid_sample_b), uuid_b)) {
+      return(TRUE)
+    }
+  }
+  FALSE
+}
+
+#' Re-key every OPEN `review_queue` row still pointing at `from` (via either
+#' `uuid_target` or `uuid_alias`) onto `to`, via the mutation layer
+#' (`db_update()` - never a raw `dbExecute()`, per this file's own CONTRACT
+#' A32 header). (Phase-7b round-3 A11.)
+#'
+#' Called by the F.19 post-pass and by `merge_identity_aliases()` (E.8) -
+#' both repoint-then-delete a redundant identity arm, and both would
+#' otherwise leave any open review row referencing that arm pointing at a
+#' `feature_alias.uuid` that no longer exists once the DELETE runs, making it
+#' unlookupable by an operator. A no-op when no open row references `from`
+#' (the common case).
+#' @keywords internal
+#' @noRd
+.fa_rekey_open_reviews <- function(con, from, to, actor) {
+  rows <- DBI::dbGetQuery(
+    con,
+    "SELECT uuid, uuid_target, uuid_alias FROM review_queue
+      WHERE status = 'open' AND (uuid_target = ? OR uuid_alias = ?)",
+    params = list(from, from)
+  )
+  for (i in seq_len(nrow(rows))) {
+    changes <- list()
+    if (identical(rows$uuid_target[[i]], from)) {
+      changes$uuid_target <- to
+    }
+    if (identical(rows$uuid_alias[[i]], from)) {
+      changes$uuid_alias <- to
+    }
+    if (length(changes) == 0) next
+    db_update(
+      con, "review_queue", rows$uuid[[i]], changes = changes, actor = actor,
+      reason = paste0(
+        "open review row re-keyed off the redundant identity arm '", from,
+        "' onto the surviving self arm '", to,
+        "' before the arm's deletion (Phase-7b round-3 A11)"
+      )
+    )
+  }
+  invisible(nrow(rows))
 }
 
 #' Merge a collision (D5/C14, override = TRUE): re-point the loser's
@@ -1191,6 +1357,14 @@ merge_identity_aliases <- function(db = st_config("live_db"), actor, dry_run = F
               "surviving self arm from '", loser, "' (E.8)"
             )
           )
+
+          # Phase-7b round-3 A11 sibling (SIBLING-GREP: same repoint-then-
+          # delete shape as the F.19 post-pass this fix was written for -
+          # `merge_identity_aliases()` also deletes a redundant identity
+          # arm, and any open review row still pointing at `loser` would
+          # otherwise be orphaned onto a `feature_alias.uuid` this DELETE is
+          # about to remove). Re-key before the delete, same helper.
+          .fa_rekey_open_reviews(con, from = loser, to = winner, actor = actor)
 
           db_delete(
             con, "feature_alias", loser, actor = actor,

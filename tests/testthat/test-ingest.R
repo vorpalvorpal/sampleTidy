@@ -1201,3 +1201,177 @@ test_that("Phase-7b round-2 item 9: ingest_dir() over a differently-named, same-
   expect_equal(count_rows(setup$db_path, "sample"), before_sample)
   expect_equal(count_rows(setup$db_path, "analysis"), before_analysis)
 })
+
+# ---- T1.2 (Robin's ruling): a dry run must make ZERO ingest_file state ----
+#      transitions - a following real run must still ingest for real -------
+
+test_that("T1.2: a dry run over a directory, followed by a REAL run over the SAME directory, actually ingests the rows - pre-fix, the dry run silently poisoned every kept file to 'reconciled', the real run's claimed-only parse filter then skipped them, and n_events_committed stayed 0 forever", {
+  setup <- ingest_test_setup()
+  input_dir <- withr::local_tempdir()
+  esdat_dir <- testthat::test_path("fixtures", "esdat")
+  for (f in c("PROJ_A.ESDAT_XX1234567_0.Chemistry2e.CSV",
+              "PROJ_A.ESDAT_XX1234567_0.Sample2e.CSV",
+              "PROJ_A.ESDAT_XX1234567_0.Header.XML")) {
+    file.copy(file.path(esdat_dir, f), file.path(input_dir, f))
+  }
+
+  dry <- ingest_dir(input_dir, db = setup$db_path, dry_run = TRUE)
+  expect_equal(dry$n_events_committed, 0L)
+  before_states <- ingest_file_states(setup$db_path)
+  # T1.2 main claim: NO ingest_file state transition happened at all under
+  # dry_run - every kept file must still be at the router's own first-cut
+  # state (`claimed`), not `parsed`/`assembled`/`reconciled`.
+  kept <- before_states[!is.na(before_states$filename), ]
+  expect_true(all(kept$state == "claimed"))
+
+  real <- ingest_dir(input_dir, db = setup$db_path)
+  expect_gt(real$n_events_committed, 0L)
+  expect_gt(count_rows(setup$db_path, "sample"), 0)
+  after_states <- ingest_file_states(setup$db_path)
+  expect_true(all(after_states$state %in% c("committed", "archived")))
+})
+
+# ---- T1.2 item 7: a dry run's report must tell the truth about an F.10 ----
+#      guard-blocked event, not report what reconcile alone would propose ---
+
+test_that("T1.2 item 7: dry_run's report matches what a real run over the SAME guard-blocked re-download reports (rows_new = 0, review_items_opened = 1) - pre-fix, the dry-run report said rows_new = 1 (the opposite of the truth F.10 exists to inform)", {
+  setup <- ingest_test_setup()
+  esdat_dir <- testthat::test_path("fixtures", "esdat")
+
+  input_dir1 <- withr::local_tempdir()
+  for (f in c("PROJ_A.ESDAT_XX1234567_0.Chemistry2e.CSV",
+              "PROJ_A.ESDAT_XX1234567_0.Sample2e.CSV",
+              "PROJ_A.ESDAT_XX1234567_0.Header.XML")) {
+    file.copy(file.path(esdat_dir, f), file.path(input_dir1, f))
+  }
+  ingest_dir(input_dir1, db = setup$db_path)
+
+  # A differently-named, same-revision re-download whose one sample row does
+  # not match anything already loaded - the classic F.10 block shape (same
+  # fixture text as the "Phase-7b round-2 item 9" test above).
+  input_dir2 <- withr::local_tempdir()
+  chem2 <- c(
+    paste0(
+      "SampleCode,ChemCode,OriginalChemName,Prefix,Result,Result_Unit,",
+      "Total_or_Filtered,Result_Type,Method_Type,Method_Name,Extraction_Date,",
+      "Analysed_Date,EQL,EQL_Units,Comments,Lab_Qualifier,UCL,LCL"
+    ),
+    paste0(
+      "XX1234567099,,pH Value,,6.90,pH Unit,T,Numeric,pH by PC Titrator,",
+      "EA005P: pH by PC Titrator,,26 May 2025,0.01,pH Unit,,,,"
+    )
+  )
+  samp2 <- c(
+    paste0(
+      "SampleCode,Sampled_Date_Time,Field_ID,Blank1,Depth,Blank2,Matrix_Type,",
+      "Sample_Type,Parent_Sample,Blank3,SDG,Lab_Name,Lab_SampleID,",
+      "Lab_Comments,Lab_Report_Number"
+    ),
+    paste0(
+      "XX1234567099,01 Sep 2025 09:00,T.S01,,,,WATER,Normal,,,,ALSE-Sydney,",
+      "XX1234567099,,XX1234567"
+    )
+  )
+  hdr2 <- c(
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<ESdat xmlns="http://www.escis.com.au/2013/XML" fileType="eLabResultsHeader">',
+    paste0(
+      '  <LabReport Lab_Report_Number="XX1234567" Date_Reported="2025-09-01" ',
+      'Project_ID="PROJ_A" Lab_Name="ALSE-Sydney" Lab_Signatory="J. Signatory">'
+    ),
+    '    <eCoCs>', '      <eCoC COC_Number="COC-0002"/>', '    </eCoCs>',
+    '  </LabReport>', '</ESdat>'
+  )
+  writeLines(chem2, file.path(input_dir2, "PROJ_A.ESDAT_XX1234567_0_REDL.Chemistry2e.CSV"))
+  writeLines(samp2, file.path(input_dir2, "PROJ_A.ESDAT_XX1234567_0_REDL.Sample2e.CSV"))
+  writeLines(hdr2, file.path(input_dir2, "PROJ_A.ESDAT_XX1234567_0_REDL.Header.XML"))
+
+  before_sample <- count_rows(setup$db_path, "sample")
+
+  dry_report <- ingest_dir(input_dir2, db = setup$db_path, dry_run = TRUE)
+  expect_equal(dry_report$rows_new, 0L)
+  expect_equal(dry_report$review_items_opened, 1L)
+  expect_equal(count_rows(setup$db_path, "sample"), before_sample)   # dry run wrote nothing
+
+  # The dry run must not have poisoned the directory either - a REAL run
+  # right after reports the SAME (correct) numbers.
+  real_report <- ingest_dir(input_dir2, db = setup$db_path)
+  expect_equal(real_report$rows_new, 0L)
+  expect_equal(real_report$review_items_opened, 1L)
+  expect_equal(count_rows(setup$db_path, "sample"), before_sample)
+})
+
+# ---- commit-3: a half-retained sibling must not report a false diagnostic -
+
+test_that("commit-3: a retained sibling whose state-transition write fails atomically rolls back its asset row too - the ingest_file row stays quarantined, no orphan asset row is created, and the warning does not claim 'unarchived' for a copy that landed", {
+  setup <- ingest_test_setup()
+  input_dir <- withr::local_tempdir()
+  for (f in list.files(testthat::test_path("fixtures", "esdat"), pattern = "ES2617126", full.names = TRUE)) {
+    file.copy(f, file.path(input_dir, basename(f)))
+  }
+  coa <- file.path(input_dir, "ES2617126_0_COA.pdf")
+  writeBin(charToRaw("fake COA bytes"), coa)
+  h <- hash_file(coa)
+  real_set_state <- ingest_file_set_state
+  testthat::local_mocked_bindings(
+    ingest_file_set_state = function(con, hash, state, reason = NA_character_, ...) {
+      if (identical(hash, h) && identical(state, "archived")) {
+        cli::cli_abort("injected state-transition failure", class = "sampletidy_error")
+      }
+      real_set_state(con, hash, state, reason = reason, ...)
+    }
+  )
+
+  w <- NULL
+  withCallingHandlers(
+    ingest_dir(input_dir, db = setup$db_path),
+    warning = function(c) { w <<- c(w, conditionMessage(c)); invokeRestart("muffleWarning") }
+  )
+
+  con <- DBI::dbConnect(duckdb::duckdb(), setup$db_path, read_only = TRUE)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  asset_row <- DBI::dbGetQuery(con, "SELECT uuid FROM asset WHERE hash = ?", params = list(h))
+  expect_equal(nrow(asset_row), 0)   # the asset insert rolled back WITH the failed transition
+
+  st <- ingest_file_states(setup$db_path)
+  st <- st[!is.na(st$hash) & st$hash == h, ]
+  expect_identical(st$state[[1]], "quarantined")
+
+  last_warning <- tail(w, 1)
+  expect_true(grepl("quarantined", last_warning, fixed = TRUE))
+  expect_false(grepl("unarchived", last_warning, fixed = TRUE))
+})
+
+# ---- commit-5: the F.17 sweep must stay silent for ordinary cruft ---------
+
+test_that("commit-5: ordinary unclaimed cruft (README.md, a photo, a stray notes file) never draws the 'non-tabular lab deliverable' retention warning, on this run or a following one", {
+  setup <- ingest_test_setup()
+  input_dir <- withr::local_tempdir()
+  for (f in list.files(testthat::test_path("fixtures", "esdat"), pattern = "ES2617126", full.names = TRUE)) {
+    file.copy(f, file.path(input_dir, basename(f)))
+  }
+  for (nm in c("site notes.docx", "photo.jpg", "README.md")) {
+    writeLines("junk", file.path(input_dir, nm))
+  }
+
+  grab <- function() {
+    w <- NULL
+    withCallingHandlers(
+      ingest_dir(input_dir, db = setup$db_path),
+      warning = function(c) { w <<- c(w, conditionMessage(c)); invokeRestart("muffleWarning") }
+    )
+    sum(grepl("work order could not be recovered", w, fixed = TRUE))
+  }
+  expect_equal(grab(), 0)
+  expect_equal(grab(), 0)
+})
+
+# ---- commit-9: a [N]-marked duplicate-download COA is still a COA ---------
+
+test_that("commit-9: a [N]-marked duplicate-download COA (the ordinary browser-redownload shape ignore_rule() deliberately passes through) is still typed 'Certificate of analysis', not 'Chemical analysis'", {
+  expect_true(sampleTidy:::.ig_is_coa_deliverable("ES2617126_0_COA[1].pdf"))
+  expect_true(sampleTidy:::.ig_is_coa_deliverable("ES2617126_0_COA.pdf"))
+  expect_true(sampleTidy:::.ig_is_coa_deliverable("ES2617126_0_COA.PDF"))
+  # COC must NOT be widened by this fix (round-2 item 6's separate ruling).
+  expect_false(sampleTidy:::.ig_is_coa_deliverable("ES2617126_0_COC[1].pdf"))
+})

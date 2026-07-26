@@ -406,7 +406,18 @@ test_that("Phase-7b round-2 item 2: confirming the SAME alias to the SAME featur
   on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
   mk_self_collision_fixture(con)
 
+  n_sample_collisions <- function() {
+    nrow(DBI::dbGetQuery(
+      con, "SELECT uuid FROM review_queue WHERE kind = 'sample_collision' AND status = 'open'"
+    ))
+  }
+
   confirm_feature_aliases("fa-9701", "f-0002", confirmed_by = "alice")
+  # Phase-7b round-3 A3 (CONFIRMED-BY-ORCH, probe2_sample_collision.R: 1 -> 2
+  # -> 3 rows across 3 confirms before the fix): R-11.10 pins re-confirmation
+  # idempotent, but the FIRST confirm above legitimately opens exactly one
+  # `sample_collision` row for this alias's own same-date pair.
+  expect_equal(n_sample_collisions(), 1L)
 
   # Once fa-9701 itself carries uuid_feature = f-0002, `.fa_find_collisions()`
   # used to see s-9701's OWN sibling s-9702 (reached through the SAME alias)
@@ -420,6 +431,9 @@ test_that("Phase-7b round-2 item 2: confirming the SAME alias to the SAME featur
   expect_identical(after_alias$uuid_feature[[1]], "f-0002")
   both <- DBI::dbGetQuery(con, "SELECT uuid FROM \"sample\" WHERE uuid IN ('s-9701', 's-9702')")
   expect_equal(nrow(both), 2) # neither sample merged/deleted by the idempotent re-confirm
+  # A3: the SECOND (idempotent) confirm must NOT open a duplicate row for the
+  # identical pair.
+  expect_equal(n_sample_collisions(), 1L)
 
   # override = TRUE on the idempotent re-confirm must not abort or
   # destructively merge the alias's own two samples against each other
@@ -431,6 +445,9 @@ test_that("Phase-7b round-2 item 2: confirming the SAME alias to the SAME featur
   )
   both_after_override <- DBI::dbGetQuery(con, "SELECT uuid FROM \"sample\" WHERE uuid IN ('s-9701', 's-9702')")
   expect_equal(nrow(both_after_override), 2)
+  # A3: a THIRD confirm (override = TRUE included) still must not open a
+  # second row for the same pair.
+  expect_equal(n_sample_collisions(), 1L)
 })
 
 # ---- authority rule + input contract ------------------------------------
@@ -1066,6 +1083,45 @@ test_that("Phase-7b round-2 M1 coverage gap: an identity mapping BECOMING a feat
   expect_true(is.na(after$uuid_feature[[1]])) # the whole call aborted, not just the bound
 })
 
+test_that("Phase-7b round-3 A2: the BOUNDS-ONLY R1 guard must also fire on a mislabelled arm that IS the feature's own name (identity), not only on kind == 'self' - own-name reachability must not go 1 -> 0", {
+  setup <- fa_setup()
+  con <- setup$con
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  # The ONLY arm carrying the feature's own name, mislabelled
+  # 'transcription_error' (the pre-F.19 registry shape merge_identity_
+  # aliases() exists to clean up) - already confirmed (uuid_feature set), so
+  # its OWN uuid_feature is in hand without picking anything. The bounds-only
+  # copy of the R1 guard used to check only `kind == 'self'` and let a bound
+  # land here, making the feature unreachable by its own name.
+  DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix, lon, lat) VALUES
+    ('f-9840', 'Z.MISLABEL9840', 'Z', 'surface', 'water', 150.9840, -33.9840)")
+  DBI::dbExecute(con, "INSERT INTO feature_alias
+    (uuid, uuid_feature, name, alias_key, kind, n_seen, auto_assign,
+     first_seen, last_seen, confirmed_by) VALUES
+    ('fa-9840', 'f-9840', 'Z.MISLABEL9840', 'z.mislabel9840', 'transcription_error', 1, TRUE,
+     TIMESTAMP '2020-01-01 00:00:00', TIMESTAMP '2020-01-01 00:00:00', 'R. Shannon')")
+
+  registry_before <- .rc_load_registry(con)
+  before_n <- nrow(.rc_feature_candidates("Z.MISLABEL9840", as.Date("2026-01-01"), registry_before))
+  expect_equal(before_n, 1L)
+
+  before_row <- feature_alias_row(con, "fa-9840")
+  err <- tryCatch(
+    confirm_feature_aliases(
+      "fa-9840", confirmed_by = "alice", date_end = as.Date("2021-01-01")
+    ),
+    error = function(e) e
+  )
+  expect_s3_class(err, "sampletidy_error")
+  after_row <- feature_alias_row(con, "fa-9840")
+  expect_identical(after_row, before_row) # nothing written
+
+  registry_after <- .rc_load_registry(con)
+  after_n <- nrow(.rc_feature_candidates("Z.MISLABEL9840", as.Date("2026-01-01"), registry_after))
+  expect_equal(after_n, 1L) # still reachable by its own name
+})
+
 test_that("Phase-7b round-2 M4 coverage gap: re-confirming a row that IS ALREADY its own feature's self arm (no kind, no bound - a plain idempotent re-confirm) never deletes it", {
   setup <- fa_setup()
   con <- setup$con
@@ -1093,6 +1149,43 @@ test_that("Phase-7b round-2 M4 coverage gap: re-confirming a row that IS ALREADY
   expect_equal(nrow(after), 1) # the self arm must survive - never deleted
   expect_identical(after$confirmed_by[[1]], "alice")
   expect_identical(after$kind[[1]], "self")
+})
+
+test_that("Phase-7b round-3 A11: an open sample_collision row on a redundant identity arm is re-keyed onto the surviving self arm before the F.19 post-pass deletes it, not left orphaned", {
+  setup <- fa_setup()
+  con <- setup$con
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  DBI::dbExecute(con, "INSERT INTO feature (uuid,name,site,flow,matrix,lon,lat) VALUES
+    ('f-9850','Z.ORPH9850','Z','surface','water',150.9850,-33.9850)")
+  DBI::dbExecute(con, "INSERT INTO feature_alias
+    (uuid,uuid_feature,name,alias_key,kind,n_seen,auto_assign,first_seen,last_seen,confirmed_by) VALUES
+    ('fa-9850-self','f-9850','Z.ORPH9850','z.orph9850','self',0,TRUE,
+     TIMESTAMP '2020-01-01 00:00:00',TIMESTAMP '2020-01-01 00:00:00',NULL),
+    ('fa-9850-red',NULL,'Z.ORPH9850','z.orph9850','pending',0,FALSE,
+     TIMESTAMP '2026-01-01 00:00:00',TIMESTAMP '2026-01-01 00:00:00',NULL)")
+  DBI::dbExecute(con, "INSERT INTO \"sample\"
+    (uuid,uuid_feature_alias,uuid_project,date,datetime,organisation) VALUES
+    ('s-9850a','fa-9850-red','p-0001',TIMESTAMP '2026-02-01 00:00:00',TIMESTAMP '2026-02-01 09:00:00','ALS'),
+    ('s-9850b','fa-9850-red','p-0001',TIMESTAMP '2026-02-01 00:00:00',TIMESTAMP '2026-02-01 14:00:00','ACIRL')")
+
+  confirm_feature_aliases("fa-9850-red", "f-9850", confirmed_by = "alice")
+
+  # the redundant arm is gone (F.19 post-pass, mirroring probe7).
+  expect_equal(
+    nrow(DBI::dbGetQuery(con, "SELECT 1 FROM feature_alias WHERE uuid = 'fa-9850-red'")), 0
+  )
+
+  open_rq <- review_queue(con, status = "open")
+  collision <- open_rq[open_rq$kind == "sample_collision", , drop = FALSE]
+  expect_equal(nrow(collision), 1) # the review item still exists...
+
+  # ...and no longer points at the deleted alias - it was re-keyed onto the
+  # surviving self arm, so an operator can still look it up.
+  expect_false("fa-9850-red" %in% collision$uuid_alias)
+  expect_false("fa-9850-red" %in% collision$uuid_target)
+  expect_true(all(collision$uuid_alias == "fa-9850-self"))
+  expect_true(all(collision$uuid_target == "fa-9850-self"))
 })
 
 # ======================================================================
@@ -1738,16 +1831,27 @@ test_that("R-15.34: confirm_analyte_methods() succeeds on a method WITH dependen
   expect_true(all(after_deps$uuid_lab == "lm-9401")) # every dependent analysis still points at the SAME lab_method
 })
 
-test_that("R-11.10/R-11.11 (A55): confirmed_by carries NO default value in either function's real parsed signature", {
+test_that("R-11.10/R-11.11/E.8 (A55): the mandatory actor argument carries NO default value in any producer's real parsed signature", {
   # Assert on the real parsed signature via formals() rather than a source
   # regex: a regex capturing `([^)]*)` cannot cross a `)`, so it truncates at
   # the first close-paren inside the argument list (e.g. a `db = st_config()`
   # or a future `date_start = as.Date(NA)` default) and silently stops
   # checking every argument after that point - an argument-order-dependent
   # guard, which is the defect this replaces (phase5-delta-to-apply-r5.md A1).
-  for (fn in list(confirm_feature_aliases, confirm_analyte_methods)) {
-    expect_true(is.function(fn))
-    expect_true("confirmed_by" %in% names(formals(fn)))
-    expect_true(identical(formals(fn)$confirmed_by, quote(expr = )))
+  #
+  # Phase-7b round-3 A12 (CONFIRMED-BY-ORCH, mutation A-M10-GAP SURVIVED):
+  # this loop used to cover only the two `confirm_*` functions, so giving
+  # `merge_identity_aliases()`'s own mandatory `actor` (PLAN-15 B-15.E8,
+  # docstring `:1124-1126`) a default would survive the whole suite - added
+  # here, keyed to its own argument name (`actor`, not `confirmed_by`).
+  producers <- list(
+    list(fn = confirm_feature_aliases, arg = "confirmed_by"),
+    list(fn = confirm_analyte_methods, arg = "confirmed_by"),
+    list(fn = merge_identity_aliases, arg = "actor")
+  )
+  for (p in producers) {
+    expect_true(is.function(p$fn))
+    expect_true(p$arg %in% names(formals(p$fn)))
+    expect_true(identical(formals(p$fn)[[p$arg]], quote(expr = )))
   }
 })

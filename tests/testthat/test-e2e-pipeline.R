@@ -399,7 +399,16 @@ test_that("R-10.6: NAMESPACE exports equal the CONTRACT-pinned public API exactl
     # `@export` but deliberately did NOT run document(), leaving roxygen
     # claiming an export the package did not deliver and man/ stale -- this
     # closes that half-state rather than reverting it to internal.
-    "merge_identity_aliases"
+    "merge_identity_aliases",
+    # Phase-7b round 3, added 2026-07-26 (Robin's ruling) and added to
+    # CONTRACT.md's public-API list in the same change. EXPORTED because round 3
+    # found that NOTHING in the package could close a `sample_collision` review
+    # row: `review_queue_close()` is internal and its single production call
+    # site filters to `kind = "unknown_feature"`, while the only review-facing
+    # exports were read-only. The open queue therefore grew monotonically and
+    # never drained. A57 puts resolution in the operator's hands, so the close
+    # path has to be on the public surface with `change_log` provenance.
+    "resolve_review"
   )
   actual <- getNamespaceExports("sampleTidy")
   expect_setequal(actual, pinned)

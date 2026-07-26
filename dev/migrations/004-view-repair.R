@@ -37,7 +37,16 @@
 # `v_feature_dates` - PLAN-15's own audit found exactly ONE date-referencing
 # view, and it is not one of these five; F.11, not F.12, owns it).
 #
-# NEVER invoked by package code (A50) - an operator runs it directly, e.g.:
+# NEVER invoked by package code (A50) - an operator runs it directly, from an
+# R session where the sampleTidy PACKAGE HAS ALREADY BEEN LOADED VIA
+# `devtools::load_all(".")` (Robin's ruling 4, Phase 7b round 3, 2026-07-26)
+# - REQUIRED, not merely convenient: `st_connect()` (R/db-connect.R) and
+# `db_transaction()` (R/mutate.R), both used below, are internal
+# (unexported) package symbols, invisible to an unqualified call once this
+# file is `sys.source()`d against a merely-INSTALLED package (see
+# 003-alias-date-bounds.R's file header for the full reproduction and the
+# "001/002 already share this convention" precedent - the same reasoning
+# applies here verbatim). `devtools::load_all(".")` FIRST, then:
 #   env <- new.env()
 #   sys.source("dev/migrations/004-view-repair.R", envir = env)
 #   env$mig004_run(db = "/path/to/monitoring.duckdb",
@@ -366,10 +375,58 @@ mig004_backup <- function(db, snapshot_dir, .now = NULL) {
   )
 )
 
-#' The SUCCESS-property verify gate (Phase 7b round 2, item 1) - asserts the
-#' 5 rebuilt views actually exist, each carries its restored column set, and
-#' `v_measurement_epa`'s row count matches R-15.35's own independently
-#' computed base-table oracle
+#' Independently-computed base-table row count for one of the 5 repaired
+#' views (Phase 7b round 3, S1/S2/S3)
+#'
+#' NOT a copy of the view's own SQL (S3's finding on the old EPA-only
+#' oracle: hand-copying the view's FROM/JOIN clause cannot detect a defect
+#' made identically in both places). Computed by reading each base table
+#' with a plain, unjoined `SELECT` and then intersecting uuid sets in R -
+#' sharing neither the view's JOIN topology nor (for the masked views) its
+#' literal case-form (`toupper()` here is independent of DuckDB's own
+#' `UPPER()`). A JOIN-topology bug in the view (a dropped/added join, a
+#' wrong join column) or a re-introduced case-mismatch literal (the exact
+#' F.12(a) defect this migration exists to fix) is therefore caught here
+#' even if the SAME mistake were made in this function's own query, because
+#' the query shapes cannot share that mistake - they are not the same shape.
+#'
+#' @param con an open DBI connection.
+#' @param variant_literal the UPPERCASE mask variant to filter on (e.g.
+#'   `"EPA"`), or `NULL` for `v_measurement` (no mask filter - every
+#'   `analysis` row reachable through a live sample/feature_alias/lab_method
+#'   chain).
+#' @return integer(1).
+.mig004_base_n <- function(con, variant_literal = NULL) {
+  analysis_tbl <- DBI::dbGetQuery(con, "SELECT uuid, uuid_sample, uuid_lab FROM analysis")
+  sample_tbl <- DBI::dbGetQuery(con, "SELECT uuid, uuid_feature_alias FROM \"sample\"")
+  alias_tbl <- DBI::dbGetQuery(con, "SELECT uuid, uuid_feature FROM feature_alias")
+  lab_method_tbl <- DBI::dbGetQuery(con, "SELECT uuid FROM lab_method")
+
+  # Every view's JOIN to feature_alias/feature is INNER, so an alias with no
+  # resolved uuid_feature (a dangling/pending alias) can never be reached by
+  # any of the 5 views - excluded here too, rather than only relying on
+  # `%in%` treating NA as "matches nothing" for uuid_feature_alias itself.
+  alias_resolved <- alias_tbl$uuid[!is.na(alias_tbl$uuid_feature)]
+
+  sample_ok <- sample_tbl$uuid[sample_tbl$uuid_feature_alias %in% alias_resolved]
+  keep <- analysis_tbl$uuid_sample %in% sample_ok &
+    analysis_tbl$uuid_lab %in% lab_method_tbl$uuid
+
+  if (!is.null(variant_literal)) {
+    mask_tbl <- DBI::dbGetQuery(con, "SELECT uuid_feature, variant FROM feature_mask")
+    masked_features <- unique(mask_tbl$uuid_feature[toupper(mask_tbl$variant) == variant_literal])
+    masked_aliases <- alias_tbl$uuid[alias_tbl$uuid_feature %in% masked_features]
+    sample_masked <- sample_tbl$uuid[sample_tbl$uuid_feature_alias %in% masked_aliases]
+    keep <- keep & (analysis_tbl$uuid_sample %in% sample_masked)
+  }
+
+  as.integer(sum(keep))
+}
+
+#' The SUCCESS-property verify gate (Phase 7b round 2, item 1; extended
+#' Phase 7b round 3, S1/S2/S3/S4) - asserts the 5 rebuilt views actually
+#' exist, each carries its restored column set, and EACH view's row count
+#' matches an independently computed base-table oracle
 #'
 #' `mig004_verify()` alone is BLIND to this migration's own reason for
 #' being: it compares only the 6 base tables 004 never writes, so a run
@@ -380,15 +437,42 @@ mig004_backup <- function(db, snapshot_dir, .now = NULL) {
 #' the whole migration (including the 1004 marker) exactly like a
 #' `mig004_verify()` failure does.
 #'
+#' S1 (Phase 7b round 3): the count oracle used to cover `v_measurement_epa`
+#' ONLY, so re-introducing the F.12(a) case defect on
+#' `v_measurement_gas_report`/`v_measurement_long` (or `_old`) committed as
+#' `status = "migrated"` WITH the 1004 marker, and was thereafter permanently
+#' unrepairable (the marker makes every later run return
+#' `already_migrated`). Every one of the 5 views now gets the same oracle.
+#' S4: this loop now iterates `.mig004_five_views` (the ONE canonical view
+#' list), not `names(.mig004_expected_view_cols)` - a view added there and
+#' forgotten in `.mig004_expected_view_cols` is now a hard internal-
+#' consistency failure instead of being silently skipped.
+#'
+#' S2: a count comparison alone passes vacuously at `0 == 0` on a
+#' variant-free database - indistinguishable from a correctly-empty variant.
+#' `.mig004_base_n() == 0` is therefore now a HARD FAILURE, not a pass, for
+#' every one of the 5 views (mirrors R-15.35's own fixture, which plants a
+#' real, non-zero row for every variant precisely so this gate can
+#' discriminate).
+#'
 #' @param con an open DBI connection, inside the caller's transaction (so it
 #'   sees `.mig004_rebuild_views()`'s own writes).
 #' @return invisible(TRUE) if every check holds; throws (`sampletidy_error`)
 #'   otherwise.
 .mig004_verify_views <- function(con) {
   bad_views <- character(0)
-  for (v in names(.mig004_expected_view_cols)) {
+  for (v in .mig004_five_views) {
+    expected_cols <- .mig004_expected_view_cols[[v]]
+    if (is.null(expected_cols)) {
+      cli::cli_abort(
+        "004-view-repair internal error: {.val {v}} is listed in
+         .mig004_five_views but has no entry in .mig004_expected_view_cols -
+         the two lists have drifted apart (S4).",
+        class = "sampletidy_error"
+      )
+    }
     cols <- tryCatch(DBI::dbListFields(con, v), error = function(e) NULL)
-    if (is.null(cols) || !setequal(cols, .mig004_expected_view_cols[[v]])) {
+    if (is.null(cols) || !setequal(cols, expected_cols)) {
       bad_views <- c(bad_views, v)
     }
   }
@@ -400,25 +484,41 @@ mig004_backup <- function(db, snapshot_dir, .now = NULL) {
     )
   }
 
-  # R-15.35's own oracle: v_measurement_epa's row count equals an
-  # independently computed base-table count for the case-insensitive EPA
-  # filter (mirrors test-migration-004.R's own assertion, so a rebuild that
-  # silently regresses to the case-SENSITIVE filter - or to no rows at all -
-  # cannot commit the 1004 marker).
-  epa_view_n <- DBI::dbGetQuery(con, "SELECT COUNT(*) n FROM v_measurement_epa")$n
-  epa_base_n <- DBI::dbGetQuery(con, "
-    SELECT COUNT(*) n
-    FROM analysis a
-    JOIN \"sample\" s ON a.uuid_sample = s.uuid
-    JOIN feature_alias fa ON fa.uuid = s.uuid_feature_alias
-    JOIN feature f ON fa.uuid_feature = f.uuid
-    JOIN feature_mask fm ON fm.uuid_feature = f.uuid AND UPPER(fm.variant) = 'EPA'
-  ")$n
-  if (!identical(as.integer(epa_view_n), as.integer(epa_base_n))) {
+  bad_counts <- character(0)
+  zero_base <- character(0)
+  for (v in .mig004_five_views) {
+    # `[[` on a NAMED list errors ("subscript out of bounds") on a name that
+    # is not present - unlike `$`, which would silently return NULL - so
+    # v_measurement (absent from .mig004_variant_literal by design: it has
+    # no mask filter) must be looked up defensively, not with a bare `[[`.
+    literal <- if (v %in% names(.mig004_variant_literal)) {
+      .mig004_variant_literal[[v]]
+    } else {
+      NULL
+    }
+    view_n <- as.integer(DBI::dbGetQuery(con, sprintf("SELECT COUNT(*) n FROM %s", v))$n)
+    base_n <- .mig004_base_n(con, literal)
+    if (identical(base_n, 0L)) {
+      # S2: 0 == 0 must never pass silently - it is indistinguishable from a
+      # rebuild that regressed to matching nothing at all.
+      zero_base <- c(zero_base, v)
+    } else if (!identical(view_n, base_n)) {
+      bad_counts <- c(bad_counts, sprintf("%s (view=%s, base=%s)", v, view_n, base_n))
+    }
+  }
+  if (length(zero_base) > 0) {
     cli::cli_abort(
-      "004-view-repair verify failed: v_measurement_epa row count
-       ({epa_view_n}) does not match the R-15.35 base-table oracle
-       ({epa_base_n}).",
+      "004-view-repair verify failed: the independent base-table oracle
+       returned ZERO for {paste(zero_base, collapse = ', ')} - a zero count
+       cannot be distinguished from a rebuild that silently regressed to
+       matching nothing, so it is refused rather than passed (S2).",
+      class = "sampletidy_error"
+    )
+  }
+  if (length(bad_counts) > 0) {
+    cli::cli_abort(
+      "004-view-repair verify failed: view row count does not match its
+       independent base-table oracle for {paste(bad_counts, collapse = '; ')}.",
       class = "sampletidy_error"
     )
   }
@@ -531,40 +631,46 @@ mig004_run <- function(db, snapshot_dir, dry_run = FALSE, .now = NULL) {
       .mig004_ensure_icu(con)
       counts_before <- mig004_counts_checksum(con)
 
-      DBI::dbExecute(con, "BEGIN TRANSACTION")
+      # S5 (Phase 7b round 3): this used to be a raw
+      # `DBI::dbExecute(con, "BEGIN TRANSACTION")` / manual ROLLBACK/COMMIT,
+      # issued OUTSIDE its own tryCatch - precisely the shape round-2 already
+      # removed from `ensure_schema()` (R/db-schema.R) and from
+      # `mig003_run()` (which explicitly documents why a raw BEGIN "would
+      # break this"). Consequences it left live: (a) a failure in the BEGIN
+      # itself was unhandled; (b) the raw BEGIN did not set the
+      # mutation-layer's own transaction tag, so the moment
+      # `.mig004_rebuild_views()` (or anything called from inside this body)
+      # grows a `db_update()`/`db_append()` call, DuckDB would raise "cannot
+      # start a transaction within a transaction" (reproduced against
+      # `db_transaction()`). Replaced with `db_transaction()` itself,
+      # mirroring `mig003_run()`'s own body exactly - it opens/commits/rolls
+      # back the ONE transaction and participates rather than nests if `con`
+      # already carries an open mutation-layer transaction.
+      body <- db_transaction(con, function(con) {
+        .mig004_rebuild_views(con)
 
-      body <- tryCatch(
-        {
-          .mig004_rebuild_views(con)
+        DBI::dbExecute(
+          con, "INSERT INTO schema_version (version, applied_at) VALUES (?, ?)",
+          params = list(.mig004_marker_version, recorded_at)
+        )
 
-          DBI::dbExecute(
-            con, "INSERT INTO schema_version (version, applied_at) VALUES (?, ?)",
-            params = list(.mig004_marker_version, recorded_at)
-          )
+        # ---- hard verify gate, before COMMIT (read-your-own-writes).
+        # BOTH halves must pass (see the file header): mig004_verify()
+        # proves the base tables are untouched (SAFETY); .mig004_verify_views()
+        # proves the 5 views were actually repaired (SUCCESS) - item 1. The
+        # marker INSERT above stays before this gate, matching sibling
+        # migration 003's own order (ALTER/flip/bounds, then INSERT, then
+        # verify) - order does not affect correctness here, since the
+        # whole body runs inside one transaction and ANY error before
+        # COMMIT (including one thrown by either verify step) rolls back
+        # everything already written, marker included. ----
+        counts_after <- mig004_counts_checksum(con)
+        mig004_verify(counts_before, counts_after)
+        .mig004_verify_views(con)
 
-          # ---- hard verify gate, before COMMIT (read-your-own-writes).
-          # BOTH halves must pass (see the file header): mig004_verify()
-          # proves the base tables are untouched (SAFETY); .mig004_verify_views()
-          # proves the 5 views were actually repaired (SUCCESS) - item 1. The
-          # marker INSERT above stays before this gate, matching sibling
-          # migration 003's own order (ALTER/flip/bounds, then INSERT, then
-          # verify) - order does not affect correctness here, since the
-          # whole body runs inside one transaction and ANY error before
-          # COMMIT (including one thrown by either verify step) rolls back
-          # everything already written, marker included. ----
-          counts_after <- mig004_counts_checksum(con)
-          mig004_verify(counts_before, counts_after)
-          .mig004_verify_views(con)
+        list(counts_after = counts_after)
+      })
 
-          list(counts_after = counts_after)
-        },
-        error = function(e) {
-          try(DBI::dbExecute(con, "ROLLBACK"), silent = TRUE)
-          stop(e)
-        }
-      )
-
-      DBI::dbExecute(con, "COMMIT")
       logf("Verify passed: base tables unchanged; views rebuilt and restored.")
 
       list(counts_before = counts_before, counts_after = body$counts_after)

@@ -38,11 +38,18 @@
 #'
 #' @param con an open read-write DBI connection.
 #' @param routed the tibble returned by [route_files()].
+#' @param dry_run T1.2 (Robin's ruling): a dry run makes NO `ingest_file`
+#'   state transitions at all, not just no core-table writes. Parsing itself
+#'   still runs (so a dry-run preview can be built), but the `parsed`/
+#'   `failed` transition below is skipped - the file stays at whatever state
+#'   [route_files()] left it in (`claimed`), so the NEXT run (dry or real)
+#'   parses it again instead of `.ig_parse_claimed()`'s own `claimed`-only
+#'   filter silently skipping it forever (the T1.2 defect).
 #' @return `list(<hash> = list(ir = list(results, samples), report, meta))`,
 #'   one entry per successfully parsed file.
 #' @keywords internal
 #' @noRd
-.ig_parse_claimed <- function(con, routed) {
+.ig_parse_claimed <- function(con, routed, dry_run = FALSE) {
   parsed <- list()
 
   claimed_idx <- which(routed$state == "claimed")
@@ -80,11 +87,15 @@
     )
 
     if (inherits(out, "error")) {
-      ingest_file_set_state(con, hash, "failed", conditionMessage(out))
+      if (!dry_run) {
+        ingest_file_set_state(con, hash, "failed", conditionMessage(out))
+      }
       next
     }
 
-    ingest_file_set_state(con, hash, "parsed")
+    if (!dry_run) {
+      ingest_file_set_state(con, hash, "parsed")
+    }
     parsed[[hash]] <- list(
       ir = list(results = out$results, samples = out$samples),
       report = out$report,
@@ -98,10 +109,12 @@
 # ---- assemble-state application -----------------------------------------
 
 #' Apply every `assemble_events()` state-transition row (R-9.5 step d)
+#' @param dry_run T1.2 (Robin's ruling): skip every `ingest_file` write - a
+#'   dry run leaves no state trace for a later run to trip over.
 #' @keywords internal
 #' @noRd
-.ig_apply_assemble_states <- function(con, states) {
-  if (nrow(states) == 0) {
+.ig_apply_assemble_states <- function(con, states, dry_run = FALSE) {
+  if (nrow(states) == 0 || dry_run) {
     return(invisible(NULL))
   }
   for (i in seq_len(nrow(states))) {
@@ -115,11 +128,23 @@
 #' Reconcile and (unless `dry_run`) commit every assembled event
 #' (R-9.5 step e)
 #'
-#' For each event: reconciles (read-only) via [reconcile_event()], moves the
-#' event's kept files from `assembled` to `reconciled` (guarded - only a
-#' file currently in state `assembled` is transitioned), then commits via
-#' [commit_event()] unless `dry_run` (in which case reconciliation still
-#' happens but nothing is committed).
+#' For each event: reconciles (read-only) via [reconcile_event()], then
+#' either commits via [commit_event()] (real run) or, under `dry_run`,
+#' previews the F.10 guard verdict read-only via
+#' [.ct_reingest_guard_preview()] (T1.2 item 7) - so the report's
+#' `rows_new`/`review_items_opened` tell the truth about what a following
+#' real run would do, instead of assuming reconcile's proposed `clean` rows
+#' would all commit.
+#'
+#' T1.2 (Robin's ruling): a dry run makes ZERO `ingest_file` state
+#' transitions, full stop - not just no core-table writes. Before this fix,
+#' the event's kept files were moved `assembled -> reconciled`
+#' UNCONDITIONALLY (even under `dry_run`), which permanently poisoned the
+#' input directory: a following REAL run found those files already past
+#' `claimed` and silently ingested nothing (reproduced, probe P7,
+#' `dev/tdd-run/probes/p7-r3-commit-probes.R`). The `reconciled` transition
+#' (and the error-path `failed` transition below) are now both skipped
+#' entirely when `dry_run`.
 #'
 #' @return a list with `committed_any` (logical), `n_events`, `n_committed`,
 #'   `events_failed`, and `tally` (named list of row/review counts summed
@@ -148,16 +173,32 @@
       {
         resolved <- reconcile_event(event, con)
 
-        for (h in kept_hashes) {
-          row <- DBI::dbGetQuery(con, "SELECT state FROM ingest_file WHERE hash = ?", params = list(h))
-          if (nrow(row) > 0 && identical(row$state[[1]], "assembled")) {
-            ingest_file_set_state(con, h, "reconciled")
+        if (!dry_run) {
+          for (h in kept_hashes) {
+            row <- DBI::dbGetQuery(con, "SELECT state FROM ingest_file WHERE hash = ?", params = list(h))
+            if (nrow(row) > 0 && identical(row$state[[1]], "assembled")) {
+              ingest_file_set_state(con, h, "reconciled")
+            }
           }
         }
 
         commit_result <- NULL
         if (!dry_run) {
           commit_result <- commit_event(event, resolved, con)
+        } else {
+          # T1.2 item 7: preview the F.10 verdict read-only (never writes),
+          # mirroring commit_event()'s own guard/find-or-create logic exactly
+          # (R/commit.R's .ct_reingest_guard_preview()) - so a dry run's
+          # report is not silently derived from resolved$clean/review (what
+          # reconcile WOULD have committed), which lies for a guard-blocked
+          # event (reproduced, probe P6: dry run reported rows_new = 1 where
+          # a real run over the identical fixture reports rows_new = 0).
+          preview <- .ct_reingest_guard_preview(con, event, resolved)
+          commit_result <- if (isTRUE(preview$blocked)) {
+            list(blocked = TRUE, n_review = preview$n_review)
+          } else {
+            NULL
+          }
         }
 
         list(resolved = resolved, commit_result = commit_result)
@@ -168,8 +209,10 @@
     if (inherits(step, "error")) {
       events_failed <- events_failed + 1L
       msg <- conditionMessage(step)
-      for (h in kept_hashes) {
-        ingest_file_set_state(con, h, "failed", msg)
+      if (!dry_run) {
+        for (h in kept_hashes) {
+          ingest_file_set_state(con, h, "failed", msg)
+        }
       }
       cli::cli_warn(
         "ingest_dir(): event containing {.val {kept_hashes}} failed during
@@ -186,8 +229,10 @@
     # invisible(NULL), so a blocked event's tally was derived from
     # resolved$clean - what reconcile WOULD have committed, not what
     # commit_event() actually wrote - and committed_any/n_committed were set
-    # unconditionally.
-    blocked <- !dry_run && isTRUE(step$commit_result$blocked)
+    # unconditionally. T1.2 item 7: under dry_run, `commit_result` now comes
+    # from the read-only preview above (not NULL), so the SAME `isTRUE(...)`
+    # test applies uniformly to both real and previewed verdicts.
+    blocked <- isTRUE(step$commit_result$blocked)
 
     skipped <- resolved$skipped
     if (nrow(skipped) > 0 && "reason" %in% names(skipped)) {
@@ -282,14 +327,22 @@
 #' the one retained kind PLAN-15 F.17 + Robin's ruling name an explicit
 #' `asset.type` for? Real-corpus shape "<work order>_<revision>_COA.<ext>"
 #' (e.g. "ES2617126_0_COA.pdf"): a literal `_COA.` token, case-insensitive,
-#' immediately before the extension. Deliberately narrow - `.ig_retain_
+#' immediately before the extension, with an OPTIONAL `[N]` duplicate-
+#' download marker (round-3 item 9) - `ignore_rule()` (R/router.R)
+#' DELIBERATELY passes a `[N]` browser-redownload twin through rather than
+#' filtering it, so hash dedup (not filename guesswork) handles the ordinary
+#' case where both copies are present; but when the `[1]` copy is the ONLY
+#' copy on disk (the original was moved/deleted between downloads), it must
+#' still be recognised as a COA, not silently typed `"Chemical analysis"`
+#' (reproduced: `ES2617126_0_COA[1].pdf` was typed `"Chemical analysis"`
+#' pre-fix). Otherwise deliberately narrow - `.ig_retain_
 #' siblings()` also retains COC/QC/QCI PDFs and `XTAB.XLS`, none of which are
 #' COAs; widening `"Certificate of analysis"` to cover them needs a separate
 #' ruling (see the round-2 report's enumerated list), not a guess here.
 #' @keywords internal
 #' @noRd
 .ig_is_coa_deliverable <- function(filename) {
-  grepl("(?i)_coa\\.[a-z0-9]+$", filename, perl = TRUE)
+  grepl("(?i)_coa(\\[[0-9]+\\])?\\.[a-z0-9]+$", filename, perl = TRUE)
 }
 
 #' @param con an open read-write DBI connection (already past
@@ -303,8 +356,24 @@
 .ig_retain_siblings <- function(con, routed) {
   retained <- character(0)
 
+  # commit-5 (round-3): `state == "quarantined" & reason == "unclaimed"`
+  # matches ANY file no adapter claims - `ignore_rule()` (R/router.R) only
+  # diverts bak/tmp/ds_store/.DS_Store/zero-byte files, so an ordinary
+  # README.md, a photo.jpg or a stray notes.docx in the input directory each
+  # drew the loop's "looks like a non-tabular lab deliverable" warning below,
+  # every run, forever (nothing removes an un-retainable file from the input
+  # directory) - reproduced, probe P3b: 3 cruft files, 3 warnings on run 1,
+  # 3 again on run 2. Gate the SELECTION itself on a positive deliverable
+  # shape (the COA/COC/QC/QCI/XTAB.XLS kinds this function's own roxygen
+  # enumerates), not merely on "unclaimed" - a genuine deliverable always
+  # carries one of these tokens (verified against the real corpus: every one
+  # of the 19 real quarantined files matches), so this narrows the loop to
+  # files actually worth naming in a warning, silencing it for ordinary
+  # cruft instead of retraining an operator to ignore the warning that
+  # matters.
   idx <- which(routed$state == "quarantined" &
-    !is.na(routed$reason) & routed$reason == "unclaimed")
+    !is.na(routed$reason) & routed$reason == "unclaimed" &
+    grepl("(?i)_(coa|coc|qc|qci|xtab)\\b", routed$filename, perl = TRUE))
   if (length(idx) == 0) {
     return(retained)
   }
@@ -370,9 +439,27 @@
             } else {
               "Chemical analysis"
             }
-            archive_file(con, path, hash, event = list(work_order = work_order),
-                         type = sibling_type)
-            ingest_file_set_state(con, hash, "archived", reason = "retained_sibling", reset = TRUE)
+            # commit-3 (round-3): `archive_file()` (writes the `asset` row)
+            # and `ingest_file_set_state()` (the terminal transition) used to
+            # run as two independent DB writes with no `db_transaction()`
+            # around them. If the transition failed AFTER the archive write,
+            # the `asset` row landed but the `ingest_file` row stayed
+            # `quarantined` forever (the next run's `file.exists(path) ==
+            # FALSE` `next`s before it can repair the state) - reproduced,
+            # probe P3. Wrapping both writes in ONE `db_transaction()` makes
+            # them land or roll back together (the byte COPY inside
+            # `archive_file()` itself stays outside transaction scope, a
+            # separate, deliberately-deferred issue - see the byte-copy note
+            # in this file's header). This inner `db_transaction()` detects
+            # the OUTER one already tagging `con` (this whole function runs
+            # inside `with_db_write()`'s connection, not its own nested
+            # transaction) and just runs inline, same as `.ct_ensure_project()`
+            # (R/commit.R) already relies on for `add_project()`.
+            db_transaction(con, function(con) {
+              archive_file(con, path, hash, event = list(work_order = work_order),
+                           type = sibling_type)
+              ingest_file_set_state(con, hash, "archived", reason = "retained_sibling", reset = TRUE)
+            })
             hash
           }
         }
@@ -380,9 +467,10 @@
       error = function(e) {
         cli::cli_warn(
           "ingest_dir(): failed to retain non-tabular deliverable
-           {.path {path}}: {conditionMessage(e)} - it stays quarantined,
-           unarchived, and in the input directory; already-committed events
-           in this run are unaffected."
+           {.path {path}}: {conditionMessage(e)} - the archive write (if any)
+           was rolled back with the state transition, so it stays quarantined
+           and in the input directory; already-committed events in this run
+           are unaffected."
         )
         NA_character_
       }
@@ -552,7 +640,15 @@
 #' returned report reflects what the run *would* do), but skips
 #' `commit_event()` and the snapshot entirely - the only two core-table/
 #' snapshot writers - so a dry run makes zero core-table writes and
-#' produces no snapshot file.
+#' produces no snapshot file. T1.2 (Robin's ruling, 2026-07-26): a dry run
+#' ALSO makes zero `ingest_file` STATE writes - parsing/assembly/reconcile
+#' still run in memory to build the preview, but none of it is persisted, so
+#' a following run (dry or real) re-discovers the same files at the same
+#' `route_files()`-assigned state and re-processes them for real. Before
+#' this fix, the parse/assemble/reconcile stages silently advanced
+#' `ingest_file.state` regardless of `dry_run`, so a dry run followed by a
+#' real run over the SAME directory committed nothing - the exact
+#' consequence of the cautious habit of dry-running first.
 #'
 #' When `st_config("remove_ingested")` is `TRUE` (default `FALSE`, A13) and
 #' this run produced a successful snapshot, every input file whose content
@@ -586,12 +682,12 @@ ingest_dir <- function(path, db = st_config("live_db"), dry_run = FALSE) {
 
       routed <- route_files(paths, con)
 
-      parsed <- .ig_parse_claimed(con, routed)
+      parsed <- .ig_parse_claimed(con, routed, dry_run)
 
       events <- list()
       if (length(parsed) > 0) {
         asm <- assemble_events(parsed)
-        .ig_apply_assemble_states(con, asm$states)
+        .ig_apply_assemble_states(con, asm$states, dry_run)
         events <- asm$events
       }
 

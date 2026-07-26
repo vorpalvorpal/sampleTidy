@@ -19,3 +19,15 @@ not-yet-applied migration from \code{.st_schema_migrations} in a transaction,
 recording its version. Never touches core (pre-existing) business tables.
 Safe to call repeatedly.
 }
+\details{
+S13 (Phase 7b round 3): each migration PARTICIPATES in an already-open
+mutation-layer transaction rather than always committing independently
+(see the \code{db_transaction()} comment inside the loop below) - so if this
+function is called from INSIDE a caller's own \code{db_transaction()}, the ops
+schema it creates/upgrades is durable only if that OUTER transaction goes
+on to commit. A caller failure after \code{ensure_schema()} but before its own
+commit rolls the schema changes back too (reproduced: a bare DB left with
+zero tables). Called standalone (the common case, and the only way it is
+invoked in this package today), it still commits (or rolls back) each
+migration independently exactly as before.
+}

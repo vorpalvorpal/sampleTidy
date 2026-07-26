@@ -4,7 +4,24 @@
 #
 # NEVER invoked by package code (A50) - no `ensure_schema()`, `ingest_dir()`
 # or other package entry point sources this file. An operator runs it
-# directly, e.g.:
+# directly, from an R session where the sampleTidy PACKAGE HAS ALREADY BEEN
+# LOADED VIA `devtools::load_all(".")` (Robin's ruling 4, Phase 7b round 3,
+# 2026-07-26) - REQUIRED, not merely convenient: `st_connect()`
+# (R/db-connect.R) and `db_transaction()`/`db_update()` (R/mutate.R), both
+# used below, are internal (unexported) package symbols. `sys.source()`ing
+# this file resolves an unqualified call to either name through
+# `globalenv()` -> the search path -> `package:sampleTidy` if the package is
+# only INSTALLED (25 exported names, neither of which is on that list) - so
+# the documented recipe below fails with "could not find function
+# 'st_connect'" against an installed-but-not-`load_all()`ed package
+# (reproduced: 21 errors under `pkgload::load_all(export_all = FALSE)`, the
+# name visibility an installed package gives). 001 and 002 already share
+# this same convention (both call `st_connect()` the same way) and have
+# already been run successfully against the live DB under `load_all()` - so
+# this is a PRE-EXISTING, ACCEPTED operator constraint, not a new one; this
+# file's own `db_transaction()` dependency merely widens it. NOT re-plumbed
+# through the exported API (Robin's ruling: these stay operator tools, not
+# public package functions) - `devtools::load_all(".")` FIRST, then:
 #   env <- new.env()
 #   sys.source("dev/migrations/003-alias-date-bounds.R", envir = env)
 #   env$mig003_run(db = "/path/to/monitoring.duckdb",
@@ -356,6 +373,25 @@ mig003_backup <- function(db, snapshot_dir, .now = NULL) {
 #'   (`date_start`/`date_end` are `Date` or `NA`).
 #' @return integer(1), the number of bounds rows applied.
 .mig003_apply_bounds <- function(con, bounds) {
+  # ---- G-A / S11-S12 (Phase 7b round 3): `bounds` is this function's ONE
+  # injectable input, and R's `$` PARTIAL-MATCHES on data frames just as it
+  # does on lists (verified: `data.frame(date_start_wrong = 1)$date_start`
+  # returns the `date_start_wrong` column) - so a mis-transcribed column name
+  # (e.g. `date_start_wrong` for `date_start`) used to be silently read as
+  # the right one instead of being refused, defeating the very
+  # transcription-error guard this file exists to enforce (SIG-09, below).
+  # Reproduced: a `bounds` table missing `target_name` used to fail deep
+  # inside the transaction with a raw DuckDB bind-count error instead of a
+  # named caller error. Validate the exact column set is present FIRST - the
+  # same `checkmate::assert_names(must.include = ...)` shape `.rq_row()`
+  # uses for its own injectable `expired` argument (R/db-schema.R) - then
+  # read every column with `[[` (never `$`) so a typo can no longer resolve
+  # to an unrelated, wrongly-named column. ----
+  checkmate::assert_names(
+    names(bounds),
+    must.include = c("alias_key", "target_name", "date_start", "date_end")
+  )
+
   # ---- SIG-09: REJECT a non-Date bounds column rather than coerce it
   # (mirrors `.rq_row()` / `.rc_as_date_bound()`'s identical rule for the
   # identical hazard). Reproduced through the real DuckDB driver:
@@ -365,8 +401,8 @@ mig003_backup <- function(db, snapshot_dir, .now = NULL) {
   # injectable data input and its whole reason for being injectable; the
   # verify gate deliberately does not compare the date columns (they are
   # licensed to change), so nothing else would catch this. ----
-  .mig003_assert_date_bound_col(bounds$date_start, "bounds$date_start")
-  .mig003_assert_date_bound_col(bounds$date_end, "bounds$date_end")
+  .mig003_assert_date_bound_col(bounds[["date_start"]], "bounds$date_start")
+  .mig003_assert_date_bound_col(bounds[["date_end"]], "bounds$date_end")
 
   n <- nrow(bounds)
   if (n == 0) {
@@ -375,8 +411,8 @@ mig003_backup <- function(db, snapshot_dir, .now = NULL) {
 
   db_transaction(con, function(con) {
     for (i in seq_len(n)) {
-      alias_key <- bounds$alias_key[[i]]
-      target_name <- bounds$target_name[[i]]
+      alias_key <- bounds[["alias_key"]][[i]]
+      target_name <- bounds[["target_name"]][[i]]
 
       matched <- DBI::dbGetQuery(
         con,
@@ -399,8 +435,8 @@ mig003_backup <- function(db, snapshot_dir, .now = NULL) {
       db_update(
         con, "feature_alias", uuid = matched$uuid[[1]],
         changes = list(
-          date_start = bounds$date_start[[i]],
-          date_end = bounds$date_end[[i]],
+          date_start = bounds[["date_start"]][[i]],
+          date_end = bounds[["date_end"]][[i]],
           auto_assign = TRUE
         ),
         actor = "003-alias-date-bounds",

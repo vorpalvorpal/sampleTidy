@@ -73,6 +73,16 @@ pending_features(con); pending_analytes(con)   # dangling backlog readers
 # duplicate identity arm into the feature's self arm, deletes the duplicate,
 # and repoints dependent samples.
 merge_identity_aliases(db = st_config("live_db"), actor, dry_run = FALSE)
+
+# phase-7b round 3 — the review CLOSE API, added 2026-07-26 (Robin's ruling).
+# EXPORTED because round 3 found the queue could only ever GROW: the internal
+# review_queue_close() has one production call site, filtered to
+# kind = "unknown_feature", so a `sample_collision` row -- opened on every
+# colliding confirm -- had no close path at all, exported or internal, while
+# review_queue()/review_queue_candidates() are read-only. Targets a row by its
+# own PRIMARY KEY (not the polymorphic uuid_target, which closes across
+# producers), and records the human in `resolved_by` per A55.
+resolve_review(uuid, resolution, resolved_by, db = st_config("live_db"))
 ```
 
 `confirm_feature_aliases()`'s `kind` defaults to `transcription_error` on a

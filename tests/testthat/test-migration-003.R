@@ -687,6 +687,68 @@ test_that("003-alias-date-bounds: .mig003_apply_bounds() rejects a POSIXct date_
 })
 
 # ======================================================================
+# Phase 7b round 3, G-A / S11-S12: R's `$` partial-matches on data frames
+# just as it does on lists - `bounds$date_start`/`$date_end`/`$alias_key`/
+# `$target_name` used to be read with `$`, so a mis-transcribed column name
+# was silently accepted instead of refused. Fixed with checkmate::assert_names()
+# + `[[`.
+# ======================================================================
+
+test_that("003-alias-date-bounds (S11/G-A): a bounds column named 'date_start_wrong' is REFUSED, not silently read via R's `$` partial-matching", {
+  mig <- .mig003_load()
+  path <- seed_migration_003_db()
+  con <- migration_003_con(path)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+  DBI::dbExecute(con, "ALTER TABLE feature_alias ADD COLUMN IF NOT EXISTS date_start DATE")
+  DBI::dbExecute(con, "ALTER TABLE feature_alias ADD COLUMN IF NOT EXISTS date_end DATE")
+
+  before <- .mig003_bounds_snapshot(con)
+
+  # `$date_start` on this data.frame WOULD partial-match `date_start_wrong`
+  # (verified: `data.frame(date_start_wrong = 1)$date_start` returns the
+  # mis-named column) - the exact transcription error SIG-09 exists to
+  # refuse, one column over.
+  bad <- data.frame(
+    alias_key = "t.src01", target_name = "T.TGT01",
+    date_start_wrong = as.Date("2024-03-10"), date_end = as.Date("2024-03-10"),
+    stringsAsFactors = FALSE
+  )
+  err <- tryCatch(mig$.mig003_apply_bounds(con, bad), error = function(e) e)
+  expect_s3_class(err, "error")
+  expect_match(conditionMessage(err), "date_start", fixed = TRUE)
+
+  # Refused before any write.
+  after <- .mig003_bounds_snapshot(con)
+  expect_equal(after, before)
+})
+
+test_that("003-alias-date-bounds (S12): a bounds data.frame missing target_name gets a named caller error, not a raw duckdb bind-count error deep inside the transaction", {
+  mig <- .mig003_load()
+  path <- seed_migration_003_db()
+  con <- migration_003_con(path)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+  DBI::dbExecute(con, "ALTER TABLE feature_alias ADD COLUMN IF NOT EXISTS date_start DATE")
+  DBI::dbExecute(con, "ALTER TABLE feature_alias ADD COLUMN IF NOT EXISTS date_end DATE")
+
+  before <- .mig003_bounds_snapshot(con)
+
+  bad <- data.frame(
+    alias_key = "t.src01",
+    date_start = as.Date("2024-03-10"), date_end = as.Date("2024-03-10"),
+    stringsAsFactors = FALSE
+  )
+  err <- tryCatch(mig$.mig003_apply_bounds(con, bad), error = function(e) e)
+  expect_s3_class(err, "error")
+  expect_match(conditionMessage(err), "target_name", fixed = TRUE)
+  # NOT the raw duckdb error the reported reproduction hit ("Bind parameter
+  # values need to have the same length").
+  expect_false(grepl("Bind parameter", conditionMessage(err), fixed = TRUE))
+
+  after <- .mig003_bounds_snapshot(con)
+  expect_equal(after, before)
+})
+
+# ======================================================================
 # Phase 7b round 2, item 11: mig003_counts_checksum()/mig003_verify() must
 # read `analysis` conditionally - excluded-safely when the fixture has no
 # such table, but genuinely checked when it does (the live registry always
@@ -719,6 +781,35 @@ test_that("003-alias-date-bounds: mig003_counts_checksum()/mig003_verify() read 
   after <- mig$mig003_counts_checksum(con)
 
   expect_false(identical(before$checksum, after$checksum))
+  expect_error(mig$mig003_verify(before, after), class = "sampletidy_error")
+})
+
+# ======================================================================
+# Phase 7b round 3, S10: the item-11 test above does not actually pin
+# mig003_verify()'s own `analysis` scalar comparison - the mismatch it
+# catches is ALSO caught by `checksum` (which folds analysis_vals), so
+# removing "analysis" from mig003_verify()'s scalar_fields still throws on
+# that fixture (reproduced by the auditor). Pin the mutant DIRECTLY: a
+# before/after pair differing ONLY in $analysis, with an IDENTICAL checksum,
+# must still throw.
+# ======================================================================
+
+test_that("003-alias-date-bounds (S10): mig003_verify()'s own `analysis` scalar comparison is exercised directly - a before/after pair differing ONLY in $analysis (checksum held equal) throws", {
+  mig <- .mig003_load()
+
+  shared <- list(
+    feature = 1L, feature_mask = 1L, analyte = 1L, lab_method = 1L,
+    project = 1L, sample = 1L,
+    feature_alias_n = 1L, feature_alias_checksum = "same-alias-checksum",
+    checksum = "same-overall-checksum",
+    feature_alias_uuids = c("a-1")
+  )
+  before <- c(shared, list(analysis = 1L))
+  after <- c(shared, list(analysis = 2L))
+
+  # Every OTHER scalar_fields entry, and the uuid set, are identical - if
+  # mig003_verify() did not genuinely compare `analysis` on its own, this
+  # pair would pass silently.
   expect_error(mig$mig003_verify(before, after), class = "sampletidy_error")
 })
 

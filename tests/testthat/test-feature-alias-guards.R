@@ -224,6 +224,44 @@ test_that("Phase-7 pin (guard 2d control): an ordinary UNCONFIRMED pending alias
   )
 })
 
+test_that("Phase-7b round-3 A5 regression guard: an E.8-shaped torn trail (a merge_identity_aliases() repoint reason on a loser arm whose uuid_feature is NOT NULL, as every real E.8 loser's is by construction) must NOT abort - the guard predicate is scoped to uuid_feature IS NULL and must stay that way", {
+  # A5 (CONFIRMED-BY-ORCH, probe3_torn_guard.R): a prior `OR cl.reason LIKE
+  # 'merge_identity_aliases(): ...'` clause here was UNREACHABLE dead SQL,
+  # because .fa_torn_guard()'s own WHERE requires `fa.uuid_feature IS NULL`
+  # and .fa_identity_duplicates() only ever selects E.8 losers with a
+  # non-NULL uuid_feature - deleted, per Robin's explicit instruction NOT to
+  # widen the predicate (that would block E.8's own documented
+  # recovery-by-re-run, R/feature-alias.R:1118-1121). This is a REGRESSION
+  # GUARD, not a red/green pin for the deletion itself - removing dead code
+  # cannot be exhibited as a behaviour change by definition. It exists to
+  # catch a FUTURE "widen the predicate to also catch E.8" mistake.
+  setup <- fag_setup()
+  con <- setup$con
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix, lon, lat) VALUES
+    ('f-torn-e8', 'Z.TORNE8A5', 'Z', 'surface', 'water', 150.9860, -33.9860)")
+  DBI::dbExecute(con, "INSERT INTO feature_alias
+    (uuid, uuid_feature, name, alias_key, kind, n_seen, auto_assign,
+     first_seen, last_seen, confirmed_by) VALUES
+    ('fa-torn-e8-self', 'f-torn-e8', 'Z.TORNE8A5', 'z.torne8a5', 'self', 0, TRUE,
+     TIMESTAMP '2020-01-01 00:00:00', TIMESTAMP '2020-01-01 00:00:00', 'R. Shannon'),
+    ('fa-torn-e8-loser', 'f-torn-e8', 'Z.TORNE8A5', 'z.torne8a5', 'transcription_error', 0, TRUE,
+     TIMESTAMP '2026-01-01 00:00:00', TIMESTAMP '2026-01-01 00:00:00', 'R. Shannon')")
+  .st_write_change_log(
+    con, at = Sys.time(), actor = "prior_run", action = "update",
+    tbl = "sample", uuid_row = "s-torn-e8-1", field = "uuid_feature_alias",
+    old = "fa-torn-e8-loser", new = "fa-torn-e8-self",
+    reason = paste0(
+      "merge_identity_aliases(): sample re-pointed from redundant identity ",
+      "arm 'fa-torn-e8-loser' onto surviving self arm 'fa-torn-e8-self' (E.8)"
+    ),
+    source_hash = NA_character_
+  )
+
+  expect_no_error(.fa_torn_guard(con))
+})
+
 # ======================================================================
 # Guard 3 - .fa_check_kind() vocabulary validation (PLAN-15 F.19)
 # ======================================================================
