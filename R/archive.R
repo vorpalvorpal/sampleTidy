@@ -27,16 +27,31 @@
 #' the caller's open mutation-layer transaction (`commit_event()` calls this
 #' from inside one `db_transaction()`); no transaction is opened here.
 #'
+#' Round-2 audit item 6: `type` is now an explicit argument, default
+#' `"Chemical analysis"` (unchanged default behaviour for every existing
+#' caller/test - `.ct_archive_files()`, R/commit.R, archives the event's own
+#' tabular deliverables and never passes `type`). PLAN-15 F.17 pins that a
+#' retained non-tabular sibling is "evidence, not `Chemical analysis` data";
+#' `.ig_retain_siblings()` (R/ingest.R) is the one caller that passes
+#' `type = "Certificate of analysis"`, and only for a file it can positively
+#' identify as a COA. Do NOT widen `"Certificate of analysis"` to any other
+#' retained kind (COC/QC/QCI/XTAB.XLS/other) without a separate ruling - see
+#' the round-2 report for the enumerated non-COA kinds.
+#'
 #' @param con an open read-write DBI connection.
 #' @param path path to the source file to archive.
 #' @param hash the file's xxHash128 content hash (R-1.2 `hash_file()`).
 #' @param event minimally `list(work_order = <work order id>)`.
+#' @param type `asset.type` for a NEWLY-inserted row (ignored on the
+#'   dedup-reuse path, since an existing row's `type` is never overwritten).
+#'   Default `"Chemical analysis"`.
 #' @return the asset row's uuid (new or reused), visibly.
 #' @keywords internal
 #' @noRd
-archive_file <- function(con, path, hash, event) {
+archive_file <- function(con, path, hash, event, type = "Chemical analysis") {
   checkmate::assert_string(path)
   checkmate::assert_string(hash)
+  checkmate::assert_string(type)
 
   existing <- DBI::dbGetQuery(
     con,
@@ -77,7 +92,7 @@ archive_file <- function(con, path, hash, event) {
     name = NA_character_,
     date = as.POSIXct(NA),
     file_format = tools::file_ext(path),
-    type = "Chemical analysis",
+    type = type,
     purpose = NA_character_,
     organisation = NA_character_,
     person = NA_character_,

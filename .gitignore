@@ -9,5 +9,11 @@
 _problems
 testthat-problems.rds
 
-# tdd-plan build scratch
-dev/tdd-run/
+# tdd-plan build scratch. `dev/tdd-run/*` rather than `dev/tdd-run/` because git
+# cannot re-include a file whose parent DIRECTORY is excluded - with the trailing
+# slash the negation below is silently dead.
+dev/tdd-run/*
+# ...except the criterion bijection lint, which is a project tool that happens to
+# live here, not run scratch. Phase 9's sign-off gate calls it, so a checkout
+# without it cannot reproduce the coverage result.
+!dev/tdd-run/criterion-lint.py

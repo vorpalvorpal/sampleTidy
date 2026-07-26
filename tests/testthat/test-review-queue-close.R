@@ -247,7 +247,7 @@ test_that("R-15.39: committing an event with a pending feature writes a review_q
 # R-15.40: review_queue_close() closes exactly the matching open row(s) (D4)
 # ======================================================================
 
-test_that("R-15.40: review_queue_close() closes exactly the matching open row (status -> 'resolved', resolution/resolved_by/resolved_at populated); a SECOND open row with a DIFFERENT uuid_target is untouched; a second identical call closes zero rows", {
+test_that("R-15.40: review_queue_close() closes exactly the matching open row(s) (status -> 'resolved', resolution/resolved_by/resolved_at populated); a SECOND open row with the SAME uuid_target is ALSO closed (n == 2, pinning the docstring's PLURAL claim, item G); a THIRD open row with a DIFFERENT uuid_target is untouched; a second identical call closes zero rows", {
   db_path <- seed_db()
   con <- seed_con(db_path)
   on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
@@ -257,16 +257,23 @@ test_that("R-15.40: review_queue_close() closes exactly the matching open row (s
 
   uuid_a <- review_queue_add(con, kind = "unknown_feature", work_order = "XX1234567",
                               source_hash = "h-a", payload = "a", uuid_target = target_uuid)
+  # Phase 7b round-2 item G: a SECOND row sharing the SAME uuid_target - the
+  # docstring and this criterion are both PLURAL ("closes every open row"),
+  # but before this fix every fixture had exactly one matching row, so
+  # n == 1 passed equally for a correct plural close and for a close that
+  # (bugged) LIMITs to one row. This row pins the plural claim for real.
+  uuid_a2 <- review_queue_add(con, kind = "unknown_feature", work_order = "XX1234567",
+                               source_hash = "h-a2", payload = "a2", uuid_target = target_uuid)
   uuid_b <- review_queue_add(con, kind = "unknown_feature", work_order = "XX1234567",
                               source_hash = "h-b", payload = "b", uuid_target = other_uuid)
 
   n_closed <- review_queue_close(con, uuid_target = target_uuid,
-                                  resolution = "confirmed", resolved_by = "robin")
-  expect_equal(n_closed, 1)
-  # Phase 7b: the SQL path (DBI::dbExecute()) returns a `numeric` (double)
-  # count natively - must match the NA/zero-length guard's own invisible(0L)
-  # (R-15.41, below), or the two zero-row cases D6 unifies would silently
-  # disagree on type.
+                                  resolution = "confirmed", resolved_by = "robin",
+                                  kind = NULL)
+  expect_equal(n_closed, 2)
+  # Phase 7b: the SQL path returns a `numeric` (double) count natively - must
+  # match the NA/zero-length guard's own invisible(0L) (R-15.41, below), or
+  # the two zero-row cases D6 unifies would silently disagree on type.
   expect_type(n_closed, "integer")
 
   row_a <- DBI::dbGetQuery(
@@ -277,6 +284,15 @@ test_that("R-15.40: review_queue_close() closes exactly the matching open row (s
   expect_identical(row_a$resolution[[1]], "confirmed")
   expect_identical(row_a$resolved_by[[1]], "robin")
   expect_false(is.na(row_a$resolved_at[[1]]))
+
+  row_a2 <- DBI::dbGetQuery(
+    con, "SELECT status, resolution, resolved_by, resolved_at FROM review_queue WHERE uuid = ?",
+    params = list(uuid_a2)
+  )
+  expect_identical(row_a2$status[[1]], "resolved")
+  expect_identical(row_a2$resolution[[1]], "confirmed")
+  expect_identical(row_a2$resolved_by[[1]], "robin")
+  expect_false(is.na(row_a2$resolved_at[[1]]))
 
   # The unrelated open row (a DIFFERENT uuid_target) must be untouched - a
   # test that omits this cannot fail if the UPDATE forgets its WHERE clause.
@@ -290,8 +306,134 @@ test_that("R-15.40: review_queue_close() closes exactly the matching open row (s
   # Idempotent: nothing left open under target_uuid, so a second call closes
   # zero rows.
   n_closed_again <- review_queue_close(con, uuid_target = target_uuid,
-                                        resolution = "confirmed", resolved_by = "robin")
+                                        resolution = "confirmed", resolved_by = "robin",
+                                        kind = NULL)
   expect_equal(n_closed_again, 0)
+})
+
+# ======================================================================
+# Phase 7b round-2 item A: review_queue_close(kind =) - uuid_target is a
+# POLYMORPHIC key (version-5 ladder comment, R/db-schema.R), so closing on it
+# alone closes every open row on that target regardless of kind. `kind` is
+# OPTIONAL (default NULL = close across all kinds, preserving the pre-fix
+# behaviour) - R/feature-alias.R's call site is NOT touched by this unit and
+# still calls review_queue_close() without `kind` (a later wave's job).
+# ======================================================================
+
+test_that("Phase 7b item A: review_queue_close(kind =) closes only the matching kind, leaving a DIFFERENT-kind open row on the SAME uuid_target untouched; the plural close still works WITHIN a kind", {
+  db_path <- seed_db()
+  con <- seed_con(db_path)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  target_uuid <- "fa-kindtest-0001"
+
+  uuid_x1 <- review_queue_add(con, kind = "unknown_feature", work_order = "XX1234567",
+                               source_hash = "h-x1", payload = "x1", uuid_target = target_uuid)
+  uuid_x2 <- review_queue_add(con, kind = "unknown_feature", work_order = "XX1234567",
+                               source_hash = "h-x2", payload = "x2", uuid_target = target_uuid)
+  uuid_y <- review_queue_add(con, kind = "value_conflict", work_order = "XX1234567",
+                              source_hash = "h-y", payload = "y", uuid_target = target_uuid)
+
+  n_closed <- review_queue_close(con, uuid_target = target_uuid, resolution = "confirmed",
+                                  resolved_by = "robin", kind = "unknown_feature")
+  expect_equal(n_closed, 2) # the plural close, WITHIN a kind (item G's fixture, narrowed by kind)
+  expect_type(n_closed, "integer")
+
+  row_x1 <- DBI::dbGetQuery(con, "SELECT status FROM review_queue WHERE uuid = ?", params = list(uuid_x1))
+  row_x2 <- DBI::dbGetQuery(con, "SELECT status FROM review_queue WHERE uuid = ?", params = list(uuid_x2))
+  row_y <- DBI::dbGetQuery(con, "SELECT status FROM review_queue WHERE uuid = ?", params = list(uuid_y))
+
+  expect_identical(row_x1$status[[1]], "resolved")
+  expect_identical(row_x2$status[[1]], "resolved")
+  # SAME uuid_target, DIFFERENT kind - the exact reproduction from the audit
+  # (confirm_feature_aliases() closing a sample_collision row that was never
+  # the one it meant to resolve): must stay open.
+  expect_identical(row_y$status[[1]], "open")
+})
+
+test_that("Phase 7b item A control: review_queue_close() with an EXPLICIT kind = NULL still closes across all kinds - the escape hatch stays available, but only to a caller that asks for it in so many words", {
+  db_path <- seed_db()
+  con <- seed_con(db_path)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  target_uuid <- "fa-allkinds-0001"
+  uuid_x <- review_queue_add(con, kind = "unknown_feature", work_order = "XX1234567",
+                              source_hash = "h-ax", payload = "x", uuid_target = target_uuid)
+  uuid_y <- review_queue_add(con, kind = "value_conflict", work_order = "XX1234567",
+                              source_hash = "h-ay", payload = "y", uuid_target = target_uuid)
+
+  n_closed <- review_queue_close(con, uuid_target = target_uuid, resolution = "confirmed", resolved_by = "robin", kind = NULL)
+  expect_equal(n_closed, 2)
+
+  row_x <- DBI::dbGetQuery(con, "SELECT status FROM review_queue WHERE uuid = ?", params = list(uuid_x))
+  row_y <- DBI::dbGetQuery(con, "SELECT status FROM review_queue WHERE uuid = ?", params = list(uuid_y))
+  expect_identical(row_x$status[[1]], "resolved")
+  expect_identical(row_y$status[[1]], "resolved")
+})
+
+test_that("Phase 7b item A: OMITTING kind is a classed caller error, so the round-2 rank-1 defect cannot recur by forgetting the argument", {
+  db_path <- seed_db()
+  con <- seed_con(db_path)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
+
+  review_queue_add(con, kind = "unknown_feature", source_hash = "h-req",
+                   payload = "p", uuid_target = "fa-req-target")
+
+  # The point of the abort: documentation did NOT stop this. `kind` was
+  # documented as narrowing the close and the one live caller still omitted
+  # it, silently resolving a `sample_collision` row it had opened itself.
+  expect_error(
+    review_queue_close(con, uuid_target = "fa-req-target",
+                       resolution = "confirmed", resolved_by = "robin"),
+    class = "sampletidy_error"
+  )
+
+  # Non-vacuity control: the row is untouched by the refused call, so the
+  # abort happens BEFORE any UPDATE rather than after a partial one.
+  still_open <- DBI::dbGetQuery(
+    con, "SELECT status FROM review_queue WHERE uuid_target = 'fa-req-target'")
+  expect_identical(still_open$status[[1]], "open")
+})
+
+# ======================================================================
+# Phase 7b round-2 item C: review_queue_close() must write change_log rows
+# through the same mutation-layer audit path review_queue_add() already
+# uses, not a raw DBI::dbExecute() UPDATE producing zero.
+# ======================================================================
+
+test_that("Phase 7b item C: review_queue_close() writes change_log rows via the mutation layer, mirroring review_queue_add()'s own audit trail", {
+  dir <- withr::local_tempdir()
+  db <- seed_db(dir)
+  con <- seed_con(db)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  uuid_a <- review_queue_add(con, kind = "unknown_feature", work_order = "XX1234567",
+                              source_hash = "h-cl-a", payload = "a", uuid_target = "fa-cl-target")
+  uuid_b <- review_queue_add(con, kind = "unknown_feature", work_order = "XX1234567",
+                              source_hash = "h-cl-b", payload = "b", uuid_target = "fa-cl-other")
+
+  before <- DBI::dbGetQuery(con, "SELECT COUNT(*) AS n FROM change_log")$n
+
+  n_closed <- review_queue_close(con, uuid_target = "fa-cl-target", resolution = "confirmed", resolved_by = "robin", kind = NULL)
+  expect_equal(n_closed, 1)
+
+  after <- DBI::dbGetQuery(con, "SELECT COUNT(*) AS n FROM change_log")$n
+  expect_gt(after, before) # zero before this fix (audit asymmetry, item 12/C)
+
+  close_log <- DBI::dbGetQuery(
+    con,
+    "SELECT COUNT(*) AS n FROM change_log WHERE tbl = 'review_queue' AND uuid_row = ? AND action = 'update'",
+    params = list(uuid_a)
+  )$n
+  expect_gt(close_log, 0)
+
+  # the row NOT closed by this call must not have gained a change_log row.
+  other_log <- DBI::dbGetQuery(
+    con,
+    "SELECT COUNT(*) AS n FROM change_log WHERE tbl = 'review_queue' AND uuid_row = ? AND action = 'update'",
+    params = list(uuid_b)
+  )$n
+  expect_equal(other_log, 0)
 })
 
 # ======================================================================
@@ -312,18 +454,33 @@ test_that("R-15.41: review_queue_close() with a NA/missing target, or a target m
                                     params = list(null_uuid))$uuid_target[[1]]
   expect_true(is.na(before_target))
 
+  # Phase 7b round-2 item F: D6's stated danger is an NA_character_
+  # interpolated as the LITERAL STRING "NA" matching a row the moment
+  # anything ever wrote that literal string into uuid_target. Without a real
+  # `uuid_target = 'NA'` row in the fixture, "an NA target closes zero rows"
+  # (below) passes equally for the correct R-side guard and for a bugged
+  # implementation that interpolates and merely happens to match nothing.
+  # Seed that row for real so the assertion actually discriminates.
+  na_literal_uuid <- review_queue_add(con, kind = "value_conflict", work_order = "XX1234567",
+                                       source_hash = "h-na-literal", payload = "na-literal-target",
+                                       uuid_target = "NA")
+  before_na_literal <- DBI::dbGetQuery(con, "SELECT uuid_target, status FROM review_queue WHERE uuid = ?",
+                                        params = list(na_literal_uuid))
+  expect_identical(before_na_literal$uuid_target[[1]], "NA")
+  expect_identical(before_na_literal$status[[1]], "open")
+
   # (D6) An NA target must not be interpolated as the SQL/R literal string
   # "NA" and match nothing only by accident - review_queue_close() must
   # return early on a missing/NA target.
   n_na <- expect_no_error(
-    review_queue_close(con, uuid_target = NA_character_, resolution = "confirmed", resolved_by = "robin")
+    review_queue_close(con, uuid_target = NA_character_, resolution = "confirmed", resolved_by = "robin", kind = NULL)
   )
   expect_equal(n_na, 0)
   expect_type(n_na, "integer")
 
   # A target matching no row - the second, weaker half.
   n_missing <- expect_no_error(
-    review_queue_close(con, uuid_target = "no-such-uuid-anywhere", resolution = "confirmed", resolved_by = "robin")
+    review_queue_close(con, uuid_target = "no-such-uuid-anywhere", resolution = "confirmed", resolved_by = "robin", kind = NULL)
   )
   expect_equal(n_missing, 0)
   expect_type(n_missing, "integer")
@@ -332,6 +489,15 @@ test_that("R-15.41: review_queue_close() with a NA/missing target, or a target m
                                  params = list(null_uuid))
   expect_equal(nrow(still_open), 1)
   expect_identical(still_open$status[[1]], "open")
+
+  # Item F, the real discriminator: the row whose uuid_target is the LITERAL
+  # STRING "NA" must still be open after the NA-target call above - a bugged
+  # implementation that interpolates NA_character_ as "NA" would have closed
+  # exactly this row.
+  still_open_na_literal <- DBI::dbGetQuery(con, "SELECT status FROM review_queue WHERE uuid = ?",
+                                            params = list(na_literal_uuid))
+  expect_equal(nrow(still_open_na_literal), 1)
+  expect_identical(still_open_na_literal$status[[1]], "open")
 })
 
 # ======================================================================

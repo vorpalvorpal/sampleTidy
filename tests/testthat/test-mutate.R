@@ -200,22 +200,117 @@ test_that("PLAN-14 R-14.1/A32: db_update()/db_delete() abort when a composite `k
   expect_setequal(rows_after_delete$name, c("Bore Twelve", "Borehole 12"))
 })
 
-test_that("R-9.1: direct-write bypass is lint-guarded - no forbidden raw SQL writes in R/", {
+# ---- Phase-7b round-2 item 9: the A32/R-9.1 "only write door" lint -------
+#
+# The OLD scanner (`grepl(pattern, lines)` over `readLines()`, one element
+# per file line) had three independent defects, all measured on decoys: (1)
+# it matched per LINE, so a multi-line `DBI::dbExecute(\n con,\n "DELETE
+# FROM ...")` call was never caught - `[^)]*` is a character class (it DOES
+# span newlines) but a per-line `grepl()` never even hands it a newline to
+# span; (2) `duckdb_register()` + `paste0("INSERT INTO ", ...)` +
+# `dbExecute(con, sql)` - `.st_append_rows()`'s OWN pattern - built its SQL
+# in a variable, so no INSERT/UPDATE/DELETE literal ever sat inside the
+# `dbExecute(...)` call itself; (3) a comment merely NAMING a forbidden
+# function (`# never call dbAppendTable() directly`) false-positived, because
+# the old pattern never stripped comments. Its own inline comment ("Trivially
+# passes while R/ has no adapter/commit/etc. sources yet") was stale too - R/
+# now holds 28 files.
+#
+# Fix: strip real comment tokens via `getParseData()` (not a `#` line regex -
+# a `#` inside a string literal must survive), search the WHOLE joined
+# source text rather than per-line so a multi-line call is not blind, and add
+# `dbSendStatement`/`dbWriteTable`/`duckdb_register` as UNCONDITIONALLY
+# forbidden identifiers (not just inside an INSERT/UPDATE/DELETE dbExecute
+# call), which is what actually catches the register()+paste0()+dbExecute()
+# shape.
+
+.rq9_write_door_pattern <- "dbAppendTable|dbSendStatement|dbWriteTable|duckdb_register|dbExecute\\s*\\([^)]*(INSERT|UPDATE|DELETE)"
+
+#' Strip real `#` comment tokens (via `getParseData()`) out of `lines`,
+#' returning the WHOLE file as one joined string - never comment text
+#' matching a forbidden identifier by coincidence, and never blind to a call
+#' that spans more than one line.
+#' @keywords internal
+.rq9_strip_comments <- function(lines) {
+  text <- paste(lines, collapse = "\n")
+  pd <- tryCatch(
+    utils::getParseData(parse(text = text, keep.source = TRUE)),
+    error = function(e) NULL
+  )
+  if (is.null(pd) || nrow(pd) == 0) {
+    return(text)
+  }
+  comments <- pd[pd$token == "COMMENT", ]
+  if (nrow(comments) == 0) {
+    return(text)
+  }
+  out_lines <- lines
+  for (i in seq_len(nrow(comments))) {
+    ln <- comments$line1[[i]]
+    col1 <- comments$col1[[i]]
+    s <- out_lines[[ln]]
+    if (col1 <= nchar(s) + 1) {
+      out_lines[[ln]] <- substr(s, 1, col1 - 1)
+    }
+  }
+  paste(out_lines, collapse = "\n")
+}
+
+#' TRUE if `lines` (a file's raw `readLines()` output) contains a forbidden
+#' raw-write call, comment-and-continuation-line-aware.
+#' @keywords internal
+.rq9_scan <- function(lines) {
+  grepl(.rq9_write_door_pattern, .rq9_strip_comments(lines), perl = TRUE)
+}
+
+test_that("R-9.1: direct-write bypass is lint-guarded - no forbidden raw SQL writes in R/ (comment/string-aware, continuation-line-aware; Phase-7b round-2 item 9)", {
   pkg_root <- normalizePath(file.path(testthat::test_path(), "..", ".."))
   r_dir <- file.path(pkg_root, "R")
   r_files <- if (dir.exists(r_dir)) list.files(r_dir, pattern = "\\.R$", full.names = TRUE) else character(0)
   r_files <- r_files[!basename(r_files) %in% c("mutate.R", "db-schema.R")]
+  # The scan must be non-vacuous - R/ now holds well over 20 production
+  # files, not zero, so this cannot silently pass for the "empty r_files"
+  # reason the old comment excused.
+  expect_gt(length(r_files), 20)
 
-  pattern <- "dbAppendTable|dbExecute\\([^)]*(INSERT|UPDATE|DELETE)"
   hits <- character(0)
   for (f in r_files) {
     lines <- readLines(f, warn = FALSE)
-    bad <- grepl(pattern, lines)
-    if (any(bad)) hits <- c(hits, paste0(basename(f), ":", paste(which(bad), collapse = ",")))
+    if (.rq9_scan(lines)) hits <- c(hits, basename(f))
   }
-  # Trivially passes while R/ has no adapter/commit/etc. sources yet; becomes
-  # meaningful once plans 01-09 land their production files (R-9.1 note).
   expect_true(length(hits) == 0, info = paste("forbidden direct writes found in:", paste(hits, collapse = "; ")))
+})
+
+test_that("Phase-7b round-2 item 9 (decoy A): the scanner catches a multi-line dbExecute(...DELETE...) call - the per-line [^)]* blind spot", {
+  decoy <- c(
+    "f <- function(con) {",
+    "  DBI::dbExecute(",
+    "    con,",
+    "    \"DELETE FROM sample WHERE uuid = 'x'\")",
+    "}"
+  )
+  expect_true(.rq9_scan(decoy))
+})
+
+test_that("Phase-7b round-2 item 9 (decoy B): the scanner catches the register()+paste0(INSERT)+dbExecute(con, sql) shape (.st_append_rows()'s own pattern) even with no INSERT/UPDATE/DELETE literal inside the dbExecute() call itself", {
+  decoy <- c(
+    "g <- function(con, df) {",
+    "  duckdb::duckdb_register(con, 'v', df)",
+    "  sql <- paste0(\"INSERT INTO t SELECT * FROM v\")",
+    "  DBI::dbExecute(con, sql)",
+    "}"
+  )
+  expect_true(.rq9_scan(decoy))
+})
+
+test_that("Phase-7b round-2 item 9 (decoy C): the scanner does NOT false-positive on a comment merely naming a forbidden function", {
+  decoy <- c(
+    "h <- function() {",
+    "  # never call dbAppendTable() directly - use db_append() instead",
+    "  invisible(NULL)",
+    "}"
+  )
+  expect_false(.rq9_scan(decoy))
 })
 
 # ---- domain helpers ---------------------------------------------------------
@@ -318,6 +413,23 @@ test_that("R-9.1: review_queue() has stable columns on a zero-row result", {
   expect_equal(nrow(empty), 0)
   expect_true(all(c("uuid", "created_at", "kind", "work_order", "source_hash", "payload",
                      "status", "resolution", "resolved_by", "resolved_at") %in% names(empty)))
+})
+
+test_that("Phase-7b round-2 item 5b: review_queue() also returns the typed uuid_incoming column (schema ladder version 7) alongside uuid_existing - it was written but not read back", {
+  path <- seed_db()
+  con <- seed_con(path)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  DBI::dbExecute(con, "INSERT INTO review_queue
+    (uuid, created_at, kind, subkind, status, uuid_existing, uuid_incoming) VALUES
+    ('rq-9501', CURRENT_TIMESTAMP, 'value_conflict', 'alias_merge', 'open', 'an-existing', 'an-incoming')")
+
+  rows <- review_queue(con, status = "open")
+  expect_true("uuid_incoming" %in% names(rows))
+  hit <- rows[rows$uuid == "rq-9501", ]
+  expect_equal(nrow(hit), 1)
+  expect_identical(hit$uuid_existing[[1]], "an-existing")
+  expect_identical(hit$uuid_incoming[[1]], "an-incoming")
 })
 
 # ---- R-11.17: add_feature() aligned to the live `feature` schema (F5/A-4) --
@@ -769,6 +881,74 @@ test_that("R-15.30/B3: a failure on the SECOND write of add_feature()'s atomic p
     info = "the FIRST write (feature) must be rolled back when the SECOND (self alias) fails")
   expect_equal(after_log, before_log,
     info = "no change_log row may survive a rolled-back transaction")
+})
+
+# ---- Phase-7b round-2 item 10: add_feature() name-clash guard -------------
+#
+# `add_feature()` did not check the name's `.rc_feature_key()` was unused.
+# Two calls with the same name created TWO features and TWO 'self'/
+# auto_assign=TRUE arms sharing one alias_key - `.rc_feature_candidates()`
+# then returns 2 candidates for that name, and `.rc_resolve_features()`
+# routes it to feature_pending/unknown_feature. BOTH features become
+# unreachable by their own name - the exact failure F.9 exists to prevent,
+# reachable again through F.9's own fix.
+
+test_that("Phase-7b round-2 item 10: add_feature() aborts when the name's .rc_feature_key() is already used by an existing feature_alias row, instead of minting a second unreachable 'self' arm", {
+  path <- seed_db()
+  withr::local_options(list("sampletidy.live_db" = path))
+  con <- seed_con(path)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  add_feature(name = "T.DUPNAME9010", site = "T", lon = 150.9010, lat = -33.9010,
+              actor = "tester", reason = "first")
+
+  before_features <- DBI::dbGetQuery(con, "SELECT count(*) AS n FROM feature")$n
+  before_aliases <- DBI::dbGetQuery(con, "SELECT count(*) AS n FROM feature_alias")$n
+
+  err <- tryCatch(
+    add_feature(name = "T.DUPNAME9010", site = "T", lon = 150.9011, lat = -33.9011,
+                actor = "tester", reason = "second, same name"),
+    error = function(e) e
+  )
+  expect_s3_class(err, "sampletidy_error")
+
+  after_features <- DBI::dbGetQuery(con, "SELECT count(*) AS n FROM feature")$n
+  after_aliases <- DBI::dbGetQuery(con, "SELECT count(*) AS n FROM feature_alias")$n
+  expect_equal(after_features, before_features) # nothing written by the aborted second call
+  expect_equal(after_aliases, before_aliases)
+
+  # the name still resolves to exactly ONE feature through the real resolver
+  # - never routed to feature_pending/unknown_feature by a phantom duplicate.
+  registry <- .rc_load_registry(con)
+  cand <- .rc_feature_candidates("T.DUPNAME9010", as.Date("2026-07-25"), registry)
+  expect_equal(nrow(cand), 1L)
+})
+
+# ---- Phase-7b round-2 item 11: add_feature()'s self alias is not a human --
+#      confirmation (CONTRACT A55) -------------------------------------------
+
+test_that("Phase-7b round-2 item 11: add_feature()'s self alias is NOT stamped confirmed_by = actor - a machine-created arm is not a human confirmation, so it never trips .fa_confirm_one_alias()'s already_confirmed guard", {
+  path <- seed_db()
+  withr::local_options(list("sampletidy.live_db" = path))
+  con <- seed_con(path)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  new_uuid <- add_feature(
+    name = "T.NOCONFIRM9011", site = "T", lon = 150.9021, lat = -33.9021,
+    actor = "tester", reason = "F.9 self alias, no confirmed_by"
+  )
+
+  self_alias <- DBI::dbGetQuery(con, sprintf(
+    "SELECT * FROM feature_alias WHERE uuid_feature = '%s' AND kind = 'self'", new_uuid
+  ))
+  expect_equal(nrow(self_alias), 1)
+  expect_true(is.na(self_alias$confirmed_by[[1]])) # NOT actor - provenance lives in change_log alone
+  expect_true(isTRUE(self_alias$auto_assign[[1]])) # F.9 still marks it auto_assign TRUE
+
+  log_rows <- DBI::dbGetQuery(con, sprintf(
+    "SELECT actor FROM change_log WHERE uuid_row = '%s'", self_alias$uuid[[1]]
+  ))
+  expect_true(all(log_rows$actor == "tester")) # provenance: the real actor, via change_log
 })
 
 # ---- W-F (round-2 remediation): db_append() surfaces the ORIGINAL DB error -

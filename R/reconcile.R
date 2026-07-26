@@ -1194,12 +1194,26 @@
 #' Candidate lab_method rows for `(analyte_raw, org, method_raw)` under the
 #' FOLDED key (R-8.3 step a); method disambiguates only when name+org is not
 #' already unique.
+#'
+#' PLAN-7b round-2 D1: `.rc_method_key(lm$name)` is NA for any `lab_method`
+#' whose `name` is NA or folds to the empty string (A44). The `organisation`
+#' conjunct below has always been `!is.na()`-guarded; the name conjunct was
+#' not, so `NA == key` produced `NA` and base-R logical row indexing spliced
+#' in a phantom all-NA row for every such registry row - silently
+#' de-resolving every OTHER analyte that reaches this org's folded path
+#' (`unique(cand$uuid_analyte)` gained a spurious NA, tripping the
+#' `length(distinct_an) == 1` check in `.rc_resolve_one_analyte()` into
+#' `ambiguous`). Fold `nk` once and guard both sides of the `==`, matching
+#' the exact-match branch two frames up (`.rc_resolve_one_analyte:1226-1227`,
+#' already guarded) and `.rc_feature_candidates()` (`:388`).
 #' @keywords internal
 #' @noRd
 .rc_lab_method_candidates <- function(analyte_raw, org, method_raw, registry) {
   lm <- registry$lab_method
   key <- .rc_method_key(analyte_raw)
-  cand <- lm[.rc_method_key(lm$name) == key & !is.na(lm$organisation) & lm$organisation == org, , drop = FALSE]
+  if (is.na(key)) return(lm[0, , drop = FALSE])
+  nk <- .rc_method_key(lm$name)
+  cand <- lm[!is.na(nk) & !is.na(key) & nk == key & !is.na(lm$organisation) & lm$organisation == org, , drop = FALSE]
   if (nrow(cand) > 1 && !is.na(method_raw)) {
     mkey <- .rc_method_key(method_raw)
     narrowed <- cand[!is.na(cand$method) & .rc_method_key(cand$method) == mkey, , drop = FALSE]
@@ -1208,18 +1222,26 @@
   cand
 }
 
-#' Resolve one row's analyte/method (R-11.19 order): (1) EXACT raw-name +
-#' organisation + method match wins; (2) else the folded match - if every
-#' survivor resolves to ONE analyte it is a HIT (deterministic uuid_lab pick),
-#' else ambiguous; (3) no candidates -> miss. A matched method whose
-#' `uuid_analyte` is NULL is a "dangling_method" (we know the method, not the
-#' analyte).
+#' Resolve one row's analyte/method (R-11.19 order): (0) an `analyte_raw`
+#' that is NA or folds to nothing (punctuation-only) is HELD - PLAN-7b
+#' round-2 D2, the A44/F.1 rule applied to the analyte side. There is no key
+#' to hang a dangling `lab_method` on, so the row must never reach COMMIT's
+#' `.ct_materialise_lab_methods()`: doing so used to mint
+#' `lab_method(name = '--')`, precisely the D1 poison row - one junk analyte
+#' cell permanently degrading analyte resolution for the whole organisation.
+#' `.rc_resolve_features()` applies the identical rule to `feature_raw`
+#' (`:794`); this mirrors it. (1) EXACT raw-name + organisation + method match
+#' wins; (2) else the folded match - if every survivor resolves to ONE
+#' analyte it is a HIT (deterministic uuid_lab pick), else ambiguous; (3) no
+#' candidates -> miss. A matched method whose `uuid_analyte` is NULL is a
+#' "dangling_method" (we know the method, not the analyte).
 #' @return `list(status, uuid_lab, uuid_analyte)`.
 #' @keywords internal
 #' @noRd
 .rc_resolve_one_analyte <- function(analyte_raw, org, method_raw, registry) {
   na_res <- function(status) list(status = status, uuid_lab = NA_character_, uuid_analyte = NA_character_)
-  if (is.na(analyte_raw) || is.na(org)) return(na_res("miss"))
+  if (is.na(.rc_method_key(analyte_raw))) return(na_res("held"))
+  if (is.na(org)) return(na_res("miss"))
 
   lm <- registry$lab_method
   # (1) exact raw-name (case-sensitive) + organisation + method.
@@ -1252,12 +1274,18 @@
   na_res("miss")
 }
 
-#' Resolve analyte/method for every row (R-11.6 conveyor). EVERY row is kept.
-#' A resolved analyte -> `analyte_pending = FALSE`. A dangling method, an
-#' ambiguous fold, a CAS-only hit, or a full miss all -> `analyte_pending =
-#' TRUE`, `uuid_analyte = NA` and commit dangling (a dangling lab_method is
-#' materialised at COMMIT - A54). A CAS hit carries the matched analyte on its
-#' review item AS A SUGGESTION, never as a link (A66).
+#' Resolve analyte/method for every row (R-11.6 conveyor). A resolved analyte
+#' -> `analyte_pending = FALSE`. A dangling method, an ambiguous fold, a
+#' CAS-only hit, or a full miss all -> `analyte_pending = TRUE`, `uuid_analyte
+#' = NA` and commit dangling (a dangling lab_method is materialised at
+#' COMMIT - A54). A CAS hit carries the matched analyte on its review item AS
+#' A SUGGESTION, never as a link (A66).
+#'
+#' PLAN-7b round-2 D2: a row whose `analyte_raw` is NA or folds to nothing
+#' (`.rc_resolve_one_analyte()` status `"held"`) is dropped from `kept`
+#' entirely - the analyte-side mirror of `.rc_resolve_features()`'s "NA/blank
+#' feature_raw, no key to hang a pending alias on" HELD rule. Every other row
+#' is kept, exactly as before.
 #' @return `list(kept, review)`.
 #' @keywords internal
 #' @noRd
@@ -1273,9 +1301,14 @@
   uuid_lab <- rep(NA_character_, n)
   uuid_analyte <- rep(NA_character_, n)
   cas_suggest <- rep(NA_character_, n)
+  held <- rep(FALSE, n)
 
   for (i in seq_len(n)) {
     res <- .rc_resolve_one_analyte(rows$analyte_raw[[i]], rows$org[[i]], rows$method_raw[[i]], registry)
+    if (identical(res$status, "held")) {
+      held[[i]] <- TRUE
+      next
+    }
     uuid_lab[[i]] <- res$uuid_lab
     uuid_analyte[[i]] <- res$uuid_analyte
     # CAS suggestion only when no lab_method matched at all (miss/ambiguous):
@@ -1290,17 +1323,30 @@
   rows$uuid_analyte <- uuid_analyte
   rows$analyte_pending <- is.na(uuid_analyte)
 
-  review <- .rc_analyte_review(rows, cas_suggest)
-  list(kept = rows, review = review)
+  review <- .rc_analyte_review(rows, cas_suggest, held)
+  list(kept = rows[!held, , drop = FALSE], review = review)
 }
 
 #' Review items for pending analytes with NO resolved method (uuid_lab NA): a
 #' CAS-suggested row gets its own `known_analyte_no_method` item naming the
 #' suggested analyte; the rest group by `(key(analyte_raw), org)`. A dangling
 #' METHOD hit (method known, analyte NULL) is not re-flagged here.
+#'
+#' PLAN-7b round-2 D2: `held` rows (analyte_raw NA or punctuation-only, no
+#' key to hang a dangling lab_method on) get their OWN group, by row-index -
+#' never folded into the string-keyed `split()` below via a sentinel: an
+#' `.rc_method_key()` output of NA coerced through `paste()` would read as
+#' the literal string `"NA"`, which could collide with a genuine analyte name
+#' that itself folds to `"na"` (same NA-sentinel hazard `.rc_feature_review()`
+#' documents for feature keys).
+#'
+#' PLAN-7b round-2 D4/D5: the GROUP order (`split()`'s locale collation) and
+#' the WITHIN-group `source_ref`/`source_hash` order (presentation-order
+#' dependent) are both radix-pinned, mirroring `.rc_feature_review()`'s own
+#' item-7/F.5 fixes - this sibling producer never received them.
 #' @keywords internal
 #' @noRd
-.rc_analyte_review <- function(rows, cas_suggest) {
+.rc_analyte_review <- function(rows, cas_suggest, held = rep(FALSE, nrow(rows))) {
   out <- list()
 
   # PLAN-16 R-16.18 RULING: `suggested_analyte` is an analyte uuid, but it is
@@ -1319,11 +1365,25 @@
     )
   }
 
-  miss_idx <- which(is.na(rows$uuid_lab) & is.na(cas_suggest))
+  held_idx <- which(held)
+  if (length(held_idx) > 0) {
+    held_idx <- held_idx[order(rows$source_ref[held_idx], method = "radix")]
+    out[[length(out) + 1]] <- .rc_review_row(
+      source_ref = rows$source_ref[held_idx], kind = "unknown_analyte",
+      n_rows = length(held_idx), source_hash = rows$source_hash[[held_idx[[1]]]],
+      subkind = "held",
+      diagnostics = list(analyte_raw = rows$analyte_raw[[held_idx[[1]]]],
+                         org = rows$org[[held_idx[[1]]]])
+    )
+  }
+
+  miss_idx <- which(!held & is.na(rows$uuid_lab) & is.na(cas_suggest))
   if (length(miss_idx) > 0) {
     key <- paste(.rc_method_key(rows$analyte_raw[miss_idx]), rows$org[miss_idx], sep = "||")
     groups <- split(miss_idx, key)
+    groups <- groups[order(names(groups), method = "radix")]
     for (g in groups) {
+      g <- g[order(rows$source_ref[g], method = "radix")]
       refs <- rows$source_ref[g]
       ar <- rows$analyte_raw[[g[[1]]]]
       org <- rows$org[[g[[1]]]]
@@ -1609,6 +1669,16 @@
 #' the method, which determines the analyte (A45's key preserved). A still-NA
 #' pending key (or a first-sighting dangling method with no `uuid_lab`) finds
 #' nothing.
+#'
+#' PLAN-7b round-2 D6: the query below carries an explicit `ORDER BY a.uuid`
+#' (the convention `.rc_resolve_one_analyte()` already uses at `:1232`/
+#' `:1244`, for the identical reason). Without it, when more than one
+#' committed `analysis` shares `(uuid_feature, CAST(date AS DATE), uuid_lab)`
+#' and the datetime narrowing below does not collapse the set to one, the
+#' `cand[1, ]` pick at the bottom of this function is whichever row DuckDB's
+#' physical storage order happens to emit first - not a stable property
+#' across compaction/checkpoint - and that uuid becomes `existing_uuid` /
+#' `uuid_existing` / `supersedes` on the caller's outcome.
 #' @return a one-row data frame, or `NULL` if no candidate.
 #' @keywords internal
 #' @noRd
@@ -1634,7 +1704,8 @@
        FROM "sample" s
        JOIN analysis a ON a.uuid_sample = s.uuid
        JOIN feature_alias fa ON fa.uuid = s.uuid_feature_alias
-       WHERE ', feat_clause, ' AND CAST(s.date AS DATE) = ? AND a.uuid_lab = ?'
+       WHERE ', feat_clause, ' AND CAST(s.date AS DATE) = ? AND a.uuid_lab = ?
+       ORDER BY a.uuid'
     ),
     params = list(feat_param, as.character(sample_date), uuid_lab)
   )
@@ -2081,6 +2152,11 @@ reconcile_event <- function(event, con) {
   counts <- c(clean = as.integer(nrow(clean)))
   if (nrow(count_df) > 0) {
     tbl <- tapply(count_df$n, count_df$key, sum)
+    # PLAN-7b round-2 D7: tapply() factorises `key`, so `names(tbl)` is
+    # locale-collated - same class of defect as D4/D10, latent only because
+    # today's key vocabulary (lowercase ASCII plus `qc_<UPPER>`) happens not
+    # to diverge across locales yet. Radix-pin it anyway.
+    tbl <- tbl[order(names(tbl), method = "radix")]
     counts <- c(stats::setNames(as.integer(tbl), names(tbl)), counts)
   }
 
