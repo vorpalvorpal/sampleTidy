@@ -1165,9 +1165,11 @@ Work E lands after Work B, and the E.3 test carries a positive control (below).
   migration that never checks passes. See also F.9, which is why the precondition is
   not an invariant.
 
-### R-15.44 Migration 003 aborts when any feature lacks a `self` alias
+### R-15.47 Migration 003 aborts when any feature lacks a `self` alias
 *(Declared 2026-07-26, Phase-7 audit PCR-A. This is the RESTATED R-15.20 criterion given a
-number of its own. R-15.20 itself stays permanently unassigned — the plan forbids reusing it.)*
+number of its own. R-15.20 itself stays permanently unassigned — the plan forbids reusing it.
+Numbered 47 because 44 was already taken by E.8's criterion and 45/46 are also live; I briefly
+declared this as 44 and collided with it. The highest previously used number was 46.)*
 
 **Why this had to be re-declared.** The R-15.20 block above opens with an HTML comment saying
 the criterion is withdrawn and *"must not be declared"*, then immediately RESTATES it with
