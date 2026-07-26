@@ -62,8 +62,16 @@
   actual <- DBI::dbListFields(con, table)
   bad <- setdiff(cols, actual)
   if (length(bad) > 0) {
+    # Round-3 audit S9: `{?s}` with TWO pluralisable substitutions in the same
+    # string (`bad`, length n, and `table`, length 1) makes cli raise its own
+    # "Multiple quantities for pluralization" - a bare `simpleError` that names
+    # NO column and carries NO `sampletidy_error` class, so every class-based
+    # handler misses it. This is the column guard for the WHOLE mutation layer
+    # (db_append/db_update/db_delete), so before this fix EVERY bad-column abort
+    # in the package was undiagnosable. `cli::qty()` pins the quantity to `bad`
+    # explicitly; keep it, and do not add a second vector to this string.
     cli::cli_abort(
-      "Column{?s} {.val {bad}} not found on table {.val {table}}.",
+      "{cli::qty(length(bad))}Column{?s} {.val {bad}} not found on table {.val {table}}.",
       class = "sampletidy_error"
     )
   }

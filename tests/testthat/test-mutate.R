@@ -1113,3 +1113,49 @@ test_that("R-12.6: a commit-time failure rolls back the whole call and aborts sa
   expect_equal(unchanged$organisation, "ALS",
     info = "the pre-commit UPDATE must be rolled back, leaving no partial write")
 })
+
+test_that("round-3 S9: .st_validate_columns() names the bad columns and is classed", {
+  # Before this fix the message string carried `{?s}` with TWO pluralisable
+  # substitutions, so cli raised its own bare `simpleError` reading "Multiple
+  # quantities for pluralization": no column named, and NOT a
+  # `sampletidy_error`, so every class-based handler in the package missed the
+  # column guard for the entire mutation layer. Assert the three things that
+  # regression destroyed - class, the offending column name, and the table -
+  # in BOTH the singular and plural branches, because the defect was in the
+  # pluralisation machinery itself.
+  con <- DBI::dbConnect(duckdb::duckdb())
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+  DBI::dbExecute(con, "CREATE TABLE t (a VARCHAR, b VARCHAR)")
+
+  one <- tryCatch(.st_validate_columns(con, "t", c("a", "zzz")), error = function(e) e)
+  expect_s3_class(one, "sampletidy_error")
+  expect_match(conditionMessage(one), "zzz", fixed = TRUE)
+  expect_match(conditionMessage(one), "\"t\"", fixed = TRUE)
+  expect_false(grepl("Multiple quantities", conditionMessage(one), fixed = TRUE))
+
+  two <- tryCatch(.st_validate_columns(con, "t", c("zzz", "yyy")), error = function(e) e)
+  expect_s3_class(two, "sampletidy_error")
+  expect_match(conditionMessage(two), "zzz", fixed = TRUE)
+  expect_match(conditionMessage(two), "yyy", fixed = TRUE)
+  expect_false(grepl("Multiple quantities", conditionMessage(two), fixed = TRUE))
+
+  # And the guard still passes a wholly-valid column set.
+  expect_silent(.st_validate_columns(con, "t", c("a", "b")))
+
+  # Reached through a real mutation-layer entry point, not just the helper:
+  # db_append() is where an operator actually meets this error. Must be an
+  # ALLOWLISTED table, or `.st_validate_table()` aborts first and this stops
+  # exercising the column guard at all.
+  DBI::dbExecute(con, 'CREATE TABLE feature (uuid VARCHAR, name VARCHAR)')
+  DBI::dbExecute(con, 'CREATE TABLE change_log (uuid VARCHAR PRIMARY KEY,
+    "at" TIMESTAMP, actor VARCHAR, "action" VARCHAR, tbl VARCHAR, uuid_row VARCHAR,
+    field VARCHAR, "old" VARCHAR, "new" VARCHAR, reason VARCHAR, source_hash VARCHAR)')
+  appended <- tryCatch(
+    db_append(con, "feature", tibble::tibble(uuid = "f1", nope = "y"),
+              actor = "test", reason = "S9"),
+    error = function(e) e
+  )
+  expect_s3_class(appended, "sampletidy_error")
+  expect_match(conditionMessage(appended), "nope", fixed = TRUE)
+  expect_false(grepl("Multiple quantities", conditionMessage(appended), fixed = TRUE))
+})
