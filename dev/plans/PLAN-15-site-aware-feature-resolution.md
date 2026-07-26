@@ -1136,7 +1136,13 @@ Work E lands after Work B, and the E.3 test carries a positive control (below).
   were already TRUE (E.5) — assert the end state over the 19, not the count of rows
   updated — and unchanged everywhere else. Row counts and checksums otherwise unchanged
   — **with a checksum that covers `feature_alias`** over
-  `(uuid, alias_key, uuid_feature, kind, auto_assign, n_seen)`. `mig001_counts_checksum()`
+  ~~`(uuid, alias_key, uuid_feature, kind, auto_assign, n_seen)`~~
+  **`(uuid, alias_key, uuid_feature, kind, n_seen)` — AMENDED 2026-07-26, Phase-7 audit
+  PCR-B.** `auto_assign` CANNOT sit in a before/after checksum: R1 flips it table-wide by
+  design, so the gate as originally written could never match on a *correct* migration — it
+  was unsatisfiable. That is why the implementer dropped the value-level checksum entirely,
+  a retreat larger than the contradiction forced: the other five columns ARE genuinely
+  invariant under 003 and were checkable all along. `mig001_counts_checksum()`
   covers feature/sample/analysis/lab_method only (001:57-84) and would not notice 003
   damaging the one table it modifies.
 
@@ -1158,6 +1164,31 @@ Work E lands after Work B, and the E.3 test carries a positive control (below).
   the healthy seed. Without (b) a migration that always aborts passes; without (a) a
   migration that never checks passes. See also F.9, which is why the precondition is
   not an invariant.
+
+### R-15.44 Migration 003 aborts when any feature lacks a `self` alias
+*(Declared 2026-07-26, Phase-7 audit PCR-A. This is the RESTATED R-15.20 criterion given a
+number of its own. R-15.20 itself stays permanently unassigned — the plan forbids reusing it.)*
+
+**Why this had to be re-declared.** The R-15.20 block above opens with an HTML comment saying
+the criterion is withdrawn and *"must not be declared"*, then immediately RESTATES it with
+instructions to construct a damaged seed. Read top-down, a test writer sees "withdrawn" and
+writes nothing — and that is exactly what happened: Phase 4 wrote no test, Phase 6 had no red,
+and **the mandated abort was never implemented**. Migration 003 shipped with no self-alias
+check at all, returning `status = "migrated"` on a seed with a self alias deleted. The struck
+text is what was withdrawn; the restated criterion was always in force. Splitting it out under
+its own heading is the fix for that ambiguity, not a change of intent.
+
+Acceptance (must be able to FAIL — the seed must be PURPOSE-BUILT, since 0 of 895 live and
+0 of 13 fixture features lack a self alias, so no shipped seed can exercise it):
+on a seed with exactly one `kind='self'` row DELETED, **(a)** `mig003_run()` aborts with
+`class = "sampletidy_error"`, the message NAMES the offending feature, `date_start` is still
+absent from `feature_alias`, and no 1003 marker was written; and **(b)** 003 still runs to
+completion on the healthy seed. Both halves are required: without (b) a migration that always
+aborts would pass, and without (a) a migration that never checks would pass.
+
+See also F.9, which is why the precondition is not an invariant: `add_feature()` now creates
+the self arm in the same transaction, so the invariant holds going FORWARD, but it is not
+retroactive, and D.1 records that features do get added by hand.
 
 ### R-15.21 sample_date NA yields unchanged behavior
 - `sample_date` NA → no narrowing, unchanged behaviour. Pin this as a **unit test on
@@ -1249,6 +1280,17 @@ E.7 is a new *kind*, not a new *architecture*.
 declared ID the bijection lint counted it as neither covered nor uncovered — invisible
 either way. The Phase-4 writer filed this; it is recorded here so it is not lost.
 The test must be retitled to carry `R-15.45`.)*
+
+**CARDINALITY, PINNED 2026-07-26 (Phase-7 audit PCR-2).** The note is emitted **once per
+`(alias_key, resolved feature)` group, NOT once per result row.** This was unspecified, and the
+implementation chose per-row — but reconcile's rows are ANALYSIS-grain (one per analyte per
+sample), so one ambiguous sampling point with a 30-analyte panel over 58 samples produced
+**~1,700 byte-identical notes per ingest**, each with a `review_queue_candidate` child. E.7's
+whole stated purpose is that it "is what stops [R1] turning into a review-queue flood", so a
+per-row note reintroduces the very flood the mechanism exists to prevent. Group exactly as
+`.rc_feature_review()` already does; `.rc_review_row()` already accepts `source_ref` as a
+VECTOR precisely so a grouped producer can carry them all. A one-row event satisfies the
+acceptance below either way, which is why the fan-out was invisible to it.
 
 Acceptance (must be able to FAIL): a key whose `self` arm and one live historical arm
 are BOTH `auto_assign = TRUE`, reconciled at a date inside the historical arm's bound,
@@ -1378,7 +1420,7 @@ below it belongs to a row that did not; E.7's belongs to a row that did.
 | 1 | `ambiguous` | no | ~~≥2 live candidates~~ **≥2 live candidates, NOT uniquely resolved by precedence 0** (restated 2026-07-23). Already implemented. Expired candidates, if any, ride along in an `expired=` clause (E.3) rather than winning. |
 | 2 | `expired_alias` | no | **ZERO live arms** (auto_assign-BLIND — see the ruling below) and ≥1 expired/not-yet-started one (E.3). Must emit at count 1. |
 | 3 | `suggestion` | no | **exactly ONE live arm**, `auto_assign = FALSE` (F.6). Must emit at count 1. Carries an `expired=` clause if the key ALSO has expired arms (ruling below). |
-| 4 (lowest) | `structural` | no | no alias row at all, and Layer 2 produced a parse (B.7). Already implemented as the fallback. |
+| 4 (lowest) | `structural` | no | ~~no alias row at all~~ **no LIVE and no EXPIRED alias candidate, and Layer 2 produced a parse — INCLUDING B.4's dangling-alias suggestion case (AMENDED 2026-07-26, Phase-7 audit PCR-1)**. The old wording contradicted B.4 (`:246-256`), which pins that a *dangling* `feature_alias` row still gets the structural hit attached as a SUGGESTION. The implementation follows B.4 and a green test pins it deliberately; `.rc_feature_expired()` and `.rc_feature_suggestions()` both exclude dangling arms, so a dangling-only key has zero live AND zero expired candidates and can reach no rank but 4. **The plan text was wrong, not the code — no code change.** |
 
 > **RULED 2026-07-24 — "LIVE CANDIDATE" WAS OVERLOADED, AND THAT IS WHAT MADE 2 AND 3
 > LOOK CONTRADICTORY.** *(Phase-5 audit round 3, PCR-1.)*
