@@ -267,7 +267,20 @@
       next                             # EXEMPTION 1: A12 supersede re-issue
     }
 
-    unmatched <- .ct_unmatched_clean_rows(con, clean)
+    # Phase-7b item 8: filter to the rows actually recorded against THIS work
+    # order before counting - `clean` is the WHOLE event's clean tibble, which
+    # can span more than one work order (this `for (wo in wos)` loop itself
+    # proves that), so counting over all of it overstated n_rows_blocked (and
+    # could reach exemption 3 wrongly) for whichever WO's guard fired first.
+    # `work_order` is absent only for legacy hand-built test fixtures with a
+    # single implicit WO; falling back to the WHOLE tibble there preserves
+    # their existing behaviour.
+    wo_clean <- if ("work_order" %in% names(clean)) {
+      clean[!is.na(clean$work_order) & clean$work_order == wo, , drop = FALSE]
+    } else {
+      clean
+    }
+    unmatched <- .ct_unmatched_clean_rows(con, wo_clean)
     if (length(unmatched) == 0) next   # EXEMPTION 3: everything already matches
 
     # payload built by .rq_row() -> jsonlite, never by concatenation.
@@ -623,6 +636,7 @@
   ref_unique_alias <- ref_unique_alias[!is.na(ref_unique_alias)]
 
   for (i in seq_len(nrow(review))) {
+    if (!identical(review$kind[[i]], "unknown_feature")) next
     sr <- review$source_ref[[i]]
     if (is.na(sr)) next
     refs <- strsplit(sr, ",", fixed = TRUE)[[1]]
@@ -1179,6 +1193,17 @@
       next
     }
     if (needs_review_only) {
+      # Phase-7b item 3: a SECOND commit_event() call on an already-blocked
+      # event (Step 0's contract: "a clean no-op abort") re-enters this
+      # branch with the file already sitting at needs_review - re-issuing the
+      # same state is not in .st_ingest_transitions[["needs_review"]] (it is
+      # deliberately non-terminal, per the roxygen above, so it is not
+      # rejected by the terminal-state check either), so it tripped the
+      # illegal-transition guard and rolled back the whole retry instead of
+      # being the no-op the blocking contract promises.
+      if (identical(row$state[[1]], "needs_review")) {
+        next
+      }
       ingest_file_set_state(con, h, "needs_review", reason = reason)
     } else {
       ingest_file_set_state(con, h, "committed", reason = reason)
@@ -1210,7 +1235,13 @@
 #' @param con an open read-write DBI connection, already live - this
 #'   function does NOT open its own connection via `with_db_write()` (A40);
 #'   the caller holds `con` open across the call.
-#' @return `NULL`, invisibly.
+#' @return invisibly, a list distinguishing a guard-blocked call from a real
+#'   commit (Phase-7b item 2): `list(blocked = TRUE, n_review = <n>)` when the
+#'   PLAN-15 F.10 re-ingest guard fired (no `sample`/`analysis` row was
+#'   written), or `list(blocked = FALSE, n_clean = <n>, n_review = <n>)` on a
+#'   real commit. Callers that only need the side effect (every current
+#'   caller except `.ig_reconcile_and_commit()`, R/ingest.R) may ignore the
+#'   return value entirely - no caller destructures it positionally.
 #' @keywords internal
 #' @noRd
 commit_event <- function(event, resolved, con) {
@@ -1221,7 +1252,7 @@ commit_event <- function(event, resolved, con) {
 
   .ct_check_not_already_committed(con, event$files)
 
-  db_transaction(con, function(con) {
+  result <- db_transaction(con, function(con) {
     # Step 0b (PLAN-15 F.10, R-15.31/R-15.32): a re-download of an
     # already-ingested work order is routed to review INSTEAD of committed.
     # Evaluated first, on reads only, so a blocked event writes no `sample` /
@@ -1242,7 +1273,12 @@ commit_event <- function(event, resolved, con) {
       # never lost; its files land on `needs_review`, not a terminal state.
       .ct_archive_files(con, event)
       .ct_set_file_states(con, event$files, 0L, nrow(blocked_review), reason)
-      return(invisible(NULL))
+      # Phase-7b item 2: the guard verdict MUST be distinguishable from a real
+      # commit in the return value - .ig_reconcile_and_commit() (R/ingest.R)
+      # derives its tally from resolved$clean, which is what reconcile WOULD
+      # have committed, not what commit_event() actually wrote; without this
+      # a blocked event was silently counted as committed.
+      return(list(blocked = TRUE, n_review = nrow(blocked_review)))
     }
 
     uuid_project <- .ct_ensure_project(con, event$work_order, reason)
@@ -1278,8 +1314,8 @@ commit_event <- function(event, resolved, con) {
 
     .ct_set_file_states(con, event$files, nrow(clean), nrow(review), reason)
 
-    invisible(NULL)
+    list(blocked = FALSE, n_clean = nrow(clean), n_review = nrow(review))
   })
 
-  invisible(NULL)
+  invisible(result)
 }

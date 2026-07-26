@@ -357,11 +357,33 @@ confirm_feature_aliases <- function(uuid_alias, uuid_feature = NULL, confirmed_b
       # steps must commit separately. Deliberately after, not before, so the
       # D5 collision analysis inside the transaction still sees the samples
       # exactly where they were.
+      #
+      # RULED BY ROBIN 2026-07-25 (Phase-7b item 2): the redundant arm left
+      # behind by this branch (`uuid_feature IS NULL`) is UNRECLAIMABLE -
+      # `.fa_identity_duplicates()` joins `d.uuid_feature = s.uuid_feature`,
+      # so a dangling redundant arm can never match it, the item never leaves
+      # `pending_features()`, and no exported API can clear it. Delete it
+      # HERE, in this same post-pass, immediately after its samples are
+      # re-pointed - never inside the confirm transaction above, where the
+      # arm may still carry sample references and duckdb's chained-FK
+      # limitation (see the head-of-file note) would refuse the DELETE
+      # anyway. Mirrors `merge_identity_aliases()` (E.8): repoint via
+      # `.fa_repoint_samples()`, then a plain `db_delete()` - by this point
+      # the arm is PROVABLY zero-sample, so no FK dance is needed for the
+      # delete itself.
       for (i in seq_len(nrow(out))) {
         if (!is.na(out$uuid_self_arm[[i]])) {
           .fa_repoint_samples(
             con, from = out$uuid_alias[[i]], to = out$uuid_self_arm[[i]],
             actor = confirmed_by
+          )
+          db_delete(
+            con, "feature_alias", out$uuid_alias[[i]], actor = confirmed_by,
+            reason = paste0(
+              "confirm_feature_aliases(): redundant identity arm deleted ",
+              "after its samples were re-pointed onto the surviving self arm '",
+              out$uuid_self_arm[[i]], "' (F.19 post-pass, Phase-7b item 2)"
+            )
           )
         }
       }
@@ -386,7 +408,15 @@ confirm_feature_aliases <- function(uuid_alias, uuid_feature = NULL, confirmed_b
   checkmate::assert_string(kind)
   if (!kind %in% .fa_kind_vocabulary) {
     cli::cli_abort(
-      "kind must be one of {.val {.fa_kind_vocabulary}}, not {.val {kind}}.",
+      # Phase-7b item 7: `{.fa_kind_vocabulary}` is a leading-dot `{}`
+      # expression, which cli >= 3.4.0 treats as a STYLE token, not
+      # interpolation - so this literally never formats the message, it
+      # throws cli's own "Invalid cli literal" error first, of class
+      # `rlib_error_3_0`, not `sampletidy_error`. A caller catching
+      # `sampletidy_error` (this function's own documented contract) misses
+      # it entirely. Parenthesising the inner expression is exactly what
+      # cli's own error message recommends.
+      "kind must be one of {.val {(.fa_kind_vocabulary)}}, not {.val {kind}}.",
       class = "sampletidy_error"
     )
   }
@@ -506,9 +536,16 @@ confirm_feature_aliases <- function(uuid_alias, uuid_feature = NULL, confirmed_b
       con, 'SELECT count(*) AS n FROM "sample" WHERE uuid_feature_alias = ?',
       params = list(uuid_alias)
     )$n[[1]]
+    # Phase-7b item 1: a bounds-only call confirms NOTHING - it only widens or
+    # clears a validity window. Writing confirmed_by/auto_assign here would
+    # silently re-confirm the row and, for a row with auto_assign = FALSE
+    # (a curator's per-row veto on a non-'self' arm, PLAN-15:574), silently
+    # overturn that veto. `changes` therefore carries `bounds` alone; the
+    # audit trail is preserved regardless - db_update() writes actor/reason to
+    # change_log on every call.
     db_update(
       con, "feature_alias", uuid_alias,
-      changes = c(list(confirmed_by = confirmed_by, auto_assign = TRUE), bounds),
+      changes = bounds,
       actor = confirmed_by, reason = "confirm_feature_aliases(): validity bounds"
     )
     return(tibble::tibble(
@@ -547,6 +584,33 @@ confirm_feature_aliases <- function(uuid_alias, uuid_feature = NULL, confirmed_b
     con, 'SELECT count(*) AS n FROM "sample" WHERE uuid_feature_alias = ?',
     params = list(uuid_alias)
   )$n[[1]]
+
+  # Phase-7b item 3 (D5, RULED BY ROBIN 2026-07-25): `.fa_find_collisions()`
+  # below requires `fa2.uuid_feature = ?` for the OTHER sample, so it is
+  # blind to a second sample reached through THIS SAME dangling alias - that
+  # sample's `uuid_feature` is still NULL (the alias is not yet confirmed),
+  # so it can never match. Two samples on this alias landing on one
+  # (feature, date) once confirmation resolves would therefore land silently.
+  # Same-point/same-date field duplicates are a routine monitoring pattern,
+  # so this does NOT abort (unlike the cross-alias case below) and does NOT
+  # invent a winner (no "which sample is pre-existing" contract exists for
+  # two samples arriving via the same alias) - it opens a review item via the
+  # existing `review_queue_add()` and lets the confirmation proceed.
+  self_collisions <- .fa_find_self_collisions(con, uuid_alias)
+  if (nrow(self_collisions) > 0) {
+    for (i in seq_len(nrow(self_collisions))) {
+      review_queue_add(
+        con, kind = "sample_collision", subkind = "same_alias",
+        uuid_alias = uuid_alias, uuid_target = uuid_alias,
+        diagnostics = list(
+          uuid_feature = uuid_feature,
+          collision_date = as.character(self_collisions$collision_date[[i]]),
+          uuid_sample_a = self_collisions$uuid_a[[i]],
+          uuid_sample_b = self_collisions$uuid_b[[i]]
+        )
+      )
+    }
+  }
 
   collisions <- .fa_find_collisions(con, uuid_alias, uuid_feature)
 
@@ -599,6 +663,32 @@ confirm_feature_aliases <- function(uuid_alias, uuid_feature = NULL, confirmed_b
     )
     if (nrow(arms) > 0 && !identical(arms$uuid[[1]], uuid_alias)) {
       self_arm <- arms$uuid[[1]]
+    }
+  }
+
+  # Phase-7b item 6: R1 pins own-name reachability as UNCONDITIONAL. A bound
+  # on a 'self' arm makes the feature unreachable by its own name outside the
+  # window, and since auto_assign stays TRUE on a 'self' arm regardless,
+  # R1's post-condition cannot detect it. Abort rather than silently write
+  # the bound - on any of the three ways a 'self' arm could end up bounded
+  # here: (a) the target row already carries kind = 'self' (a direct
+  # re-confirm with bounds); (b) an identity mapping is about to FLIP an
+  # existing self arm (`self_arm` resolved above); (c) an identity mapping is
+  # about to BECOME the feature's self arm for the first time (`is_identity`
+  # true, no pre-existing self arm found).
+  if (length(bounds) > 0) {
+    target_is_self <- identical(alias$kind[[1]], "self") || !is.na(self_arm) || is_identity
+    if (target_is_self) {
+      cli::cli_abort(
+        paste0(
+          "Cannot set a validity bound on alias '", uuid_alias, "': it is (or is ",
+          "becoming) feature '", uuid_feature, "'s 'self' arm. R1 pins a feature's ",
+          "own-name reachability as unconditional; bounding the self arm would make ",
+          "it unreachable by its own name outside the window, and auto_assign staying ",
+          "TRUE on a self arm means nothing downstream could detect it."
+        ),
+        class = "sampletidy_error"
+      )
     }
   }
 
@@ -716,6 +806,31 @@ confirm_feature_aliases <- function(uuid_alias, uuid_feature = NULL, confirmed_b
       AND fa2.uuid_feature = ?
     ',
     params = list(uuid_alias, uuid_feature)
+  )
+}
+
+#' Find same-date collisions AMONG samples reached through `uuid_alias`
+#' itself (Phase-7b item 3, RULED BY ROBIN 2026-07-25). `.fa_find_collisions()`
+#' cannot see this shape: it requires the OTHER sample's alias to already
+#' carry `uuid_feature` (i.e. already confirmed), but a second sample on this
+#' SAME dangling alias has `uuid_feature IS NULL` until this very call
+#' resolves it, so it never matches that join. One row per unordered pair
+#' (`s2.uuid > s1.uuid`, so a pair is never reported twice).
+#' @keywords internal
+#' @noRd
+.fa_find_self_collisions <- function(con, uuid_alias) {
+  DBI::dbGetQuery(
+    con,
+    '
+    SELECT DISTINCT s1.uuid AS uuid_a, s2.uuid AS uuid_b,
+           CAST(s1.date AS DATE) AS collision_date
+    FROM "sample" s1
+    JOIN "sample" s2
+      ON CAST(s2.date AS DATE) = CAST(s1.date AS DATE) AND s2.uuid > s1.uuid
+    WHERE s1.uuid_feature_alias = ?
+      AND s2.uuid_feature_alias = ?
+    ',
+    params = list(uuid_alias, uuid_alias)
   )
 }
 
@@ -891,6 +1006,21 @@ merge_identity_aliases <- function(db = st_config("live_db"), actor, dry_run = F
       .fa_torn_guard(con)
 
       cand <- .fa_identity_duplicates(con)
+      # Phase-7b item 4: `.fa_identity_duplicates()` emits one row per SELF
+      # arm, so two `kind = 'self'` arms sharing one feature both join
+      # against the same duplicate and yield the same `uuid_loser` twice.
+      # Without this de-dup, the loop below would re-delete an
+      # already-deleted `uuid_loser` on iteration 2 and abort AFTER
+      # iteration 1's writes had already committed (there is no
+      # `db_transaction()` around this loop - each iteration's repoint/
+      # update/delete are their own separately committed mutation-layer
+      # calls, per the guarded FK exception at the head of this file), losing
+      # the itemised return value for every later iteration too. The absence
+      # of a transaction here is the underlying exposure and stays: this
+      # removes the TRIGGER (a duplicate uuid_loser reaching the loop), not
+      # the class of exposure (some other future write ordering could still
+      # hit a half-applied state on a real error).
+      cand <- cand[!duplicated(cand$uuid_loser), , drop = FALSE]
       if (nrow(cand) == 0) {
         return(tibble::tibble(
           alias_key = character(0), uuid_winner = character(0),

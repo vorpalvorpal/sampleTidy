@@ -229,6 +229,70 @@ test_that("R-10.2: QC rows are skipped with the fixture's known counts and revie
   expect_equal(report$review_items_opened, nrow(reviews))
 })
 
+# ---- Phase 7b item 7: PLAN-15 F.10's re-ingest guard driven through
+#      ingest_dir() itself (regression test for item 2's return-contract fix)
+#      - the R-10.3 idempotency block below re-ingests BYTE-IDENTICAL files,
+#      so content-hash dedup pre-empts the guard before it is ever reached;
+#      that is exactly why item 2's bug had no test that could see it. This
+#      stages a differently-named, CONTENT-DIFFERENT copy of an
+#      already-committed work order's source so the guard genuinely fires
+#      through the full route/parse/assemble/reconcile/commit chain. --------
+
+test_that("Phase-7b item 7: ingest_dir() reports a guard-blocked re-download as blocked, not committed - n_events_committed/rows_new/review_items_opened all reflect the block, not a phantom commit", {
+  db_path <- e2e_setup()
+  input_dir <- build_e2e_input_dir()
+  report1 <- ingest_dir(input_dir, db = db_path)
+  expect_gt(report1$n_events_committed, 0)  # sanity: WO XX1234567 really committed
+
+  # A differently-named, CONTENT-DIFFERENT (new hash - hash dedup cannot
+  # pre-empt this) re-download of work order XX1234567: the SAME resolved
+  # feature (T.S01/pH Value/EA005P, already loaded above) but a NEW
+  # sample_datetime (01 Sep 2025) matching NOTHING already committed - the
+  # classic F.10 block, same revision (0) as the original.
+  redl_dir <- withr::local_tempdir()
+  chem_path <- file.path(redl_dir, "PROJ_A.ESDAT_XX1234567_0_REDL.Chemistry2e.CSV")
+  sample_path <- file.path(redl_dir, "PROJ_A.ESDAT_XX1234567_0_REDL.Sample2e.CSV")
+  writeLines(c(
+    "SampleCode,ChemCode,OriginalChemName,Prefix,Result,Result_Unit,Total_or_Filtered,Result_Type,Method_Type,Method_Name,Extraction_Date,Analysed_Date,EQL,EQL_Units,Comments,Lab_Qualifier,UCL,LCL",
+    "XX1234567001,,pH Value,,6.80,pH Unit,T,Numeric,pH by PC Titrator,EA005P: pH by PC Titrator,,01 Sep 2025,0.01,pH Unit,,,,"
+  ), chem_path)
+  writeLines(c(
+    "SampleCode,Sampled_Date_Time,Field_ID,Blank1,Depth,Blank2,Matrix_Type,Sample_Type,Parent_Sample,Blank3,SDG,Lab_Name,Lab_SampleID,Lab_Comments,Lab_Report_Number",
+    "XX1234567001,01 Sep 2025 09:00,T.S01,,,,WATER,Normal,,,,ALSE-Sydney,XX1234567001,,XX1234567"
+  ), sample_path)
+
+  con <- DBI::dbConnect(duckdb::duckdb(), db_path, read_only = TRUE)
+  before_sample <- DBI::dbGetQuery(con, "SELECT count(*) AS n FROM \"sample\"")$n
+  before_analysis <- DBI::dbGetQuery(con, "SELECT count(*) AS n FROM analysis")$n
+  before_review <- DBI::dbGetQuery(con, "SELECT count(*) AS n FROM review_queue")$n
+  DBI::dbDisconnect(con, shutdown = TRUE)
+
+  report2 <- ingest_dir(redl_dir, db = db_path)
+
+  con2 <- DBI::dbConnect(duckdb::duckdb(), db_path, read_only = TRUE)
+  on.exit(DBI::dbDisconnect(con2, shutdown = TRUE))
+  after_sample <- DBI::dbGetQuery(con2, "SELECT count(*) AS n FROM \"sample\"")$n
+  after_analysis <- DBI::dbGetQuery(con2, "SELECT count(*) AS n FROM analysis")$n
+  after_review <- DBI::dbGetQuery(con2, "SELECT count(*) AS n FROM review_queue")$n
+
+  # Reproduction premise: the guard actually fired at the DB level - zero new
+  # sample/analysis rows, at least one new review item.
+  expect_equal(after_sample, before_sample)
+  expect_equal(after_analysis, before_analysis)
+  expect_gt(after_review, before_review)
+
+  # The item-2 regression: pre-fix, commit_event() returned invisible(NULL)
+  # from BOTH the blocked and the committed branch, so
+  # .ig_reconcile_and_commit() derived its tally from resolved$clean (what
+  # reconcile WOULD have committed, not what commit_event() actually wrote)
+  # and counted a blocked event as committed unconditionally - measured as
+  # n_committed=1, new=1, review_opened=0 against 0 samples/0 analyses/1
+  # review row actually written.
+  expect_equal(report2$n_events_committed, 0)
+  expect_equal(report2$rows_new, 0)
+  expect_equal(report2$review_items_opened, after_review - before_review)
+})
+
 # ---- R-10.3: idempotency ----------------------------------------------------
 
 test_that("R-10.3: repeat ingests over an unchanged (or touched) directory produce zero deltas; a byte-identical rename adds exactly one sighting", {

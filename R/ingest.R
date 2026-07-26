@@ -155,11 +155,12 @@
           }
         }
 
+        commit_result <- NULL
         if (!dry_run) {
-          commit_event(event, resolved, con)
+          commit_result <- commit_event(event, resolved, con)
         }
 
-        list(resolved = resolved)
+        list(resolved = resolved, commit_result = commit_result)
       },
       error = function(e) e
     )
@@ -178,25 +179,48 @@
     }
 
     resolved <- step$resolved
-
-    clean <- resolved$clean
-    if (nrow(clean) > 0 && "supersedes" %in% names(clean)) {
-      tally$new <- tally$new + sum(is.na(clean$supersedes))
-      tally$superseded <- tally$superseded + sum(!is.na(clean$supersedes))
-    } else {
-      tally$new <- tally$new + nrow(clean)
-    }
+    # Phase-7b item 2: commit_event() now returns a guard verdict
+    # (list(blocked = ..., ...)) distinguishing a PLAN-15 F.10 guard-blocked
+    # call (no sample/analysis row written; resolved$clean was never
+    # committed) from a real commit. Before this, both branches returned
+    # invisible(NULL), so a blocked event's tally was derived from
+    # resolved$clean - what reconcile WOULD have committed, not what
+    # commit_event() actually wrote - and committed_any/n_committed were set
+    # unconditionally.
+    blocked <- !dry_run && isTRUE(step$commit_result$blocked)
 
     skipped <- resolved$skipped
     if (nrow(skipped) > 0 && "reason" %in% names(skipped)) {
       tally$already_present <- tally$already_present + sum(skipped$reason == "already_present")
     }
     tally$skipped <- tally$skipped + nrow(skipped)
-    tally$review_opened <- tally$review_opened + nrow(resolved$review)
+
+    if (blocked) {
+      # resolved$clean was never committed - it contributes zero rows. The
+      # review items ACTUALLY written are commit_event()'s own count
+      # (resolved$review plus the guard's own blocking row), not
+      # nrow(resolved$review) alone.
+      tally$review_opened <- tally$review_opened + step$commit_result$n_review
+    } else {
+      clean <- resolved$clean
+      if (nrow(clean) > 0 && "supersedes" %in% names(clean)) {
+        tally$new <- tally$new + sum(is.na(clean$supersedes))
+        tally$superseded <- tally$superseded + sum(!is.na(clean$supersedes))
+      } else {
+        tally$new <- tally$new + nrow(clean)
+      }
+      tally$review_opened <- tally$review_opened + nrow(resolved$review)
+    }
 
     if (!dry_run) {
+      # committed_any still reflects "this run made writes worth snapshotting"
+      # - a blocked event still writes review_queue/asset/ingest_file rows -
+      # but n_committed (a distinct, event-tally figure) counts only events
+      # that actually committed clean rows.
       committed_any <- TRUE
-      n_committed <- n_committed + 1L
+      if (!blocked) {
+        n_committed <- n_committed + 1L
+      }
     }
   }
 

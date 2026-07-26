@@ -790,7 +790,7 @@ review_queue_add <- function(con, kind, work_order = NA_character_,
 #' longer matches `status = 'open'`, so a second identical call closes zero
 #' rows.
 #'
-#' D6 (the NA trap): a missing/`NA`/zero-length `uuid_target` returns early
+#' D6 (the NA trap): an `NA`/zero-length `uuid_target` returns early
 #' and closes NOTHING, without erroring. This is NOT relying on SQL's own
 #' `= NULL` semantics (which never match) - it is a deliberate R-side guard,
 #' because the moment anything ever writes the literal string `"NA"` into
@@ -798,8 +798,8 @@ review_queue_add <- function(con, kind, work_order = NA_character_,
 #' unmatched by accident.
 #'
 #' @param con an open read-write DBI connection.
-#' @param uuid_target the `review_queue.uuid_target` value to close; a
-#'   missing/`NA`/zero-length value closes nothing (D6).
+#' @param uuid_target the `review_queue.uuid_target` value to close; an
+#'   `NA`/zero-length value closes nothing (D6).
 #' @param resolution free-text resolution stored on every closed row.
 #' @param resolved_by who resolved it.
 #' @return integer count of rows closed, invisibly.
@@ -832,5 +832,10 @@ review_queue_close <- function(con, uuid_target, resolution, resolved_by) {
       WHERE uuid_target = ? AND status = 'open'",
     params = list(resolution, resolved_by, Sys.time(), uuid_target)
   )
-  invisible(n)
+  # D6's two zero-row cases (the NA/zero-length early return above, and this
+  # SQL path closing zero matching rows) must return the SAME type: the early
+  # return already returns invisible(0L) (integer); DBI::dbExecute() returns
+  # a `numeric` (double) count, so without this coercion the two zero-row
+  # cases silently disagreed on class.
+  invisible(as.integer(n))
 }

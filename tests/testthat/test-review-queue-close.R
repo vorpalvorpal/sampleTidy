@@ -160,6 +160,26 @@ test_that("R-15.38: ensure_schema() on a pre-version-5 database adds uuid_target
     con, "SELECT count(*) AS n FROM schema_version WHERE version = 5"
   )$n[[1]]
   expect_equal(v5_count, 1)
+
+  # Phase 7b Tier-3: R-15.38's own "the ALTER is not re-attempted" clause had
+  # no oracle - the v5_count == 1 assertion above is guaranteed by the
+  # marker-skip regardless of whether the v5 DDL is itself idempotent, so it
+  # cannot tell "the DDL is safe to re-run" from "the DDL never gets
+  # re-run". Delete ONLY the version-5 marker row (columns/data untouched -
+  # unlike the fixture-forcing block at the top of this test, which also
+  # drops the column) and re-apply: `ALTER TABLE ... ADD COLUMN IF NOT
+  # EXISTS uuid_target` (the real production DDL) must not raw-error just
+  # because the column is already present, and review_queue must still carry
+  # EXACTLY ONE uuid_target column afterwards (not silently duplicated).
+  DBI::dbExecute(con, "DELETE FROM schema_version WHERE version = 5")
+  expect_no_error(ensure_schema(con))
+
+  uuid_target_cols <- DBI::dbGetQuery(
+    con,
+    "SELECT column_name FROM information_schema.columns
+     WHERE table_name = 'review_queue' AND column_name = 'uuid_target'"
+  )
+  expect_equal(nrow(uuid_target_cols), 1)
 })
 
 # ======================================================================
@@ -243,6 +263,11 @@ test_that("R-15.40: review_queue_close() closes exactly the matching open row (s
   n_closed <- review_queue_close(con, uuid_target = target_uuid,
                                   resolution = "confirmed", resolved_by = "robin")
   expect_equal(n_closed, 1)
+  # Phase 7b: the SQL path (DBI::dbExecute()) returns a `numeric` (double)
+  # count natively - must match the NA/zero-length guard's own invisible(0L)
+  # (R-15.41, below), or the two zero-row cases D6 unifies would silently
+  # disagree on type.
+  expect_type(n_closed, "integer")
 
   row_a <- DBI::dbGetQuery(
     con, "SELECT status, resolution, resolved_by, resolved_at FROM review_queue WHERE uuid = ?",
@@ -294,12 +319,14 @@ test_that("R-15.41: review_queue_close() with a NA/missing target, or a target m
     review_queue_close(con, uuid_target = NA_character_, resolution = "confirmed", resolved_by = "robin")
   )
   expect_equal(n_na, 0)
+  expect_type(n_na, "integer")
 
   # A target matching no row - the second, weaker half.
   n_missing <- expect_no_error(
     review_queue_close(con, uuid_target = "no-such-uuid-anywhere", resolution = "confirmed", resolved_by = "robin")
   )
   expect_equal(n_missing, 0)
+  expect_type(n_missing, "integer")
 
   still_open <- DBI::dbGetQuery(con, "SELECT status FROM review_queue WHERE uuid = ?",
                                  params = list(null_uuid))

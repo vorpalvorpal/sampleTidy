@@ -326,6 +326,59 @@ test_that("R-11.10 (D5, cold review C14): override = TRUE merges a collision - w
   expect_setequal(on_winner$uuid, c("an-w1", "an-w2", "an-l2"))
 })
 
+# ---- Phase-7b item 3 (D5, RULED BY ROBIN): same-alias collision -----------
+
+#' Two samples reached through the SAME dangling alias, same date - the
+#' shape `.fa_find_collisions()` cannot see because the OTHER sample's alias
+#' (here, the SAME alias) has `uuid_feature IS NULL` until this confirmation
+#' resolves it.
+mk_self_collision_fixture <- function(con) {
+  DBI::dbExecute(con, "INSERT INTO feature_alias
+    (uuid, uuid_feature, name, alias_key, kind, n_seen, auto_assign,
+     first_seen, last_seen, confirmed_by) VALUES
+    (?, NULL, ?, ?, 'pending', 0, FALSE, TIMESTAMP '2025-08-05 08:00:00',
+     TIMESTAMP '2025-08-05 08:00:00', NULL)",
+    params = list("fa-9701", "T.SELFCOLL", "tselfcoll"))
+  DBI::dbExecute(con, "INSERT INTO \"sample\"
+    (uuid, uuid_feature_alias, uuid_project, date, datetime, organisation, person) VALUES
+    ('s-9701', 'fa-9701', 'p-0001', TIMESTAMP '2025-08-05 00:00:00', TIMESTAMP '2025-08-05 09:00:00', 'ALS', NULL),
+    ('s-9702', 'fa-9701', 'p-0001', TIMESTAMP '2025-08-05 00:00:00', TIMESTAMP '2025-08-05 14:00:00', 'ACIRL', 'J. Smith')")
+  invisible(NULL)
+}
+
+test_that("Phase-7b item 3 (D5, RULED BY ROBIN): two samples on the SAME dangling alias landing on one (feature, date) do NOT abort - the confirmation proceeds and a review item is opened, with no winner picked", {
+  setup <- fa_setup()
+  con <- setup$con
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  mk_self_collision_fixture(con)
+
+  before_review <- count_rows(con, "review_queue")
+
+  expect_no_error(
+    confirm_feature_aliases("fa-9701", "f-0002", confirmed_by = "alice")
+  )
+
+  # the confirmation proceeded - not blocked, no override needed.
+  after_alias <- feature_alias_row(con, "fa-9701")
+  expect_identical(after_alias$uuid_feature[[1]], "f-0002")
+
+  # both samples still exist, untouched - no winner picked, neither deleted
+  # or re-pointed.
+  both <- DBI::dbGetQuery(con, "SELECT uuid FROM \"sample\" WHERE uuid IN ('s-9701', 's-9702')")
+  expect_equal(nrow(both), 2)
+
+  after_review <- count_rows(con, "review_queue")
+  expect_equal(after_review, before_review + 1)
+
+  review <- DBI::dbGetQuery(con, "SELECT * FROM review_queue WHERE kind = 'sample_collision'")
+  expect_equal(nrow(review), 1)
+  expect_identical(review$uuid_alias[[1]], "fa-9701")
+  txt <- paste(review$payload, review$uuid_alias, review$uuid_target, collapse = " ")
+  expect_true(grepl("s-9701", txt, fixed = TRUE))
+  expect_true(grepl("s-9702", txt, fixed = TRUE))
+  expect_true(grepl("2025-08-05", txt, fixed = TRUE))
+})
+
 # ---- authority rule + input contract ------------------------------------
 
 test_that("R-11.10 (A55): confirmed_by is mandatory and must not default", {
@@ -620,6 +673,40 @@ test_that("R-11.11: vectorised over uuid_lab/uuid_analyte - one call confirms tw
 # ======================================================================
 
 # ======================================================================
+# Phase-7b item 7: .fa_check_kind()'s abort message used a leading-dot
+# `{.fa_kind_vocabulary}` cli literal, which cli >= 3.4.0 treats as a STYLE
+# token rather than interpolation - so the abort itself throws cli's own
+# "Invalid cli literal" error (class rlib_error_3_0) before this function's
+# documented sampletidy_error ever fires. A caller catching sampletidy_error
+# (the contract F.19 pins - "fails loudly ... not a silent override") misses
+# it entirely.
+# ======================================================================
+
+test_that("Phase-7b item 7: .fa_check_kind() on a typo'd kind aborts with class sampletidy_error (not a cli-internals rlib_error) AND the message names the valid vocabulary", {
+  err <- tryCatch(.fa_check_kind("histrical_code"), error = function(e) e)
+  expect_s3_class(err, "sampletidy_error")
+  msg <- conditionMessage(err)
+  # the message half matters independently of the class half: parenthesising
+  # the cli literal could silence the cli error while still producing a
+  # useless/empty message, and only asserting the class would not catch that.
+  for (valid_kind in .fa_kind_vocabulary) {
+    expect_true(grepl(valid_kind, msg, fixed = TRUE), info = valid_kind)
+  }
+  expect_true(grepl("histrical_code", msg, fixed = TRUE))
+})
+
+test_that("Phase-7b item 7: the same typo'd kind, reached through the public confirm_feature_aliases() entry point, also aborts sampletidy_error - not just the internal helper in isolation", {
+  setup <- fa_setup()
+  con <- setup$con
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  expect_error(
+    confirm_feature_aliases("fa-0010", "f-0002", confirmed_by = "alice", kind = "histrical_code"),
+    class = "sampletidy_error"
+  )
+})
+
+# ======================================================================
 # PLAN-15 F.19 / R-15.37 - confirm_feature_aliases() no longer mislabels
 # every confirmation as a transcription error (RULINGS-2026-07-23 R4).
 # ======================================================================
@@ -652,15 +739,24 @@ test_that("R-15.37: confirming an identity-mapped pending alias (alias_key == lo
 
   confirm_feature_aliases("fa-9602", "f-9601", confirmed_by = "alice")
 
-  # (a) no new feature_alias row minted for the identity confirmation -
-  # assert the table row count, not the resolution outcome.
+  # (a) no new feature_alias row is minted for the identity confirmation, and
+  # (Phase-7b item 2, RULED BY ROBIN) the now-provably-zero-sample redundant
+  # arm (fa-9602) is deleted in the post-pass, so the row count drops by
+  # exactly one - assert the table row count, not the resolution outcome.
   after_count <- count_rows(con, "feature_alias")
-  expect_equal(after_count, before_count)
+  expect_equal(after_count, before_count - 1)
 
   # (b) the EXISTING self arm (fa-9601), not the just-confirmed pending row,
   # carries the confirmed_by - proof the flip landed on the self arm.
   after_self <- feature_alias_row(con, "fa-9601")
   expect_identical(after_self$confirmed_by[[1]], "alice")
+
+  # (b2) Phase-7b item 2: the redundant arm itself is gone, and
+  # pending_features() (the only reader that could ever have surfaced it,
+  # since it can never leave 'pending' via .fa_identity_duplicates()) no
+  # longer lists it.
+  expect_equal(nrow(feature_alias_row(con, "fa-9602")), 0)
+  expect_false("fa-9602" %in% pending_features(con)$uuid_alias)
 
   # (c) a genuine NON-identity alias (key != lower(feature.name)) accepts an
   # explicit `kind`, which round-trips onto the row rather than being
@@ -707,6 +803,67 @@ test_that("R-15.37: confirming an identity-mapped pending alias (alias_key == lo
   defaulted <- feature_alias_row(con, "fa-9604")
   expect_identical(defaulted$kind[[1]], "transcription_error")
   expect_identical(defaulted$uuid_feature[[1]], "f-9601")
+})
+
+test_that("Phase-7b item 6: bounding a 'self' arm aborts - own-name reachability (R1) is unconditional and a bound cannot be silently attached to it", {
+  setup <- fa_setup()
+  con <- setup$con
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix, lon, lat) VALUES
+    ('f-9801', 'Z.SELFBOUND01', 'Z', 'surface', 'water', 150.9801, -33.9801)")
+
+  # (a) a DIRECT re-confirm of a row that already carries kind = 'self',
+  # with a bound - must abort before writing anything.
+  DBI::dbExecute(con, "INSERT INTO feature_alias
+    (uuid, uuid_feature, name, alias_key, kind, n_seen, auto_assign,
+     first_seen, last_seen, confirmed_by) VALUES
+    ('fa-9801', 'f-9801', 'Z.SELFBOUND01', 'z.selfbound01', 'self', 0, TRUE,
+     TIMESTAMP '2025-01-01 00:00:00', TIMESTAMP '2025-01-01 00:00:00', NULL)")
+  before_direct <- feature_alias_row(con, "fa-9801")
+  err_direct <- tryCatch(
+    confirm_feature_aliases(
+      "fa-9801", "f-9801", confirmed_by = "alice", date_start = as.Date("2025-01-01")
+    ),
+    error = function(e) e
+  )
+  expect_s3_class(err_direct, "sampletidy_error")
+  after_direct <- feature_alias_row(con, "fa-9801")
+  expect_true(is.na(after_direct$date_start[[1]])) # nothing written
+  expect_identical(after_direct, before_direct)
+
+  # (b) an IDENTITY mapping FLIPPING an existing self arm, with a bound -
+  # must also abort, even though the bound is nominally attached to the
+  # confirming call for the REDUNDANT arm, not the self arm directly.
+  DBI::dbExecute(con, "INSERT INTO feature_alias
+    (uuid, uuid_feature, name, alias_key, kind, n_seen, auto_assign,
+     first_seen, last_seen, confirmed_by) VALUES
+    ('fa-9802', NULL, 'Z.SELFBOUND01', 'z.selfbound01', 'pending', 0, FALSE,
+     TIMESTAMP '2025-09-01 08:00:00', TIMESTAMP '2025-09-01 08:00:00', NULL)")
+  before_flip_self <- feature_alias_row(con, "fa-9801")
+  err_flip <- tryCatch(
+    confirm_feature_aliases(
+      "fa-9802", "f-9801", confirmed_by = "alice", date_end = as.Date("2025-12-31")
+    ),
+    error = function(e) e
+  )
+  expect_s3_class(err_flip, "sampletidy_error")
+  after_flip_self <- feature_alias_row(con, "fa-9801") # the self arm itself, untouched
+  expect_identical(after_flip_self, before_flip_self)
+  after_flip_redundant <- feature_alias_row(con, "fa-9802")
+  expect_true(is.na(after_flip_redundant$uuid_feature[[1]])) # still dangling, no write happened
+  expect_true(is.na(after_flip_redundant$date_end[[1]]))
+
+  # (c) a NON-self bound (e.g. on fa-0009, kind = 'descriptive') is
+  # unaffected - the regression guard proving this fix did not become a
+  # blanket "bounds are always rejected" bug.
+  expect_no_error(
+    confirm_feature_aliases(
+      "fa-0009", "f-0003", confirmed_by = "alice", date_start = as.Date("2020-01-01")
+    )
+  )
+  non_self <- feature_alias_row(con, "fa-0009")
+  expect_equal(non_self$date_start[[1]], as.Date("2020-01-01"))
 })
 
 # ======================================================================
@@ -939,6 +1096,97 @@ test_that("R-15.44 (E.8): dry_run = TRUE leaves both alias rows AND the sample p
   expect_setequal(diff_rows$uuid, c("fa-e8-self2", "fa-e8-otherfeat"))
 })
 
+# ---- Phase-7b item 4: a duplicate loser aborts mid-way with no de-dup -----
+
+#' Two `kind = 'self'` arms sharing one `alias_key`/feature (a bug precondition
+#' - two self arms should not normally coexist, but this fixture proves the
+#' merge loop survives it rather than assuming it away), plus ONE non-self
+#' duplicate arm carrying the same key. `.fa_identity_duplicates()` joins on
+#' (alias_key, uuid_feature) with no restriction distinguishing the two self
+#' rows, so it emits the SAME `uuid_loser` (the one non-self arm) TWICE, paired
+#' with each self arm in turn - the exact duplicate-loser shape item 4 fixes.
+fa_e8_dup_loser_setup <- function() {
+  env <- parent.frame()
+  dir <- withr::local_tempdir(.local_envir = env)
+  path <- file.path(dir, "e8-duploser-seed.duckdb")
+  withr::local_options(list("sampletidy.live_db" = path), .local_envir = env)
+
+  {
+    con <- DBI::dbConnect(duckdb::duckdb(), path, read_only = FALSE)
+    on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+    ensure_schema(con)
+
+    DBI::dbExecute(con, "CREATE TABLE feature (
+      uuid VARCHAR PRIMARY KEY, name VARCHAR, site VARCHAR,
+      lon DOUBLE NOT NULL, lat DOUBLE NOT NULL)")
+    DBI::dbExecute(con, "CREATE TABLE feature_alias (
+      uuid VARCHAR PRIMARY KEY, uuid_feature VARCHAR REFERENCES feature(uuid),
+      name VARCHAR NOT NULL, alias_key VARCHAR NOT NULL, kind VARCHAR,
+      n_seen INTEGER DEFAULT 0, auto_assign BOOLEAN DEFAULT TRUE,
+      first_seen TIMESTAMP, last_seen TIMESTAMP, confirmed_by VARCHAR,
+      date_start DATE, date_end DATE, comments VARCHAR)")
+    DBI::dbExecute(con, "CREATE TABLE \"sample\" (
+      uuid VARCHAR PRIMARY KEY,
+      uuid_feature_alias VARCHAR NOT NULL REFERENCES feature_alias(uuid),
+      date TIMESTAMP, datetime TIMESTAMP, organisation VARCHAR)")
+    for (ddl in .st_mig003_empty_ddl) DBI::dbExecute(con, ddl)
+
+    DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, lon, lat) VALUES
+      ('f-dup-01', 'Z.DUPLOSER01', 'Z', 150.9101, -33.9101)")
+
+    DBI::dbExecute(con, "INSERT INTO feature_alias
+      (uuid, uuid_feature, name, alias_key, kind, n_seen, auto_assign, first_seen, last_seen, confirmed_by) VALUES
+      ('fa-dup-selfA', 'f-dup-01', 'Z.DUPLOSER01', 'z.duploser01', 'self', 1, FALSE,
+       TIMESTAMP '2020-01-01 00:00:00', TIMESTAMP '2020-01-01 00:00:00', NULL)")
+    DBI::dbExecute(con, "INSERT INTO feature_alias
+      (uuid, uuid_feature, name, alias_key, kind, n_seen, auto_assign, first_seen, last_seen, confirmed_by) VALUES
+      ('fa-dup-selfB', 'f-dup-01', 'Z.DUPLOSER01', 'z.duploser01', 'self', 1, FALSE,
+       TIMESTAMP '2020-01-01 00:00:00', TIMESTAMP '2020-01-01 00:00:00', NULL)")
+    DBI::dbExecute(con, "INSERT INTO feature_alias
+      (uuid, uuid_feature, name, alias_key, kind, n_seen, auto_assign, first_seen, last_seen, confirmed_by) VALUES
+      ('fa-dup-loser', 'f-dup-01', 'Z.DUPLOSER01', 'z.duploser01', 'transcription_error', 1, TRUE,
+       TIMESTAMP '2026-07-23 00:00:00', TIMESTAMP '2026-07-23 00:00:00', 'R. Shannon')")
+
+    DBI::dbExecute(con, "INSERT INTO \"sample\"
+      (uuid, uuid_feature_alias, date, datetime, organisation) VALUES
+      ('s-dup-01', 'fa-dup-loser', TIMESTAMP '2026-06-01 00:00:00', TIMESTAMP '2026-06-01 09:00:00', 'ALS')")
+  }
+
+  list(path = path, con = seed_con(path))
+}
+
+test_that("Phase-7b item 4: merge_identity_aliases() de-dups on uuid_loser before the loop, so a loser shared by two self arms does not abort mid-way after the first iteration's writes committed", {
+  setup <- fa_e8_dup_loser_setup()
+  con <- setup$con
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  expect_no_error(
+    result <- merge_identity_aliases(actor = "phase7b-item4-test")
+  )
+
+  # exactly ONE itemised row - the duplicate uuid_loser is collapsed, not
+  # reported (and re-processed) twice.
+  expect_equal(nrow(result), 1)
+  expect_identical(result$uuid_loser[[1]], "fa-dup-loser")
+  expect_true(result$uuid_winner[[1]] %in% c("fa-dup-selfA", "fa-dup-selfB"))
+
+  # the loser is gone, deleted exactly once.
+  expect_equal(nrow(DBI::dbGetQuery(con, "SELECT * FROM feature_alias WHERE uuid = 'fa-dup-loser'")), 0)
+
+  # exactly one of the two self arms received the merge (auto_assign TRUE,
+  # confirmed_by carried over); the other is untouched.
+  selves <- DBI::dbGetQuery(con,
+    "SELECT uuid, auto_assign, confirmed_by FROM feature_alias WHERE uuid IN ('fa-dup-selfA', 'fa-dup-selfB')")
+  expect_equal(nrow(selves), 2)
+  n_merged <- sum(selves$auto_assign & !is.na(selves$confirmed_by))
+  expect_equal(n_merged, 1)
+
+  # the sample was re-pointed onto whichever self arm actually won.
+  sample_row <- DBI::dbGetQuery(con, "SELECT uuid_feature_alias FROM \"sample\" WHERE uuid = 's-dup-01'")
+  expect_identical(sample_row$uuid_feature_alias[[1]], result$uuid_winner[[1]])
+})
+
 # ======================================================================
 # PLAN-15 E.4 / R-15.18 - confirm_feature_aliases() gains date_start /
 # date_end bound arguments: set, clear (explicit sentinel), leave-alone, and
@@ -1048,6 +1296,38 @@ test_that("R-15.18 (E.4): a bounds-only call works with uuid_feature OMITTED - w
   after <- feature_alias_row(con, "fa-9504")
   expect_identical(after$uuid_feature[[1]], "f-0003") # untouched - no feature re-pick
   expect_equal(after$date_start[[1]], as.Date("2024-01-01")) # bound widened
+})
+
+test_that("Phase-7b item 1: a bounds-only call on a row with auto_assign = FALSE (a curator veto on a non-'self' arm) does NOT flip auto_assign to TRUE or write confirmed_by - only the bound itself changes", {
+  setup <- fa_setup()
+  con <- setup$con
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  # fa-9506: a curated arm with the row already resolved (uuid_feature set)
+  # but auto_assign FALSE and confirmed_by NULL - the per-row veto PLAN-15:574
+  # pins on any non-'self' arm. The OLD bounds-only branch's
+  # `changes = c(list(confirmed_by = confirmed_by, auto_assign = TRUE), bounds)`
+  # is invisible against fa-9504 above (already auto_assign TRUE) but would
+  # flip THIS row's veto and mark a still-dangling/vetoed arm as confirmed.
+  DBI::dbExecute(con, "INSERT INTO feature_alias
+    (uuid, uuid_feature, name, alias_key, kind, n_seen, auto_assign,
+     first_seen, last_seen, confirmed_by, date_start) VALUES
+    ('fa-9506', 'f-0003', 'Z.VETOBOUNDS01', 'z.vetobounds01', 'historical_code', 0, FALSE,
+     TIMESTAMP '2025-01-01 00:00:00', TIMESTAMP '2025-01-01 00:00:00', NULL,
+     DATE '2025-05-01')")
+
+  before <- feature_alias_row(con, "fa-9506")
+  expect_false(before$auto_assign[[1]])
+  expect_true(is.na(before$confirmed_by[[1]]))
+
+  confirm_feature_aliases(
+    "fa-9506", confirmed_by = "alice", date_start = as.Date("2024-01-01")
+  )
+
+  after <- feature_alias_row(con, "fa-9506")
+  expect_false(after$auto_assign[[1]]) # veto NOT silently un-vetoed
+  expect_true(is.na(after$confirmed_by[[1]])) # NOT silently confirmed
+  expect_equal(after$date_start[[1]], as.Date("2024-01-01")) # bound still widened
 })
 
 test_that("R-15.18 (E.4): confirm_feature_aliases() with BOTH date_start and date_end entirely OMITTED leaves BOTH bounds unchanged - the direct guard of the NULL-means-leave-alone half of the sentinel scheme (PCR-4)", {

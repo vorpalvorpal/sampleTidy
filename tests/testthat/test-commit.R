@@ -78,6 +78,18 @@ mk_resolved <- function(clean = mk_clean_row(), review = tibble::tibble(),
 
 count_rows <- function(con, table) DBI::dbGetQuery(con, sprintf('SELECT count(*) AS n FROM "%s"', table))$n
 
+#' Phase-7b item 5: the ONE `work_order_reingest`/`blocked` guard row a test
+#' fixture is expected to have written - fetched with its typed `kind`/
+#' `subkind` columns AND its JSON `payload` (parsed for `n_rows_blocked`), so
+#' a blocking assertion can check more than "some review row of some kind
+#' exists" (the pre-existing `expect_gt(count_rows(...), before_review)`
+#' checks nothing about WHICH item landed).
+guard_review_row <- function(con) {
+  row <- DBI::dbGetQuery(con,
+    "SELECT kind, subkind, payload FROM review_queue WHERE kind = 'work_order_reingest'")
+  row
+}
+
 #' Local copies of test-reconcile.R's `mk_row`/`mk_event` builders (verbatim,
 #' lines ~18-50 there) - no cross-file name collision since each testthat
 #' test file runs in its own environment. Needed here to drive a REAL
@@ -886,6 +898,73 @@ test_that("W-8b-f2 (guard, holds before AND after the fix - do not repin): the r
   expect_true(is.na(stored$uuid_alias[[1]]))
 })
 
+# ---- Phase 7b item 6: a positive test for the source_hash half of the key -
+
+test_that("Phase-7b item 6: two review items sharing ONE source_ref, each carrying the source_hash of its OWN file, link to THEIR OWN (distinct) alias - the hash-keyed match, not the ref-only fallback", {
+  # W-8b-f2's guard test above proves the ref-only fallback correctly REFUSES
+  # to link an ambiguous ref. This proves the positive half: when each review
+  # row's OWN source_hash correctly identifies which file it belongs to, the
+  # hash-keyed lookup links it to that file's alias directly - the property
+  # the roxygen on .ct_rewrite_review_payloads() spends 15 lines justifying,
+  # and which had no test exercising the hash key actually doing its job.
+  setup <- commit_test_setup()
+  con <- setup$con
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  key_a <- .rc_feature_key("AA.ITEM6-HASH")
+  key_b <- .rc_feature_key("BB.ITEM6-HASH")
+
+  files <- tibble::tibble(hash = setup$hash, filename = basename(setup$path),
+                          adapter = "esdat/1", rank = 3L, kept = TRUE)
+  # Two pending rows, SAME source_ref ("r1"), from TWO DIFFERENT files
+  # (different source_hash), resolving to TWO DIFFERENT aliases - the exact
+  # ambiguous-ref shape the ref-only fallback must refuse, but which the
+  # hash-keyed lookup resolves correctly because each review item below
+  # carries the CORRECT file's own source_hash.
+  clean <- dplyr::bind_rows(
+    mk_p11_row(source_ref = "r1", source_hash = setup$hash,
+               feature_raw = "AA.ITEM6-HASH", alias_key = key_a,
+               feature_pending = TRUE, uuid_feature_alias = NA_character_,
+               sample_date = as.Date("2025-07-20"),
+               sample_datetime = as.POSIXct("2025-07-20 09:00:00", tz = "UTC")),
+    mk_p11_row(source_ref = "r1", source_hash = "item6-other-file-hash",
+               feature_raw = "BB.ITEM6-HASH", alias_key = key_b,
+               feature_pending = TRUE, uuid_feature_alias = NA_character_,
+               sample_date = as.Date("2025-07-20"),
+               sample_datetime = as.POSIXct("2025-07-20 10:00:00", tz = "UTC"))
+  )
+  review <- tibble::tibble(
+    source_ref = c("r1", "r1"), kind = c("unknown_feature", "unknown_feature"),
+    source_hash = c(setup$hash, "item6-other-file-hash"),
+    payload = c("r1,work_order=XX1234567,n_rows=1", "r1,work_order=XX1234567,n_rows=1")
+  )
+  resolved <- mk_resolved(clean = clean, review = review)
+
+  commit_event(mk_commit_event(files, work_order = setup$work_order), resolved, con)
+
+  alias_a <- dangling_alias_row(con, key_a)
+  alias_b <- dangling_alias_row(con, key_b)
+  expect_equal(nrow(alias_a), 1)
+  expect_equal(nrow(alias_b), 1)
+  expect_false(identical(alias_a$uuid[[1]], alias_b$uuid[[1]]))
+
+  stored_a <- DBI::dbGetQuery(con,
+    "SELECT uuid_alias FROM review_queue WHERE kind = 'unknown_feature' AND source_hash = ?",
+    params = list(setup$hash))
+  stored_b <- DBI::dbGetQuery(con,
+    "SELECT uuid_alias FROM review_queue WHERE kind = 'unknown_feature' AND source_hash = ?",
+    params = list("item6-other-file-hash"))
+  expect_equal(nrow(stored_a), 1)
+  expect_equal(nrow(stored_b), 1)
+  # Pre-fix (mutation `hit <- character(0)`): the hash-keyed lookup never
+  # matches ANYTHING, so both items fall through to the ref-only fallback,
+  # which sees ONE ref ("r1") mapping to TWO distinct aliases and correctly
+  # (per W-8b-f2's guard) refuses to link EITHER - both would be NA here,
+  # not just one.
+  expect_identical(stored_a$uuid_alias[[1]], alias_a$uuid[[1]])
+  expect_identical(stored_b$uuid_alias[[1]], alias_b$uuid[[1]])
+})
+
 # ---- PLAN-16 Q2 (Robin 2026-07-25): source_ref/n_rows survive the commit
 #      boundary INSIDE diagnostics, because review_queue has no column for
 #      either one ---------------------------------------------------------
@@ -1635,6 +1714,31 @@ test_that("R-15.31/R-15.32: the work-order re-ingest guard blocks a differently-
   expect_equal(count_rows(con, "sample"), before_sample)
   expect_equal(count_rows(con, "analysis"), before_analysis)
   expect_gt(count_rows(con, "review_queue"), before_review)
+
+  # Phase-7b item 5: WHICH item landed, not just "some review row exists" -
+  # kind/subkind and the n_rows_blocked value parsed out of the guard's own
+  # JSON payload (exactly 1: the lo event's single, non-matching clean row).
+  guard_row <- guard_review_row(con)
+  expect_equal(nrow(guard_row), 1)
+  expect_identical(guard_row$kind[[1]], "work_order_reingest")
+  expect_identical(guard_row$subkind[[1]], "blocked")
+  guard_diag <- jsonlite::fromJSON(guard_row$payload[[1]])
+  expect_equal(guard_diag$n_rows_blocked, 1)
+
+  # Phase-7b item 4 (F.17 obligations of the blocked path): the blocked
+  # deliverable is still archived (asset row + byte copy on disk), so it is
+  # never lost, and its ingest_file row lands on needs_review, NOT the
+  # committed/archived terminal state a real commit would use. A mutation
+  # sending `.ct_set_file_states()` down the committed->archived path for a
+  # blocked event (n_clean wrongly passed as nrow(resolved$clean) instead of
+  # 0L) survived the whole suite with no assertion here to catch it.
+  lo_asset <- DBI::dbGetQuery(con, "SELECT * FROM asset WHERE hash = ?", params = list(lo$hash))
+  expect_equal(nrow(lo_asset), 1)
+  expect_true(file.exists(file.path(setup$archive_dir, lo_asset$uuid[[1]])))
+
+  lo_state <- DBI::dbGetQuery(con, "SELECT state FROM ingest_file WHERE hash = ?",
+                              params = list(lo$hash))
+  expect_identical(lo_state$state[[1]], "needs_review")
 })
 
 test_that("R-15.32 (ACIRL false-merge guard): a first-time work order whose filename embeds a SHORTER, already-loaded ACIRL work order as a literal prefix still commits cleanly - the guard must key on the recorded work_order, never a filename-parsed one", {
@@ -1719,6 +1823,14 @@ test_that("R-15.32 (ACIRL false-split guard): a re-download of a loaded work ord
   expect_equal(count_rows(con, "sample"), before_sample)
   expect_equal(count_rows(con, "analysis"), before_analysis)
   expect_gt(count_rows(con, "review_queue"), before_review)
+
+  # Phase-7b item 5 (see note at the R-15.31/R-15.32 block above).
+  guard_row <- guard_review_row(con)
+  expect_equal(nrow(guard_row), 1)
+  expect_identical(guard_row$kind[[1]], "work_order_reingest")
+  expect_identical(guard_row$subkind[[1]], "blocked")
+  guard_diag <- jsonlite::fromJSON(guard_row$payload[[1]])
+  expect_equal(guard_diag$n_rows_blocked, 1)
 })
 
 test_that("R-15.32 (legacy work order): a re-download of a work order whose project row PREDATES this pipeline - samples present, no `change_log` project insert - is still blocked and routed to review", {
@@ -1775,4 +1887,220 @@ test_that("R-15.32 (legacy work order): a re-download of a work order whose proj
   expect_equal(count_rows(con, "sample"), before_sample)
   expect_equal(count_rows(con, "analysis"), before_analysis)
   expect_gt(count_rows(con, "review_queue"), before_review)
+
+  # Phase-7b item 5 (see note at the R-15.31/R-15.32 block above).
+  guard_row <- guard_review_row(con)
+  expect_equal(nrow(guard_row), 1)
+  expect_identical(guard_row$kind[[1]], "work_order_reingest")
+  expect_identical(guard_row$subkind[[1]], "blocked")
+  guard_diag <- jsonlite::fromJSON(guard_row$payload[[1]])
+  expect_equal(guard_diag$n_rows_blocked, 1)
+})
+
+# ---- Phase 7b item 1: .ct_rewrite_review_payloads() must key on `kind` too -
+
+test_that("Phase-7b item 1: a row that is BOTH feature- and analyte-pending stamps ONLY the unknown_feature item's uuid_target with the alias uuid; the unknown_analyte item sharing the SAME source_ref is left NA", {
+  setup <- commit_test_setup()
+  con <- setup$con
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  files <- tibble::tibble(hash = setup$hash, filename = basename(setup$path),
+                          adapter = "esdat/1", rank = 3L, kept = TRUE)
+  results <- mk_row(source_ref = "r1", source_hash = setup$hash,
+                     feature_raw = "T.NEW-P1-FEAT", analyte_raw = "NEW-P1-ANALYTE",
+                     method_raw = "NEW-P1-METHOD", cas_number = NA_character_,
+                     sample_datetime_raw = "10 Jul 2025 09:00")
+  event <- mk_event(results, work_order = setup$work_order)
+  out <- reconcile_event(event, con)
+
+  # Reproduction premise: one clean row produces TWO review items, both keyed
+  # on the SAME source_ref ("r1") - exactly the collision .ct_rewrite_review_
+  # payloads() must disambiguate by `kind`, not by (source_hash, source_ref).
+  expect_equal(nrow(out$review), 2)
+  expect_setequal(out$review$kind, c("unknown_feature", "unknown_analyte"))
+  expect_true(all(out$review$source_ref == "r1"))
+  expect_equal(nrow(out$clean), 1)
+
+  resolved <- mk_resolved(clean = out$clean, review = out$review, skipped = out$skipped,
+                          counts = c(new = nrow(out$clean)))
+  commit_event(mk_commit_event(files, work_order = setup$work_order), resolved, con)
+
+  stored <- DBI::dbGetQuery(con,
+    "SELECT kind, uuid_target FROM review_queue WHERE kind IN ('unknown_feature','unknown_analyte') AND source_hash = ?",
+    params = list(setup$hash))
+  expect_equal(nrow(stored), 2)
+  feat_row <- stored[stored$kind == "unknown_feature", , drop = FALSE]
+  an_row <- stored[stored$kind == "unknown_analyte", , drop = FALSE]
+
+  alias <- dangling_alias_row(con, .rc_feature_key("T.NEW-P1-FEAT"))
+  expect_equal(nrow(alias), 1)
+
+  # Pre-fix bug: the per-row loop had no `kind` filter, so the (source_hash,
+  # source_ref) key matched BOTH review rows and stamped uuid_target on
+  # whichever one the loop reached, including the unknown_analyte item -
+  # which confirm_feature_aliases() would then wrongly close as resolved
+  # while its lab_method stayed dangling.
+  expect_identical(feat_row$uuid_target[[1]], alias$uuid[[1]])
+  expect_true(is.na(an_row$uuid_target[[1]]))
+})
+
+# ---- Phase 7b item 2: commit_event()'s return value must distinguish a
+#      guard-blocked call from a real commit ---------------------------------
+
+test_that("Phase-7b item 2: commit_event() returns a guard verdict - blocked = FALSE for a real commit, blocked = TRUE with n_review = 1 for a guard-blocked re-download", {
+  setup <- commit_test_setup(filename = "PROJ_A.ESDAT_XX9990002_0.Chemistry2e.CSV",
+                              work_order = "XX9990002", revision = 0L)
+  con <- setup$con
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  files0 <- tibble::tibble(hash = setup$hash, filename = basename(setup$path),
+                           adapter = "esdat/1", rank = 3L, kept = TRUE)
+  event0 <- mk_event(mk_row(source_ref = "r1", source_hash = setup$hash,
+                             work_order = "XX9990002", revision = 0L,
+                             sample_datetime_raw = "01 Aug 2025 09:00"),
+                      work_order = "XX9990002")
+  resolved0 <- reconcile_event(event0, con)
+  expect_equal(nrow(resolved0$clean), 1)  # sanity: a real, unblocked commit
+  out0 <- commit_event(mk_commit_event(files0, work_order = "XX9990002"), resolved0, con)
+  expect_false(isTRUE(out0$blocked))
+
+  # a differently-named, same-revision re-download matching NOTHING already
+  # loaded - the classic F.10 block.
+  lo <- add_reconciled_file(setup, "PROJ_A.ESDAT_XX9990002_0_REDOWNLOAD.Chemistry2e.CSV",
+                             work_order = "XX9990002", revision = 0L)
+  files_lo <- tibble::tibble(hash = lo$hash, filename = basename(lo$path),
+                             adapter = "esdat/1", rank = 3L, kept = TRUE)
+  event_lo <- mk_event(mk_row(source_ref = "r1", source_hash = lo$hash,
+                               work_order = "XX9990002", revision = 0L,
+                               sample_datetime_raw = "03 Aug 2025 09:00"),
+                        work_order = "XX9990002")
+  resolved_lo <- reconcile_event(event_lo, con)
+  before_sample <- count_rows(con, "sample")
+  before_analysis <- count_rows(con, "analysis")
+  out_lo <- commit_event(mk_commit_event(files_lo, work_order = "XX9990002"), resolved_lo, con)
+
+  # Pre-fix: commit_event() returned invisible(NULL) from BOTH branches, so a
+  # caller (.ig_reconcile_and_commit(), R/ingest.R) could not tell a blocked
+  # event from a committed one and counted it as committed anyway.
+  expect_true(isTRUE(out_lo$blocked))
+  expect_equal(out_lo$n_review, 1)
+  expect_equal(count_rows(con, "sample"), before_sample)      # nothing written
+  expect_equal(count_rows(con, "analysis"), before_analysis)
+})
+
+# ---- Phase 7b item 3: retrying a blocked event must be a clean no-op abort -
+
+test_that("Phase-7b item 3: a SECOND commit_event() on an already-blocked (needs_review) event is a clean no-op abort, not an illegal needs_review -> needs_review transition error", {
+  setup <- commit_test_setup(filename = "PROJ_A.ESDAT_XX9990003_0.Chemistry2e.CSV",
+                              work_order = "XX9990003", revision = 0L)
+  con <- setup$con
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  files0 <- tibble::tibble(hash = setup$hash, filename = basename(setup$path),
+                           adapter = "esdat/1", rank = 3L, kept = TRUE)
+  event0 <- mk_event(mk_row(source_ref = "r1", source_hash = setup$hash,
+                             work_order = "XX9990003", revision = 0L,
+                             sample_datetime_raw = "01 Aug 2025 09:00"),
+                      work_order = "XX9990003")
+  commit_event(mk_commit_event(files0, work_order = "XX9990003"),
+               reconcile_event(event0, con), con)
+
+  # a differently-named re-download that trips the F.10 guard
+  lo <- add_reconciled_file(setup, "PROJ_A.ESDAT_XX9990003_0_REDOWNLOAD.Chemistry2e.CSV",
+                             work_order = "XX9990003", revision = 0L)
+  files_lo <- tibble::tibble(hash = lo$hash, filename = basename(lo$path),
+                             adapter = "esdat/1", rank = 3L, kept = TRUE)
+  event_lo <- mk_event(mk_row(source_ref = "r1", source_hash = lo$hash,
+                               work_order = "XX9990003", revision = 0L,
+                               sample_datetime_raw = "03 Aug 2025 09:00"),
+                        work_order = "XX9990003")
+  resolved_lo <- reconcile_event(event_lo, con)
+
+  out1 <- commit_event(mk_commit_event(files_lo, work_order = "XX9990003"), resolved_lo, con)
+  expect_true(isTRUE(out1$blocked))
+
+  state_after_1 <- DBI::dbGetQuery(con, "SELECT state FROM ingest_file WHERE hash = ?",
+                                   params = list(lo$hash))$state[[1]]
+  expect_identical(state_after_1, "needs_review")
+
+  before_sample <- count_rows(con, "sample")
+  before_analysis <- count_rows(con, "analysis")
+  before_review <- count_rows(con, "review_queue")
+
+  # Pre-fix: `.ct_set_file_states()`'s needs_review_only branch re-issued the
+  # same state on the SECOND call - needs_review -> needs_review - which is
+  # not in `.st_ingest_transitions[["needs_review"]]`, so it aborted (and
+  # rolled back the whole transaction) instead of being the no-op the
+  # blocking contract promises.
+  out2 <- commit_event(mk_commit_event(files_lo, work_order = "XX9990003"), resolved_lo, con)
+  expect_true(isTRUE(out2$blocked))
+
+  state_after_2 <- DBI::dbGetQuery(con, "SELECT state FROM ingest_file WHERE hash = ?",
+                                   params = list(lo$hash))$state[[1]]
+  expect_identical(state_after_2, "needs_review")
+  expect_equal(count_rows(con, "sample"), before_sample)
+  expect_equal(count_rows(con, "analysis"), before_analysis)
+})
+
+# ---- Phase 7b item 8: n_rows_blocked must be counted PER WORK ORDER --------
+
+test_that("Phase-7b item 8: a multi-work-order event's guard row counts n_rows_blocked against ONLY the work order it fired for, not every unmatched row across the whole event", {
+  setup <- commit_test_setup(filename = "P8_A0.CSV", work_order = "XX9990020", revision = 0L)
+  con <- setup$con
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  # Seed TWO work orders, each with one existing sample.
+  files_a0 <- tibble::tibble(hash = setup$hash, filename = basename(setup$path),
+                             adapter = "esdat/1", rank = 3L, kept = TRUE)
+  event_a0 <- mk_event(mk_row(source_ref = "r1", source_hash = setup$hash,
+                               work_order = "XX9990020", revision = 0L,
+                               sample_datetime_raw = "01 Aug 2025 09:00"),
+                        work_order = "XX9990020")
+  commit_event(mk_commit_event(files_a0, work_order = "XX9990020"),
+               reconcile_event(event_a0, con), con)
+
+  b0 <- add_reconciled_file(setup, "P8_B0.CSV", work_order = "XX9990021", revision = 0L)
+  files_b0 <- tibble::tibble(hash = b0$hash, filename = basename(b0$path),
+                             adapter = "esdat/1", rank = 3L, kept = TRUE)
+  event_b0 <- mk_event(mk_row(source_ref = "r1", source_hash = b0$hash,
+                               work_order = "XX9990021", revision = 0L,
+                               sample_datetime_raw = "01 Aug 2025 09:00"),
+                        work_order = "XX9990021")
+  commit_event(mk_commit_event(files_b0, work_order = "XX9990021"),
+               reconcile_event(event_b0, con), con)
+
+  # ONE event spanning BOTH now-loaded work orders, each carrying ONE clean
+  # row that matches nothing already loaded for ITS OWN work order (the
+  # block condition, evaluated separately per WO by .ct_reingest_guard()'s
+  # `for (wo in wos)` loop).
+  a1 <- add_reconciled_file(setup, "P8_A1_REDL.CSV", work_order = "XX9990020", revision = 0L)
+  b1 <- add_reconciled_file(setup, "P8_B1_REDL.CSV", work_order = "XX9990021", revision = 0L)
+  files <- tibble::tibble(
+    hash = c(a1$hash, b1$hash), filename = c(basename(a1$path), basename(b1$path)),
+    adapter = "esdat/1", rank = 3L, kept = TRUE
+  )
+  clean <- dplyr::bind_rows(
+    mk_clean_row(source_ref = "r1", source_hash = a1$hash, work_order = "XX9990020",
+                 uuid_feature = "f-0001", sample_date = as.Date("2025-09-01"),
+                 sample_datetime = as.POSIXct("2025-09-01 09:00:00", tz = "Australia/Sydney")),
+    mk_clean_row(source_ref = "r2", source_hash = b1$hash, work_order = "XX9990021",
+                 uuid_feature = "f-0002", sample_date = as.Date("2025-09-02"),
+                 sample_datetime = as.POSIXct("2025-09-02 09:00:00", tz = "Australia/Sydney"))
+  )
+  resolved <- mk_resolved(clean = clean)
+
+  before_review <- count_rows(con, "review_queue")
+  out <- commit_event(mk_commit_event(files, work_order = "XX9990020"), resolved, con)
+  expect_true(isTRUE(out$blocked))
+  expect_gt(count_rows(con, "review_queue"), before_review)
+
+  guard_row <- guard_review_row(con)
+  expect_equal(nrow(guard_row), 1)
+  diag <- jsonlite::fromJSON(guard_row$payload[[1]])
+  expect_identical(diag$work_order, "XX9990020")
+  # Pre-fix: `.ct_unmatched_clean_rows(con, clean)` ran over the WHOLE
+  # event's clean tibble (both WOs' rows), so the guard row that fired for
+  # WO XX9990020 wrongly reported 2 - counting WO XX9990021's unmatched row
+  # too - instead of the 1 row actually recorded against XX9990020.
+  expect_equal(diag$n_rows_blocked, 1)
 })
