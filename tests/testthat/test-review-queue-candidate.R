@@ -212,6 +212,33 @@ test_that("review_queue_candidates(): an unknown uuid_review returns zero rows, 
 })
 
 # ==============================================================================
+# Phase-7b item 5: review_queue()'s SELECT omitted uuid_target, so the
+# package's only review-queue reader could not surface the key
+# review_queue_close(con, uuid_target, ...) requires. Fixture: a row written
+# with a real uuid_target (via review_queue_add()'s own uuid_target=
+# argument, unedited) - before the fix, this column simply is not in the
+# returned tibble at all (fails on `expect_true("uuid_target" %in% names())`
+# and on the value assertion, since the column does not exist to compare).
+# ==============================================================================
+
+test_that("Phase-7b item 5: review_queue() surfaces uuid_target, the key review_queue_close() requires to find rows to close", {
+  path <- seed_db()
+  con <- seed_con(path)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  uuid_review <- review_queue_add(
+    con, kind = "unknown_feature", subkind = "ambiguous",
+    work_order = "XX1234567", uuid_target = "fa-0010"
+  )
+
+  got <- review_queue(con, status = "open")
+  expect_true("uuid_target" %in% names(got))
+  hit <- got[got$uuid == uuid_review, ]
+  expect_equal(nrow(hit), 1)
+  expect_identical(hit$uuid_target[[1]], "fa-0010")
+})
+
+# ==============================================================================
 # R-16.24: one carrier per item, discriminated by presence, never guessed
 # ==============================================================================
 

@@ -275,7 +275,9 @@ mig004_backup <- function(db, snapshot_dir, .now = NULL) {
 #' @return invisible(NULL).
 .mig004_rebuild_views <- function(con) {
   for (v in .mig004_five_views) {
-    DBI::dbExecute(con, sprintf("DROP VIEW %s", v))
+    # IF EXISTS: 004 is a VIEW-REPAIR migration, so "a view is missing" is
+    # precisely its own use case, not an error condition.
+    DBI::dbExecute(con, sprintf("DROP VIEW IF EXISTS %s", v))
   }
 
   DBI::dbExecute(con, sprintf("

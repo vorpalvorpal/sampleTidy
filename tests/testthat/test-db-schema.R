@@ -17,6 +17,13 @@ test_that("R-1.5: ensure_schema() creates all five ops objects on a fresh DB", {
   ))
 })
 
+test_that("Phase 7b Tier-3: the migration ladder's versions are strictly ascending in LIST ORDER, not merely in `version` value - the ordering comment above `.st_schema_migrations` is load-bearing (ensure_schema() applies migrations in list order) and was otherwise pinned by nothing", {
+  ns <- asNamespace("sampleTidy")
+  migrations <- get(".st_schema_migrations", envir = ns)
+  versions <- vapply(migrations, function(m) m$version, integer(1))
+  expect_true(all(diff(versions) > 0))
+})
+
 test_that("R-1.5: schema_version holds every migration version applied", {
   dir <- withr::local_tempdir()
   db <- file.path(dir, "fresh2.duckdb")

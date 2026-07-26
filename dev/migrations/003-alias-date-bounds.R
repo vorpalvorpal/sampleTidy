@@ -101,7 +101,8 @@
 # ---- mig003_counts_checksum() -----------------------------------------------
 
 #' Row counts + a value checksum over the tables this migration never
-#' writes to, plus `feature_alias`'s own row-count/uuid-set invariant
+#' writes to, plus `feature_alias`'s own row-count/uuid-set invariant AND a
+#' five-column value digest over the fields this migration never writes
 #'
 #' Deliberately EXCLUDES `analysis`: 003 never touches it (unlike 001, which
 #' rebuilds it, or 004, whose fixture inherits 001's full schema), and the
@@ -112,15 +113,22 @@
 #' selected here IS guaranteed present on both that fixture and the live
 #' registry.
 #'
-#' `feature_alias` itself is EXPECTED to change (auto_assign flips, bounds
-#' written) - so unlike the other tables, only its ROW COUNT and its uuid
-#' SET are checked here (S-15.9: a plain `ADD COLUMN` never inserts, deletes
-#' or regenerates a uuid; a forbidden rebuild would). Its changed COLUMN
-#' VALUES are not part of this checksum.
+#' `feature_alias` itself is EXPECTED to change on THREE columns
+#' (`date_start`, `date_end`, `auto_assign`) - so ROW COUNT and uuid SET are
+#' checked here (S-15.9: a plain `ADD COLUMN` never inserts, deletes or
+#' regenerates a uuid; a forbidden rebuild would), and additionally a value
+#' digest over the five columns that are genuinely invariant under this
+#' migration: `uuid`, `alias_key`, `uuid_feature`, `kind`, `n_seen`.
+#' `auto_assign` is excluded from this digest (R1 flips it table-wide by
+#' design, and `date_start`/`date_end` do not exist pre-migration) - but
+#' those three are the ONLY columns this migration is licensed to change; a
+#' bug that corrupted any of the other five (e.g. reassigning `uuid_feature`)
+#' would otherwise go undetected by row-count/uuid-set alone.
 #'
 #' @param con an open DBI connection.
 #' @return named list(feature, feature_mask, analyte, lab_method, project,
-#'   sample, feature_alias_n, feature_alias_uuids, checksum).
+#'   sample, feature_alias_n, feature_alias_uuids, feature_alias_checksum,
+#'   checksum).
 mig003_counts_checksum <- function(con) {
   feature_n <- DBI::dbGetQuery(con, "SELECT COUNT(*) n FROM feature")$n
   mask_n <- DBI::dbGetQuery(con, "SELECT COUNT(*) n FROM feature_mask")$n
@@ -130,6 +138,11 @@ mig003_counts_checksum <- function(con) {
   sample_n <- DBI::dbGetQuery(con, "SELECT COUNT(*) n FROM \"sample\"")$n
   alias_n <- DBI::dbGetQuery(con, "SELECT COUNT(*) n FROM feature_alias")$n
   alias_uuids <- DBI::dbGetQuery(con, "SELECT uuid FROM feature_alias ORDER BY uuid")$uuid
+  alias_invariant_fields <- DBI::dbGetQuery(
+    con,
+    "SELECT uuid, alias_key, uuid_feature, kind, n_seen FROM feature_alias ORDER BY uuid"
+  )
+  feature_alias_checksum <- digest::digest(alias_invariant_fields, algo = "sha1")
 
   feature_vals <- DBI::dbGetQuery(
     con, "SELECT uuid, name, site, date_end, lon, lat FROM feature ORDER BY uuid"
@@ -160,6 +173,7 @@ mig003_counts_checksum <- function(con) {
     sample = as.integer(sample_n),
     feature_alias_n = as.integer(alias_n),
     feature_alias_uuids = alias_uuids,
+    feature_alias_checksum = feature_alias_checksum,
     checksum = checksum
   )
 }
@@ -170,16 +184,18 @@ mig003_counts_checksum <- function(con) {
 #'
 #' Every table this migration never writes to is byte-identical before/after
 #' (checksum + counts); `feature_alias`'s row count and uuid SET are
-#' unchanged (S-15.9 - no INSERT/DELETE, ever, only ALTER/UPDATE). Its
-#' column values are deliberately NOT compared here - the whole point of
-#' this migration is to change some of them.
+#' unchanged (S-15.9 - no INSERT/DELETE, ever, only ALTER/UPDATE), AND its
+#' five genuinely-invariant columns (`uuid`, `alias_key`, `uuid_feature`,
+#' `kind`, `n_seen`) are byte-identical via `feature_alias_checksum`.
+#' `auto_assign`, `date_start`, `date_end` are deliberately NOT compared -
+#' the whole point of this migration is to change those three.
 #'
 #' @param before,after `mig003_counts_checksum()`-shaped lists.
 #' @return invisible(TRUE) if every invariant holds; throws otherwise.
 mig003_verify <- function(before, after) {
   scalar_fields <- c(
     "feature", "feature_mask", "analyte", "lab_method", "project", "sample",
-    "feature_alias_n", "checksum"
+    "feature_alias_n", "feature_alias_checksum", "checksum"
   )
   bad <- Filter(function(f) !identical(before[[f]], after[[f]]), scalar_fields)
   if (!setequal(before$feature_alias_uuids, after$feature_alias_uuids)) {
@@ -376,6 +392,15 @@ mig003_run <- function(db, snapshot_dir, dry_run = FALSE, .now = NULL,
 
   # ---- Step 0: idempotency guard - read-only, writes nothing. ----
   marker_con <- st_connect(db, read_only = TRUE)
+  if (!("schema_version" %in% DBI::dbListTables(marker_con))) {
+    DBI::dbDisconnect(marker_con, shutdown = TRUE)
+    cli::cli_abort(
+      "{db}: no schema_version table found - ensure_schema() has never been
+       applied to this database, so 003-alias-date-bounds cannot check its
+       own idempotency marker.",
+      class = "sampletidy_error"
+    )
+  }
   marker <- tryCatch(
     DBI::dbGetQuery(
       marker_con, "SELECT applied_at FROM schema_version WHERE version = ?",
@@ -447,9 +472,40 @@ mig003_run <- function(db, snapshot_dir, dry_run = FALSE, .now = NULL,
       # EVERYTHING: the ALTER, the R1 flip, and any bounds rows already
       # applied. ----
       body <- db_transaction(con, function(con) {
-        # ---- Step: additive columns only (S-15.9). ----
-        DBI::dbExecute(con, "ALTER TABLE feature_alias ADD COLUMN date_start DATE")
-        DBI::dbExecute(con, "ALTER TABLE feature_alias ADD COLUMN date_end DATE")
+        # ---- R-15.47 (PLAN-15 E.3/E.6, restated 2026-07-23): every feature
+        # must carry its own kind='self' feature_alias row BEFORE anything
+        # else runs - a feature with no self arm is permanently unreachable
+        # by its own name once this migration's ALTER/flip/bounds steps
+        # land. Checked first, inside the transaction, so an abort here
+        # writes nothing at all (no ALTER, no flip, no bounds, no marker). ----
+        missing_self <- DBI::dbGetQuery(
+          con,
+          "SELECT f.name FROM feature f
+           WHERE NOT EXISTS (
+             SELECT 1 FROM feature_alias fa
+             WHERE fa.uuid_feature = f.uuid AND fa.kind = 'self'
+           )
+           ORDER BY f.name"
+        )$name
+        if (length(missing_self) > 0) {
+          cli::cli_abort(
+            paste0(
+              "003-alias-date-bounds: {length(missing_self)} feature(s) missing a ",
+              "kind='self' feature_alias row (E.3 precondition) - every feature ",
+              "must be reachable by its own name: {paste(missing_self, collapse = ', ')}."
+            ),
+            class = "sampletidy_error"
+          )
+        }
+
+        # ---- Step: additive columns only (S-15.9). `IF NOT EXISTS` - the
+        # idempotency guard (Step 0, above) keys on the 1003 schema_version
+        # marker, NOT on whether these columns already exist (see this
+        # file's own header comment and test-migration-003.R's target-file
+        # contract) - so a columns-present/marker-absent database must not
+        # crash on a raw "column already exists" catalog error. ----
+        DBI::dbExecute(con, "ALTER TABLE feature_alias ADD COLUMN IF NOT EXISTS date_start DATE")
+        DBI::dbExecute(con, "ALTER TABLE feature_alias ADD COLUMN IF NOT EXISTS date_end DATE")
 
         # ---- R1: universal self-arm flip, table-wide, unconditional -
         # every feature must be reachable by its own name, regardless of

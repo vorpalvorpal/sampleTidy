@@ -30,8 +30,17 @@
 #             test below passes `bounds = .mig003_fixture_bounds()`, so
 #             R-15.19's per-row assertions cover the REAL entry point, not
 #             only the internal `.mig003_apply_bounds()`.
-#        "already_migrated" if `date_start`/`date_end` already exist on
-#        `feature_alias` (idempotent no-op) - not exercised by this file.
+#        "already_migrated" - the idempotency guard KEYS ON THE 1003
+#        schema_version MARKER, not on whether date_start/date_end already
+#        exist. This is deliberate, not merely an implementation detail: the
+#        marker is the only artefact recording that R1's universal self-arm
+#        flip and E.5's curated bounds were applied, so on a
+#        columns-present/marker-absent database the correct behaviour is to
+#        PROCEED (ALTER TABLE ... ADD COLUMN IF NOT EXISTS is a no-op on the
+#        columns, but the flip/bounds/marker steps still run) - returning
+#        "already_migrated" there would silently skip them. Not exercised by
+#        this file's own idempotency test, but the columns-present/
+#        marker-absent shape IS exercised below.
 #
 #   .mig003_apply_bounds(con, bounds)
 #     -> integer(1), rows updated. `bounds` is a
@@ -457,4 +466,159 @@ test_that("E.5: .mig003_e5_bounds() is exactly the nine curated rows, with rule-
                    as.Date("2026-05-04"))
   ke02 <- b$alias_key == "k.e02" & b$target_name == "K.S06"
   expect_true(is.na(b$date_start[ke02]) && is.na(b$date_end[ke02]))
+})
+
+# ======================================================================
+# R-15.47: the self-alias precondition (PLAN-15 E.3/E.6, restated) - Phase
+# 7b Tier-2 remediation. PLAN-15's criterion block at :1143-1160 opens with an
+# HTML comment declaring the ORIGINAL wording withdrawn ("cannot fail on any
+# existing seed"), then immediately RESTATES it demanding a purpose-built seed
+# with exactly one self alias deleted. The restated version is in force, and
+# it is declared here as R-15.47.
+#
+# The withdrawn criterion's own number is deliberately NOT written anywhere in
+# this suite: the plan pins it as permanently unassigned, and spelling it in a
+# comment makes `criterion-lint.py` report it as a criterion declared by no
+# plan. Read the plan block itself for that history.
+# ======================================================================
+
+test_that("R-15.47: migration 003 aborts, naming the offending feature and writing nothing, on a seed missing a self alias - AND still runs to completion on the healthy seed (both halves, so neither an always-abort nor a never-checking migration can pass)", {
+  mig <- .mig003_load()
+
+  # ---- (a): a purpose-built seed with exactly ONE kind='self' row deleted.
+  # 'ma-ctrl02-self' is chosen deliberately: unlike 'ma-ctrl01-self', no
+  # `sample` row references it (helper-migration-003-db.R's only sample row
+  # points at ma-ctrl01-self), so the DELETE itself cannot trip the FK this
+  # seed exists to enforce (S-15.9) - the failure under test must be the
+  # precondition check, not an incidental FK violation.
+  path_bad <- seed_migration_003_db()
+  con_bad <- migration_003_con(path_bad)
+  DBI::dbExecute(con_bad, "DELETE FROM feature_alias WHERE uuid = 'ma-ctrl02-self'")
+  DBI::dbDisconnect(con_bad, shutdown = TRUE)
+
+  snap_dir_bad <- withr::local_tempdir()
+  err <- tryCatch(
+    mig$mig003_run(db = path_bad, snapshot_dir = snap_dir_bad, bounds = .mig003_fixture_bounds()),
+    error = function(e) e
+  )
+  expect_s3_class(err, "sampletidy_error")
+  # Names the offending feature (T.CTRL02, mf-ctrl02's own name) - not merely
+  # "an error occurred".
+  expect_match(conditionMessage(err), "T.CTRL02", fixed = TRUE)
+
+  con_check <- migration_003_con(path_bad)
+  withr::defer(DBI::dbDisconnect(con_check, shutdown = TRUE))
+  # Writes NOTHING: date_start/date_end never landed (the ALTER never ran)...
+  fields <- DBI::dbListFields(con_check, "feature_alias")
+  expect_false("date_start" %in% fields)
+  expect_false("date_end" %in% fields)
+  # ...and no 1003 marker was recorded.
+  marker_n <- DBI::dbGetQuery(
+    con_check, "SELECT count(*) n FROM schema_version WHERE version = 1003"
+  )$n
+  expect_equal(marker_n, 0)
+
+  # ---- (b): the UNMODIFIED, healthy seed still runs to completion. Without
+  # this half, a migration that unconditionally aborts (never checking
+  # anything else) would also pass (a) above.
+  path_good <- seed_migration_003_db()
+  snap_dir_good <- withr::local_tempdir()
+  result <- mig$mig003_run(db = path_good, snapshot_dir = snap_dir_good, bounds = .mig003_fixture_bounds())
+  expect_equal(result$status, "migrated")
+})
+
+# ======================================================================
+# Phase 7b Tier-2: 003's verify gate now covers feature_alias's five
+# genuinely-invariant columns (uuid, alias_key, uuid_feature, kind, n_seen)
+# via mig003_counts_checksum()$feature_alias_checksum.
+# ======================================================================
+
+test_that("003-alias-date-bounds: mig003_verify() catches a corrupted feature_alias field (n_seen) that row-count/uuid-set alone would miss", {
+  mig <- .mig003_load()
+  path <- seed_migration_003_db()
+  con <- migration_003_con(path)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  before <- mig$mig003_counts_checksum(con)
+  # Corrupt one of the five protected columns directly - row count and uuid
+  # SET are both untouched by this, so only the new value digest can catch it.
+  DBI::dbExecute(con, "UPDATE feature_alias SET n_seen = n_seen + 1 WHERE uuid = 'ma-ctrl01-self'")
+  after <- mig$mig003_counts_checksum(con)
+
+  expect_equal(before$feature_alias_n, after$feature_alias_n)
+  expect_true(setequal(before$feature_alias_uuids, after$feature_alias_uuids))
+  expect_false(identical(before$feature_alias_checksum, after$feature_alias_checksum))
+
+  expect_error(mig$mig003_verify(before, after), class = "sampletidy_error")
+})
+
+# ======================================================================
+# Phase 7b Tier-2: columns-present/marker-absent must not crash.
+# ======================================================================
+
+test_that("003-alias-date-bounds: a database with date_start/date_end already present but the 1003 marker absent does not crash - ADD COLUMN IF NOT EXISTS lets the migration proceed to completion", {
+  mig <- .mig003_load()
+  path <- seed_migration_003_db()
+  con <- migration_003_con(path)
+  DBI::dbExecute(con, "ALTER TABLE feature_alias ADD COLUMN date_start DATE")
+  DBI::dbExecute(con, "ALTER TABLE feature_alias ADD COLUMN date_end DATE")
+  DBI::dbDisconnect(con, shutdown = TRUE)
+
+  snap_dir <- withr::local_tempdir()
+  result <- expect_no_error(
+    mig$mig003_run(db = path, snapshot_dir = snap_dir, bounds = .mig003_fixture_bounds())
+  )
+  expect_equal(result$status, "migrated")
+
+  con2 <- migration_003_con(path)
+  withr::defer(DBI::dbDisconnect(con2, shutdown = TRUE))
+  marker_n <- DBI::dbGetQuery(
+    con2, "SELECT count(*) n FROM schema_version WHERE version = 1003"
+  )$n
+  expect_equal(marker_n, 1)
+})
+
+# ======================================================================
+# Phase 7b Tier-3: 003 aborts with a classed sampletidy_error, not a raw
+# catalog error, on a database with no schema_version table at all.
+# ======================================================================
+
+test_that("003-alias-date-bounds aborts with a classed sampletidy_error (not a raw catalog error) on a database with no schema_version table", {
+  mig <- .mig003_load()
+  dir <- withr::local_tempdir()
+  path <- file.path(dir, "no-schema-version.duckdb")
+  con <- DBI::dbConnect(duckdb::duckdb(), path, read_only = FALSE)
+  DBI::dbExecute(con, "CREATE TABLE placeholder (x INTEGER)")
+  DBI::dbDisconnect(con, shutdown = TRUE)
+
+  snap_dir <- withr::local_tempdir()
+  err <- tryCatch(
+    mig$mig003_run(db = path, snapshot_dir = snap_dir, bounds = .mig003_fixture_bounds()),
+    error = function(e) e
+  )
+  expect_s3_class(err, "sampletidy_error")
+})
+
+# ======================================================================
+# Phase 7b Tier-3: the DATE column TYPE is pinned by more than
+# as.character() rendering (which cannot tell DATE from a midnight
+# TIMESTAMP apart).
+# ======================================================================
+
+test_that("003-alias-date-bounds: feature_alias.date_start/date_end are declared DATE, not TIMESTAMP", {
+  mig <- .mig003_load()
+  path <- seed_migration_003_db()
+  snap_dir <- withr::local_tempdir()
+  mig$mig003_run(db = path, snapshot_dir = snap_dir, bounds = .mig003_fixture_bounds())
+
+  con <- migration_003_con(path)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  col_types <- DBI::dbGetQuery(
+    con,
+    "SELECT column_name, data_type FROM information_schema.columns
+     WHERE table_name = 'feature_alias' AND column_name IN ('date_start', 'date_end')"
+  )
+  expect_setequal(col_types$column_name, c("date_start", "date_end"))
+  expect_true(all(col_types$data_type == "DATE"))
 })

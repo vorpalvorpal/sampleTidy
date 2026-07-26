@@ -666,10 +666,11 @@ correct_value <- function(uuid_analysis, new_value, reason, actor) {
 
 #' Read `review_queue` rows, filtered by status
 #'
-#' Returns queue rows as a tibble with stable columns (all 13) even on a
+#' Returns queue rows as a tibble with stable columns (all 14) even on a
 #' zero-row result, since the `SELECT` names every column explicitly.
 #' Entity/classification data lives in typed columns (`subkind`, `uuid_existing`,
-#' `uuid_alias`); `payload` carries only the diagnostics JSON remainder.
+#' `uuid_alias`, `uuid_target`); `payload` carries only the diagnostics JSON
+#' remainder.
 #'
 #' @param con an open DBI connection.
 #' @param status status to filter on, defaults to `"open"`.
@@ -680,7 +681,7 @@ review_queue <- function(con, status = "open") {
   rows <- DBI::dbGetQuery(
     con,
     "SELECT uuid, created_at, kind, subkind, work_order, source_hash, payload,
-            uuid_existing, uuid_alias, status, resolution, resolved_by, resolved_at
+            uuid_existing, uuid_alias, uuid_target, status, resolution, resolved_by, resolved_at
      FROM review_queue
      WHERE status = ?",
     params = list(status)

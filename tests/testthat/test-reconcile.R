@@ -3990,3 +3990,411 @@ test_that("cold-audit defect 2: dplyr::bind_rows() over one df with a real `cand
   expect_true(is.data.frame(combined$candidates[[1]]))
   expect_false(is.data.frame(combined$candidates[[2]]))
 })
+
+# =============================================================================
+# PLAN-7b remediation (2026-07-26 round 3 audit) - items 1-8
+# =============================================================================
+
+# ---- item 1: E.7 self-precedence notes grouped by (alias_key, resolved -----
+# feature), not emitted per ANALYSIS ROW (this file's grain) ------------------
+
+test_that("PLAN-7b item 1: a multi-analyte panel resolving via self-precedence over the SAME (alias_key, resolved feature) emits exactly ONE self_precedence_note, not one per analysis row - E.7's own stated purpose ('stops turning into a review-queue flood')", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  # Same self-precedence shape as R-15.45: f-0002's self-alias (fa-0002)
+  # shares key 't.s02' with a curated historical arm on f-0003.
+  DBI::dbExecute(con, "INSERT INTO feature_alias
+    (uuid, uuid_feature, name, alias_key, kind, auto_assign, first_seen, last_seen, date_start, date_end) VALUES
+    ('fa-e7grp-block', 'f-0003', 'T.S02', 't.s02', 'historical_code', TRUE,
+     TIMESTAMP '2015-01-01 00:00:00', TIMESTAMP '2019-12-31 00:00:00',
+     DATE '2015-01-01', DATE '2019-12-31')")
+
+  event <- mk_event(mk_rows(
+    mk_row(source_ref = "grp_a", feature_raw = "T.S02", lab_sample_id = "XX9999951001",
+           sample_datetime_raw = "01 Jun 2017 09:00"),
+    mk_row(source_ref = "grp_b", feature_raw = "T.S02", lab_sample_id = "XX9999951002",
+           sample_datetime_raw = "01 Jun 2017 09:00"),
+    mk_row(source_ref = "grp_c", feature_raw = "T.S02", lab_sample_id = "XX9999951003",
+           sample_datetime_raw = "01 Jun 2017 09:00")
+  ))
+  out <- reconcile_event(event, con)
+
+  notes <- out$review[!is.na(out$review$subkind) & out$review$subkind == "self_precedence_note", ]
+  expect_equal(nrow(notes), 1)
+  expect_setequal(strsplit(notes$source_ref[[1]], ",", fixed = TRUE)[[1]],
+                  c("grp_a", "grp_b", "grp_c"))
+  # `n_rows` itself is internal (not part of `reconcile_event()`'s returned
+  # `review` columns), so it is not asserted directly here; the real
+  # discriminator against the fan-out this item fixes is `nrow(notes) == 1`
+  # above (unfixed code emits THREE rows, one per analysis row, and the
+  # `source_ref` check above would then only ever see ONE ref per row, never
+  # the full set).
+  expect_equal(unname(out$counts[["unknown_feature"]]), 3)
+})
+
+# ---- item 2 (kills M5): same-feature alias tie-break prefers the `self` ----
+# arm, regardless of DB physical row order ------------------------------------
+
+test_that("PLAN-7b item 2 (kills M5): when several ARMS resolve to the SAME feature, the arm written to sample.uuid_feature_alias is the `kind == 'self'` one - not whichever arm the DB happens to return first - proved in BOTH insert orders", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix, lon, lat) VALUES
+    ('f-tb-a', 'T.TBCASEA', 'T', 'surface', 'water', 150.7001, -33.7001),
+    ('f-tb-b', 'T.TBCASEB', 'T', 'surface', 'water', 150.7002, -33.7002)")
+
+  # Case A: self arm inserted FIRST, the non-self arm SECOND.
+  DBI::dbExecute(con, "INSERT INTO feature_alias
+    (uuid, uuid_feature, name, alias_key, kind, auto_assign, first_seen, last_seen) VALUES
+    ('fa-tb-a-self', 'f-tb-a', 'T.TBCASEA', 't.tbcasea', 'self', TRUE,
+     TIMESTAMP '2020-01-01 00:00:00', TIMESTAMP '2020-01-01 00:00:00')")
+  DBI::dbExecute(con, "INSERT INTO feature_alias
+    (uuid, uuid_feature, name, alias_key, kind, auto_assign, first_seen, last_seen) VALUES
+    ('fa-tb-a-other', 'f-tb-a', 'T.TBCASEA', 't.tbcasea', 'transcription_error', TRUE,
+     TIMESTAMP '2020-01-01 00:00:00', TIMESTAMP '2020-01-01 00:00:00')")
+
+  # Case B: the OPPOSITE order - non-self arm FIRST, self arm SECOND.
+  DBI::dbExecute(con, "INSERT INTO feature_alias
+    (uuid, uuid_feature, name, alias_key, kind, auto_assign, first_seen, last_seen) VALUES
+    ('fa-tb-b-other', 'f-tb-b', 'T.TBCASEB', 't.tbcaseb', 'transcription_error', TRUE,
+     TIMESTAMP '2020-01-01 00:00:00', TIMESTAMP '2020-01-01 00:00:00')")
+  DBI::dbExecute(con, "INSERT INTO feature_alias
+    (uuid, uuid_feature, name, alias_key, kind, auto_assign, first_seen, last_seen) VALUES
+    ('fa-tb-b-self', 'f-tb-b', 'T.TBCASEB', 't.tbcaseb', 'self', TRUE,
+     TIMESTAMP '2020-01-01 00:00:00', TIMESTAMP '2020-01-01 00:00:00')")
+
+  registry <- .rc_load_registry(con)
+  # sanity: both arms really are live candidates on one feature (two rows).
+  expect_equal(nrow(.rc_feature_candidates("T.TBCASEA", as.Date("2025-05-20"), registry)), 2)
+  expect_equal(nrow(.rc_feature_candidates("T.TBCASEB", as.Date("2025-05-20"), registry)), 2)
+
+  event <- mk_event(mk_rows(
+    mk_row(source_ref = "case_a", feature_raw = "T.TBCASEA", lab_sample_id = "XX9999955001",
+           sample_datetime_raw = "01 Jun 2020 09:00"),
+    mk_row(source_ref = "case_b", feature_raw = "T.TBCASEB", lab_sample_id = "XX9999955002",
+           sample_datetime_raw = "01 Jun 2020 09:00")
+  ))
+  out <- reconcile_event(event, con)
+
+  a <- out$clean[out$clean$source_ref == "case_a", ]
+  expect_false(a$feature_pending)
+  expect_identical(a$uuid_feature, "f-tb-a")
+  expect_identical(a$uuid_feature_alias, "fa-tb-a-self")   # self arm, inserted FIRST
+
+  b <- out$clean[out$clean$source_ref == "case_b", ]
+  expect_false(b$feature_pending)
+  expect_identical(b$uuid_feature, "f-tb-b")
+  expect_identical(b$uuid_feature_alias, "fa-tb-b-self")   # self arm, inserted SECOND
+})
+
+# ---- item 3 (kills M1): C.2's cross-site-merge guard, a DIRECT-boundary ----
+# same-key re-siting the shared C.2 fixture's dotted/spaced raws cannot reach -
+
+test_that("PLAN-7b item 3 (kills M1): Layer 3 never retries a row Layer 2 already recognised SOME site for through a DIRECT (separator-less) boundary, even when that recognition did not itself produce a hit - without the guard, the WHOLE canonicalised raw is reinterpreted as a point of the work order's single site and silently merges onto an unrelated feature (the live B.K01/L.B01 shape)", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix, lon, lat) VALUES
+    ('f-cx-anchor', 'X.ANCHOR', 'X', 'surface', 'water', 150.8001, -33.8001),
+    ('f-cx-collide', 'X.XY01', 'X', 'surface', 'water', 150.8002, -33.8002)")
+  DBI::dbExecute(con, "INSERT INTO feature_alias
+    (uuid, uuid_feature, name, alias_key, kind, auto_assign, first_seen, last_seen) VALUES
+    ('fa-cx-anchor', 'f-cx-anchor', 'X.ANCHOR', 'x.anchor', 'self', TRUE,
+     TIMESTAMP '2020-01-01 00:00:00', TIMESTAMP '2020-01-01 00:00:00'),
+    ('fa-cx-collide', 'f-cx-collide', 'X.XY01', 'x.xy01', 'self', TRUE,
+     TIMESTAMP '2020-01-01 00:00:00', TIMESTAMP '2020-01-01 00:00:00')")
+
+  event <- mk_event(mk_rows(
+    # Resolves via Layer 1 (exact alias hit) - establishes the event's
+    # single site 'X' for Layer 3 (C.1/C.3).
+    mk_row(source_ref = "anchor", feature_raw = "X.ANCHOR", lab_sample_id = "XX9999970001",
+           sample_datetime_raw = "01 Jun 2025 09:00"),
+    # 'XY01': Layer 2 recognises site 'X' via a DIRECT (separator-less)
+    # boundary, extracting residual point 'Y01' -> canonical 'Y1' - which does
+    # NOT match f-cx-collide's own point ('X.XY01' split on '.' -> 'XY1').
+    # Layer 2 therefore MISSES, but `parsed_site` IS set ('X'). Without the
+    # guard, Layer 3 re-canonicalises the WHOLE raw ('xy01' -> 'XY1') as the
+    # point and DOES match f-cx-collide - a wrong merge onto an unrelated
+    # feature that only happens to share the recognised site.
+    mk_row(source_ref = "collide", feature_raw = "XY01", lab_sample_id = "XX9999970002",
+           sample_datetime_raw = "01 Jun 2025 09:00")
+  ))
+  out <- reconcile_event(event, con)
+
+  anc <- out$clean[out$clean$source_ref == "anchor", ]
+  expect_false(anc$feature_pending)
+  expect_identical(anc$uuid_feature, "f-cx-anchor")
+
+  col <- out$clean[out$clean$source_ref == "collide", ]
+  expect_true(col$feature_pending)
+  expect_true(is.na(col$uuid_feature))
+})
+
+# ---- item 4 (kills M2/M3/M4): exact date-boundary assertions ---------------
+
+test_that("PLAN-7b item 4 (kills M2): an alias-side date_end bound RESOLVES exactly ON the boundary date (E.2 'date_end INCLUSIVE'), not merely strictly before it", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  DBI::dbExecute(con, "INSERT INTO feature_alias
+    (uuid, uuid_feature, name, alias_key, kind, auto_assign, first_seen, last_seen, date_start, date_end) VALUES
+    ('fa-e07b', 'f-0002', 'T.EXPIRED07B', 't.expired07b', 'historical_code', TRUE,
+     TIMESTAMP '2018-01-01 00:00:00', TIMESTAMP '2020-12-31 00:00:00', NULL, DATE '2020-12-31')")
+  registry <- .rc_load_registry(con)
+
+  cand_on <- .rc_feature_candidates("T.EXPIRED07B", as.Date("2020-12-31"), registry)
+  expect_equal(nrow(cand_on), 1)
+  expect_identical(cand_on$uuid_feature[[1]], "f-0002")
+
+  # paired negative control: one day AFTER the boundary no longer resolves.
+  cand_after <- .rc_feature_candidates("T.EXPIRED07B", as.Date("2021-01-01"), registry)
+  expect_equal(nrow(cand_after), 0)
+})
+
+test_that("PLAN-7b item 4: an alias-side date_start bound RESOLVES exactly ON the boundary date", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  DBI::dbExecute(con, "INSERT INTO feature_alias
+    (uuid, uuid_feature, name, alias_key, kind, auto_assign, first_seen, last_seen, date_start, date_end) VALUES
+    ('fa-e08b', 'f-0002', 'T.STARTED08B', 't.started08b', 'historical_code', TRUE,
+     TIMESTAMP '2024-01-01 00:00:00', TIMESTAMP '2025-01-01 00:00:00', DATE '2024-01-01', NULL)")
+  registry <- .rc_load_registry(con)
+
+  cand_on <- .rc_feature_candidates("T.STARTED08B", as.Date("2024-01-01"), registry)
+  expect_equal(nrow(cand_on), 1)
+  expect_identical(cand_on$uuid_feature[[1]], "f-0002")
+
+  # paired negative control: one day BEFORE the boundary does not yet resolve.
+  cand_before <- .rc_feature_candidates("T.STARTED08B", as.Date("2023-12-31"), registry)
+  expect_equal(nrow(cand_before), 0)
+})
+
+test_that("PLAN-7b item 4 (kills M4): .rc_feature_candidates() (via .rc_narrow_live_feature()) keeps a defunct FEATURE candidate exactly ON its own date_end - the reused code T.REUSED stays AMBIGUOUS (both f-0006/f-0007) at the exact boundary, not narrowed to f-0007 alone", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  registry <- .rc_load_registry(con)
+
+  # f-0006's date_end is 2020-06-30 (helper-db.R).
+  cand_on <- .rc_feature_candidates("T.REUSED", as.Date("2020-06-30"), registry)
+  expect_setequal(unique(cand_on$uuid_feature), c("f-0006", "f-0007"))
+
+  # paired negative control: one day after narrows to the single live feature.
+  cand_after <- .rc_feature_candidates("T.REUSED", as.Date("2020-07-01"), registry)
+  expect_equal(length(unique(cand_after$uuid_feature)), 1)
+  expect_identical(unique(cand_after$uuid_feature), "f-0007")
+})
+
+test_that("PLAN-7b item 4 (kills M3): .rc_structural_hit() RESOLVES a structural hit exactly ON the feature's own date_end - E.2's 'date_end inclusive' rule applied to the FEATURE side, not only the alias side", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  registry <- .rc_load_registry(con)
+  index <- .rc_structural_index(registry)
+
+  # f-0006 (T.S06), date_end 2020-06-30 (helper-db.R); canonical point 'S6'.
+  hit_on <- .rc_structural_hit("T", "S6", index, as.Date("2020-06-30"), registry)
+  expect_identical(hit_on, "f-0006")
+
+  # paired negative control: one day AFTER the boundary does not resolve.
+  hit_after <- .rc_structural_hit("T", "S6", index, as.Date("2020-07-01"), registry)
+  expect_true(is.na(hit_after))
+})
+
+# ---- item 5: .rc_structural_hit() does not abort when feature.date_end ----
+# is an ABSENT column (mirrors .rc_narrow_live_feature()'s existing guard) ---
+
+#' A throwaway registry with a `feature` table that has NO `date_end` column
+#' at all (not a column of NA) - the pre-existing-column state
+#' `.rc_narrow_live_feature()` already guards ("no date_end column at all =
+#' unbounded") but `.rc_structural_hit()` did not.
+seed_no_feature_date_end_con <- function(dir = NULL) {
+  if (is.null(dir)) dir <- withr::local_tempdir(.local_envir = parent.frame())
+  path <- file.path(dir, "no-fde.duckdb")
+  con <- DBI::dbConnect(duckdb::duckdb(), path, read_only = FALSE)
+  DBI::dbExecute(con, "CREATE TABLE feature (
+    uuid VARCHAR PRIMARY KEY, name VARCHAR, site VARCHAR, flow VARCHAR, matrix VARCHAR,
+    lon DOUBLE NOT NULL, lat DOUBLE NOT NULL)")
+  DBI::dbExecute(con, "CREATE TABLE feature_alias (
+    uuid VARCHAR PRIMARY KEY, uuid_feature VARCHAR, name VARCHAR NOT NULL,
+    alias_key VARCHAR NOT NULL, kind VARCHAR, n_seen INTEGER DEFAULT 0,
+    auto_assign BOOLEAN DEFAULT TRUE, first_seen TIMESTAMP, last_seen TIMESTAMP,
+    confirmed_by VARCHAR, comments VARCHAR)")
+  DBI::dbExecute(con, "CREATE TABLE feature_mask (uuid_feature VARCHAR, variant VARCHAR, name VARCHAR)")
+  DBI::dbExecute(con, "CREATE TABLE analyte (uuid VARCHAR PRIMARY KEY, name VARCHAR, units VARCHAR,
+    conversion_constant DOUBLE, type VARCHAR, CAS VARCHAR)")
+  DBI::dbExecute(con, "CREATE TABLE lab_method (uuid VARCHAR PRIMARY KEY, uuid_analyte VARCHAR,
+    name VARCHAR, method VARCHAR, organisation VARCHAR, rl_low DOUBLE, rl_high DOUBLE,
+    reported_as VARCHAR, api VARCHAR, uuid_project VARCHAR, uuid_feature VARCHAR,
+    comments VARCHAR, units VARCHAR, conversion_constant DOUBLE)")
+  DBI::dbExecute(con, "CREATE TABLE project (uuid VARCHAR PRIMARY KEY, uuid_parent VARCHAR,
+    uuid_root VARCHAR, uuid_project VARCHAR, name VARCHAR, type VARCHAR, purpose VARCHAR,
+    date_start TIMESTAMP, date_end TIMESTAMP, regulated_by VARCHAR, cypher VARCHAR,
+    site VARCHAR, value VARCHAR)")
+
+  DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix, lon, lat) VALUES
+    ('f-nfde-01', 'P.S01', 'P', 'surface', 'water', 150.9001, -33.9001)")
+  DBI::dbExecute(con, "INSERT INTO feature_alias
+    (uuid, uuid_feature, name, alias_key, kind, auto_assign, first_seen, last_seen) VALUES
+    ('fa-nfde-01', 'f-nfde-01', 'P.S01', 'p.s01', 'self', TRUE,
+     TIMESTAMP '2025-01-01 00:00:00', TIMESTAMP '2025-01-01 00:00:00')")
+  con
+}
+
+test_that("PLAN-7b item 5: .rc_structural_hit() does not abort when feature.date_end is an ABSENT column (mirrors .rc_narrow_live_feature()'s existing 'no date_end column at all = unbounded' guard)", {
+  con <- seed_no_feature_date_end_con()
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  registry <- .rc_load_registry(con)
+  expect_null(registry$feature$date_end)
+
+  index <- .rc_structural_index(registry)
+  hit <- .rc_structural_hit("P", "S1", index, as.Date("2025-05-20"), registry)
+  expect_identical(hit, "f-nfde-01")
+})
+
+# ---- item 6(a): .rc_as_date_bound() never silently admits a wrongly-spelled -
+# character bound as "unbounded" ----------------------------------------------
+
+test_that("PLAN-7b item 6(a): .rc_as_date_bound() ABORTS on a non-NA character bound that does not parse as ISO 'YYYY-MM-DD' - a wrong spelling ('2026/05/04') used to silently become NA (i.e. UNBOUNDED, i.e. ADMITTING the row), defeating the bound a curator set", {
+  expect_error(.rc_as_date_bound("2026/05/04", what = "test bound"), class = "sampletidy_error")
+
+  # paired positive control: a real ISO string still parses cleanly.
+  expect_identical(.rc_as_date_bound("2026-05-04", what = "test bound"), as.Date("2026-05-04"))
+
+  # paired NA control: a genuine missing bound stays unbounded, never an error.
+  expect_true(is.na(.rc_as_date_bound(NA_character_, what = "test bound")))
+})
+
+# ---- item 6(b): .rc_narrow_live() routed through .rc_as_date_bound() -------
+
+test_that("PLAN-7b item 6(b): .rc_narrow_live() routes feature$date_end through .rc_as_date_bound() and ABORTS on a POSIXct bound instead of silently coercing it - the candidate path (.rc_narrow_live_feature()/.rc_structural_hit()) already rejects exactly this input", {
+  registry <- list(feature = data.frame(
+    uuid = c("fx-1", "fx-2"),
+    date_end = as.POSIXct(c("2020-06-30 00:00:00", NA), tz = "UTC"),
+    stringsAsFactors = FALSE
+  ))
+  cand <- tibble::tibble(uuid_alias = c("a1", "a2"), uuid_feature = c("fx-1", "fx-2"))
+  expect_error(.rc_narrow_live(cand, as.Date("2025-05-20"), registry), class = "sampletidy_error")
+})
+
+# ---- item 7: unknown_feature review row GROUP order is radix-pinned, not --
+# the R session's LC_COLLATE ---------------------------------------------------
+
+test_that("PLAN-7b item 7: .rc_feature_review()'s GROUP order is pinned to radix (byte-order) collation, not the R session's LC_COLLATE - two keys differing only in punctuation ('t_01' vs 't.01') that collate in OPPOSITE order under C vs en_US.UTF-8 on this platform still emit in the SAME (radix) order under both", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  event <- mk_event(mk_rows(
+    mk_row(source_ref = "r_underscore", feature_raw = "T_01",
+           lab_sample_id = "XX9999960001", sample_datetime_raw = "01 Jun 2025 09:00"),
+    mk_row(source_ref = "r_dot", feature_raw = "T.01",
+           lab_sample_id = "XX9999960002", sample_datetime_raw = "01 Jun 2025 09:00")
+  ))
+
+  run_order <- function(locale) {
+    withr::with_locale(c(LC_COLLATE = locale), {
+      out <- reconcile_event(event, con)
+      out$review$source_ref[out$review$kind == "unknown_feature"]
+    })
+  }
+
+  # Establish the divergence is REAL on this platform before pinning against
+  # it - otherwise a platform where the two locales happen to agree would
+  # make the assertion below vacuous.
+  sort_c <- sort(c("t_01", "t.01"))
+  sort_en <- withr::with_locale(c(LC_COLLATE = "en_US.UTF-8"), sort(c("t_01", "t.01")))
+  skip_if_not(!identical(sort_c, sort_en),
+              "this platform's C and en_US.UTF-8 collations agree on 't_01'/'t.01' - cannot demonstrate the divergence here")
+
+  order_c <- run_order("C")
+  order_en <- run_order("en_US.UTF-8")
+
+  expect_identical(order_c, order_en)
+  # radix: 't.01' < 't_01' (ASCII '.' 0x2E < '_' 0x5F).
+  expect_identical(order_c, c("r_dot", "r_underscore"))
+})
+
+# ---- item 8: `blocking` is an explicit boolean on every remaining review- --
+# row diagnostic this file queues, not merely the self_precedence_note case --
+
+test_that("PLAN-7b item 8 REVERSED (Robin, 2026-07-26): `blocking` stays SCOPED to the unknown_feature subkind precedence table (.rc_feature_review()/.rc_self_precedence_notes()) and is ABSENT (not merely FALSE) from every other kind's diagnostics - batch_duplicate, unknown_unit, unknown_analyte (both branches), parse_error, value_conflict, and STAGE-0. A first attempt made it universal; that broke test-review-queue-payload.R's R-16.19/R-16.20 cross-producer key-parity invariant against .fa_merge_samples() (R/feature-alias.R, a file this assignment does not own) because that sibling producer has no `blocking` key to match. Reverted to code; the docstring's claim was narrowed instead (see the comment block above `.rc_feature_review()`) - this test locks the narrowed contract, not the reverted-and-forgotten one", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  diag_of <- function(review_row) jsonlite::fromJSON(review_row$payload[[1]])
+
+  # unknown_unit
+  event_unit <- mk_event(mk_row(source_ref = "r1", units_raw = "banana/L"))
+  out_unit <- reconcile_event(event_unit, con)
+  hit_unit <- out_unit$review[out_unit$review$source_ref == "r1" & out_unit$review$kind == "unknown_unit", ]
+  expect_equal(nrow(hit_unit), 1)
+  expect_false("blocking" %in% names(diag_of(hit_unit)))
+
+  # parse_error (datetime)
+  event_dt <- mk_event(mk_row(source_ref = "r1", sample_datetime_raw = "not a date"))
+  out_dt <- reconcile_event(event_dt, con)
+  hit_dt <- out_dt$review[out_dt$review$source_ref == "r1" & out_dt$review$kind == "parse_error", ]
+  expect_equal(nrow(hit_dt), 1)
+  expect_false("blocking" %in% names(diag_of(hit_dt)))
+
+  # unknown_analyte: known_analyte_no_method (CAS-suggested) branch
+  event_cas <- mk_event(mk_row(source_ref = "r1", analyte_raw = "Fluoride", org = "Internal",
+                               cas_number = "16984-48-8", method_raw = NA_character_))
+  out_cas <- reconcile_event(event_cas, con)
+  hit_cas <- out_cas$review[out_cas$review$source_ref == "r1", ]
+  expect_equal(nrow(hit_cas), 1)
+  expect_identical(hit_cas$subkind[[1]], "known_analyte_no_method")
+  expect_false("blocking" %in% names(diag_of(hit_cas)))
+
+  # unknown_analyte: full-miss (grouped) branch
+  event_miss <- mk_event(mk_row(source_ref = "r1", analyte_raw = "Nonexistentite", org = "ALS",
+                                cas_number = NA_character_))
+  out_miss <- reconcile_event(event_miss, con)
+  hit_miss <- out_miss$review[out_miss$review$kind == "unknown_analyte" &
+                                 grepl("Nonexistentite", out_miss$review$payload), ]
+  expect_equal(nrow(hit_miss), 1)
+  expect_false("blocking" %in% names(diag_of(hit_miss)))
+
+  # value_conflict - the shape that broke R-16.19/R-16.20 parity.
+  DBI::dbExecute(con, "INSERT INTO analysis
+    (uuid, uuid_sample, uuid_lab, value, value_chr, quantified) VALUES
+    ('an-p7b8-vc', 's-0001', 'lm-0001', NULL, 'clear', NULL)")
+  event_vc <- mk_event(mk_row(source_ref = "r1", analyte_raw = "pH Value", org = "ALS",
+                              method_raw = "EA005P: pH by PC Titrator", units_raw = "pH",
+                              value_raw = "turbid, brown", value_num = NA_real_,
+                              value_chr = "turbid, brown", below_detection = NA,
+                              rl = NA_real_, cas_number = NA_character_,
+                              lab_sample_id = "XX1234567001"))
+  out_vc <- reconcile_event(event_vc, con)
+  hit_vc <- out_vc$review[out_vc$review$source_ref == "r1" & out_vc$review$kind == "value_conflict", ]
+  expect_equal(nrow(hit_vc), 1)
+  expect_false("blocking" %in% names(diag_of(hit_vc)))
+
+  # batch_duplicate
+  event_bd <- mk_event(mk_rows(
+    mk_row(source_ref = "BD_WINNER", feature_raw = "T.S01", lab_sample_id = "XX9999958001",
+           sample_datetime_raw = "01 Jun 2025 09:00"),
+    mk_row(source_ref = "BD_LOSER", feature_raw = "T.S01", lab_sample_id = "XX9999958001",
+           sample_datetime_raw = "01 Jun 2025 09:00")
+  ))
+  out_bd <- reconcile_event(event_bd, con)
+  hit_bd <- out_bd$review[out_bd$review$kind == "batch_duplicate", ]
+  expect_equal(nrow(hit_bd), 1)
+  expect_false("blocking" %in% names(diag_of(hit_bd)))
+
+  # STAGE-0 (foreign_work_order, via assembly)
+  parsed <- list(
+    "h-p7b8" = .rc_mk_parsed_entry(
+      results = dplyr::bind_rows(
+        .rc_mk_ir_result(source_hash = "h-p7b8", source_ref = "own_wo", work_order = "XX1234567",
+                         lab_sample_id = "XX1234567001", sample_type = "unknown"),
+        .rc_mk_ir_result(source_hash = "h-p7b8", source_ref = "foreign_wo", work_order = "ZZ0000002",
+                         lab_sample_id = "ZZ0000002001", sample_type = "Normal")
+      ),
+      meta = list(work_order_guess = "XX1234567")
+    )
+  )
+  asm <- assemble_events(parsed)
+  target <- Filter(function(e) "foreign_wo" %in% e$results$source_ref, asm$events)
+  out_s0 <- reconcile_event(target[[1]], con)
+  hit_s0 <- out_s0$review[out_s0$review$source_ref == "foreign_wo", ]
+  expect_equal(nrow(hit_s0), 1)
+  expect_false("blocking" %in% names(diag_of(hit_s0)))
+
+  # positive control (same test): the unknown_feature producer STILL carries
+  # `blocking` - the scoped claim, not a total absence.
+  event_uf <- mk_event(mk_row(source_ref = "r1", feature_raw = "Test Surface 01",
+                              sample_datetime_raw = "20 May 2025 09:00"))
+  out_uf <- reconcile_event(event_uf, con)
+  hit_uf <- out_uf$review[out_uf$review$source_ref == "r1" & out_uf$review$kind == "unknown_feature", ]
+  expect_equal(nrow(hit_uf), 1)
+  expect_true("blocking" %in% names(diag_of(hit_uf)))
+})

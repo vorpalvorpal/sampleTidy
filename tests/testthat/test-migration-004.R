@@ -206,3 +206,39 @@ test_that("R-15.35: v_measurement_epa's restored date column is the Sydney calen
   expect_identical(got_date, expected_date)
   expect_false(identical(got_date, wrong_date))
 })
+
+# =============================================================================
+# Phase 7b Tier-3: DROP VIEW IF EXISTS - 004 is a VIEW-REPAIR migration, so "a
+# view is already missing" is precisely its own use case, not an error.
+# =============================================================================
+
+test_that("004-view-repair: runs to completion (does not raw-error) when one of the 5 views is already missing before it runs", {
+  mig1 <- .mig001_load()
+  mig4 <- .mig004_load()
+
+  path <- seed_pre_migration_db()
+  con0 <- pre_migration_con(path)
+  .seed_004_epa_case_fixture(con0)
+  DBI::dbDisconnect(con0, shutdown = TRUE)
+
+  mig1$mig001_run(db = path, snapshot_dir = withr::local_tempdir(), dry_run = FALSE)
+
+  # Simulate the view-repair use case directly: one of the 5 views 004 owns
+  # is already gone by the time 004 runs (e.g. a prior partial repair, or an
+  # operator DROPping it by hand).
+  con1 <- pre_migration_con(path)
+  DBI::dbExecute(con1, "DROP VIEW v_measurement_epa")
+  DBI::dbDisconnect(con1, shutdown = TRUE)
+
+  snap_dir <- withr::local_tempdir()
+  result <- expect_no_error(
+    mig4$mig004_run(db = path, snapshot_dir = snap_dir, dry_run = FALSE)
+  )
+  expect_equal(result$status, "migrated")
+
+  con2 <- pre_migration_con(path)
+  withr::defer(DBI::dbDisconnect(con2, shutdown = TRUE))
+  # The view was recreated, not left missing.
+  view_n <- DBI::dbGetQuery(con2, "SELECT COUNT(*) n FROM v_measurement_epa")$n
+  expect_true(view_n >= 0)
+})

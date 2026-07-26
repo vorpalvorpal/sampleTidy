@@ -110,7 +110,24 @@
   if (is.null(x)) return(NULL)
   if (inherits(x, "Date")) return(x)
   if (all(is.na(x))) return(rep(as.Date(NA), length(x)))
-  if (is.character(x)) return(as.Date(x, format = "%Y-%m-%d"))
+  if (is.character(x)) {
+    out <- as.Date(x, format = "%Y-%m-%d")
+    # PLAN-7b item 6(a): a non-NA character input that does NOT parse as ISO
+    # 'YYYY-MM-DD' (e.g. "2026/05/04") used to come back NA - i.e. UNBOUNDED,
+    # i.e. ADMITTING the row - silently defeating a bound a curator set, while
+    # the POSIXct branch two lines below aborts loudly on the same class of
+    # mistake. Abort here too, rather than let a spelling error masquerade as
+    # "no bound at all".
+    bad <- !is.na(x) & is.na(out)
+    if (any(bad)) {
+      cli::cli_abort(
+        "{what} contains a value that does not parse as an ISO 'YYYY-MM-DD'
+         date: {.val {unique(x[bad])}}.",
+        class = "sampletidy_error"
+      )
+    }
+    return(out)
+  }
   cli::cli_abort(
     "{what} must be class Date (or an ISO 'YYYY-MM-DD' string); got class
      {.cls {class(x)}}. Not auto-converted: as.Date() on a POSIXct is itself
@@ -409,17 +426,25 @@
 .rc_narrow_live <- function(cand, sample_date, registry) {
   if (length(unique(cand$uuid_feature)) > 1 && !is.na(sample_date)) {
     feat <- registry$feature
-    de <- feat$date_end[match(cand$uuid_feature, feat$uuid)]
-    # Round-3 H11: pin tz= explicitly (matches lines 508/1033's convention).
-    # No-op today (`de`/`sample_date` are already class Date, and
-    # as.Date.Date() ignores tz), but as.Date() WITHOUT tz= on a POSIXct
-    # input is the same silent-corruption class already fixed once at the
-    # driver boundary (.rq_row()'s `expired` check) - unwatched here except
-    # by the SKIPPED R-11.17 drift detector.
-    live <- is.na(de) | as.Date(de, tz = "Australia/Sydney") >=
-      as.Date(sample_date, tz = "Australia/Sydney")
-    narrowed <- cand[live, , drop = FALSE]
-    if (nrow(narrowed) >= 1) cand <- narrowed
+    # PLAN-7b item 6(b): `feat$date_end` routed through `.rc_as_date_bound()`
+    # rather than calling `as.Date(de, tz = ...)` directly - the candidate
+    # path (`.rc_structural_hit()`/`.rc_narrow_live_feature()`) already goes
+    # through the shared coercer, which ABORTS on a POSIXct `date_end` bound
+    # rather than silently coercing it (E.1); this suggestion path used to
+    # coerce the exact bound the candidate path rejects. Also picks up the
+    # "no date_end column at all = unbounded" NULL guard for free.
+    # `sample_date` itself is NOT routed through `.rc_as_date_bound()` - H11
+    # (test-review-queue-candidate.R) pins that a POSIXct `sample_date` is
+    # handled here via explicit `tz=` pinning, not rejected; `.rc_as_date_bound()`
+    # aborts on ANY POSIXct input, which would break that contract.
+    de <- .rc_as_date_bound(feat$date_end[match(cand$uuid_feature, feat$uuid)],
+                            what = "feature$date_end")
+    if (!is.null(de)) {
+      d <- as.Date(sample_date, tz = "Australia/Sydney")
+      live <- is.na(de) | de >= d
+      narrowed <- cand[live, , drop = FALSE]
+      if (nrow(narrowed) >= 1) cand <- narrowed
+    }
   }
   cand
 }
@@ -637,6 +662,12 @@
   if (!is.na(sample_date)) {
     feat <- registry$feature
     de <- feat$date_end[match(u, feat$uuid)]
+    # PLAN-7b item 5: mirror `.rc_narrow_live_feature()`'s "no date_end column
+    # at all = unbounded" guard. Without it, a registry whose `feature` table
+    # lacks a `date_end` column entirely makes `de` NULL, `!is.na(de)`
+    # `logical(0)`, and `logical(0) && ...` an ERROR - aborting the whole
+    # reconcile - where the sibling function degrades gracefully instead.
+    if (is.null(de)) return(u)
     # Round-3 H11: pin tz= explicitly, same reasoning as .rc_narrow_live()
     # just above - a no-op on the current Date-typed columns, but the guard
     # against a future POSIXct bound turning this into a silent NA.
@@ -769,7 +800,22 @@
     distinct_feat <- unique(cand$uuid_feature)
     if (length(distinct_feat) == 1) {
       uuid_feature[[i]] <- distinct_feat
-      uuid_alias[[i]] <- cand$uuid_alias[[1]]
+      # PLAN-7b item 2 (kills M5): when several ARMS resolve to the SAME
+      # feature (the live `b.s01`/`k.e02` shape - a `self` arm plus e.g. a
+      # `transcription_error` arm on one feature), the arm written to
+      # `sample.uuid_feature_alias` used to be `cand$uuid_alias[[1]]` -
+      # whichever DuckDB happened to return first, an arbitrary physical-row-
+      # order artefact. `.rc_self_precedence()` cannot help here (it requires
+      # >=2 DISTINCT features). Prefer the `kind == 'self'` arm - R1's own
+      # principle ("the self arm wins"), previously implemented only for the
+      # different-feature case - falling back to the first arm only when NO
+      # arm is `self` (a registry shape with none is a separate defect this
+      # tie-break does not adjudicate).
+      fa <- registry$feature_alias
+      arm_kind <- fa$kind[match(cand$uuid_alias, fa$uuid)]
+      arm_is_self <- !is.na(arm_kind) & arm_kind == "self"
+      arm <- if (any(arm_is_self)) which(arm_is_self)[[1]] else 1L
+      uuid_alias[[i]] <- cand$uuid_alias[[arm]]
       status[[i]] <- "hit"
       next
     }
@@ -907,17 +953,40 @@
 .rc_self_precedence_notes <- function(rows, uuid_feature, shadowed, work_order) {
   idx <- which(!vapply(shadowed, is.null, logical(1)))
   if (length(idx) == 0) return(.rc_proto_review())
-  out <- lapply(idx, function(i) {
+
+  # PLAN-7b item 1 (Robin's ruling, from E.7's own justification): group by
+  # `(alias_key, resolved feature)`, exactly as `.rc_feature_review()` already
+  # does. This file's rows are ANALYSIS-grain (one per analyte per sample), so
+  # emitting one note PER ROW fans a single ambiguous sampling point with a
+  # 30-analyte panel across 58 samples out to ~1,700 byte-identical notes per
+  # ingest - exactly the review-queue flood E.7 exists to prevent (its own
+  # stated purpose). `source_ref` becomes the group's VECTOR (`.rc_review_row()`
+  # already accepts one for exactly this reason) and `n_rows` the group size.
+  grp_key <- paste(rows$alias_key[idx], uuid_feature[idx], sep = "||")
+  groups <- split(idx, grp_key)
+  # Radix-pinned group order (matches `.rc_feature_review()`'s own fix,
+  # item 7) so the emitted order does not shift with the R session's locale.
+  groups <- groups[order(names(groups), method = "radix")]
+
+  out <- lapply(groups, function(g) {
+    # Canonical, presentation-independent WITHIN-group order (F.5-style).
+    g <- g[order(rows$source_ref[g], method = "radix")]
+    refs <- rows$source_ref[g]
+    # The shadowed set is a property of the KEY, not the individual row - but
+    # read as the union across the group (F.5's own rule) rather than the
+    # first row's own value, so a caller extending this later never has to
+    # re-derive the pattern.
+    shadow_union <- unique(unlist(shadowed[g], use.names = FALSE))
     .rc_review_row(
-      source_ref = rows$source_ref[[i]], kind = "unknown_feature", n_rows = 1L,
-      source_hash = rows$source_hash[[i]], work_order = work_order,
+      source_ref = refs, kind = "unknown_feature", n_rows = length(g),
+      source_hash = rows$source_hash[[g[[1]]]], work_order = work_order,
       subkind = "self_precedence_note",
       # The shadowed arms ARE candidates a curator may later prefer, so they
       # take the same typed carrier every other candidate set now takes.
-      candidates = shadowed[[i]],
+      candidates = shadow_union,
       diagnostics = list(
-        feature_raw = rows$feature_raw[[i]],
-        resolved_feature = uuid_feature[[i]],
+        feature_raw = rows$feature_raw[[g[[1]]]],
+        resolved_feature = uuid_feature[[g[[1]]]],
         blocking = FALSE
       )
     )
@@ -998,11 +1067,30 @@
 #'   `expired_alias` fires at ZERO live arms only. The expired arms themselves
 #'   ride along at EVERY rank, so an `ambiguous` or `suggestion` row still
 #'   names them (E.3's "ambiguity is the actionable fact; expiry is context").
-#' * **`blocking` IS AN EXPLICIT BOOLEAN ON EVERY ROW, not an inference from
-#'   the subkind** (E.7/R2). Emitting it only on the note would leave "absent
-#'   means blocking" as the rule, i.e. the same hardcoded set of note-subkinds
-#'   the flag exists to abolish - so every row this file queues carries it, and
-#'   a reader branches on one field at any rank, including ranks added later.
+#' * **`blocking` IS AN EXPLICIT BOOLEAN ON EVERY ROW *THIS TABLE* EMITS, not
+#'   an inference from the subkind** (E.7/R2). Emitting it only on the note
+#'   would leave "absent means blocking" as the rule for the OTHER five
+#'   ranks, i.e. the same hardcoded special-case the flag exists to abolish
+#'   within THIS vocabulary - so every `unknown_feature` row this file queues
+#'   carries it, and a reader branches on one field at any rank here,
+#'   including ranks added later.
+#'
+#'   PLAN-7b round 3 (2026-07-26), Robin's reversal: `blocking` is
+#'   DELIBERATELY NOT universal across every OTHER `kind` this file queues
+#'   (`unknown_analyte`, `unknown_unit`, `parse_error`, `value_conflict`,
+#'   `batch_duplicate`, plus STAGE-0's fold-in). A first attempt at Phase-7b
+#'   added it there too, on the reading that "every row this file queues
+#'   carries it" should hold package-wide - but `value_conflict`'s
+#'   `.rc_three_way()` producer shares its diagnostics vocabulary with
+#'   `.fa_merge_samples()`'s `alias_merge` producer (R/feature-alias.R), and
+#'   `tests/testthat/test-review-queue-payload.R`'s R-16.19/R-16.20 pins
+#'   their diagnostics KEY SETS equal on the shared subset (an explicit,
+#'   individually-justified `extras_permitted` list is the only exemption).
+#'   Adding `blocking` to one side and not the other breaks that parity -
+#'   making it universal is therefore a real design change (touching a
+#'   sibling producer in a different file to preserve the invariant), not a
+#'   local diagnostics addition, and belongs to its own criterion rather than
+#'   this remediation.
 #'
 #' # CARRIERS: ONE PER ROW, NEVER BOTH
 #'
@@ -1043,6 +1131,12 @@
   na_grp <- idx[is.na(grp_key)]
   real_idx <- idx[!is.na(grp_key)]
   groups <- split(real_idx, grp_key[!is.na(grp_key)])
+  # PLAN-7b item 7: `split()` orders groups by `factor()`'s LOCALE collation
+  # (via `sort(unique(f))`), not the radix (C-locale byte order) this
+  # function's own header claims - only the WITHIN-group order below was
+  # actually radix-pinned. Pin the GROUP order too, immediately after the
+  # split and before the NA group (which has no name to sort by) is appended.
+  groups <- groups[order(names(groups), method = "radix")]
   if (length(na_grp)) groups <- c(groups, list(na_grp))
 
   out <- list()
