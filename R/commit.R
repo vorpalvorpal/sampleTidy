@@ -304,8 +304,31 @@
     # commit). `work_order` is absent only for legacy hand-built test
     # fixtures with a single implicit WO; falling back to the whole tibble
     # there preserves their existing behaviour.
+    #
+    # T1.4 (round-3 regression): the strict `clean$work_order == wo` above
+    # dropped every NA-`work_order` row from EVERY work order's subset, so a
+    # multi-file event whose rows lack a per-row work order (a real
+    # crosstab/assemble shape, NOT a fixture artefact - a crosstab section
+    # with no `Workgroup:` row emits `work_order = NA` on every result row,
+    # R/adapter-crosstab.R:384/444/554/618, and R/assemble.R:325 deliberately
+    # keeps those rows as the event's OWN, not foreign) skipped
+    # `.ct_unmatched_clean_rows()` entirely (empty `wo_clean`), hit
+    # "EXEMPTION 3: everything already matches", and committed a genuine
+    # duplicate - reopening the exact hole F.10 exists to close (reproduced,
+    # probe P2). RULING (this worker): an NA-`work_order` row is unattributed
+    # to any SPECIFIC work order, but R/assemble.R:325 already decided it
+    # belongs to the EVENT's own (home) work order, not to some other WO the
+    # event also happens to touch - so only `event$work_order`'s subset
+    # absorbs the NA rows; every OTHER `wo` in a multi-WO event keeps the
+    # strict equality (an NA row must not be misattributed to a work order it
+    # was never recorded against, which would UNDER-count that WO's own
+    # unmatched rows instead).
     wo_clean <- if ("work_order" %in% names(clean)) {
-      clean[!is.na(clean$work_order) & clean$work_order == wo, , drop = FALSE]
+      if (identical(wo, event$work_order)) {
+        clean[is.na(clean$work_order) | clean$work_order == wo, , drop = FALSE]
+      } else {
+        clean[!is.na(clean$work_order) & clean$work_order == wo, , drop = FALSE]
+      }
     } else {
       clean
     }
@@ -319,10 +342,28 @@
     unmatched <- .ct_unmatched_clean_rows(con, wo_clean)
     if (length(unmatched) == 0) next   # EXEMPTION 3: everything already matches
 
+    # commit-4 (round-3): `own_hashes[[1]]` is evaluated identically on EVERY
+    # iteration of `for (wo in wos)`, so a multi-WO block's second (and
+    # later) guard row recorded the FIRST work order's file hash - an
+    # operator tracing "which file blocked WO B" was sent to WO A's file
+    # instead (reproduced, probe P5). Prefer a hash actually recorded
+    # against THIS `wo` (`wo_clean$source_hash`, already the per-WO subset
+    # computed above); fall back to `own_hashes[[1]]` only when `wo_clean`
+    # carries no `source_hash` column at all (the legacy hand-built-fixture
+    # path where `clean` has no `work_order` column either, see `wo_clean`'s
+    # own construction above).
+    wo_source_hash <- if ("source_hash" %in% names(wo_clean) && nrow(wo_clean) > 0) {
+      wo_clean$source_hash[[1]]
+    } else if (length(own_hashes) > 0) {
+      own_hashes[[1]]
+    } else {
+      NA_character_
+    }
+
     # payload built by .rq_row() -> jsonlite, never by concatenation.
     rq <- .rq_row(
       kind = "work_order_reingest", subkind = "blocked", work_order = wo,
-      source_hash = if (length(own_hashes) > 0) own_hashes[[1]] else NA_character_,
+      source_hash = wo_source_hash,
       diagnostics = list(
         work_order = wo,
         n_samples_existing = n_samples,
@@ -338,6 +379,24 @@
         n_rows_clean = nrow(wo_clean)
       )
     )
+    # commit-8 (round-3): `.rq_row()` (R/db-schema.R, owned by another unit -
+    # not edited here) has no `uuid_target` parameter, so a guard row minted
+    # via it alone carries `uuid_target = NA`, and `review_queue_close()`
+    # (R/db-schema.R) can only close on a non-NA `uuid_target` - a guard row
+    # could never leave `status = 'open'` (confirmed: `grep -n "status =" R/
+    # *.R` yields only `.rq_row()`'s default and `review_queue_close()`'s
+    # writer; nothing else ever sets `review_queue.status`). Stamp it here,
+    # as a plain post-hoc column assignment on the tibble `.rq_row()`
+    # returned (same pattern `review_queue_add()`'s own `uuid_target=`
+    # override already uses) - `.ct_commit_review()` below carries this
+    # column through to the actually-inserted row. `n_samples > 0` (checked
+    # above, this `wo`'s loop-entry guard) guarantees a `project` row for
+    # `wo` already exists, so this is a plain lookup, never a create.
+    project_row <- DBI::dbGetQuery(
+      con, "SELECT uuid FROM project WHERE name = ? AND type = 'Work order'",
+      params = list(wo)
+    )
+    rq$review$uuid_target <- if (nrow(project_row) > 0) project_row$uuid[[1]] else NA_character_
     # Round-2 item 12: the old `row$source_ref <- NA_character_` here was
     # dead - review_queue has no source_ref column and .ct_commit_review()
     # rebuilds the row from .rq_row() anyway. Deleted, not carried forward.
@@ -351,6 +410,61 @@
     return(NULL)
   }
   dplyr::bind_rows(rows)
+}
+
+#' T1.2 item 7: read-only preview of what `commit_event()`'s blocked branch
+#' would ACTUALLY write, for `.ig_reconcile_and_commit()`'s (R/ingest.R)
+#' `dry_run` path.
+#'
+#' `.ct_reingest_guard()` alone is not enough for a truthful preview: it
+#' names every work order that WOULD block, but `commit_event()`'s blocked
+#' branch (see its `already_open` find-or-create, added for the round-2
+#' retry-idempotence fix and extended by the T1.4/commit-1 fix above it)
+#' writes FEWER review rows than `nrow(guard_rows)` whenever a guard row for
+#' that work order is already open - and a dry-run preview that ignores that
+#' reports a number the following real run will not match. Mirrors
+#' `commit_event()`'s find-or-create EXACTLY (same query, same dedup) rather
+#' than reimplementing an approximation; keep the two in sync if either
+#' changes. NEVER writes - every DB access here is a `SELECT`.
+#'
+#' @return `list(blocked = FALSE)`, or `list(blocked = TRUE, n_review = <n>)`
+#'   where `n_review` is the review-row count a real `commit_event()` call
+#'   would write this call (co-resident `resolved$review` items plus any
+#'   NOT-already-open guard rows).
+#' @keywords internal
+#' @noRd
+.ct_reingest_guard_preview <- function(con, event, resolved) {
+  guard_rows <- .ct_reingest_guard(con, event, resolved)
+  if (is.null(guard_rows)) {
+    return(list(blocked = FALSE))
+  }
+
+  already_open <- vapply(seq_len(nrow(guard_rows)), function(i) {
+    wo_g <- guard_rows$work_order[[i]]
+    if (is.na(wo_g)) {
+      return(FALSE)
+    }
+    existing <- DBI::dbGetQuery(
+      con,
+      "SELECT count(*) AS n FROM review_queue
+        WHERE kind = 'work_order_reingest' AND work_order = ? AND status = 'open'",
+      params = list(wo_g)
+    )
+    existing$n[[1]] > 0
+  }, logical(1))
+  new_guard_rows <- guard_rows[!already_open, , drop = FALSE]
+
+  n_review <- if (!is.null(resolved$review) && nrow(resolved$review) > 0) {
+    if (nrow(new_guard_rows) > 0) {
+      nrow(resolved$review) + nrow(new_guard_rows)
+    } else {
+      nrow(resolved$review)
+    }
+  } else {
+    nrow(new_guard_rows)
+  }
+
+  list(blocked = TRUE, n_review = n_review)
 }
 
 # ---- step 1: project ---------------------------------------------------------
@@ -1236,6 +1350,17 @@
     if ("payload" %in% names(review)) {
       row$payload <- review$payload[[i]]
     }
+    # commit-8: carry the guard row's `uuid_target` (stamped in
+    # `.ct_reingest_guard()`) through to the row actually persisted -
+    # `.rq_row()` (R/db-schema.R) has no `uuid_target` parameter, so this is
+    # the one place that column can reach `db_append()`. Ordinary reconcile
+    # producers carry no `uuid_target` column at all, so `col_or_na()`'s
+    # NA default leaves the column out of `db_append()`'s write for them
+    # (unchanged behaviour).
+    row_uuid_target <- col_or_na("uuid_target", i)
+    if (!is.na(row_uuid_target)) {
+      row$uuid_target <- row_uuid_target
+    }
     db_append(con, "review_queue", row, actor = actor, reason = reason, source_hash = source_hash)
     review$uuid[[i]] <- row_uuid
 
@@ -1382,12 +1507,24 @@ commit_event <- function(event, resolved, con) {
       }, logical(1))
       new_guard_rows <- guard_rows[!already_open, , drop = FALSE]
 
-      review_to_insert <- if (!is.null(resolved$review) && nrow(resolved$review) > 0) {
-        if (nrow(new_guard_rows) > 0) {
-          dplyr::bind_rows(resolved$review, new_guard_rows)
-        } else {
-          resolved$review
-        }
+      # commit-1 (round-3): the round-2 item-3 find-or-create above dedupes
+      # ONLY the guard's own work_order_reingest row - `resolved$review`
+      # (any co-resident ordinary reconcile item, e.g. unknown_feature) was
+      # passed to `.ct_commit_review()` on EVERY retry and reinserted
+      # verbatim, growing one duplicate review row per retry forever: the
+      # exact "3 calls -> 3 rows" shape the round-2 fix closed, one row-kind
+      # over (reproduced, probe P1: 3 retries -> unknown_feature = 3).
+      # `nrow(new_guard_rows) == 0` (every guard row already open) means this
+      # call is a PURE retry of an already-blocked event - by construction
+      # `resolved$review` was already written by the FIRST blocked call (the
+      # one that minted the still-open guard row), so it must not be
+      # reinserted again here. Only when at least one guard row is genuinely
+      # NEW (first call, or a newly-blocking WO in a multi-WO event) does
+      # `resolved$review` get written, alongside that new guard row.
+      review_to_insert <- if (nrow(new_guard_rows) == 0) {
+        tibble::tibble()
+      } else if (!is.null(resolved$review) && nrow(resolved$review) > 0) {
+        dplyr::bind_rows(resolved$review, new_guard_rows)
       } else {
         new_guard_rows
       }

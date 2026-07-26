@@ -521,10 +521,14 @@ db_delete <- function(con, table, uuid = NULL, actor, reason, key = NULL) {
 #' uses), each with its own `change_log` provenance row. A failure on the
 #' second write (the alias) rolls the first (the feature) back too - this is
 #' a single atomic unit, not two independent `with_db_write()` calls. The
-#' self alias is written already `confirmed_by = actor` and `auto_assign =
-#' TRUE` (the only combination Layer-1's exact match reaches - PLAN-15 test
-#' R-15.30), with `alias_key = .rc_feature_key(name)` matching migration
-#' 001's `.mig001_normalize()` convention exactly.
+#' self alias is written already `auto_assign = TRUE` and `confirmed_by =
+#' NA_character_` (Phase-7b round-2 item 11 - NEVER `confirmed_by = actor`: a
+#' machine-stamped `confirmed_by` is indistinguishable from a human
+#' confirmation, which CONTRACT A55 forbids), with `alias_key =
+#' .rc_feature_key(name)` matching migration 001's `.mig001_normalize()`
+#' convention exactly. Layer-1's exact match reaches this row on
+#' `auto_assign` alone (`R/reconcile.R:388-398`); it never reads
+#' `confirmed_by` at all.
 #'
 #' @param name feature name.
 #' @param site site name.
@@ -587,8 +591,24 @@ add_feature <- function(name, site, lon, lat, flow = NA_character_,
         # transaction, on the SAME `con` about to write, so a concurrent
         # add_feature() racing on the same name is still serialised by
         # DuckDB rather than opening a TOCTOU gap at the R level.
+        #
+        # Phase-7b round-3 T1.5/A1 (CONFIRMED-BY-ORCH, mutation A-M8-GAP
+        # SURVIVED): scoped to `uuid_feature IS NOT NULL`. A DANGLING
+        # `kind = 'pending'` alias (`uuid_feature = NULL, auto_assign =
+        # FALSE` - exactly what `.ct_materialise_feature_aliases()` writes
+        # for every unknown feature name, `R/commit.R:502-519`) can never
+        # become a Layer-1 candidate: `.rc_feature_candidates()` drops
+        # `auto_assign != TRUE` (`R/reconcile.R:393`) AND `is.na(uuid_feature)`
+        # (`R/reconcile.R:397`), so the "BOTH unreachable" duplicate this
+        # guard warns about cannot arise against a dangling row - and without
+        # this scoping, the documented operator loop for a genuinely NEW
+        # monitoring point (`pending_features()` -> `add_feature()` ->
+        # `confirm_feature_aliases()`) deadlocks: `add_feature()` refuses
+        # because the pending alias holds the name, and the pending alias
+        # cannot be confirmed because the feature does not exist yet.
         clash <- DBI::dbGetQuery(
-          con, "SELECT uuid FROM feature_alias WHERE alias_key = ?", params = list(key)
+          con, "SELECT uuid FROM feature_alias WHERE alias_key = ? AND uuid_feature IS NOT NULL",
+          params = list(key)
         )
         if (nrow(clash) > 0) {
           cli::cli_abort(

@@ -437,6 +437,36 @@ test_that("Phase 7b item C: review_queue_close() writes change_log rows via the 
 })
 
 # ======================================================================
+# Phase 7b round 3, S6: review_queue_close() used to write
+# change_log.actor = "pipeline", discarding `resolved_by` - asymmetric with
+# its own sibling db_update() in the SAME transaction
+# (.fa_confirm_one_alias(), R/feature-alias.R, actor = confirmed_by). Fixed:
+# actor = resolved_by.
+# ======================================================================
+
+test_that("Phase 7b (S6): review_queue_close() writes change_log.actor = resolved_by, not a generic 'pipeline' placeholder", {
+  dir <- withr::local_tempdir()
+  db <- seed_db(dir)
+  con <- seed_con(db)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  uuid_a <- review_queue_add(con, kind = "unknown_feature", work_order = "XX1234567",
+                              source_hash = "h-actor-a", payload = "a", uuid_target = "fa-actor-target")
+
+  review_queue_close(con, uuid_target = "fa-actor-target", resolution = "confirmed",
+                      resolved_by = "robin", kind = NULL)
+
+  actor_rows <- DBI::dbGetQuery(
+    con,
+    "SELECT DISTINCT actor FROM change_log WHERE tbl = 'review_queue' AND uuid_row = ? AND action = 'update'",
+    params = list(uuid_a)
+  )$actor
+  expect_true(length(actor_rows) > 0)
+  expect_true(all(actor_rows == "robin"))
+  expect_false(any(actor_rows == "pipeline"))
+})
+
+# ======================================================================
 # R-15.41: the D6 NULL trap
 # ======================================================================
 
@@ -673,4 +703,85 @@ test_that("R-15.43 (transactional arm): when a MULTI-alias confirmation aborts o
                                     params = list(alias_a$uuid[[1]]))
   expect_true(is.na(alias_a_after$uuid_feature[[1]]))
   expect_true(is.na(alias_a_after$confirmed_by[[1]]))
+})
+
+# ======================================================================
+# Robin's ruling 2 (Phase 7b round 3, 2026-07-26): export
+# resolve_review(uuid, resolution, resolved_by) - the operator API for
+# closing ANY review kind. Before this function existed, NOTHING could close
+# a `sample_collision` review row: review_queue_close() is unexported and
+# its one production call site hard-filters to kind = "unknown_feature", and
+# review_queue()/review_queue_candidates() are read-only (Tier-3 finding A4).
+# ======================================================================
+
+test_that("Ruling 2: resolve_review() closes a sample_collision review row - a kind review_queue_close()'s one production call site never reaches", {
+  dir <- withr::local_tempdir()
+  db_path <- seed_db(dir)
+  con <- seed_con(db_path)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  # A real sample_collision row, shaped exactly like
+  # .fa_find_self_collisions()'s own producer (R/feature-alias.R:672-681) -
+  # the kind review_queue_close()'s one caller never passes.
+  uuid_collision <- review_queue_add(
+    con, kind = "sample_collision", subkind = "same_alias",
+    work_order = "XX1234567", source_hash = "h-collision",
+    uuid_alias = "fa-collision-0001", uuid_target = "fa-collision-0001",
+    diagnostics = list(
+      uuid_feature = "f-0001", collision_date = "2025-01-01",
+      uuid_sample_a = "s-a", uuid_sample_b = "s-b"
+    )
+  )
+
+  before_log <- DBI::dbGetQuery(con, "SELECT COUNT(*) AS n FROM change_log")$n
+
+  result <- resolve_review(
+    uuid_collision, resolution = "reviewed - accepted field duplicate",
+    resolved_by = "robin", db = db_path
+  )
+  expect_true(isTRUE(result))
+
+  row <- DBI::dbGetQuery(
+    con, "SELECT status, resolution, resolved_by, resolved_at FROM review_queue WHERE uuid = ?",
+    params = list(uuid_collision)
+  )
+  expect_identical(row$status[[1]], "resolved")
+  expect_identical(row$resolution[[1]], "reviewed - accepted field duplicate")
+  expect_identical(row$resolved_by[[1]], "robin")
+  expect_false(is.na(row$resolved_at[[1]]))
+
+  # change_log provenance, with actor = resolved_by (not "pipeline").
+  after_log <- DBI::dbGetQuery(con, "SELECT COUNT(*) AS n FROM change_log")$n
+  expect_gt(after_log, before_log)
+  actor_rows <- DBI::dbGetQuery(
+    con,
+    "SELECT DISTINCT actor FROM change_log WHERE tbl = 'review_queue' AND uuid_row = ? AND action = 'update'",
+    params = list(uuid_collision)
+  )$actor
+  expect_true(length(actor_rows) > 0)
+  expect_true(all(actor_rows == "robin"))
+})
+
+test_that("resolve_review(): idempotent - resolving an already-resolved (or nonexistent) uuid closes nothing, returns FALSE, and does not error", {
+  dir <- withr::local_tempdir()
+  db_path <- seed_db(dir)
+  con <- seed_con(db_path)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  uuid_x <- review_queue_add(con, kind = "value_conflict", work_order = "XX1234567",
+                              source_hash = "h-idem", payload = "x")
+
+  first <- resolve_review(uuid_x, resolution = "confirmed", resolved_by = "robin", db = db_path)
+  expect_true(isTRUE(first))
+
+  second <- expect_no_error(
+    resolve_review(uuid_x, resolution = "confirmed", resolved_by = "robin", db = db_path)
+  )
+  expect_false(isTRUE(second))
+
+  # A nonexistent uuid behaves identically - no error, FALSE.
+  third <- expect_no_error(
+    resolve_review("no-such-uuid-anywhere", resolution = "confirmed", resolved_by = "robin", db = db_path)
+  )
+  expect_false(isTRUE(third))
 })

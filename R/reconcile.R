@@ -550,7 +550,13 @@
   s <- trimws(s[!is.na(s)])
   s <- unique(s[s != ""])
   if (length(s) == 0) return(character(0))
-  s[order(-nchar(s), s)]
+  # Phase-7b round-3 [GENERALIZE]: `method = "radix"` is the locale-independent
+  # sort this codebase pins (D4/D7). The secondary key here is CHARACTER, so
+  # without it two sites of equal length order by the user's collation - and
+  # this registry is matched longest-first, so a tie that flips changes which
+  # site a point resolves to. Found by extending U2's escalation into a
+  # tree-wide grep rather than fixing only the site it reported.
+  s[order(-nchar(s), s, method = "radix")]
 }
 
 #' Canonical form of a POINT within its site (B.3): uppercase, then drop
@@ -1050,7 +1056,20 @@
 #' | 2 | `expired_alias`        | ZERO live arms and >=1 EXPIRED arm (E.3)     | TRUE     |
 #' | 3 | `suggestion`           | EXACTLY ONE live candidate feature (F.6)     | TRUE     |
 #' | 4 | `structural`           | no candidates at all, but a `(site, point)`  | TRUE     |
-#' | 5 | `NA`                   | nothing to say                               | TRUE     |
+#' | 4.5 | `held`               | `feature_raw` NA/blank/punctuation-only (A44)| TRUE     |
+#' | 5 | `NA`                   | nothing to say (row still PENDING/committable)| TRUE    |
+#'
+#' PLAN-7b round-3 finding 7: `.rc_resolve_one_analyte()`'s docstring claims
+#' the analyte-side `held` subkind (`.rc_analyte_review()`) "mirrors" this
+#' producer's own NA-key group, but this table used to emit `NA` for BOTH
+#' the genuinely-NA-key group (all `status == "held"`, dropped from `kept`,
+#' never committed) and a `pending` row with nothing else to say (kept,
+#' committed dangling) - two rows with OPPOSITE commit dispositions were
+#' indistinguishable in `review_queue`. The NA-key group here is EXCLUSIVELY
+#' held rows (a `pending` row's `alias_key` is never NA by construction - the
+#' loop above only sets `status = "held"` when `alias_key[[i]]` IS NA), so
+#' this rank is unambiguous to add: the group formed at rank 4.5 is always
+#' whole-group `held`, never mixed with a `pending` row.
 #'
 #' Three things the table pins that prose kept getting wrong:
 #'
@@ -1158,7 +1177,13 @@
     # The precedence table, in one expression. See the header block above for
     # the full table and the three rules it pins.
     n_live <- length(cand)
-    subkind <- if (n_live >= 2) {
+    # PLAN-7b round-3 finding 7: this group is the NA-key ("held") group iff
+    # every member's status is "held" - see the table header above for why
+    # that is never mixed with a "pending" member.
+    is_held_group <- length(g) > 0 && all(status[g] == "held")
+    subkind <- if (is_held_group) {
+      "held"
+    } else if (n_live >= 2) {
       "ambiguous"
     } else if (n_live == 1) {
       "suggestion"
@@ -1206,18 +1231,38 @@
 #' `ambiguous`). Fold `nk` once and guard both sides of the `==`, matching
 #' the exact-match branch two frames up (`.rc_resolve_one_analyte:1226-1227`,
 #' already guarded) and `.rc_feature_candidates()` (`:388`).
+#'
+#' PLAN-7b round-3 T1.1: round 2 fixed exactly this shape on the NAME
+#' conjunct above and left it live on the METHOD and `org`-PARAMETER
+#' conjuncts, one site of three. The method-narrowing step gated on the RAW
+#' `method_raw`/`cand$method` (`!is.na()`) but then compared the FOLDED
+#' `.rc_method_key()` of each, which goes NA independently for a routine
+#' lab-spreadsheet placeholder like `"-"` or `"--"` (a non-NA raw value that
+#' folds to nothing) - `TRUE & NA` in the row filter spliced the same
+#' phantom-all-NA-row defect the name conjunct was fixed against. Guard the
+#' FOLDED key on both sides and skip narrowing entirely (never compare
+#' against a NA `mkey`) rather than trying to make `NA == NA` mean "match".
+#' Also guard the `org` PARAMETER itself (not just the `lm$organisation`
+#' column) - `.rc_resolve_one_analyte:1244` returns `"miss"` on `is.na(org)`
+#' before this is ever reached in production, but the function is not
+#' otherwise safe to call with `org = NA` and the docstring above claimed a
+#' completeness the code did not have.
 #' @keywords internal
 #' @noRd
 .rc_lab_method_candidates <- function(analyte_raw, org, method_raw, registry) {
   lm <- registry$lab_method
   key <- .rc_method_key(analyte_raw)
   if (is.na(key)) return(lm[0, , drop = FALSE])
+  if (is.na(org)) return(lm[0, , drop = FALSE])
   nk <- .rc_method_key(lm$name)
   cand <- lm[!is.na(nk) & !is.na(key) & nk == key & !is.na(lm$organisation) & lm$organisation == org, , drop = FALSE]
-  if (nrow(cand) > 1 && !is.na(method_raw)) {
+  if (nrow(cand) > 1) {
     mkey <- .rc_method_key(method_raw)
-    narrowed <- cand[!is.na(cand$method) & .rc_method_key(cand$method) == mkey, , drop = FALSE]
-    if (nrow(narrowed) >= 1) cand <- narrowed
+    if (!is.na(mkey)) {
+      mk <- .rc_method_key(cand$method)
+      narrowed <- cand[!is.na(mk) & mk == mkey, , drop = FALSE]
+      if (nrow(narrowed) >= 1) cand <- narrowed
+    }
   }
   cand
 }
@@ -1251,7 +1296,7 @@
     (!is.na(lm$method) & !is.na(method_raw) & lm$method == method_raw)
   exact <- lm[name_eq & org_eq & meth_eq, , drop = FALSE]
   if (nrow(exact) >= 1) {
-    exact <- exact[order(exact$uuid), , drop = FALSE]
+    exact <- exact[order(exact$uuid, method = "radix"), , drop = FALSE]
     return(list(
       status = if (is.na(exact$uuid_analyte[[1]])) "dangling_method" else "resolved",
       uuid_lab = exact$uuid[[1]], uuid_analyte = exact$uuid_analyte[[1]]
@@ -1263,7 +1308,7 @@
   if (nrow(cand) >= 1) {
     distinct_an <- unique(cand$uuid_analyte)
     if (length(distinct_an) == 1) {
-      cand <- cand[order(cand$uuid), , drop = FALSE]
+      cand <- cand[order(cand$uuid, method = "radix"), , drop = FALSE]
       return(list(
         status = if (is.na(distinct_an[[1]])) "dangling_method" else "resolved",
         uuid_lab = cand$uuid[[1]], uuid_analyte = distinct_an[[1]]
@@ -1367,14 +1412,32 @@
 
   held_idx <- which(held)
   if (length(held_idx) > 0) {
-    held_idx <- held_idx[order(rows$source_ref[held_idx], method = "radix")]
-    out[[length(out) + 1]] <- .rc_review_row(
-      source_ref = rows$source_ref[held_idx], kind = "unknown_analyte",
-      n_rows = length(held_idx), source_hash = rows$source_hash[[held_idx[[1]]]],
-      subkind = "held",
-      diagnostics = list(analyte_raw = rows$analyte_raw[[held_idx[[1]]]],
-                         org = rows$org[[held_idx[[1]]]])
-    )
+    # PLAN-7b round-3 finding 6: held rows used to form ONE group by row
+    # index regardless of `org`, so holds from different organisations
+    # collapsed into a single review item whose diagnostics named only the
+    # first member's org - an operator could not see which lab sent junk.
+    # Every OTHER `unknown_analyte` group is keyed `(analyte_raw, org)`
+    # (below); `org` is never the NA-fold hazard the header above documents
+    # for `analyte_raw` (that hazard is specific to `.rc_method_key()`
+    # folding two DIFFERENT strings onto the same "na" sentinel) - but `org`
+    # CAN itself be NA, and base `split()` SILENTLY DROPS NA-keyed elements
+    # (verified: `split(1:3, c("a", NA, "b"))` returns only groups "a"/"b" -
+    # the NA-org held row would vanish from `review` entirely, not just be
+    # mis-grouped). Coalesce NA org to an explicit sentinel before splitting
+    # so no held row is ever silently discarded.
+    org_key <- ifelse(is.na(rows$org[held_idx]), "\x01NA\x01", rows$org[held_idx])
+    held_groups <- split(held_idx, org_key)
+    held_groups <- held_groups[order(names(held_groups), method = "radix")]
+    for (g in held_groups) {
+      g <- g[order(rows$source_ref[g], method = "radix")]
+      out[[length(out) + 1]] <- .rc_review_row(
+        source_ref = rows$source_ref[g], kind = "unknown_analyte",
+        n_rows = length(g), source_hash = rows$source_hash[[g[[1]]]],
+        subkind = "held",
+        diagnostics = list(analyte_raw = rows$analyte_raw[[g[[1]]]],
+                           org = rows$org[[g[[1]]]])
+      )
+    }
   }
 
   miss_idx <- which(!held & is.na(rows$uuid_lab) & is.na(cas_suggest))
@@ -1612,6 +1675,16 @@
 #' uuid_feature to "" and dedup DIFFERENT features against each other).
 #' Analyte-pending rows (uuid_analyte NA) and rows with no feature key at all
 #' (a genuine first-sighting NA alias) are EXCLUDED from the dedup entirely.
+#'
+#' PLAN-7b round-3 finding 10: `order()` is STABLE, so a tie on
+#' `(is.na(rl_low), rl_low, -value_num)` used to fall through to whichever row
+#' happened to sort first in `idx` - a presentation-order artefact deciding
+#' `kept_uuid_lab` and which row survives into `clean`, the same
+#' non-determinism class D5/F.5/item-7 closed for `.rc_analyte_review()`,
+#' `.rc_feature_review()` and `.rc_self_precedence_notes()`. This sibling
+#' never received it. `source_ref` is a total order over rows (unique per
+#' event), so it is a safe FINAL tie-break; `method = "radix"` pins C-locale
+#' byte order so the winner does not shift with the R session's locale.
 #' @return `list(kept, skipped)`.
 #' @keywords internal
 #' @noRd
@@ -1633,7 +1706,8 @@
     labs <- unique(rows$uuid_lab[idx])
     if (length(labs) <= 1) next
 
-    ord <- order(is.na(rl_low[idx]), rl_low[idx], -rows$value_num[idx])
+    ord <- order(is.na(rl_low[idx]), rl_low[idx], -rows$value_num[idx],
+                 rows$source_ref[idx], method = "radix")
     winner <- idx[ord[[1]]]
     kept_uuid_lab <- rows$uuid_lab[[winner]]
     # Only rows from a LOSING lab are eliminated here; rows sharing the
@@ -1988,6 +2062,20 @@
   df
 }
 
+#' Radix-sort a NAMED vector by its OWN names (PLAN-7b round-2 D7). Extracted
+#' from `reconcile_event()`'s `counts` assembly (PLAN-7b round-3 finding 9) so
+#' the locale-divergence this pins can be exercised directly against a
+#' synthetic key set that DOES diverge under this platform's collations - the
+#' real `reconcile_event()` key vocabulary (lowercase ASCII plus `qc_<UPPER>`)
+#' happens not to diverge yet, which had left the pin both latent AND
+#' unobserved by any test (removing it changed nothing the suite could see).
+#' `method = "radix"` pins C-locale byte order.
+#' @keywords internal
+#' @noRd
+.rc_radix_sort_named <- function(x) {
+  x[order(names(x), method = "radix")]
+}
+
 # ---- top-level entry point --------------------------------------------------
 
 #' Reconcile one assembled event against the registry/analysis DB.
@@ -2082,8 +2170,15 @@ reconcile_event <- function(event, con) {
       stage0_rows <- lapply(seq_len(nrow(fr)), function(i) {
         diag <- fr$review_payload[[i]]
         if (is.null(diag)) diag <- list()
-        subkind <- diag$subkind
-        if (is.null(subkind)) subkind <- NA_character_
+        # PLAN-7b round-3 G-A site 2: `diag` is ADAPTER-CONTROLLED
+        # (R/assemble.R's `review_payload`); `$` prefix-matches on lists, so
+        # `diag$subkind` would silently read a sibling key like
+        # `subkind_detail` (verified: `list(subkind_detail="x")$subkind`
+        # returns `"x"`) - and because the `setdiff()` below strips only the
+        # EXACT name `"subkind"`, that same mis-read key would then ALSO be
+        # re-emitted into `diagnostics`, doubling the leak. `[[` + an
+        # explicit name check never partial-matches.
+        subkind <- if ("subkind" %in% names(diag)) diag[["subkind"]] else NA_character_
         diag <- diag[setdiff(names(diag), c("kind", "subkind", "home_work_order"))]
         if ("work_order" %in% names(diag)) {
           names(diag)[names(diag) == "work_order"] <- "foreign_work_order"
@@ -2156,7 +2251,7 @@ reconcile_event <- function(event, con) {
     # locale-collated - same class of defect as D4/D10, latent only because
     # today's key vocabulary (lowercase ASCII plus `qc_<UPPER>`) happens not
     # to diverge across locales yet. Radix-pin it anyway.
-    tbl <- tbl[order(names(tbl), method = "radix")]
+    tbl <- .rc_radix_sort_named(tbl)
     counts <- c(stats::setNames(as.integer(tbl), names(tbl)), counts)
   }
 

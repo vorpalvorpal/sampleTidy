@@ -2063,6 +2063,89 @@ test_that("Phase-7b item 3: a SECOND commit_event() on an already-blocked (needs
   expect_equal(nrow(guard_row), 1)
 })
 
+# ---- commit-1 (round-3): a retry must not re-insert a co-resident ---------
+#      ordinary reconcile review item on every call ------------------------
+
+test_that("commit-1: a blocked event that ALSO carries an ordinary reconcile review item (e.g. unknown_feature) does not re-insert that item on every retry - only the guard's own find-or-create was deduped, not co-resident review rows", {
+  setup <- commit_test_setup(filename = "C1_A0.CSV", work_order = "XY9990070", revision = 0L)
+  con <- setup$con
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  files0 <- tibble::tibble(hash = setup$hash, filename = basename(setup$path),
+                           adapter = "esdat/1", rank = 3L, kept = TRUE)
+  commit_event(mk_commit_event(files0, work_order = "XY9990070"),
+               mk_resolved(mk_clean_row(source_hash = setup$hash, work_order = "XY9990070")), con)
+
+  a1 <- add_reconciled_file(setup, "C1_A1_REDL.CSV", work_order = "XY9990070", revision = 0L)
+  files1 <- tibble::tibble(hash = a1$hash, filename = basename(a1$path),
+                           adapter = "esdat/1", rank = 3L, kept = TRUE)
+  clean <- mk_clean_row(source_hash = a1$hash, work_order = "XY9990070",
+                        sample_date = as.Date("2025-09-01"),
+                        sample_datetime = as.POSIXct("2025-09-01 09:00:00", tz = "Australia/Sydney"))
+  review <- tibble::tibble(
+    source_ref = "row1", kind = "unknown_feature", subkind = NA_character_,
+    payload = "{}", n_rows = 1L, source_hash = a1$hash,
+    uuid_existing = NA_character_, uuid_alias = NA_character_
+  )
+  ev <- mk_commit_event(files1, work_order = "XY9990070")
+  res <- mk_resolved(clean, review)
+
+  before_review <- count_rows(con, "review_queue")
+  out1 <- commit_event(ev, res, con)
+  out2 <- commit_event(ev, res, con)
+  out3 <- commit_event(ev, res, con)
+
+  expect_true(isTRUE(out1$blocked) && isTRUE(out2$blocked) && isTRUE(out3$blocked))
+  # Pre-fix: n_review was 2/1/1 and review_queue kinds ended
+  # work_order_reingest = 1, unknown_feature = 3 (one new duplicate per
+  # retry). One guard row PLUS one unknown_feature row on the FIRST call,
+  # then a true no-op on every retry.
+  expect_equal(out1$n_review, 2)
+  expect_equal(out2$n_review, 0)
+  expect_equal(out3$n_review, 0)
+  kinds <- DBI::dbGetQuery(con, "SELECT kind, count(*) AS n FROM review_queue GROUP BY kind")
+  expect_equal(kinds$n[kinds$kind == "work_order_reingest"], 1)
+  expect_equal(kinds$n[kinds$kind == "unknown_feature"], 1)
+  expect_equal(count_rows(con, "review_queue"), before_review + 2)
+})
+
+# ---- commit-8 (round-3): a work_order_reingest guard row must be closable -
+
+test_that("commit-8: a work_order_reingest guard row's uuid_target is stamped with the blocked work order's project uuid, so review_queue_close() can actually close it - pre-fix, no code path could ever set status = 'resolved' on it", {
+  setup <- commit_test_setup(filename = "C8_A0.CSV", work_order = "XY9990080", revision = 0L)
+  con <- setup$con
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  files0 <- tibble::tibble(hash = setup$hash, filename = basename(setup$path),
+                           adapter = "esdat/1", rank = 3L, kept = TRUE)
+  commit_event(mk_commit_event(files0, work_order = "XY9990080"),
+               mk_resolved(mk_clean_row(source_hash = setup$hash, work_order = "XY9990080")), con)
+
+  a1 <- add_reconciled_file(setup, "C8_A1_REDL.CSV", work_order = "XY9990080", revision = 0L)
+  files1 <- tibble::tibble(hash = a1$hash, filename = basename(a1$path),
+                           adapter = "esdat/1", rank = 3L, kept = TRUE)
+  clean <- mk_clean_row(source_hash = a1$hash, work_order = "XY9990080",
+                        sample_date = as.Date("2025-09-01"),
+                        sample_datetime = as.POSIXct("2025-09-01 09:00:00", tz = "Australia/Sydney"))
+  out <- commit_event(mk_commit_event(files1, work_order = "XY9990080"), mk_resolved(clean), con)
+  expect_true(isTRUE(out$blocked))
+
+  guard_row <- guard_review_row(con)
+  expect_equal(nrow(guard_row), 1)
+  proj_uuid <- DBI::dbGetQuery(con, "SELECT uuid FROM project WHERE name = ?",
+                               params = list("XY9990080"))$uuid[[1]]
+  target_row <- DBI::dbGetQuery(
+    con, "SELECT uuid_target FROM review_queue WHERE kind = 'work_order_reingest'"
+  )
+  expect_identical(target_row$uuid_target[[1]], proj_uuid)
+
+  n_closed <- review_queue_close(con, uuid_target = proj_uuid, resolution = "handled manually",
+                                 resolved_by = "robin", kind = "work_order_reingest")
+  expect_equal(n_closed, 1L)
+  status_after <- DBI::dbGetQuery(con, "SELECT status FROM review_queue WHERE kind = 'work_order_reingest'")$status[[1]]
+  expect_identical(status_after, "resolved")
+})
+
 # ---- Phase 7b item 8: n_rows_blocked must be counted PER WORK ORDER --------
 
 test_that("Phase-7b item 8: a multi-work-order event's guard row counts n_rows_blocked against ONLY the work order it fired for, not every unmatched row across the whole event", {
@@ -2132,6 +2215,97 @@ test_that("Phase-7b item 8: a multi-work-order event's guard row counts n_rows_b
   # Pre-fix this read 2 for a WO whose truth was 1 - "1 of 2 blocked" when
   # the real answer is "1 of 1".
   expect_equal(diag$n_rows_clean, 1)
+})
+
+# ---- T1.4 (round-3 regression): an NA-`work_order` clean row must not ------
+#      escape the per-work-order F.10 filter -------------------------------
+
+test_that("T1.4: a re-download of an already-loaded work order still blocks under F.10 when the clean row's OWN work_order is NA (a real crosstab/assemble shape, mirroring R/assemble.R:325's 'own, not foreign' NA classification)", {
+  setup <- commit_test_setup(filename = "T14_A0.CSV", work_order = "XX9990060", revision = 0L)
+  con <- setup$con
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  files_a0 <- tibble::tibble(hash = setup$hash, filename = basename(setup$path),
+                             adapter = "esdat/1", rank = 3L, kept = TRUE)
+  commit_event(mk_commit_event(files_a0, work_order = "XX9990060"),
+               mk_resolved(mk_clean_row(source_hash = setup$hash, work_order = "XX9990060")), con)
+
+  a1 <- add_reconciled_file(setup, "T14_A1_REDL.CSV", work_order = "XX9990060", revision = 0L)
+  files <- tibble::tibble(hash = a1$hash, filename = basename(a1$path),
+                          adapter = "esdat/1", rank = 3L, kept = TRUE)
+  # Pre-fix: `wo_clean <- clean[!is.na(clean$work_order) & clean$work_order ==
+  # wo, ]` dropped this row from EVERY work order's subset, so
+  # `.ct_unmatched_clean_rows(con, wo_clean)` saw zero rows, hit "EXEMPTION 3:
+  # everything already matches", and committed a genuine duplicate.
+  clean <- mk_clean_row(source_hash = a1$hash, work_order = NA_character_,
+                        sample_date = as.Date("2025-09-01"),
+                        sample_datetime = as.POSIXct("2025-09-01 09:00:00", tz = "Australia/Sydney"))
+  before_sample <- count_rows(con, "sample")
+  before_analysis <- count_rows(con, "analysis")
+
+  out <- commit_event(mk_commit_event(files, work_order = "XX9990060"), mk_resolved(clean), con)
+
+  expect_true(isTRUE(out$blocked))
+  expect_equal(count_rows(con, "sample"), before_sample)
+  expect_equal(count_rows(con, "analysis"), before_analysis)
+
+  diag <- jsonlite::fromJSON(guard_review_row(con)$payload[[1]])
+  expect_equal(diag$n_rows_blocked, 1)
+})
+
+test_that("T1.4: in a genuinely multi-WO event, an NA-work_order clean row is absorbed only by the event's own (home) work order, never by a different work order it was not recorded against", {
+  setup <- commit_test_setup(filename = "T14B_A0.CSV", work_order = "XX9990063", revision = 0L)
+  con <- setup$con
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  # Seed TWO work orders, each already carrying one sample - mirrors the
+  # Phase-7b item 8 multi-WO test above.
+  files_a0 <- tibble::tibble(hash = setup$hash, filename = basename(setup$path),
+                             adapter = "esdat/1", rank = 3L, kept = TRUE)
+  commit_event(mk_commit_event(files_a0, work_order = "XX9990063"),
+               mk_resolved(mk_clean_row(source_hash = setup$hash, work_order = "XX9990063")), con)
+
+  b0 <- add_reconciled_file(setup, "T14B_B0.CSV", work_order = "XX9990064", revision = 0L)
+  commit_event(mk_commit_event(
+    tibble::tibble(hash = b0$hash, filename = basename(b0$path), adapter = "esdat/1", rank = 3L, kept = TRUE),
+    work_order = "XX9990064"),
+    mk_resolved(mk_clean_row(source_hash = b0$hash, work_order = "XX9990064", uuid_feature = "f-0002")), con)
+
+  # ONE event whose home work_order is XX9990063 (WO A), that ALSO touches
+  # WO B via its own `ingest_file.work_order` link (`.ct_event_work_orders()`
+  # then reports BOTH WOs, exactly the multi-WO shape the per-WO filter
+  # exists for), carrying an NA-work_order clean row for WO A's own
+  # re-download AND a second file recorded against WO B that carries NO
+  # clean row of its own at all (a fixture stand-in for "WO B's own upload
+  # this run matched everything already loaded" - genuinely exempt on its
+  # own evidence). If the fix mis-scoped the NA-absorb to EVERY `wo` in the
+  # loop (rather than only `event$work_order`), the NA row would ALSO count
+  # as WO B's unmatched evidence and WO B would spuriously block too, even
+  # though WO B has no clean row of its own in this event at all.
+  a1 <- add_reconciled_file(setup, "T14B_A1_REDL.CSV", work_order = "XX9990063", revision = 0L)
+  b_dummy <- add_reconciled_file(setup, "T14B_B_TOUCH.CSV", work_order = "XX9990064", revision = 0L)
+  files <- tibble::tibble(
+    hash = c(a1$hash, b_dummy$hash), filename = c(basename(a1$path), basename(b_dummy$path)),
+    adapter = "esdat/1", rank = 3L, kept = TRUE
+  )
+  clean <- mk_clean_row(source_ref = "r1", source_hash = a1$hash, work_order = NA_character_,
+                        sample_date = as.Date("2025-09-01"),
+                        sample_datetime = as.POSIXct("2025-09-01 09:00:00", tz = "Australia/Sydney"))
+
+  out <- commit_event(mk_commit_event(files, work_order = "XX9990063"), mk_resolved(clean), con)
+
+  expect_true(isTRUE(out$blocked))
+  guard_rows <- DBI::dbGetQuery(
+    con, "SELECT work_order, payload FROM review_queue WHERE kind = 'work_order_reingest'"
+  )
+  # ONLY WO A (the NA row's home) blocks. Pre-fix (whole-loop NA-absorb),
+  # WO B's `wo_clean` would also pick up the NA row (which has no genuine
+  # match for WO B either) and mint a second, spurious guard row for a work
+  # order the event carries zero real clean rows for.
+  expect_equal(nrow(guard_rows), 1)
+  expect_identical(guard_rows$work_order[[1]], "XX9990063")
+  diag <- jsonlite::fromJSON(guard_rows$payload[[1]])
+  expect_equal(diag$n_rows_blocked, 1)
 })
 
 # ---- Phase-7b round-2, item 1 (RANK 1): the incoming-revision comparison

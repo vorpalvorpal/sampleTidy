@@ -223,13 +223,51 @@ test_that("PLAN-14 R-14.1/A32: db_update()/db_delete() abort when a composite `k
 # forbidden identifiers (not just inside an INSERT/UPDATE/DELETE dbExecute
 # call), which is what actually catches the register()+paste0()+dbExecute()
 # shape.
+#
+# Phase-7b round-3 A7/A8/A6 (CONFIRMED-BY-ORCH, probe4_a32_lint.R):
+#   A7 - the comment-only strip left STRING LITERALS intact, so a production
+#     error message merely NAMING a forbidden identifier
+#     (`stop("do not use dbAppendTable here")`) turned this lint red - SIG-04
+#     recurring on its OWN rewrite, despite the test's title claiming
+#     "comment/string-aware". Fix: the four UNCONDITIONALLY-forbidden
+#     identifiers (dbAppendTable/dbSendStatement/dbWriteTable/
+#     duckdb_register) are matched on text run through the shared
+#     `.st_strip_source_noise()` (helper-source-scan.R, the G-B
+#     [GENERALIZE] fix - strips COMMENT *and* STR_CONST, so
+#     test-payload-lint.R, a different unit's file, can call the same
+#     correct implementation instead of growing its own half-measure). The
+#     `dbExecute(...INSERT|UPDATE|DELETE...)` half is DIFFERENT: the
+#     write-door literal there genuinely lives INSIDE the call's own SQL
+#     STRING argument (`dbExecute(con, "DELETE FROM ...")`), so blanking
+#     ALL string content would blind decoy A below too (verified: it did,
+#     while wiring this fix) - that half stays on the comment-ONLY strip,
+#     unchanged from round-2's `.rq9_strip_comments()`.
+#   A8 - `.st_strip_source_noise()` aborts loudly on a parse failure
+#     (rather than the old silent raw-text fallback) - and it runs FIRST in
+#     `.rq9_scan()` below, so an unparseable fixture never reaches the
+#     comment-only strip either.
+#   A6 - `.rq9_write_door_pattern` only ever matched a write-door literal
+#     SITTING INSIDE the `dbExecute(...)` call itself, so the
+#     `sql <- paste0("UPDATE ...", ...); dbExecute(con, sql)` shape was
+#     missed - decoy B below only ever passed because it ALSO contains the
+#     unconditionally-forbidden `duckdb_register`, not because this pattern
+#     covered the shape its own name claims. `.rq9_var_built_sql_pattern`
+#     below closes it: a symbol assigned from a `paste0`/`paste`/`sprintf`/
+#     `glue` call containing an INSERT/UPDATE/DELETE literal, then passed to
+#     `dbExecute()` as a bare argument - checked on the comment-only-stripped
+#     text too, for the same string-content reason.
 
-.rq9_write_door_pattern <- "dbAppendTable|dbSendStatement|dbWriteTable|duckdb_register|dbExecute\\s*\\([^)]*(INSERT|UPDATE|DELETE)"
+.rq9_forbidden_calls_pattern <- "dbAppendTable|dbSendStatement|dbWriteTable|duckdb_register"
+.rq9_write_door_pattern <- "dbExecute\\s*\\([^)]*(INSERT|UPDATE|DELETE)"
+.rq9_var_built_sql_pattern <- "\\b([A-Za-z._][A-Za-z0-9._]*)\\s*<-\\s*(paste0?|sprintf|glue(::glue)?)\\([^)]*(INSERT|UPDATE|DELETE)"
 
-#' Strip real `#` comment tokens (via `getParseData()`) out of `lines`,
-#' returning the WHOLE file as one joined string - never comment text
-#' matching a forbidden identifier by coincidence, and never blind to a call
-#' that spans more than one line.
+#' Strip only real `#` comment tokens (via `getParseData()`), joining `lines`
+#' into one string - string content is deliberately PRESERVED (unlike
+#' `.st_strip_source_noise()`): the dbExecute()/paste0() checks below need
+#' the call's own SQL string argument intact. Silently returns the raw text
+#' on a parse failure (round-2 behaviour) - safe here because `.rq9_scan()`
+#' always calls `.st_strip_source_noise()` FIRST, which already aborted
+#' loudly (A8) if `lines` cannot be parsed at all.
 #' @keywords internal
 .rq9_strip_comments <- function(lines) {
   text <- paste(lines, collapse = "\n")
@@ -257,10 +295,35 @@ test_that("PLAN-14 R-14.1/A32: db_update()/db_delete() abort when a composite `k
 }
 
 #' TRUE if `lines` (a file's raw `readLines()` output) contains a forbidden
-#' raw-write call, comment-and-continuation-line-aware.
+#' raw-write call: one of the four unconditionally-forbidden identifiers
+#' (matched comment/string-immune, via `.st_strip_source_noise()`), a
+#' write-door literal sitting inside the `dbExecute(...)` call itself, or
+#' (A6) a symbol assigned via `paste0`/`sprintf`/`glue` and passed to
+#' `dbExecute()` as a bare argument. Aborts (A8) rather than returning FALSE
+#' when `lines` cannot be parsed at all.
 #' @keywords internal
 .rq9_scan <- function(lines) {
-  grepl(.rq9_write_door_pattern, .rq9_strip_comments(lines), perl = TRUE)
+  noise_free <- paste(.st_strip_source_noise(lines, file_label = "A32 lint fixture"), collapse = "\n")
+  if (grepl(.rq9_forbidden_calls_pattern, noise_free, perl = TRUE)) {
+    return(TRUE)
+  }
+
+  comment_free <- .rq9_strip_comments(lines)
+  if (grepl(.rq9_write_door_pattern, comment_free, perl = TRUE)) {
+    return(TRUE)
+  }
+  hits <- regmatches(comment_free, gregexpr(.rq9_var_built_sql_pattern, comment_free, perl = TRUE))[[1]]
+  if (length(hits) == 0) {
+    return(FALSE)
+  }
+  vars <- unique(sub(.rq9_var_built_sql_pattern, "\\1", hits, perl = TRUE))
+  for (v in vars) {
+    call_pattern <- paste0("dbExecute\\s*\\([^,]*,\\s*", v, "\\s*[,)]")
+    if (grepl(call_pattern, comment_free, perl = TRUE)) {
+      return(TRUE)
+    }
+  }
+  FALSE
 }
 
 test_that("R-9.1: direct-write bypass is lint-guarded - no forbidden raw SQL writes in R/ (comment/string-aware, continuation-line-aware; Phase-7b round-2 item 9)", {
@@ -311,6 +374,34 @@ test_that("Phase-7b round-2 item 9 (decoy C): the scanner does NOT false-positiv
     "}"
   )
   expect_false(.rq9_scan(decoy))
+})
+
+test_that("Phase-7b round-3 A7: the scanner does NOT false-positive on a forbidden identifier merely NAMED inside a string literal (e.g. a production error message)", {
+  decoy <- c(
+    "j <- function() {",
+    "  stop(\"do not use dbAppendTable here\")",
+    "}"
+  )
+  expect_false(.rq9_scan(decoy))
+})
+
+test_that("Phase-7b round-3 A8: an unparseable fixture aborts the scan loudly rather than silently reverting to comments/strings intact", {
+  unparseable <- c(
+    "f <- function( {",
+    "  # dbAppendTable mentioned only in a comment, on an unparseable file",
+    "}"
+  )
+  expect_error(.rq9_scan(unparseable))
+})
+
+test_that("Phase-7b round-3 A6 (decoy D): the scanner catches a paste0()-built UPDATE statement assigned to a variable and passed to dbExecute() as a bare symbol - decoy B's duplicate catch (duckdb_register) was hiding this exact gap", {
+  decoy <- c(
+    "k <- function(con, tbl) {",
+    "  sql <- paste0(\"UPDATE \", tbl, \" SET x = 1\")",
+    "  DBI::dbExecute(con, sql)",
+    "}"
+  )
+  expect_true(.rq9_scan(decoy))
 })
 
 # ---- domain helpers ---------------------------------------------------------
@@ -921,6 +1012,59 @@ test_that("Phase-7b round-2 item 10: add_feature() aborts when the name's .rc_fe
   # - never routed to feature_pending/unknown_feature by a phantom duplicate.
   registry <- .rc_load_registry(con)
   cand <- .rc_feature_candidates("T.DUPNAME9010", as.Date("2026-07-25"), registry)
+  expect_equal(nrow(cand), 1L)
+})
+
+# ---- Phase-7b round-3 T1.5/A1: the clash guard must not deadlock the -----
+#      pending -> new-feature workflow --------------------------------------
+#
+# The round-2 item 10 guard above (rightly) blocks a name clash against an
+# ALREADY-CONFIRMED alias. But it also fired on a DANGLING `kind = 'pending'`
+# alias (`uuid_feature = NULL, auto_assign = FALSE`) - exactly what
+# `.ct_materialise_feature_aliases()` writes for every unknown feature name
+# (R/commit.R:502-519). That deadlocked the documented operator loop for a
+# genuinely NEW monitoring point: `pending_features()` -> `add_feature()` ->
+# `confirm_feature_aliases()` - `add_feature()` refused because the pending
+# alias held the name, and the pending alias could never be confirmed
+# because the feature did not exist yet. A dangling alias can never be a
+# Layer-1 candidate (`.rc_feature_candidates()` drops `auto_assign != TRUE`
+# and `is.na(uuid_feature)`), so the "BOTH unreachable" duplicate the guard
+# warns about cannot arise against this row shape.
+
+test_that("Phase-7b round-3 T1.5/A1: add_feature() SUCCEEDS over a dangling pending alias of the same key, and the name resolves to exactly one candidate", {
+  path <- seed_db()
+  withr::local_options(list("sampletidy.live_db" = path))
+  con <- seed_con(path)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  nm <- "T.BRANDNEW9012"
+  key <- .rc_feature_key(nm)
+  DBI::dbExecute(con, "INSERT INTO feature_alias
+    (uuid, uuid_feature, name, alias_key, kind, n_seen, auto_assign, first_seen, last_seen, confirmed_by)
+    VALUES ('fa-pend-9012', NULL, ?, ?, 'pending', 1, FALSE,
+            TIMESTAMP '2026-01-01 00:00:00', TIMESTAMP '2026-01-01 00:00:00', NULL)",
+    params = list(nm, key))
+  expect_true("fa-pend-9012" %in% pending_features(con)$uuid_alias)
+
+  new_uuid <- add_feature(
+    name = nm, site = "S", lon = 150.9012, lat = -33.9012,
+    actor = "alice", reason = "new monitoring point behind a dangling pending alias"
+  )
+
+  after_features <- DBI::dbGetQuery(
+    con, "SELECT count(*) AS n FROM feature WHERE name = ?", params = list(nm)
+  )$n
+  expect_equal(after_features, 1L)
+
+  self_alias <- DBI::dbGetQuery(con, sprintf(
+    "SELECT * FROM feature_alias WHERE uuid_feature = '%s' AND kind = 'self'", new_uuid
+  ))
+  expect_equal(nrow(self_alias), 1)
+
+  # the name still resolves to exactly ONE candidate - the dangling pending
+  # row never was, and still is not, a Layer-1 candidate.
+  registry <- .rc_load_registry(con)
+  cand <- .rc_feature_candidates(nm, as.Date("2026-07-25"), registry)
   expect_equal(nrow(cand), 1L)
 })
 
