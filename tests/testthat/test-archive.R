@@ -200,3 +200,35 @@ test_that("R-12.17: a pre-existing legacy extensionless <uuid> file in archive_d
   expect_false(dir.exists(legacy_path))
   expect_identical(readBin(legacy_path, "raw", file.size(legacy_path)), legacy_bytes_before)
 })
+
+# ---- Phase-7b round-2 item 6: archive_file() takes an explicit `type` -------
+
+test_that("Phase-7b round-2 item 6: archive_file()'s `type` argument controls the newly-inserted asset row's type, defaulting to 'Chemical analysis' when omitted (unchanged behaviour for every pre-existing caller)", {
+  setup <- archive_test_setup()
+  con <- setup$con
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  src_dir <- withr::local_tempdir()
+
+  default_path <- file.path(src_dir, "PROJ_A.ESDAT_XX1234567_0.Chemistry2e.CSV")
+  writeLines("default type content", default_path)
+  default_hash <- hash_file(default_path)
+  archive_file(con, default_path, default_hash, event = list(work_order = "XX1234567"))
+  default_row <- DBI::dbGetQuery(con, "SELECT type FROM asset WHERE hash = ?", params = list(default_hash))
+  expect_identical(default_row$type[[1]], "Chemical analysis")
+
+  coa_path <- file.path(src_dir, "XX1234567_0_COA.pdf")
+  writeLines("coa content", coa_path)
+  coa_hash <- hash_file(coa_path)
+  archive_file(con, coa_path, coa_hash, event = list(work_order = "XX1234567"),
+               type = "Certificate of analysis")
+  coa_row <- DBI::dbGetQuery(con, "SELECT type FROM asset WHERE hash = ?", params = list(coa_hash))
+  expect_identical(coa_row$type[[1]], "Certificate of analysis")
+
+  # The dedup-reuse path (same hash, second call) never overwrites an
+  # existing row's type, even if a DIFFERENT `type` is passed the second time.
+  archive_file(con, coa_path, coa_hash, event = list(work_order = "XX1234567"),
+               type = "Chemical analysis")
+  coa_row_after <- DBI::dbGetQuery(con, "SELECT type FROM asset WHERE hash = ?", params = list(coa_hash))
+  expect_identical(coa_row_after$type[[1]], "Certificate of analysis")
+})

@@ -278,6 +278,20 @@
 #' `.ig_remove_verified()` picks it up unmodified and the run's
 #' `files_by_state` report no longer shows it as `quarantined`.
 #'
+#' Round-2 audit item 6: is `filename` a COA (Certificate of Analysis) PDF,
+#' the one retained kind PLAN-15 F.17 + Robin's ruling name an explicit
+#' `asset.type` for? Real-corpus shape "<work order>_<revision>_COA.<ext>"
+#' (e.g. "ES2617126_0_COA.pdf"): a literal `_COA.` token, case-insensitive,
+#' immediately before the extension. Deliberately narrow - `.ig_retain_
+#' siblings()` also retains COC/QC/QCI PDFs and `XTAB.XLS`, none of which are
+#' COAs; widening `"Certificate of analysis"` to cover them needs a separate
+#' ruling (see the round-2 report's enumerated list), not a guess here.
+#' @keywords internal
+#' @noRd
+.ig_is_coa_deliverable <- function(filename) {
+  grepl("(?i)_coa\\.[a-z0-9]+$", filename, perl = TRUE)
+}
+
 #' @param con an open read-write DBI connection (already past
 #'   `.ig_reconcile_and_commit()`, so any committed event's `project` row
 #'   exists).
@@ -307,23 +321,76 @@
       next
     }
 
-    fm <- file_meta(path)
-    work_order <- fm$work_order_guess
-    if (is.na(work_order)) {
-      next
-    }
-
-    project_row <- DBI::dbGetQuery(
-      con, "SELECT uuid FROM project WHERE name = ?",
-      params = list(work_order)
+    # Round-2 item 5: contain a per-file failure here, mirroring
+    # .ig_parse_claimed() (A27). archive_file() cli_abort()s on a
+    # dir.create()/file.copy() failure (a dehydrated OneDrive placeholder, a
+    # permission error, a rejected filename), and this loop previously had NO
+    # tryCatch at all - reproduced: one unarchivable retained sibling threw
+    # ingest_dir() out AFTER commits had already landed (6 samples committed,
+    # 0 snapshots produced, no report, remove_ingested never run). Every
+    # OTHER sibling stage in this file is contained per A27/R-12.1/R-12.2;
+    # this later-added F.17 sweep was not.
+    result <- tryCatch(
+      {
+        fm <- file_meta(path)
+        work_order <- fm$work_order_guess
+        if (is.na(work_order)) {
+          # Round-2 item 7: refusing to filename-parse a `2400-*` ACIRL work
+          # order is CORRECT (see the ACIRL work-order trap, R/commit.R) and
+          # must stay - staying silent about the residual exposure is not.
+          # Every such file's COA/COC/QC/QCI PDFs and XTAB.XLS stay
+          # quarantined, unarchived, and in the input directory forever (the
+          # realised-loss shape PLAN-CHANGE-REQUESTS records for 13 files),
+          # with no report field naming them - `retained` is returned then
+          # discarded by the caller. Name it loudly instead.
+          cli::cli_warn(
+            "ingest_dir(): {.path {path}} looks like a non-tabular lab
+             deliverable but its work order could not be recovered from its
+             filename (no {.val ES#######}-shaped token) - F.17 retention is
+             skipped for it; it stays quarantined and unarchived."
+          )
+          NA_character_
+        } else {
+          project_row <- DBI::dbGetQuery(
+            con, "SELECT uuid FROM project WHERE name = ?",
+            params = list(work_order)
+          )
+          if (nrow(project_row) == 0) {
+            NA_character_
+          } else {
+            # Round-2 item 6: an appropriate asset.type, not the blanket
+            # "Chemical analysis" every other archived file gets - a
+            # retained sibling is evidence, not chemistry data (PLAN-15
+            # F.17). Only a positively-identified COA gets the ruled type;
+            # every other retained kind (COC/QC/QCI/XTAB.XLS/unknown) keeps
+            # the existing default pending a separate ruling - NOT widened
+            # here.
+            sibling_type <- if (.ig_is_coa_deliverable(basename(path))) {
+              "Certificate of analysis"
+            } else {
+              "Chemical analysis"
+            }
+            archive_file(con, path, hash, event = list(work_order = work_order),
+                         type = sibling_type)
+            ingest_file_set_state(con, hash, "archived", reason = "retained_sibling", reset = TRUE)
+            hash
+          }
+        }
+      },
+      error = function(e) {
+        cli::cli_warn(
+          "ingest_dir(): failed to retain non-tabular deliverable
+           {.path {path}}: {conditionMessage(e)} - it stays quarantined,
+           unarchived, and in the input directory; already-committed events
+           in this run are unaffected."
+        )
+        NA_character_
+      }
     )
-    if (nrow(project_row) == 0) {
-      next
-    }
 
-    archive_file(con, path, hash, event = list(work_order = work_order))
-    ingest_file_set_state(con, hash, "archived", reason = "retained_sibling", reset = TRUE)
-    retained <- c(retained, hash)
+    if (!is.na(result)) {
+      retained <- c(retained, result)
+    }
   }
 
   retained

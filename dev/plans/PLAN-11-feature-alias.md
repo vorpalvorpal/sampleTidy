@@ -1031,6 +1031,10 @@ exactly; the numbers reconcile with `review_queue()`.
 <!-- block: B-11.13 -->
 ## R-11.13 Migration — MOVED to PLAN-13 (A68)
 
+**DOC-ONLY:** moved to PLAN-13 (A68), which owns the script and
+`tests/testthat/test-migration-001.R`; this heading is a pointer stub with no
+behaviour of its own to test. The ordering constraint below still binds.
+
 The one-off `dev/migrations/001-alias-indirection.R` is **no longer part of this
 plan**. It is `dev/plans/PLAN-13-alias-migration.md`, which owns the script and
 `tests/testthat/test-migration-001.R`. Split because it is a separable

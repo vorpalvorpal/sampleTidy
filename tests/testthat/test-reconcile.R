@@ -79,10 +79,21 @@ test_that("R-8.1: unknown sample_type rows are not skipped", {
   con <- seed_con(path)
   on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
 
-  event <- mk_event(mk_row(source_ref = "r1", sample_type = "unknown", value_raw = "2.3",
-                           value_num = 2.3, below_detection = FALSE, rl = 0.1))
+  event <- mk_event(mk_rows(
+    mk_row(source_ref = "r1", sample_type = "unknown", value_raw = "2.3",
+           value_num = 2.3, below_detection = FALSE, rl = 0.1),
+    # D17 (PLAN-7b round-2): `is_ok <- is.na(st) | st %in% c('Normal',
+    # 'unknown')` keeps the NA arm too - a future adapter that leaves
+    # sample_type unset must not have every row silently skipped as
+    # `qc_NA` with no review item.
+    mk_row(source_ref = "r2", sample_type = NA_character_,
+           feature_raw = "T.S02", lab_sample_id = "XX1234567002",
+           value_raw = "2.3", value_num = 2.3, below_detection = FALSE, rl = 0.1)
+  ))
   out <- reconcile_event(event, con)
   expect_false("r1" %in% out$skipped$source_ref[grepl("^qc_", out$skipped$reason)])
+  expect_false("r2" %in% out$skipped$source_ref[grepl("^qc_", out$skipped$reason)])
+  expect_true("r2" %in% out$clean$source_ref)
 })
 
 test_that("R-8.1: an NCP row, if somehow present, is still skipped as QC-like (defensive)", {
@@ -282,6 +293,119 @@ test_that("R-8.3: a full analyte miss queues grouped by (analyte_raw, org)", {
   grouped <- out$review[out$review$kind == "unknown_analyte" &
                            grepl("Nonexistentite", out$review$payload), ]
   expect_equal(nrow(grouped), 1)
+})
+
+test_that("D1/D2 (PLAN-7b round-2): closing the analyte-side registry poison loop - a punctuation-only analyte_raw is HELD (never mints a dangling lab_method), and an EXISTING poisoned lab_method row (name='--') does not phantom-splice into an UNRELATED analyte's folded-match candidate set", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  # D1 setup: a junk lab_method row whose name folds to NA (punctuation-only)
+  # - exactly what D2 prevents COMMIT from ever minting again, seeded
+  # directly here so D1's fix is exercised independently of D2's.
+  DBI::dbExecute(con, "INSERT INTO lab_method (uuid, uuid_analyte, name, organisation) VALUES
+    ('lm-poison', NULL, '--', 'ALS')")
+
+  event <- mk_event(mk_rows(
+    # D1 precondition (orchestrator-verified): the incoming name must differ
+    # in case/whitespace from the stored 'pH Value' so the EXACT-match
+    # branch (already NA-guarded, and which returns FIRST) does not run -
+    # the phantom row is unreachable through it. 'PH VALUE' forces the
+    # FOLDED path (:1202, the previously-unguarded one) to actually run.
+    # method_raw = NA so the (unrelated) method-disambiguation narrowing
+    # never gets a chance to incidentally drop the phantom row itself -
+    # isolating D1's own guard as the thing under test.
+    mk_row(source_ref = "folded_hit", analyte_raw = "PH VALUE", org = "ALS",
+           method_raw = NA_character_, cas_number = NA_character_,
+           units_raw = "pH", value_raw = "7.20", value_num = 7.2,
+           below_detection = FALSE, rl = 0.01,
+           lab_sample_id = "XX9999979001", sample_datetime_raw = "20 Jun 2025 09:00"),
+    # D2: punctuation-only analyte_raw - no key to hang a dangling lab_method
+    # on. Must be HELD (dropped from `clean`), never reach commit's
+    # .ct_materialise_lab_methods() with name='--' (which would only
+    # re-poison the registry D1 just guarded against - closing the loop).
+    mk_row(source_ref = "punct_only", analyte_raw = "--",
+           lab_sample_id = "XX9999979002", sample_datetime_raw = "20 Jun 2025 09:00")
+  ))
+  out <- reconcile_event(event, con)
+
+  # D1: the poison row must NOT phantom-splice into the folded candidate set
+  # - 'PH VALUE' still resolves cleanly to the real method/analyte (lm-0001/
+  # a-0001), not 'ambiguous'.
+  hit <- out$clean[out$clean$source_ref == "folded_hit", ]
+  expect_equal(nrow(hit), 1)
+  expect_false(hit$analyte_pending)
+  expect_identical(hit$uuid_lab, "lm-0001")
+  expect_identical(hit$uuid_analyte, "a-0001")
+
+  # D2: the punctuation-only row is HELD - dropped from `clean` entirely,
+  # but still surfaced in `review`.
+  expect_false("punct_only" %in% out$clean$source_ref)
+  expect_true("punct_only" %in% out$review$source_ref)
+
+  # D2 (closing the loop): commit must never mint a SECOND lab_method('--')
+  # from the held row.
+  commit_event(event, out, con)
+  poisoned_after <- DBI::dbGetQuery(con,
+    "SELECT count(*) AS n FROM lab_method WHERE name = '--' AND organisation = 'ALS'")$n
+  expect_equal(poisoned_after, 1)   # only the ONE seeded above - none minted anew
+})
+
+test_that("D4 (PLAN-7b round-2): .rc_analyte_review()'s GROUP order is radix-pinned, not the R session's LC_COLLATE - mirrors PLAN-7b item 7's fix for .rc_feature_review(), which this sibling producer never received", {
+  rows <- tibble::tibble(
+    source_ref = c("r_underscore", "r_dot"),
+    analyte_raw = c("NoSuchAnalyte", "NoSuchAnalyte"),
+    org = c("T_ORG", "T.ORG"),
+    source_hash = c("h1", "h2"),
+    uuid_lab = NA_character_
+  )
+  cas_suggest <- rep(NA_character_, 2)
+
+  run_order <- function(locale) {
+    withr::with_locale(c(LC_COLLATE = locale), {
+      out <- .rc_analyte_review(rows, cas_suggest)
+      out$source_ref
+    })
+  }
+
+  # Establish the divergence is REAL on this platform before pinning against
+  # it (same idiom as PLAN-7b item 7) - the group key is
+  # 'nosuchanalyte||<org>', so the org segment carries the same '.'-vs-'_'
+  # divergence item 7 measured for feature keys.
+  sort_c <- sort(c("nosuchanalyte||T_ORG", "nosuchanalyte||T.ORG"))
+  sort_en <- withr::with_locale(c(LC_COLLATE = "en_US.UTF-8"),
+                                 sort(c("nosuchanalyte||T_ORG", "nosuchanalyte||T.ORG")))
+  skip_if_not(!identical(sort_c, sort_en),
+              "this platform's C and en_US.UTF-8 collations agree here - cannot demonstrate the divergence")
+
+  order_c <- run_order("C")
+  order_en <- run_order("en_US.UTF-8")
+
+  expect_identical(order_c, order_en)
+  # radix: '.' (0x2E) < '_' (0x5F) -> the T.ORG group ('r_dot') sorts first.
+  expect_identical(order_c, c("r_dot", "r_underscore"))
+})
+
+test_that("D5 (PLAN-7b round-2): .rc_analyte_review()'s within-GROUP order (and the source_hash it reads off the group) is presentation-order-independent - the F.5 defect, unfixed in this sibling producer", {
+  rows <- tibble::tibble(
+    source_ref = c("rZZ", "rAA"),
+    analyte_raw = c("SharedMiss", "SharedMiss"),
+    org = c("SHARED_ORG", "SHARED_ORG"),
+    source_hash = c("hZZ", "hAA"),
+    uuid_lab = NA_character_
+  )
+  cas_suggest <- rep(NA_character_, 2)
+
+  out_zz_first <- .rc_analyte_review(rows, cas_suggest)
+  out_aa_first <- .rc_analyte_review(rows[c(2, 1), ], cas_suggest)
+
+  expect_equal(nrow(out_zz_first), 1)
+  expect_equal(nrow(out_aa_first), 1)
+  # byte-identical whichever order the caller's rows were presented in.
+  expect_identical(out_zz_first$source_ref, out_aa_first$source_ref)
+  expect_identical(out_zz_first$source_hash, out_aa_first$source_hash)
+  expect_identical(out_zz_first$payload, out_aa_first$payload)
+  # radix: 'rAA' sorts before 'rZZ'.
+  expect_identical(out_zz_first$source_ref, "rAA,rZZ")
+  expect_identical(out_zz_first$source_hash, "hAA")
 })
 
 # ---- R-8.4: units & value -------------------------------------------------
@@ -747,6 +871,114 @@ test_that("R-11.18/A62: an incoming row with NO datetime at an existing feature+
   hit <- out$skipped[out$skipped$source_ref == "r1", ]
   expect_equal(nrow(hit), 1)
   expect_identical(hit$reason, "already_present")
+})
+
+test_that("D11 (R-11.18/A62/PLAN-7b round-2): a candidate row with datetime IS NULL is still reused as already_present - the 'distinctness must be PROVABLE' conjunct treats a NULL candidate instant as UNPROVABLE, not as license to fabricate a second commit", {
+  path <- seed_db()
+  con <- seed_con(path)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  # T.S02/fa-0002: fresh feature, no seeded analysis (isolates this fixture
+  # from s-0001/an-0001). A single existing candidate at feature+date+lab
+  # whose datetime is NULL (PLAN-15 F.11 measures 2 of 15,149 live samples
+  # in this exact shape), same converted value as the incoming default
+  # "<0.1 mg/L" Fluoride row (100 ug/L, quantified FALSE).
+  DBI::dbExecute(con, "INSERT INTO \"sample\" (uuid, uuid_feature_alias, uuid_project, date, datetime, organisation) VALUES
+    ('s-nulldt', 'fa-0002', 'p-0001', TIMESTAMP '2025-05-25 00:00:00', NULL, 'ALS')")
+  DBI::dbExecute(con, "INSERT INTO analysis (uuid, uuid_sample, uuid_lab, value, quantified, rl_low) VALUES
+    ('an-nulldt', 's-nulldt', 'lm-0002', 100, FALSE, 100)")
+
+  # incoming: same feature+date+lab+value, a REAL (non-NA) incoming datetime
+  # (the FIXTURES.md default "24 May 2025 11:45" applies to T.S01, so make
+  # the raw explicit for T.S02's own date/time).
+  event <- mk_event(mk_row(source_ref = "r1", feature_raw = "T.S02",
+                           lab_sample_id = "XX1234567002",
+                           sample_datetime_raw = "25 May 2025 11:45"))
+  out <- reconcile_event(event, con)
+
+  hit <- out$skipped[out$skipped$source_ref == "r1", ]
+  expect_equal(nrow(hit), 1)
+  expect_identical(hit$reason, "already_present")
+  expect_identical(hit$existing_uuid, "an-nulldt")
+  expect_false("r1" %in% out$clean$source_ref)
+})
+
+test_that("D12 (PLAN-7b round-2): .rc_find_existing() picks the INSTANT-MATCHING candidate when several committed analyses share (feature, date, lab), not an arbitrary DB physical-row-order pick", {
+  path <- seed_db()
+  con <- seed_con(path)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  # Two analyses at f-0002/fa-0002, same DATE, same lab, DIFFERENT instants -
+  # a shape D6's missing ORDER BY and D12's missing datetime-narrowing both
+  # leave undiscriminated.
+  DBI::dbExecute(con, "INSERT INTO \"sample\" (uuid, uuid_feature_alias, uuid_project, date, datetime, organisation) VALUES
+    ('s-multiA', 'fa-0002', 'p-0001', TIMESTAMP '2025-05-25 00:00:00', TIMESTAMP '2025-05-25 21:45:00', 'ALS'),
+    ('s-multiB', 'fa-0002', 'p-0001', TIMESTAMP '2025-05-25 00:00:00', TIMESTAMP '2025-05-25 23:45:00', 'ALS')")
+  DBI::dbExecute(con, "INSERT INTO analysis (uuid, uuid_sample, uuid_lab, value, quantified, rl_low) VALUES
+    ('an-multiA', 's-multiA', 'lm-0002', 50, TRUE, 0.1),
+    ('an-multiB', 's-multiB', 'lm-0002', 60, TRUE, 0.1)")
+
+  # incoming instant matches s-multiB's stored datetime EXACTLY.
+  inc_dt <- as.POSIXct("2025-05-25 23:45:00", tz = "UTC")
+  existing <- .rc_find_existing(con, resolved_feature = "f-0002", uuid_feature_alias = NA_character_,
+                                feature_pending = FALSE, sample_date = as.Date("2025-05-25"),
+                                sample_datetime = inc_dt, uuid_lab = "lm-0002")
+  expect_false(is.null(existing))
+  expect_identical(existing$analysis_uuid[[1]], "an-multiB")
+})
+
+test_that("D3/R-15.33 (deferred to F.11, BLOCKED ON F.13 - PLAN-15:1965): a reuse match finds a LEGACY-CONVENTION row ('date' at 13:00/14:00 UTC, 'datetime' at the real instant), paired with the modern-convention control", {
+  # `.rc_find_existing()` matches on `CAST(s.date AS DATE)` against the
+  # Sydney-local date computed in memory. Against the live registry, where
+  # ALL 15,111 non-NULL `date` values are stored at the legacy 13:00/14:00
+  # UTC convention (PLAN-15 F.11), this CAST reads the WRONG calendar day
+  # and the reuse match misses every legacy row. R-15.33 belongs to F.11,
+  # which the plan marks BLOCKED ON F.13 - this criterion is plan-correct
+  # RED today, not an oversight, and must not be "fixed" ahead of F.13
+  # (out of this unit's scope regardless).
+  #
+  # No native testthat "soft xfail" exists that both (a) does not turn the
+  # suite red today and (b) auto-flips to a real green PASS the day F.11
+  # lands with no test edit required: `testthat::expect_failure()` requires
+  # EXACTLY one failure and zero successes in its wrapped expression, so it
+  # is STRICT - it would itself go RED the day the wrapped assertions start
+  # passing (the opposite of "flip green"). This test self-diagnoses
+  # instead: it runs the real assertions and self-skips ONLY while the
+  # known-red condition (`nrow(out$clean) != 0`) still holds; the day F.11
+  # lands, the condition becomes false, the skip is bypassed, and the block
+  # below runs for real - a genuine PASS with no maintainer action needed.
+  path <- seed_db(); con <- seed_con(path)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  # CONTROL (modern convention, `date` = local midnight): must reuse-match
+  # TODAY and after F.11 alike - a real, unconditional assertion so a no-op
+  # "implementation" of the eventual fix still fails this test.
+  ctrl <- reconcile_event(mk_event(mk_row()), con)
+  expect_equal(nrow(ctrl$clean), 0)
+  expect_identical(ctrl$skipped$reason, "already_present")
+
+  # The fixture that makes this capable of failing: rewrite s-0001's `date`
+  # to the legacy convention. 2025-05-23 14:00 UTC IS 2025-05-24 00:00
+  # Australia/Sydney - the same calendar day as the untouched `datetime`
+  # (2025-05-24 01:45 UTC = 11:45 AEST) and the same day the incoming row
+  # parses to. Only `CAST(date AS DATE)` disagrees, reading 2025-05-23.
+  DBI::dbExecute(con, "UPDATE \"sample\" SET date = TIMESTAMP '2025-05-23 14:00:00'
+                        WHERE uuid = 's-0001'")
+
+  out <- reconcile_event(mk_event(mk_row()), con)
+
+  if (nrow(out$clean) != 0) {
+    testthat::skip(paste(
+      "R-15.33 deferred to F.11 (BLOCKED ON F.13, PLAN-15:1965):",
+      ".rc_find_existing() CAST(date AS DATE)-matches, which misses a",
+      "legacy-convention 'date' (13:00/14:00 UTC, all 15,111 live legacy",
+      "rows). Remove this self-skip once F.11 lands - see the comment",
+      "block above this test."
+    ))
+  }
+  expect_equal(nrow(out$clean), 0)
+  expect_identical(out$skipped$reason, "already_present")
+  expect_identical(out$skipped$existing_uuid, "an-0001")
 })
 
 test_that("R-8.7: conflict with recorded revision 0 and incoming revision 1 becomes a supersede row", {
@@ -2413,6 +2645,34 @@ test_that("B.6: a Layer-2 structural hit carries the target's self-alias uuid; a
   expect_true(no_alias_row$feature_pending)   # never committed with a NA alias
   expect_true(is.na(no_alias_row$uuid_feature_alias))
   expect_true("no_alias" %in% out$review$source_ref)
+
+  # D8 (PLAN-7b round-2): the identical "never commit with a NA alias" guard
+  # exists a SECOND time, on the Layer-3 branch (`:899`) - a second event,
+  # to keep it independent of the Layer-2 case above. 'S99L3' carries NO
+  # recognised site prefix at all (Layer-2's own parse never fires for it),
+  # so it can only be retried by Layer 3, which assumes the event's single
+  # resolved site ('T', established here by 'T.S01') and structurally hits
+  # a target ('T.S99L3') that - like f-local-s99 above - carries no
+  # self-alias.
+  DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix, lon, lat) VALUES
+    ('f-local-s99l3', 'T.S99L3', 'T', 'surface', 'water', 150.9998, -33.0098)")
+
+  event2 <- mk_event(mk_rows(
+    mk_row(source_ref = "site_anchor", feature_raw = "T.S01", lab_sample_id = "XX9999993001",
+           sample_datetime_raw = "06 Jun 2025 10:00"),
+    mk_row(source_ref = "l3_no_alias", feature_raw = "S99L3", lab_sample_id = "XX9999993002",
+           sample_datetime_raw = "06 Jun 2025 10:00")
+  ))
+  out2 <- reconcile_event(event2, con)
+
+  anchor <- out2$clean[out2$clean$source_ref == "site_anchor", ]
+  expect_false(anchor$feature_pending)   # establishes the event's single site (T)
+
+  l3_row <- out2$clean[out2$clean$source_ref == "l3_no_alias", ]
+  expect_true(l3_row$feature_pending)    # never committed with a NA alias
+  expect_true(is.na(l3_row$uuid_feature_alias))
+  expect_true(is.na(l3_row$uuid_feature))
+  expect_true("l3_no_alias" %in% out2$review$source_ref)
 })
 
 test_that("B.6: two identical structurally-resolved rows in one batch are subject to the R-12.13 within-batch duplicate guard", {
@@ -2722,6 +2982,42 @@ test_that("C.3: a resolved feature with NA/blank site makes the whole event INEL
   expect_identical(cc$uuid_feature, "f-0009")
 })
 
+test_that("D15/C.3: a resolved feature with a BLANK (empty-string, not NA) site ALSO makes the event INELIGIBLE for Layer 3 (fail closed) - the other half of C.3's 'NA or blank site' rule; the sibling test above covers only the NA half", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix, lon, lat) VALUES
+    ('f-local-blanksite', 'V.VIRT02', '', 'surface', 'water', 150.5556, -33.5556)")
+  DBI::dbExecute(con, "INSERT INTO feature_alias
+    (uuid, uuid_feature, name, alias_key, kind, n_seen, auto_assign, first_seen, last_seen, confirmed_by) VALUES
+    ('fa-local-blanksite', 'f-local-blanksite', 'V.VIRT02', 'v.virt02', 'self', 0, TRUE,
+     TIMESTAMP '2025-01-01 00:00:00', TIMESTAMP '2025-01-01 00:00:00', NULL)")
+
+  # A single resolved row whose feature's site is '' (blank, not NULL) is the
+  # event's ONLY resolved feature - so `unique(trimws(s))` alone (with the
+  # blank-guard mutated away) would read as "one single site: ''", NOT as
+  # ">1 distinct site", so the discriminating observable is NOT whether
+  # "candidate" resolves (a blank site never matches any real structural
+  # index entry, so it stays unresolved either way) but whether Layer 3 was
+  # even ATTEMPTED: without the guard `struct_site` gets set to '' before the
+  # (failing) hit lookup, which flips the review payload's subkind from bare
+  # (NA) to 'structural' with a meaningless site=''.
+  event <- mk_event(mk_rows(
+    mk_row(source_ref = "blanksite", feature_raw = "V.VIRT02",
+           lab_sample_id = "XX9999984001", sample_datetime_raw = "12 Jun 2025 09:00"),
+    mk_row(source_ref = "candidate", feature_raw = "MW02A",
+           lab_sample_id = "XX9999984002", sample_datetime_raw = "12 Jun 2025 09:00")
+  ))
+  out <- reconcile_event(event, con)
+
+  c <- out$clean[out$clean$source_ref == "candidate", ]
+  expect_true(c$feature_pending)
+  expect_true(is.na(c$uuid_feature))
+
+  rv <- out$review[out$review$kind == "unknown_feature" &
+                      grepl("candidate", out$review$source_ref, fixed = TRUE), ]
+  expect_equal(nrow(rv), 1)
+  expect_true(is.na(rv$subkind[[1]]))   # bare - never 'structural' with site=''
+})
+
 test_that("C.3: curation always wins - a row gated by an existing feature_alias entry (B.4) is never resolved by WO site-inference either", {
   path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
   # THE discriminating row is "gated_no_site". The previous form used
@@ -3005,6 +3301,19 @@ test_that("A14/R-8.7: a re-ingested TEXT result matches as already_present and d
   # numeric behaviour is unchanged
   expect_true(.rc_values_equal(7.1, NA_character_, TRUE, 7.1, NA_character_, TRUE))
   expect_false(.rc_values_equal(7.1, NA_character_, TRUE, 7.1, NA_character_, FALSE))
+
+  # D13 (PLAN-7b round-2): a NUMERIC value whose `quantified` state is itself
+  # NA is still a genuine mismatch against a determinate measurement sharing
+  # that same number - `is.na(inc_quant) != is.na(exist_quant)` is the ONLY
+  # guard reached when `inc_quant` is NA (the OTHER guard two lines below,
+  # `!is.na(inc_quant) && !identical(...)`, only fires when `inc_quant` is
+  # non-NA, so it cannot substitute for this one). Without it, once both
+  # `inc_value`/`exist_value` are non-NA and numerically equal, execution
+  # falls straight into the numeric-tolerance branch and reports a match -
+  # silently discarding a real change.
+  expect_false(.rc_values_equal(
+    inc_value = 100, inc_chr = NA_character_, inc_quant = NA,
+    exist_value = 100, exist_chr = NA_character_, exist_quant = TRUE))
 })
 
 # ---- PLAN-15 Work E (E.1/E.2): alias-level date bounds ---------------------
@@ -3951,6 +4260,65 @@ test_that("R-15.45 (E.7): a key reaching a live SELF arm plus one live NON-self 
   expect_identical(note_ctrl$subkind[[1]], "ambiguous")
 })
 
+test_that("D16 (E.7/PLAN-7b round-2): .rc_self_precedence() returns NULL when MORE THAN ONE surviving arm is kind='self' - two features claiming one name by their own names is a registry defect, not something to resolve arbitrarily", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  registry <- .rc_load_registry(con)
+
+  # fa-0001 (self -> f-0001) and fa-0002 (self -> f-0002): TWO distinct
+  # features, both claimed via their OWN self alias - the "not applicable"
+  # arm of E.7's rule (`sum(is_self) != 1L`), distinct from the ordinary
+  # "zero self arms" ambiguity every other self-precedence test exercises.
+  cand <- tibble::tibble(uuid_alias = c("fa-0001", "fa-0002"),
+                         uuid_feature = c("f-0001", "f-0002"))
+  expect_null(.rc_self_precedence(cand, registry))
+})
+
+test_that("D10 (PLAN-7b round-2): .rc_self_precedence_notes()'s GROUP order and WITHIN-group order are both radix-pinned, mirroring PLAN-7b item 7/F.5's fix for the sibling .rc_feature_review() producer, which this one never received - byte-identical payload across two presentation orders, with a SECOND group so group order is itself observable", {
+  mk <- function(order_rows) {
+    rows <- tibble::tibble(
+      source_ref = vapply(order_rows, `[[`, character(1), "source_ref"),
+      alias_key = vapply(order_rows, `[[`, character(1), "alias_key"),
+      feature_raw = vapply(order_rows, `[[`, character(1), "feature_raw"),
+      source_hash = vapply(order_rows, `[[`, character(1), "source_hash")
+    )
+    uuid_feature <- vapply(order_rows, `[[`, character(1), "uuid_feature")
+    shadowed <- lapply(order_rows, function(r) r$shadowed)
+    .rc_self_precedence_notes(rows, uuid_feature, shadowed, work_order = "XX1234567")
+  }
+
+  # Two GROUPS sharing the same shape item 7 already proved diverges under
+  # C vs en_US.UTF-8 collation on this platform ('t_01' vs 't.01' - ASCII
+  # '.' 0x2E < '_' 0x5F). Two rows per group also exercise the WITHIN-group
+  # source_ref order (F.5).
+  row_under_b <- list(source_ref = "r_under_b", alias_key = "t_01", feature_raw = "T_01",
+                      source_hash = "h1", uuid_feature = "f-under", shadowed = "f-under-shadow")
+  row_under_a <- list(source_ref = "r_under_a", alias_key = "t_01", feature_raw = "T_01",
+                      source_hash = "h1", uuid_feature = "f-under", shadowed = "f-under-shadow")
+  row_dot_b   <- list(source_ref = "r_dot_b", alias_key = "t.01", feature_raw = "T.01",
+                      source_hash = "h2", uuid_feature = "f-dot", shadowed = "f-dot-shadow")
+  row_dot_a   <- list(source_ref = "r_dot_a", alias_key = "t.01", feature_raw = "T.01",
+                      source_hash = "h2", uuid_feature = "f-dot", shadowed = "f-dot-shadow")
+
+  order1 <- list(row_under_b, row_under_a, row_dot_b, row_dot_a)
+  order2 <- list(row_dot_a, row_dot_b, row_under_a, row_under_b)
+
+  out1 <- mk(order1)
+  out2 <- mk(order2)
+
+  expect_equal(nrow(out1), 2)
+  expect_equal(nrow(out2), 2)
+
+  # byte-identical whichever order the caller's rows were presented in.
+  expect_identical(out1$payload, out2$payload)
+  expect_identical(out1$source_ref, out2$source_ref)
+  expect_identical(out1$source_hash, out2$source_hash)
+
+  # radix collation: 't.01' < 't_01' (ASCII '.' 0x2E < '_' 0x5F), same as
+  # PLAN-7b item 7 - the dot group's row sorts first, and within it 'r_dot_a'
+  # sorts before 'r_dot_b'.
+  expect_identical(out1$source_ref, c("r_dot_a,r_dot_b", "r_under_a,r_under_b"))
+})
+
 # ---- cold-audit defect 2: .rc_fill_missing_cols() is type-aware for the
 #      `candidates` list-column ---------------------------------------------
 
@@ -4242,8 +4610,38 @@ test_that("PLAN-7b item 5: .rc_structural_hit() does not abort when feature.date
   expect_identical(hit, "f-nfde-01")
 })
 
+test_that("D9/R-15.14 extension (PLAN-7b round-2): .rc_narrow_live_feature()'s OWN 'no feature.date_end column at all = unbounded' guard (:417) does not empty the candidate set - the same absent-column fixture item 5 uses above for its .rc_structural_hit() twin, read through .rc_feature_candidates() (which routes straight through .rc_narrow_live_feature())", {
+  con <- seed_no_feature_date_end_con()
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  registry <- .rc_load_registry(con)
+  expect_null(registry$feature$date_end)
+
+  cand <- .rc_feature_candidates("P.S01", as.Date("2025-05-20"), registry)
+  expect_equal(nrow(cand), 1)
+  expect_identical(cand$uuid_feature[[1]], "f-nfde-01")
+})
+
 # ---- item 6(a): .rc_as_date_bound() never silently admits a wrongly-spelled -
 # character bound as "unbounded" ----------------------------------------------
+
+test_that("D14 (PLAN-7b round-2): .rc_review_row() aborts when `diagnostics` supplies a RESERVED key ('source_ref' or 'n_rows') - these are always set from this function's own arguments, and a caller supplying either would otherwise silently overwrite the real value with a duplicate name .rq_row() rejects with a message pointing at the wrong function", {
+  expect_error(
+    .rc_review_row(source_ref = "r1", kind = "unknown_feature", n_rows = 1L,
+                   source_hash = "h1", diagnostics = list(source_ref = "x")),
+    class = "sampletidy_error"
+  )
+  expect_error(
+    .rc_review_row(source_ref = "r1", kind = "unknown_feature", n_rows = 1L,
+                   source_hash = "h1", diagnostics = list(n_rows = 99L)),
+    class = "sampletidy_error"
+  )
+  # paired positive control: an ORDINARY diagnostics key (no collision) does
+  # not abort - the guard is scoped to the two reserved names, not to
+  # diagnostics= being non-empty.
+  ok <- .rc_review_row(source_ref = "r1", kind = "unknown_feature", n_rows = 1L,
+                       source_hash = "h1", diagnostics = list(feature_raw = "T.S01"))
+  expect_equal(nrow(ok), 1)
+})
 
 test_that("PLAN-7b item 6(a): .rc_as_date_bound() ABORTS on a non-NA character bound that does not parse as ISO 'YYYY-MM-DD' - a wrong spelling ('2026/05/04') used to silently become NA (i.e. UNBOUNDED, i.e. ADMITTING the row), defeating the bound a curator set", {
   expect_error(.rc_as_date_bound("2026/05/04", what = "test bound"), class = "sampletidy_error")

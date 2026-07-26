@@ -104,14 +104,20 @@
 #' writes to, plus `feature_alias`'s own row-count/uuid-set invariant AND a
 #' five-column value digest over the fields this migration never writes
 #'
-#' Deliberately EXCLUDES `analysis`: 003 never touches it (unlike 001, which
-#' rebuilds it, or 004, whose fixture inherits 001's full schema), and the
-#' `feature_alias`-only seed this migration's own tests run on
+#' `analysis` is read CONDITIONALLY (item 11 - Phase 7b round 2): 003 never
+#' touches it, but on the live registry it is the largest table and 001's
+#' own gate covers it, so a verify gate that hard-excludes it is a
+#' production gate narrowed to fit a fixture, not a deliberate scoping
+#' choice. The `feature_alias`-only seed this migration's own tests run on
 #' (`tests/testthat/helper-migration-003-db.R`, S-15.9's dedicated FK-parent
 #' fixture) has no `analysis` table at all - a fixture built to prove the
-#' `DROP TABLE feature_alias` refusal, not a full-schema clone. Every table
-#' selected here IS guaranteed present on both that fixture and the live
-#' registry.
+#' `DROP TABLE feature_alias` refusal, not a full-schema clone - so
+#' `"analysis" %in% DBI::dbListTables(con)` gates the read: absent there,
+#' `analysis` comes back `NA_integer_`/excluded from the digest (both
+#' `before`/`after` calls read the SAME database within one migration run,
+#' so presence is invariant across a single comparison); present on the live
+#' registry (and on any fixture that adds it), it is counted and
+#' checksummed exactly like every other never-written table.
 #'
 #' `feature_alias` itself is EXPECTED to change on THREE columns
 #' (`date_start`, `date_end`, `auto_assign`) - so ROW COUNT and uuid SET are
@@ -127,8 +133,8 @@
 #'
 #' @param con an open DBI connection.
 #' @return named list(feature, feature_mask, analyte, lab_method, project,
-#'   sample, feature_alias_n, feature_alias_uuids, feature_alias_checksum,
-#'   checksum).
+#'   sample, analysis, feature_alias_n, feature_alias_uuids,
+#'   feature_alias_checksum, checksum).
 mig003_counts_checksum <- function(con) {
   feature_n <- DBI::dbGetQuery(con, "SELECT COUNT(*) n FROM feature")$n
   mask_n <- DBI::dbGetQuery(con, "SELECT COUNT(*) n FROM feature_mask")$n
@@ -159,8 +165,16 @@ mig003_counts_checksum <- function(con) {
     con, "SELECT uuid, uuid_feature_alias, \"date\", datetime FROM \"sample\" ORDER BY uuid"
   )
 
+  has_analysis <- "analysis" %in% DBI::dbListTables(con)
+  analysis_n <- if (has_analysis) DBI::dbGetQuery(con, "SELECT COUNT(*) n FROM analysis")$n else NA_integer_
+  analysis_vals <- if (has_analysis) {
+    DBI::dbGetQuery(con, "SELECT uuid, uuid_sample, uuid_lab, value FROM analysis ORDER BY uuid")
+  } else {
+    NULL
+  }
+
   checksum <- digest::digest(
-    list(feature_vals, mask_vals, analyte_vals, lab_method_vals, project_vals, sample_vals),
+    list(feature_vals, mask_vals, analyte_vals, lab_method_vals, project_vals, sample_vals, analysis_vals),
     algo = "sha1"
   )
 
@@ -171,6 +185,7 @@ mig003_counts_checksum <- function(con) {
     lab_method = as.integer(lab_method_n),
     project = as.integer(project_n),
     sample = as.integer(sample_n),
+    analysis = if (has_analysis) as.integer(analysis_n) else NA_integer_,
     feature_alias_n = as.integer(alias_n),
     feature_alias_uuids = alias_uuids,
     feature_alias_checksum = feature_alias_checksum,
@@ -183,19 +198,20 @@ mig003_counts_checksum <- function(con) {
 #' Step hard verify gate
 #'
 #' Every table this migration never writes to is byte-identical before/after
-#' (checksum + counts); `feature_alias`'s row count and uuid SET are
-#' unchanged (S-15.9 - no INSERT/DELETE, ever, only ALTER/UPDATE), AND its
-#' five genuinely-invariant columns (`uuid`, `alias_key`, `uuid_feature`,
-#' `kind`, `n_seen`) are byte-identical via `feature_alias_checksum`.
-#' `auto_assign`, `date_start`, `date_end` are deliberately NOT compared -
-#' the whole point of this migration is to change those three.
+#' (checksum + counts, `analysis` included when present - item 11);
+#' `feature_alias`'s row count and uuid SET are unchanged (S-15.9 - no
+#' INSERT/DELETE, ever, only ALTER/UPDATE), AND its five genuinely-invariant
+#' columns (`uuid`, `alias_key`, `uuid_feature`, `kind`, `n_seen`) are
+#' byte-identical via `feature_alias_checksum`. `auto_assign`, `date_start`,
+#' `date_end` are deliberately NOT compared - the whole point of this
+#' migration is to change those three.
 #'
 #' @param before,after `mig003_counts_checksum()`-shaped lists.
 #' @return invisible(TRUE) if every invariant holds; throws otherwise.
 mig003_verify <- function(before, after) {
   scalar_fields <- c(
     "feature", "feature_mask", "analyte", "lab_method", "project", "sample",
-    "feature_alias_n", "feature_alias_checksum", "checksum"
+    "analysis", "feature_alias_n", "feature_alias_checksum", "checksum"
   )
   bad <- Filter(function(f) !identical(before[[f]], after[[f]]), scalar_fields)
   if (!setequal(before$feature_alias_uuids, after$feature_alias_uuids)) {
@@ -284,6 +300,36 @@ mig003_backup <- function(db, snapshot_dir, .now = NULL) {
   dest
 }
 
+#' Reject a non-Date `bounds` column rather than coerce it (SIG-09; mirrors
+#' `.rq_row()` / `.rc_as_date_bound()`'s REJECT-not-coerce rule for the
+#' identical POSIXct-truncation hazard).
+#'
+#' Deliberately NOT a bare `checkmate::assert_class()` call: that throws an
+#' uncatchable-by-class `simpleError` with no explanation of WHY coercion is
+#' refused, whereas every other abort in this migration (and both sibling
+#' constructors, `.rq_row()` and `.rc_as_date_bound()`) is a catchable
+#' `sampletidy_error` carrying the "not auto-converted" rationale. Written
+#' the same way those two are, for the same reason.
+#'
+#' @param x the column to check (`bounds$date_start` or `bounds$date_end`).
+#' @param what a label for the error message.
+#' @return invisible(NULL); throws (`sampletidy_error`) if `x` is not class
+#'   `Date`.
+.mig003_assert_date_bound_col <- function(x, what) {
+  if (!inherits(x, "Date")) {
+    cli::cli_abort(
+      "{what} must be class Date; got class {.cls {class(x)}}. Not
+       auto-converted: as.Date() on a POSIXct bound is itself
+       timezone-dependent (the exact silent-corruption bug this check exists
+       to prevent - PLAN-15 E.1/E.5) - convert explicitly with as.Date(),
+       choosing the timezone deliberately, before calling
+       mig003_run()/.mig003_apply_bounds().",
+      class = "sampletidy_error"
+    )
+  }
+  invisible(NULL)
+}
+
 # ---- .mig003_apply_bounds() -------------------------------------------------
 
 #' Apply an itemised date-bounds table to `feature_alias` (E.5)
@@ -310,6 +356,18 @@ mig003_backup <- function(db, snapshot_dir, .now = NULL) {
 #'   (`date_start`/`date_end` are `Date` or `NA`).
 #' @return integer(1), the number of bounds rows applied.
 .mig003_apply_bounds <- function(con, bounds) {
+  # ---- SIG-09: REJECT a non-Date bounds column rather than coerce it
+  # (mirrors `.rq_row()` / `.rc_as_date_bound()`'s identical rule for the
+  # identical hazard). Reproduced through the real DuckDB driver:
+  # `as.POSIXct("2024-03-10 09:00:00", tz = "Australia/Sydney")` is silently
+  # stored as `2024-03-09` - one day early - because `as.Date()` on a
+  # POSIXct is itself timezone-dependent. `bounds` is this function's ONLY
+  # injectable data input and its whole reason for being injectable; the
+  # verify gate deliberately does not compare the date columns (they are
+  # licensed to change), so nothing else would catch this. ----
+  .mig003_assert_date_bound_col(bounds$date_start, "bounds$date_start")
+  .mig003_assert_date_bound_col(bounds$date_end, "bounds$date_end")
+
   n <- nrow(bounds)
   if (n == 0) {
     return(invisible(0L))

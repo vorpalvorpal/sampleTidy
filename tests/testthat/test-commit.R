@@ -86,7 +86,11 @@ count_rows <- function(con, table) DBI::dbGetQuery(con, sprintf('SELECT count(*)
 #' checks nothing about WHICH item landed).
 guard_review_row <- function(con) {
   row <- DBI::dbGetQuery(con,
-    "SELECT kind, subkind, payload FROM review_queue WHERE kind = 'work_order_reingest'")
+    # Round-2 item 2: `work_order` added to the SELECT so a test can assert
+    # the typed column, not just the JSON payload's own `work_order` field -
+    # the two used to be able to disagree (payload built from the guard's
+    # `wo`, column overwritten with `event$work_order`).
+    "SELECT kind, subkind, work_order, payload FROM review_queue WHERE kind = 'work_order_reingest'")
   row
 }
 
@@ -2040,6 +2044,23 @@ test_that("Phase-7b item 3: a SECOND commit_event() on an already-blocked (needs
   expect_identical(state_after_2, "needs_review")
   expect_equal(count_rows(con, "sample"), before_sample)
   expect_equal(count_rows(con, "analysis"), before_analysis)
+  # Round-2 item 3: the missing assertion - `before_review` was captured but
+  # never checked, so a SECOND identical work_order_reingest row landing on
+  # every retry went uncaught. Find-or-create (keyed on kind = 'work_order_
+  # reingest' AND work_order = ? AND status = 'open') means the second call
+  # reuses the first call's open row rather than minting another.
+  expect_equal(count_rows(con, "review_queue"), before_review)
+  expect_equal(out2$n_review, 0)   # nothing NEW was opened on the retry
+
+  # A THIRD call - the audit's own reproduction was "3 successive
+  # commit_event() calls -> 3 identical work_order_reingest review rows".
+  out3 <- commit_event(mk_commit_event(files_lo, work_order = "XX9990003"), resolved_lo, con)
+  expect_true(isTRUE(out3$blocked))
+  expect_equal(out3$n_review, 0)
+  expect_equal(count_rows(con, "review_queue"), before_review)
+
+  guard_row <- guard_review_row(con)
+  expect_equal(nrow(guard_row), 1)
 })
 
 # ---- Phase 7b item 8: n_rows_blocked must be counted PER WORK ORDER --------
@@ -2096,6 +2117,9 @@ test_that("Phase-7b item 8: a multi-work-order event's guard row counts n_rows_b
 
   guard_row <- guard_review_row(con)
   expect_equal(nrow(guard_row), 1)
+  # Round-2 item 2: the typed review_queue.work_order column must name the
+  # SAME work order the payload names (they used to be able to disagree).
+  expect_identical(guard_row$work_order[[1]], "XX9990020")
   diag <- jsonlite::fromJSON(guard_row$payload[[1]])
   expect_identical(diag$work_order, "XX9990020")
   # Pre-fix: `.ct_unmatched_clean_rows(con, clean)` ran over the WHOLE
@@ -2103,4 +2127,267 @@ test_that("Phase-7b item 8: a multi-work-order event's guard row counts n_rows_b
   # WO XX9990020 wrongly reported 2 - counting WO XX9990021's unmatched row
   # too - instead of the 1 row actually recorded against XX9990020.
   expect_equal(diag$n_rows_blocked, 1)
+  # Round-2 item 4: n_rows_clean must be the SAME per-work-order granularity
+  # as n_rows_blocked, not nrow(clean) (2, the whole event across both WOs).
+  # Pre-fix this read 2 for a WO whose truth was 1 - "1 of 2 blocked" when
+  # the real answer is "1 of 1".
+  expect_equal(diag$n_rows_clean, 1)
+})
+
+# ---- Phase-7b round-2, item 1 (RANK 1): the incoming-revision comparison
+#      must be scoped PER work order, not leak across a multi-WO event ------
+
+test_that("Phase-7b round-2 item 1: a same-revision re-download of WO A bundled with a genuinely higher-revision re-issue of WO B still blocks WO A - WO B's higher revision must not leak across and exempt WO A too", {
+  setup <- commit_test_setup(filename = "PROJ_A.ESDAT_XX9990040_0.Chemistry2e.CSV",
+                              work_order = "XX9990040", revision = 0L)
+  con <- setup$con
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  # ---- seed WO A (XX9990040) at revision 0.
+  files_a0 <- tibble::tibble(hash = setup$hash, filename = basename(setup$path),
+                             adapter = "esdat/1", rank = 3L, kept = TRUE)
+  event_a0 <- mk_event(mk_row(source_ref = "r1", source_hash = setup$hash,
+                               work_order = "XX9990040", revision = 0L,
+                               sample_datetime_raw = "01 Aug 2025 09:00"),
+                        work_order = "XX9990040")
+  commit_event(mk_commit_event(files_a0, work_order = "XX9990040"),
+               reconcile_event(event_a0, con), con)
+
+  # ---- seed WO B (XX9990041) at revision 0, a DIFFERENT feature so its
+  # sample is not silently reused from WO A's project (round-2 item 14).
+  b0 <- add_reconciled_file(setup, "PROJ_B.ESDAT_XX9990041_0.Chemistry2e.CSV",
+                             work_order = "XX9990041", revision = 0L)
+  files_b0 <- tibble::tibble(hash = b0$hash, filename = basename(b0$path),
+                             adapter = "esdat/1", rank = 3L, kept = TRUE)
+  event_b0 <- mk_event(mk_row(source_ref = "r1", source_hash = b0$hash,
+                               work_order = "XX9990041", revision = 0L,
+                               feature_raw = "T.S02",
+                               sample_datetime_raw = "01 Aug 2025 09:00"),
+                        work_order = "XX9990041")
+  commit_event(mk_commit_event(files_b0, work_order = "XX9990041"),
+               reconcile_event(event_b0, con), con)
+
+  before_sample <- count_rows(con, "sample")
+  before_analysis <- count_rows(con, "analysis")
+
+  # ONE event bundling: (1) a SAME-revision, differently-named re-download of
+  # WO A carrying a row matching NOTHING already loaded (the classic F.10
+  # block on its own); (2) a HIGHER-revision file for WO B, legitimately
+  # exempt (A12 supersede path).
+  a1 <- add_reconciled_file(setup, "PROJ_A.ESDAT_XX9990040_0_REDOWNLOAD.Chemistry2e.CSV",
+                             work_order = "XX9990040", revision = 0L)
+  b1 <- add_reconciled_file(setup, "PROJ_B.ESDAT_XX9990041_1_REISSUE.Chemistry2e.CSV",
+                             work_order = "XX9990041", revision = 1L)
+  files <- tibble::tibble(
+    hash = c(a1$hash, b1$hash), filename = c(basename(a1$path), basename(b1$path)),
+    adapter = "esdat/1", rank = 3L, kept = TRUE
+  )
+  clean <- dplyr::bind_rows(
+    mk_clean_row(source_ref = "r1", source_hash = a1$hash, work_order = "XX9990040",
+                 revision = 0L, uuid_feature = "f-0001",
+                 sample_date = as.Date("2025-09-05"),
+                 sample_datetime = as.POSIXct("2025-09-05 09:00:00", tz = "Australia/Sydney")),
+    mk_clean_row(source_ref = "r2", source_hash = b1$hash, work_order = "XX9990041",
+                 revision = 1L, uuid_feature = "f-0002", uuid_lab = "lm-0001", uuid_analyte = "a-0001",
+                 sample_date = as.Date("2025-09-06"),
+                 sample_datetime = as.POSIXct("2025-09-06 09:00:00", tz = "Australia/Sydney"))
+  )
+  resolved <- mk_resolved(clean = clean)
+
+  out <- commit_event(mk_commit_event(files, work_order = "XX9990040"), resolved, con)
+
+  # Pre-fix (RANK 1): .ct_incoming_revision() took max() over BOTH files on
+  # the event regardless of work order, so WO B's revision 1 wrongly exempted
+  # WO A's same-revision re-download too - blocked = FALSE, 2 NEW sample/
+  # analysis rows (a genuine duplicate commit of WO A's already-loaded data).
+  # Reproduced and verified against the pre-fix code before writing this fix.
+  expect_true(isTRUE(out$blocked))
+  expect_equal(count_rows(con, "sample"), before_sample)
+  expect_equal(count_rows(con, "analysis"), before_analysis)
+
+  guard_rows <- guard_review_row(con)
+  expect_equal(nrow(guard_rows), 1)
+  expect_identical(guard_rows$work_order[[1]], "XX9990040")
+  diag <- jsonlite::fromJSON(guard_rows$payload[[1]])
+  expect_identical(diag$work_order, "XX9990040")
+  expect_equal(diag$revision_incoming, 0)   # NOT 1 (WO B's file's revision)
+})
+
+test_that("Phase-7b round-2 (max/min gap): TWO files of one event carrying DIFFERENT revisions for the SAME already-loaded work order are exempted by the HIGHEST recorded revision, not the lowest", {
+  setup <- commit_test_setup(filename = "PROJ_A.ESDAT_XX9990030_1.Chemistry2e.CSV",
+                              work_order = "XX9990030", revision = 1L)
+  con <- setup$con
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  # seed: WO XX9990030 already loaded at revision 1.
+  files0 <- tibble::tibble(hash = setup$hash, filename = basename(setup$path),
+                           adapter = "esdat/1", rank = 3L, kept = TRUE)
+  event0 <- mk_event(mk_row(source_ref = "r1", source_hash = setup$hash,
+                             work_order = "XX9990030", revision = 1L,
+                             sample_datetime_raw = "01 Aug 2025 09:00"),
+                      work_order = "XX9990030")
+  commit_event(mk_commit_event(files0, work_order = "XX9990030"),
+               reconcile_event(event0, con), con)
+
+  # ONE event bundling TWO NEW files against the SAME WO - one at a LOWER
+  # revision (0) than recorded, one at a HIGHER revision (2). If the incoming
+  # revision were computed by min() instead of max(), the lower file would
+  # make the guard wrongly fire even though a genuinely higher-revision
+  # re-issue (2) is present too - the exact exemption 1 case.
+  lo <- add_reconciled_file(setup, "PROJ_A.ESDAT_XX9990030_0_OLD.Chemistry2e.CSV",
+                             work_order = "XX9990030", revision = 0L)
+  hi <- add_reconciled_file(setup, "PROJ_A.ESDAT_XX9990030_2_NEW.Chemistry2e.CSV",
+                             work_order = "XX9990030", revision = 2L)
+  files <- tibble::tibble(
+    hash = c(lo$hash, hi$hash), filename = c(basename(lo$path), basename(hi$path)),
+    adapter = "esdat/1", rank = 3L, kept = TRUE
+  )
+  clean <- dplyr::bind_rows(
+    mk_clean_row(source_ref = "r1", source_hash = lo$hash, work_order = "XX9990030",
+                 revision = 0L, uuid_feature = "f-0001",
+                 sample_date = as.Date("2025-09-10"),
+                 sample_datetime = as.POSIXct("2025-09-10 09:00:00", tz = "Australia/Sydney")),
+    mk_clean_row(source_ref = "r2", source_hash = hi$hash, work_order = "XX9990030",
+                 revision = 2L, uuid_feature = "f-0001",
+                 sample_date = as.Date("2025-09-10"),
+                 sample_datetime = as.POSIXct("2025-09-10 09:00:00", tz = "Australia/Sydney"))
+  )
+  resolved <- mk_resolved(clean = clean)
+
+  before_sample <- count_rows(con, "sample")
+  out <- commit_event(mk_commit_event(files, work_order = "XX9990030"), resolved, con)
+
+  # Kill-verified: with `min(revs)` substituted for `max(revs)` in
+  # .ct_incoming_revision(), incoming_rev reads 0 (not > recorded_rev 1), so
+  # the guard wrongly fires here (blocked = TRUE, 0 new samples) instead of
+  # correctly exempting a genuinely higher-revision re-issue.
+  expect_false(isTRUE(out$blocked))
+  expect_gt(count_rows(con, "sample"), before_sample)
+})
+
+# ---- Phase-7b round-2, item 10: accumulate EVERY blocking work order's row -
+
+test_that("Phase-7b round-2 item 10: a multi-WO event where BOTH work orders block gets a review row for EACH, not just the first - and each row's typed work_order column names its OWN work order (round-2 item 2)", {
+  setup <- commit_test_setup(filename = "P10_A0.CSV", work_order = "XX9990050", revision = 0L)
+  con <- setup$con
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  # Seed TWO work orders, each with its OWN sample under its OWN project
+  # (distinct features so round-2 item 14's cross-WO sample reuse cannot
+  # collapse one WO's n_samples to zero and mask its block).
+  files_a0 <- tibble::tibble(hash = setup$hash, filename = basename(setup$path),
+                             adapter = "esdat/1", rank = 3L, kept = TRUE)
+  event_a0 <- mk_event(mk_row(source_ref = "r1", source_hash = setup$hash,
+                               work_order = "XX9990050", revision = 0L,
+                               sample_datetime_raw = "01 Aug 2025 09:00"),
+                        work_order = "XX9990050")
+  commit_event(mk_commit_event(files_a0, work_order = "XX9990050"),
+               reconcile_event(event_a0, con), con)
+
+  b0 <- add_reconciled_file(setup, "P10_B0.CSV", work_order = "XX9990051", revision = 0L)
+  files_b0 <- tibble::tibble(hash = b0$hash, filename = basename(b0$path),
+                             adapter = "esdat/1", rank = 3L, kept = TRUE)
+  event_b0 <- mk_event(mk_row(source_ref = "r1", source_hash = b0$hash,
+                               work_order = "XX9990051", revision = 0L,
+                               feature_raw = "T.S02",
+                               sample_datetime_raw = "01 Aug 2025 09:00"),
+                        work_order = "XX9990051")
+  commit_event(mk_commit_event(files_b0, work_order = "XX9990051"),
+               reconcile_event(event_b0, con), con)
+
+  # ONE event bundling BOTH now-loaded work orders, each carrying ONE clean
+  # row that matches nothing already loaded for ITS OWN work order.
+  a1 <- add_reconciled_file(setup, "P10_A1_REDL.CSV", work_order = "XX9990050", revision = 0L)
+  b1 <- add_reconciled_file(setup, "P10_B1_REDL.CSV", work_order = "XX9990051", revision = 0L)
+  files <- tibble::tibble(
+    hash = c(a1$hash, b1$hash), filename = c(basename(a1$path), basename(b1$path)),
+    adapter = "esdat/1", rank = 3L, kept = TRUE
+  )
+  clean <- dplyr::bind_rows(
+    mk_clean_row(source_ref = "r1", source_hash = a1$hash, work_order = "XX9990050",
+                 uuid_feature = "f-0001", sample_date = as.Date("2025-09-01"),
+                 sample_datetime = as.POSIXct("2025-09-01 09:00:00", tz = "Australia/Sydney")),
+    mk_clean_row(source_ref = "r2", source_hash = b1$hash, work_order = "XX9990051",
+                 uuid_feature = "f-0002", uuid_lab = "lm-0001", uuid_analyte = "a-0001",
+                 sample_date = as.Date("2025-09-02"),
+                 sample_datetime = as.POSIXct("2025-09-02 09:00:00", tz = "Australia/Sydney"))
+  )
+  resolved <- mk_resolved(clean = clean)
+
+  out <- commit_event(mk_commit_event(files, work_order = "XX9990050"), resolved, con)
+  expect_true(isTRUE(out$blocked))
+  expect_equal(out$n_review, 2)
+
+  # Pre-fix: .ct_reingest_guard() `return(row)`-ed inside the `for (wo in
+  # wos)` loop, so only the FIRST blocking work order (XX9990050, since
+  # event$work_order is first in `wos`) ever got a review row - WO XX9990051
+  # was silently dropped even though it blocked too.
+  guard_rows <- guard_review_row(con)
+  expect_equal(nrow(guard_rows), 2)
+  expect_setequal(guard_rows$work_order, c("XX9990050", "XX9990051"))
+
+  diags <- lapply(guard_rows$payload, jsonlite::fromJSON)
+  wos_in_payload <- vapply(diags, function(d) d$work_order, character(1))
+  expect_setequal(wos_in_payload, c("XX9990050", "XX9990051"))
+  for (d in diags) {
+    expect_equal(d$n_rows_blocked, 1)
+    expect_equal(d$n_rows_clean, 1)
+  }
+  # Round-2 item 2: each row's typed work_order column matches its OWN
+  # payload's work_order, not both stamped with event$work_order
+  # ("XX9990050") regardless of which WO the row is actually about.
+  for (i in seq_len(nrow(guard_rows))) {
+    expect_identical(guard_rows$work_order[[i]], diags[[i]]$work_order)
+  }
+})
+
+# ---- Phase-7b round-2, item 11: the sample_date type guard must also apply
+#      at .ct_find_or_create_sample() (not only .ct_group_date_start()) ------
+
+test_that("Phase-7b round-2 item 11: .ct_find_or_create_sample() refuses a non-Date sample_date rather than silently storing a non-midnight datetime", {
+  setup <- commit_test_setup()
+  con <- setup$con
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  before_sample <- count_rows(con, "sample")
+
+  err <- tryCatch(
+    .ct_find_or_create_sample(
+      con, pending = TRUE, match_feature = NA_character_,
+      alias_uuid = "fa-does-not-exist",
+      sample_date = as.POSIXct("2025-06-10 09:00:00", tz = "Australia/Sydney"),
+      sample_datetime = as.POSIXct("2025-06-10 09:00:00", tz = "Australia/Sydney"),
+      uuid_project = "p-0001", organisation = "ALS", person = NA_character_,
+      reason = "test"
+    ),
+    error = function(e) e
+  )
+  expect_s3_class(err, "sampletidy_error")
+  expect_equal(count_rows(con, "sample"), before_sample)  # nothing written
+})
+
+# ---- Phase-7b round-2, item 13: a retry's block reason must not be lost ----
+
+test_that("Phase-7b round-2 item 13: a second .ct_set_file_states() call with a DIFFERENT reason updates ingest_file.state_reason instead of leaving it stuck on the first block's reason", {
+  setup <- commit_test_setup()
+  con <- setup$con
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  files <- tibble::tibble(hash = setup$hash, filename = basename(setup$path),
+                          adapter = "esdat/1", rank = 3L, kept = TRUE)
+
+  .ct_set_file_states(con, files, 0L, 1L, "first block reason")
+  first <- DBI::dbGetQuery(con, "SELECT state, state_reason FROM ingest_file WHERE hash = ?",
+                           params = list(setup$hash))
+  expect_identical(first$state[[1]], "needs_review")
+  expect_identical(first$state_reason[[1]], "first block reason")
+
+  # Pre-fix: the needs_review no-op skip `next`-ed BEFORE
+  # ingest_file_set_state() ran at all, so a retry's reason never reached
+  # ingest_file.state_reason - the row stayed stuck on the FIRST reason.
+  .ct_set_file_states(con, files, 0L, 1L, "second block reason")
+  second <- DBI::dbGetQuery(con, "SELECT state, state_reason FROM ingest_file WHERE hash = ?",
+                            params = list(setup$hash))
+  expect_identical(second$state[[1]], "needs_review")
+  expect_identical(second$state_reason[[1]], "second block reason")
 })

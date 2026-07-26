@@ -1968,6 +1968,18 @@ row (`date` at 14:00, `datetime` at the real instant) that asserts an incoming r
 the same local date MATCHES. Against today's code that test fails, which is the point —
 if it passes before the change, it is not testing the right thing.
 
+**DEFERRED:** blocked on F.13 (F.11 owns the fix and PLAN-15 marks F.11 blocked on
+F.13); the test ships now as an xfail so it flips green the day F.11 lands, rather than
+having to be invented then. Do NOT "fix" `.rc_find_existing()`'s `CAST(s.date AS DATE)`
+ahead of F.13 — the code matches the current plan of record.
+
+Recorded here, in the criterion's own body, because for two audit rounds this
+criterion's blocker lived only in prose elsewhere and `criterion-lint.py` reported it as
+a bare UNCOVERED — indistinguishable from an oversight. Round-2 reconcile audit D3
+reproduced the underlying exposure: against the live registry, where all 15,111
+non-NULL `date` values sit at 13:00/14:00 UTC, the reuse match misses **every** legacy
+row, so a re-ingest of any legacy measurement commits a second `analysis`.
+
 <!-- block: B-15.F16 -->
 ### F.16 Reporting-limit residue after the 2026-07-23 `rl_low` correction (RESOLVED 2026-07-23)
 **The convention (Robin, 2026-07-23):** *"Where a value is BDL its value is set

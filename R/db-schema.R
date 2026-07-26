@@ -151,6 +151,24 @@
         rank          INTEGER NOT NULL,
         UNIQUE (uuid_review, rank)
       );"
+  ),
+  # PLAN-11 R-11.10 / Robin's ruling 2 (2026-07-26, Phase 7b round-2 item B):
+  # the alias merge's `value_conflict` review item must name BOTH analysis
+  # uuids - the code only ever emitted `uuid_existing`. Robin ruled the plan
+  # wins and the second uuid is a TYPED column (consistent with PLAN-16
+  # moving uuids out of the payload), not a payload key. A NEW ladder entry,
+  # not an amendment of version 6: v6's own comment permits in-place
+  # amendment only while it has never been applied to a real database, and
+  # that is not worth re-verifying when a fresh entry costs nothing. Plain
+  # `ADD COLUMN` (footgun sheet: DuckDB 1.4.1 allows ADD COLUMN, not
+  # ALTER/DROP COLUMN, on a table any FK references - review_queue is
+  # review_queue_candidate's FK parent by v6, so this must stay ADD COLUMN
+  # only). For `subkind = "measurement"` (R/reconcile.R) the incoming side
+  # genuinely has no uuid - NA there is correct and is NOT a gap this column
+  # needs to fill.
+  list(
+    version = 7L,
+    ddl = "ALTER TABLE review_queue ADD COLUMN IF NOT EXISTS uuid_incoming VARCHAR"
   )
 )
 
@@ -179,19 +197,30 @@ ensure_schema <- function(con) {
       next
     }
 
-    DBI::dbExecute(con, "BEGIN TRANSACTION")
+    # Phase 7b round-2 item D: participate in an already-open mutation-layer
+    # transaction rather than nesting a second BEGIN (DuckDB errors on a
+    # nested transaction). `db_transaction()` is the SAME participation
+    # helper `db_append()`/`db_update()`/`review_queue_add()` all use
+    # (`.st_in_txn()`, R/mutate.R) - this used to be the only writer in this
+    # file with its own raw BEGIN/COMMIT/ROLLBACK, issued OUTSIDE its own
+    # tryCatch, so a caller running ensure_schema() inside an open
+    # db_transaction() (latent today - R/ingest.R:518 calls it unwrapped)
+    # would hit "cannot start a transaction within a transaction" before the
+    # tryCatch could even see the error. Wrapping db_transaction()'s call
+    # itself in tryCatch preserves this function's own, more specific error
+    # message (naming the migration version) while db_transaction() owns the
+    # actual BEGIN/COMMIT/ROLLBACK (or participation) mechanics.
     tryCatch(
-      {
+      db_transaction(con, function(con) {
         DBI::dbExecute(con, m$ddl)
         DBI::dbExecute(
           con,
           "INSERT INTO schema_version (version, applied_at) VALUES (?, ?)",
           params = list(m$version, Sys.time())
         )
-        DBI::dbExecute(con, "COMMIT")
-      },
+        invisible(NULL)
+      }),
       error = function(e) {
-        try(DBI::dbExecute(con, "ROLLBACK"), silent = TRUE)
         cli::cli_abort(
           "Failed to apply ops-schema migration {m$version}: {conditionMessage(e)}",
           class = "sampletidy_error",
@@ -515,6 +544,13 @@ ingest_file_set_route <- function(con, hash, adapter = NA_character_, tier = NA_
 # @param uuid_existing review_queue.uuid_existing (polymorphic; see B-16.ddl
 #   for the kind -> referent table map), or NA.
 # @param uuid_alias review_queue.uuid_alias, or NA.
+# @param uuid_incoming review_queue.uuid_incoming (ladder version 7, PLAN-11
+#   R-11.10 / Robin's ruling 2, 2026-07-26): the SECOND analysis uuid a
+#   `value_conflict` merge names, alongside `uuid_existing`. Follows
+#   `uuid_existing`'s own pattern exactly (typed column, NA default,
+#   `.rq_assert_char_scalar()` guard). For `subkind = "measurement"`
+#   (R/reconcile.R) the incoming side genuinely has no uuid - NA there is
+#   correct, not a gap.
 # @param candidates character() of feature uuids, in rank order -> one
 #   review_queue_candidate row per element, kind = 'candidate'.
 # @param expired tibble(uuid_feature, date_start, date_end) -> one
@@ -525,7 +561,8 @@ ingest_file_set_route <- function(con, hash, adapter = NA_character_, tier = NA_
 # @noRd
 .rq_row <- function(kind, subkind = NA_character_, work_order = NA_character_,
                     source_hash = NA_character_, uuid_existing = NA_character_,
-                    uuid_alias = NA_character_, candidates = NULL, expired = NULL,
+                    uuid_alias = NA_character_, uuid_incoming = NA_character_,
+                    candidates = NULL, expired = NULL,
                     diagnostics = list()) {
   checkmate::assert_string(kind)
   # Round-2 audit FD12: every scalar typed argument is validated, not just
@@ -540,6 +577,7 @@ ingest_file_set_route <- function(con, hash, adapter = NA_character_, tier = NA_
   .rq_assert_char_scalar(source_hash, "source_hash")
   .rq_assert_char_scalar(uuid_existing, "uuid_existing")
   .rq_assert_char_scalar(uuid_alias, "uuid_alias")
+  .rq_assert_char_scalar(uuid_incoming, "uuid_incoming")
   # Round-3 audit H8/FG-6: the DDL declares review_queue_candidate.uuid_feature
   # NOT NULL, so `candidates` (which becomes that column 1:1) must reject NA
   # and "" HERE, at the constructor, rather than letting either kind reach
@@ -607,7 +645,8 @@ ingest_file_set_route <- function(con, hash, adapter = NA_character_, tier = NA_
   review <- tibble::tibble(
     uuid = uuid_row, created_at = created_at, kind = kind, subkind = subkind,
     work_order = work_order, source_hash = source_hash, payload = payload,
-    status = "open", uuid_existing = uuid_existing, uuid_alias = uuid_alias
+    status = "open", uuid_existing = uuid_existing, uuid_alias = uuid_alias,
+    uuid_incoming = uuid_incoming
   )
 
   # Round-2 audit FD10(a): dedup `candidates`, preserving FIRST-SEEN order
@@ -705,7 +744,8 @@ review_queue_add <- function(con, kind, work_order = NA_character_,
                              source_hash = NA_character_, payload = NA_character_,
                              uuid = NULL, created_at = NULL,
                              subkind = NA_character_, uuid_existing = NA_character_,
-                             uuid_alias = NA_character_, candidates = NULL,
+                             uuid_alias = NA_character_, uuid_incoming = NA_character_,
+                             candidates = NULL,
                              diagnostics = list(), uuid_target = NA_character_) {
   checkmate::assert_string(kind)
   # PLAN-15 F.15 D3: `uuid_target` is the generic linkage column
@@ -739,7 +779,8 @@ review_queue_add <- function(con, kind, work_order = NA_character_,
   rq <- .rq_row(
     kind = kind, subkind = subkind, work_order = work_order,
     source_hash = source_hash, uuid_existing = uuid_existing,
-    uuid_alias = uuid_alias, candidates = candidates, diagnostics = diagnostics
+    uuid_alias = uuid_alias, uuid_incoming = uuid_incoming,
+    candidates = candidates, diagnostics = diagnostics
   )
   review <- rq$review
   review$uuid <- uuid
@@ -781,14 +822,33 @@ review_queue_add <- function(con, kind, work_order = NA_character_,
 #'
 #' Symmetric with `review_queue_add()` and for the same reason: so
 #' `review_queue` UPDATEs never scatter as raw SQL across the package.
-#' `UPDATE`s every row with `status = 'open'` and the given `uuid_target` to
-#' `status = 'resolved'`, stamping `resolution`/`resolved_by`/`resolved_at`.
+#' `UPDATE`s every row with `status = 'open'` and the given `uuid_target`
+#' (optionally narrowed to a single `kind`, see below) to `status =
+#' 'resolved'`, stamping `resolution`/`resolved_by`/`resolved_at`.
 #' `'resolved'` is the pinned terminal status (D4) - nothing wrote
 #' `review_queue.status` before this function existed, so there is no other
 #' value to honour, and `'resolved'` is what `resolution`/`resolved_by`/
 #' `resolved_at` were named for. Idempotent: a row already `resolved` no
 #' longer matches `status = 'open'`, so a second identical call closes zero
 #' rows.
+#'
+#' `kind` (Phase 7b round-2 item A): `uuid_target` is a POLYMORPHIC key - the
+#' version-5 ladder comment above says so explicitly ("`kind` says which
+#' table it points at"). Without a `kind` filter, closing on `uuid_target`
+#' alone closes EVERY open row on that target regardless of what kind raised
+#' it, which is wrong the moment two different review kinds can legitimately
+#' share one target uuid (reproduced: `confirm_feature_aliases()` opening a
+#' `sample_collision`/`same_alias` row and then its own close call silently
+#' resolving it in the same transaction). `kind` is OPTIONAL, default `NULL`
+#' meaning "close across all kinds" (today's pre-fix behaviour, preserved as
+#' the default rather than made a breaking change): the one caller live today
+#' (`.fa_confirm_one_alias()`, `R/feature-alias.R`) does not yet pass it and
+#' is NOT touched by this fix (that call site is a later wave's job, tracked
+#' separately) - making `kind` REQUIRED here would break that caller outright
+#' with no compensating fix landing in the same commit. This default is a
+#' known, temporary footgun for the NEXT producer sharing a target uuid
+#' across kinds and should be revisited once every producer passes `kind`
+#' explicitly.
 #'
 #' D6 (the NA trap): an `NA`/zero-length `uuid_target` returns early
 #' and closes NOTHING, without erroring. This is NOT relying on SQL's own
@@ -797,11 +857,39 @@ review_queue_add <- function(con, kind, work_order = NA_character_,
 #' `uuid_target`, an interpolated `NA_character_` would stop being safely
 #' unmatched by accident.
 #'
+#' Audit trail (Phase 7b round-2 item C): every closed row is written through
+#' `db_update()` (R/mutate.R), the SAME mutation-layer helper
+#' `review_queue_add()` routes through via `db_append()` - not a raw
+#' `DBI::dbExecute()` UPDATE - so closing a review item now produces
+#' `change_log` rows exactly as adding one already does (round-2 FD6/FF9
+#' fixed the add side; this closes the matching gap on the close side rather
+#' than leaving the two writers with two different audit behaviours). All
+#' matched rows are closed inside ONE `db_transaction()`, mirroring
+#' `review_queue_add()`'s own FB4 atomicity.
+#'
 #' @param con an open read-write DBI connection.
 #' @param uuid_target the `review_queue.uuid_target` value to close; an
 #'   `NA`/zero-length value closes nothing (D6).
 #' @param resolution free-text resolution stored on every closed row.
 #' @param resolved_by who resolved it.
+#' @param kind the `review_queue.kind` to narrow the close to. REQUIRED - it
+#'   has no default, so omitting it is a caller error rather than a silent
+#'   close across every kind. Pass `kind = NULL` EXPLICITLY for the rare
+#'   "resolve everything open on this entity" case; that spelling makes the
+#'   choice visible in the diff, which a defaulted `NULL` did not.
+#'
+#'   **`kind = NULL` is the hazardous option, and it was the default only
+#'   until the last caller passed a kind.** `uuid_target` is a POLYMORPHIC key - the
+#'   version-5 ladder comment above says so ("`kind` says which table it points
+#'   at"), so two rows of different kinds legitimately share one target. A
+#'   close that omits `kind` therefore means "resolve everything anyone has
+#'   ever opened about this entity", which is almost never what a caller
+#'   resolving its OWN item means. The round-2 rank-1 finding was exactly this:
+#'   `confirm_feature_aliases()` opened a `sample_collision` row and then its
+#'   own close - aimed at the alias's `unknown_feature` row - resolved the
+#'   collision row too, in the same transaction, so `review_queue(con, "open")`
+#'   returned nothing and the operator was never told that two same-date
+#'   samples had been accepted. Pass a `kind`.
 #' @return integer count of rows closed, invisibly.
 #'
 #' NOT EXPORTED, deliberately - symmetric with `review_queue_add()`, which is
@@ -812,7 +900,21 @@ review_queue_add <- function(con, kind, work_order = NA_character_,
 #' that has nothing to do with whatever that run was about.
 #' @keywords internal
 #' @noRd
-review_queue_close <- function(con, uuid_target, resolution, resolved_by) {
+review_queue_close <- function(con, uuid_target, resolution, resolved_by, kind) {
+  # No default: `kind` is required. Documentation alone did not prevent the
+  # round-2 rank-1 defect (a close that swept a different-kind row on the same
+  # polymorphic target), so the omission is made impossible rather than merely
+  # warned about. `missing()` rather than a default sentinel, so that an
+  # explicit `kind = NULL` still reaches the close-across-kinds path.
+  if (missing(kind)) {
+    cli::cli_abort(
+      "review_queue_close() requires `kind`: `uuid_target` is a polymorphic
+       key, so a close that does not name a kind resolves every OTHER
+       producer's open row on the same target too. Pass the kind you are
+       resolving, or `kind = NULL` explicitly to close across all kinds.",
+      class = "sampletidy_error"
+    )
+  }
   # A length-0 or NA target closes nothing (D6). A LONGER vector is neither -
   # it falls through to `assert_string()` and fails loudly, which is the
   # honest outcome; guarding it with `||` alone would raise R >= 4.3's
@@ -824,18 +926,41 @@ review_queue_close <- function(con, uuid_target, resolution, resolved_by) {
   checkmate::assert_string(uuid_target)
   checkmate::assert_string(resolution)
   checkmate::assert_string(resolved_by)
+  if (!is.null(kind)) checkmate::assert_string(kind)
 
-  n <- DBI::dbExecute(
-    con,
-    "UPDATE review_queue
-        SET status = 'resolved', resolution = ?, resolved_by = ?, resolved_at = ?
-      WHERE uuid_target = ? AND status = 'open'",
-    params = list(resolution, resolved_by, Sys.time(), uuid_target)
+  select_sql <- "SELECT uuid FROM review_queue WHERE uuid_target = ? AND status = 'open'"
+  select_params <- list(uuid_target)
+  if (!is.null(kind)) {
+    select_sql <- paste0(select_sql, " AND kind = ?")
+    select_params <- c(select_params, list(kind))
+  }
+  matching <- DBI::dbGetQuery(con, select_sql, params = select_params)$uuid
+
+  # D6's two zero-row cases (the NA/zero-length early return above, and no
+  # matching row here) must return the SAME type: the early return already
+  # returns invisible(0L) (integer), so this path returns an integer too
+  # rather than DBI::dbExecute()'s native `numeric` (double) count.
+  if (length(matching) == 0L) {
+    return(invisible(0L))
+  }
+
+  resolved_at <- Sys.time()
+  reason <- sprintf(
+    "review_queue_close(): kind=%s", if (is.null(kind)) "ANY" else kind
   )
-  # D6's two zero-row cases (the NA/zero-length early return above, and this
-  # SQL path closing zero matching rows) must return the SAME type: the early
-  # return already returns invisible(0L) (integer); DBI::dbExecute() returns
-  # a `numeric` (double) count, so without this coercion the two zero-row
-  # cases silently disagreed on class.
-  invisible(as.integer(n))
+  db_transaction(con, function(con) {
+    for (row_uuid in matching) {
+      db_update(
+        con, "review_queue", uuid = row_uuid,
+        changes = list(
+          status = "resolved", resolution = resolution,
+          resolved_by = resolved_by, resolved_at = resolved_at
+        ),
+        actor = .rq_actor, reason = reason
+      )
+    }
+    invisible(NULL)
+  })
+
+  invisible(as.integer(length(matching)))
 }

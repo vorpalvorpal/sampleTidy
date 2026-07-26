@@ -70,11 +70,26 @@ test_that("R-1.5: ensure_schema() never drops or narrows existing core-table col
   con <- seed_con(db)
   withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
+  # Phase 7b round-2 item E: seed_db() has already applied every migration
+  # version, so without this DELETE the loop body below executes zero times
+  # and `fields_after == fields_before` is true BY CONSTRUCTION - no
+  # production change to the ladder could ever make this test fail. Clearing
+  # schema_version (as test-review-queue-close.R's R-15.38 does) forces the
+  # ladder to genuinely re-run with the core tables already present, so this
+  # is a real assertion about ensure_schema()'s behaviour rather than a
+  # vacuous one.
+  DBI::dbExecute(con, "DELETE FROM schema_version")
+
   core_tables <- c("feature", "feature_mask", "analyte", "lab_method", "project", "sample", "analysis", "asset")
   fields_before <- lapply(core_tables, function(t) DBI::dbListFields(con, t))
   names(fields_before) <- core_tables
 
   expect_no_error(ensure_schema(con))
+
+  # The loop body really did run this time - a same-version marker cannot
+  # tell that story, but a freshly-populated schema_version can.
+  versions_reapplied <- DBI::dbGetQuery(con, "SELECT version FROM schema_version ORDER BY version")$version
+  expect_true(length(versions_reapplied) >= 1)
 
   fields_after <- lapply(core_tables, function(t) DBI::dbListFields(con, t))
   names(fields_after) <- core_tables
@@ -359,11 +374,20 @@ test_that("R-16.1 arm (b): a migration arriving out of version order (5 added af
   # attached search-path copy is a DIFFERENT binding from the one
   # ensure_schema()'s closure actually reads - only assigning into the real
   # package namespace is visible to the function under test.
-  v5 <- list(version = 5L, ddl = "CREATE TABLE IF NOT EXISTS p16_v5_probe (uuid VARCHAR)")
+  # Phase 7b round-2 item H: use the REAL version-5 entry (the production
+  # `ALTER TABLE review_queue ADD COLUMN IF NOT EXISTS uuid_target` DDL),
+  # pulled out of `base_migrations` rather than a placeholder
+  # `CREATE TABLE p16_v5_probe` stand-in. The probe table exercised nothing
+  # about the shape that actually matters here: the real ALTER running
+  # against a `review_queue` that ALREADY has `review_queue_candidate`'s FK
+  # in place (v6 applied first in this arm, deliberately out of numeric
+  # order) - `ADD COLUMN IF NOT EXISTS` on an FK parent, not `ALTER`/`DROP
+  # COLUMN`, so it is expected to succeed (footgun sheet).
+  real_v5 <- Filter(function(m) m$version == 5L, base_migrations)[[1]]
   # Appended to `no_v5`, NOT to `base_migrations` - the latter now carries the
   # real version 5, and appending to it would put TWO version-5 entries in the
   # ladder and make the "applies 5 alone, exactly once" assertions meaningless.
-  assignInNamespace(".st_schema_migrations", c(no_v5, list(v5)), ns = "sampleTidy")
+  assignInNamespace(".st_schema_migrations", c(no_v5, list(real_v5)), ns = "sampleTidy")
 
   con2 <- DBI::dbConnect(duckdb::duckdb(), db, read_only = FALSE) # re-open
   withr::defer(DBI::dbDisconnect(con2, shutdown = TRUE))
@@ -1108,6 +1132,139 @@ test_that("F9: .rq_row() rejects diagnostics with duplicate JSON keys (checkmate
     sampleTidy:::.rq_row(kind = "value_conflict", diagnostics = dup_diagnostics),
     regexp = "unique"
   )
+})
+
+# ==============================================================================
+# Phase 7b round-2 item B: ladder version 7 - review_queue.uuid_incoming
+# (PLAN-11 R-11.10 / Robin's ruling 2, 2026-07-26). Do NOT wire any producer
+# to pass it - R/feature-alias.R:909 is the alias unit's job in a later wave.
+# ==============================================================================
+
+test_that("Phase 7b item B: ensure_schema() version 7 adds review_queue.uuid_incoming as a real, nullable VARCHAR column on a bare DB", {
+  dir <- withr::local_tempdir()
+  db <- file.path(dir, "v7-bare.duckdb")
+  con <- DBI::dbConnect(duckdb::duckdb(), db, read_only = FALSE)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  ensure_schema(con)
+
+  cols <- DBI::dbGetQuery(
+    con,
+    "SELECT column_name, data_type, is_nullable FROM duckdb_columns()
+     WHERE table_name = 'review_queue' AND column_name = 'uuid_incoming'"
+  )
+  expect_equal(nrow(cols), 1L)
+  expect_equal(cols$data_type, "VARCHAR")
+  expect_true(cols$is_nullable)
+
+  versions <- DBI::dbGetQuery(con, "SELECT version FROM schema_version ORDER BY version")$version
+  expect_true(7L %in% versions)
+})
+
+test_that("Phase 7b item B, arm mirroring R-16.1 arm (b): version 7 arriving on a DB already migrated through version 6 applies alone, exactly once", {
+  ns <- asNamespace("sampleTidy")
+  base_migrations <- get(".st_schema_migrations", envir = ns)
+  withr::defer(assignInNamespace(".st_schema_migrations", base_migrations, ns = "sampleTidy"))
+
+  no_v7 <- Filter(function(m) m$version != 7L, base_migrations)
+  assignInNamespace(".st_schema_migrations", no_v7, ns = "sampleTidy")
+
+  dir <- withr::local_tempdir()
+  db <- file.path(dir, "v7-arriving-late.duckdb")
+  con1 <- DBI::dbConnect(duckdb::duckdb(), db, read_only = FALSE)
+  ensure_schema(con1) # applies through version 6 - version 7 is not defined yet
+  versions_step1 <- DBI::dbGetQuery(con1, "SELECT version FROM schema_version ORDER BY version")$version
+  DBI::dbDisconnect(con1, shutdown = TRUE)
+
+  expect_true(6L %in% versions_step1)
+  expect_false(7L %in% versions_step1)
+
+  # Restore the REAL ladder (with the real version-7 entry) - simulating
+  # version 7 arriving later, after this DB was already migrated to 6.
+  assignInNamespace(".st_schema_migrations", base_migrations, ns = "sampleTidy")
+
+  con2 <- DBI::dbConnect(duckdb::duckdb(), db, read_only = FALSE)
+  withr::defer(DBI::dbDisconnect(con2, shutdown = TRUE))
+  ensure_schema(con2)
+  versions_step2 <- DBI::dbGetQuery(con2, "SELECT version FROM schema_version ORDER BY version")$version
+
+  expect_setequal(setdiff(versions_step2, versions_step1), 7L)
+  expect_equal(sum(versions_step2 == 7L), 1L)
+
+  cols <- DBI::dbGetQuery(
+    con2,
+    "SELECT column_name, data_type, is_nullable FROM duckdb_columns()
+     WHERE table_name = 'review_queue' AND column_name = 'uuid_incoming'"
+  )
+  expect_equal(nrow(cols), 1L)
+  expect_equal(cols$data_type, "VARCHAR")
+  expect_true(cols$is_nullable)
+})
+
+test_that("Phase 7b item B: .rq_row() accepts and emits uuid_incoming, following the uuid_existing pattern exactly (typed, NA default, scalar-only)", {
+  rq <- sampleTidy:::.rq_row(kind = "value_conflict", uuid_existing = "an-0001", uuid_incoming = "an-0002")
+  expect_true(is.character(rq$review$uuid_incoming))
+  expect_equal(rq$review$uuid_incoming, "an-0002")
+
+  # default NA, typed character (not logical) - same guard H9 gives uuid_existing.
+  rq_default <- sampleTidy:::.rq_row(kind = "value_conflict")
+  expect_true(is.character(rq_default$review$uuid_incoming))
+  expect_true(is.na(rq_default$review$uuid_incoming))
+
+  # a bare logical NA is rejected, same as every other scalar typed argument (H9).
+  err <- tryCatch(sampleTidy:::.rq_row(kind = "value_conflict", uuid_incoming = NA), error = function(e) e)
+  expect_s3_class(err, "sampletidy_error")
+
+  # a length>1 value is rejected too (FD12 pattern).
+  expect_error(
+    sampleTidy:::.rq_row(kind = "value_conflict", uuid_incoming = c("a", "b")),
+    regexp = "length 1"
+  )
+})
+
+test_that("Phase 7b item B: review_queue_add(uuid_incoming=) round-trips through the real DB", {
+  dir <- withr::local_tempdir()
+  db <- seed_db(dir)
+  con <- seed_con(db)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  parent <- review_queue_add(con, kind = "value_conflict", uuid_existing = "an-0001", uuid_incoming = "an-0002")
+
+  row <- DBI::dbGetQuery(
+    con, "SELECT uuid_existing, uuid_incoming FROM review_queue WHERE uuid = ?", params = list(parent)
+  )
+  expect_equal(row$uuid_existing, "an-0001")
+  expect_equal(row$uuid_incoming, "an-0002")
+
+  # default (not supplied) is NA, exactly like uuid_existing's own default.
+  parent_default <- review_queue_add(con, kind = "value_conflict")
+  row_default <- DBI::dbGetQuery(
+    con, "SELECT uuid_incoming FROM review_queue WHERE uuid = ?", params = list(parent_default)
+  )
+  expect_true(is.na(row_default$uuid_incoming))
+})
+
+# ==============================================================================
+# Phase 7b round-2 item D: ensure_schema() must participate in an already-open
+# mutation-layer transaction instead of nesting a second BEGIN.
+# ==============================================================================
+
+test_that("Phase 7b item D: ensure_schema() called inside an open db_transaction() does not raise 'cannot start a transaction within a transaction'", {
+  dir <- withr::local_tempdir()
+  db <- file.path(dir, "nested-ensure-schema.duckdb")
+  con <- DBI::dbConnect(duckdb::duckdb(), db, read_only = FALSE)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  expect_no_error(
+    sampleTidy:::db_transaction(con, function(con) ensure_schema(con))
+  )
+
+  tables <- DBI::dbListTables(con)
+  expect_true(all(
+    c("ingest_file", "ingest_sighting", "review_queue", "change_log", "schema_version") %in% tables
+  ))
+  versions <- DBI::dbGetQuery(con, "SELECT version FROM schema_version ORDER BY version")$version
+  expect_true(length(versions) >= 1)
 })
 
 # ==============================================================================

@@ -38,9 +38,9 @@
 #        columns-present/marker-absent database the correct behaviour is to
 #        PROCEED (ALTER TABLE ... ADD COLUMN IF NOT EXISTS is a no-op on the
 #        columns, but the flip/bounds/marker steps still run) - returning
-#        "already_migrated" there would silently skip them. Not exercised by
-#        this file's own idempotency test, but the columns-present/
-#        marker-absent shape IS exercised below.
+#        "already_migrated" there would silently skip them. Exercised by this
+#        file's own idempotency test (Phase 7b round 2, item 9) AND by the
+#        columns-present/marker-absent shape below.
 #
 #   .mig003_apply_bounds(con, bounds)
 #     -> integer(1), rows updated. `bounds` is a
@@ -533,23 +533,41 @@ test_that("R-15.47: migration 003 aborts, naming the offending feature and writi
 # via mig003_counts_checksum()$feature_alias_checksum.
 # ======================================================================
 
-test_that("003-alias-date-bounds: mig003_verify() catches a corrupted feature_alias field (n_seen) that row-count/uuid-set alone would miss", {
+test_that("003-alias-date-bounds: mig003_counts_checksum()'s feature_alias digest catches a corruption in EACH of its five protected columns (uuid, alias_key, uuid_feature, kind, n_seen), not just n_seen (Phase 7b round 2 item 10)", {
+  # Phase-7a M5 (narrow the digest SELECT to `uuid, n_seen`) SURVIVED the
+  # full suite because the only test here corrupted n_seen - looping the
+  # corruption over all five protected columns, per-column, is the fix.
+  # 'ma-ctrl03-self' is used (not 'ma-ctrl01-self'): unlike ma-ctrl01-self,
+  # no `sample` row FKs onto it, so a `uuid` rewrite cannot trip that FK.
   mig <- .mig003_load()
-  path <- seed_migration_003_db()
-  con <- migration_003_con(path)
-  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
-  before <- mig$mig003_counts_checksum(con)
-  # Corrupt one of the five protected columns directly - row count and uuid
-  # SET are both untouched by this, so only the new value digest can catch it.
-  DBI::dbExecute(con, "UPDATE feature_alias SET n_seen = n_seen + 1 WHERE uuid = 'ma-ctrl01-self'")
-  after <- mig$mig003_counts_checksum(con)
+  corruptions <- list(
+    n_seen = "UPDATE feature_alias SET n_seen = n_seen + 1 WHERE uuid = 'ma-ctrl03-self'",
+    kind = "UPDATE feature_alias SET kind = kind || '_mutated' WHERE uuid = 'ma-ctrl03-self'",
+    alias_key = "UPDATE feature_alias SET alias_key = alias_key || '-mutated' WHERE uuid = 'ma-ctrl03-self'",
+    uuid_feature = "UPDATE feature_alias SET uuid_feature = 'mf-ctrl01' WHERE uuid = 'ma-ctrl03-self'",
+    uuid = "UPDATE feature_alias SET uuid = 'ma-ctrl03-self-mutated' WHERE uuid = 'ma-ctrl03-self'"
+  )
 
-  expect_equal(before$feature_alias_n, after$feature_alias_n)
-  expect_true(setequal(before$feature_alias_uuids, after$feature_alias_uuids))
-  expect_false(identical(before$feature_alias_checksum, after$feature_alias_checksum))
+  for (col in names(corruptions)) {
+    path <- seed_migration_003_db(dir = withr::local_tempdir())
+    con <- migration_003_con(path)
 
-  expect_error(mig$mig003_verify(before, after), class = "sampletidy_error")
+    before <- mig$mig003_counts_checksum(con)
+    DBI::dbExecute(con, corruptions[[col]])
+    after <- mig$mig003_counts_checksum(con)
+
+    expect_false(
+      identical(before$feature_alias_checksum, after$feature_alias_checksum),
+      info = sprintf("column '%s' corruption not reflected in feature_alias_checksum", col)
+    )
+    expect_error(
+      mig$mig003_verify(before, after), class = "sampletidy_error",
+      info = sprintf("column '%s' corruption not caught by mig003_verify()", col)
+    )
+
+    DBI::dbDisconnect(con, shutdown = TRUE)
+  }
 })
 
 # ======================================================================
@@ -621,4 +639,177 @@ test_that("003-alias-date-bounds: feature_alias.date_start/date_end are declared
   )
   expect_setequal(col_types$column_name, c("date_start", "date_end"))
   expect_true(all(col_types$data_type == "DATE"))
+})
+
+# ======================================================================
+# Phase 7b round 2, item 4 (SIG-09): .mig003_apply_bounds() must REJECT a
+# non-Date bounds column, not silently truncate it a day early.
+# ======================================================================
+
+test_that("003-alias-date-bounds: .mig003_apply_bounds() rejects a POSIXct date_start/date_end rather than silently storing it one day early (SIG-09)", {
+  # Reproduced through the real DuckDB driver: as.POSIXct("2024-03-10
+  # 09:00:00", tz = "Australia/Sydney") is stored as 2024-03-09 by a plain
+  # DATE column write - one day early - because as.Date() on a POSIXct is
+  # itself timezone-dependent. `bounds` is this function's only injectable
+  # data input.
+  mig <- .mig003_load()
+  path <- seed_migration_003_db()
+  con <- migration_003_con(path)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+  DBI::dbExecute(con, "ALTER TABLE feature_alias ADD COLUMN IF NOT EXISTS date_start DATE")
+  DBI::dbExecute(con, "ALTER TABLE feature_alias ADD COLUMN IF NOT EXISTS date_end DATE")
+
+  before <- .mig003_bounds_snapshot(con)
+
+  bad_start <- data.frame(
+    alias_key = "t.src01", target_name = "T.TGT01",
+    date_start = as.POSIXct("2024-03-10 09:00:00", tz = "Australia/Sydney"),
+    date_end = as.Date("2024-03-10"),
+    stringsAsFactors = FALSE
+  )
+  err1 <- tryCatch(mig$.mig003_apply_bounds(con, bad_start), error = function(e) e)
+  expect_s3_class(err1, "sampletidy_error")
+  expect_match(conditionMessage(err1), "date_start", fixed = TRUE)
+
+  bad_end <- data.frame(
+    alias_key = "t.src01", target_name = "T.TGT01",
+    date_start = as.Date("2024-03-10"),
+    date_end = as.POSIXct("2024-03-10 09:00:00", tz = "Australia/Sydney"),
+    stringsAsFactors = FALSE
+  )
+  err2 <- tryCatch(mig$.mig003_apply_bounds(con, bad_end), error = function(e) e)
+  expect_s3_class(err2, "sampletidy_error")
+  expect_match(conditionMessage(err2), "date_end", fixed = TRUE)
+
+  # Both rejections happened before any write.
+  after <- .mig003_bounds_snapshot(con)
+  expect_equal(after, before)
+})
+
+# ======================================================================
+# Phase 7b round 2, item 11: mig003_counts_checksum()/mig003_verify() must
+# read `analysis` conditionally - excluded-safely when the fixture has no
+# such table, but genuinely checked when it does (the live registry always
+# does, and it is the largest table there).
+# ======================================================================
+
+test_that("003-alias-date-bounds: mig003_counts_checksum()/mig003_verify() read `analysis` conditionally - absent-safe on this fixture, byte-identical-checked when present", {
+  mig <- .mig003_load()
+  path <- seed_migration_003_db()
+  con <- migration_003_con(path)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  # Baseline: this seed has no `analysis` table at all (S-15.9's dedicated
+  # FK-parent fixture, by its own header) - must not crash, and reads back
+  # as NA rather than a table that doesn't exist.
+  before_absent <- mig$mig003_counts_checksum(con)
+  expect_true(is.na(before_absent$analysis))
+
+  # Add one, mirroring the live registry's largest table - the conditional
+  # read must pick it up and the verify gate must actually check it.
+  DBI::dbExecute(con, "CREATE TABLE analysis (uuid VARCHAR PRIMARY KEY, uuid_sample VARCHAR,
+    uuid_lab VARCHAR, value DOUBLE)")
+  DBI::dbExecute(con, "INSERT INTO analysis (uuid, uuid_sample, uuid_lab, value) VALUES
+    ('an-1', 's-mig003-01', NULL, 1.23)")
+
+  before <- mig$mig003_counts_checksum(con)
+  expect_equal(before$analysis, 1L)
+
+  DBI::dbExecute(con, "UPDATE analysis SET value = 9.99 WHERE uuid = 'an-1'")
+  after <- mig$mig003_counts_checksum(con)
+
+  expect_false(identical(before$checksum, after$checksum))
+  expect_error(mig$mig003_verify(before, after), class = "sampletidy_error")
+})
+
+# ======================================================================
+# Phase 7b round 2, item 16: the `fa.kind != 'self'` qualifier in
+# .mig003_apply_bounds()'s row-identity match is exercised by no test on
+# this seed's OTHER bounds rows (every one targets a T.TGT*/TH.TGT* feature,
+# never the source feature itself). Phase-7a M6 (drop the conjunct)
+# SURVIVED the full suite as a result.
+# ======================================================================
+
+test_that("003-alias-date-bounds: .mig003_apply_bounds()'s kind != 'self' qualifier resolves a bounds row pointing at the SOURCE feature to its transcription_error duplicate, not its self arm (E.5 row-identity, item 16)", {
+  # 't.src01' -> 'T.SRC01' points at the alias's OWN source feature
+  # (mf-src01), not one of the 9 curated targets. On this seed that key,
+  # WITHOUT the kind != 'self' filter, resolves to TWO rows: ma-src01-self
+  # (kind = 'self') and ma-src01-dup (kind = 'transcription_error', already
+  # confirmed) - both share alias_key 't.src01' and both point at feature
+  # T.SRC01. WITH the filter, only the (non-self) duplicate matches.
+  mig <- .mig003_load()
+  path <- seed_migration_003_db()
+  con <- migration_003_con(path)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+  DBI::dbExecute(con, "ALTER TABLE feature_alias ADD COLUMN IF NOT EXISTS date_start DATE")
+  DBI::dbExecute(con, "ALTER TABLE feature_alias ADD COLUMN IF NOT EXISTS date_end DATE")
+
+  b <- bounds_row("t.src01", "T.SRC01", date_end = "2024-01-01")
+  n <- mig$.mig003_apply_bounds(con, b)
+  expect_equal(n, 1L)
+
+  after <- DBI::dbGetQuery(
+    con, "SELECT uuid, date_end FROM feature_alias WHERE uuid IN ('ma-src01-self', 'ma-src01-dup')"
+  )
+  self_row <- after[after$uuid == "ma-src01-self", ]
+  dup_row <- after[after$uuid == "ma-src01-dup", ]
+  # Only the transcription_error duplicate was updated - the self arm is
+  # untouched (a migration that dropped the filter would 2-row-abort
+  # instead, or - had the seed made three-plus-arm collisions silently
+  # pick one - update the wrong row).
+  expect_true(is.na(self_row$date_end))
+  expect_equal(as.character(dup_row$date_end), "2024-01-01")
+})
+
+# ======================================================================
+# Phase 7b round 2, item 9: idempotence and dry-run, for real - the header
+# comment used to claim "not exercised by this file's own idempotency
+# test" while there was no such test at all (test-migration-003.R:41-43,
+# now fixed alongside this).
+# ======================================================================
+
+test_that("003-alias-date-bounds: running mig003_run() a second time returns already_migrated with backup_path = NA and does not re-touch anything", {
+  mig <- .mig003_load()
+  path <- seed_migration_003_db()
+  snap_dir <- withr::local_tempdir()
+
+  result1 <- mig$mig003_run(db = path, snapshot_dir = snap_dir, bounds = .mig003_fixture_bounds())
+  expect_equal(result1$status, "migrated")
+
+  con <- migration_003_con(path)
+  fa_after_first <- DBI::dbGetQuery(con, "SELECT * FROM feature_alias ORDER BY uuid")
+  DBI::dbDisconnect(con, shutdown = TRUE)
+
+  result2 <- mig$mig003_run(db = path, snapshot_dir = snap_dir, bounds = .mig003_fixture_bounds())
+  expect_equal(result2$status, "already_migrated")
+  expect_true(is.na(result2$backup_path))
+  expect_true(is.na(result2$restore_command))
+
+  con2 <- migration_003_con(path)
+  withr::defer(DBI::dbDisconnect(con2, shutdown = TRUE))
+  fa_after_second <- DBI::dbGetQuery(con2, "SELECT * FROM feature_alias ORDER BY uuid")
+  expect_equal(fa_after_second, fa_after_first)
+})
+
+test_that("003-alias-date-bounds: dry_run = TRUE adds no columns, applies no bounds, records no marker, and writes no backup", {
+  mig <- .mig003_load()
+  path <- seed_migration_003_db()
+  snap_dir <- withr::local_tempdir()
+
+  result <- mig$mig003_run(
+    db = path, snapshot_dir = snap_dir, dry_run = TRUE, bounds = .mig003_fixture_bounds()
+  )
+  expect_equal(result$status, "dry_run")
+
+  con <- migration_003_con(path)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  fields <- DBI::dbListFields(con, "feature_alias")
+  expect_false("date_start" %in% fields)
+  expect_false("date_end" %in% fields)
+
+  marker_n <- DBI::dbGetQuery(con, "SELECT count(*) n FROM schema_version WHERE version = 1003")$n
+  expect_equal(marker_n, 0)
+
+  expect_equal(length(list.files(snap_dir)), 0L)
 })

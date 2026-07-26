@@ -120,6 +120,22 @@
 # unguarded. Coverage is therefore 324 of 423, not all of them. Closing that
 # gap needs prior-ingest evidence that does not exist in the DB today; it is a
 # plan decision, not an implementer's.
+#
+# A SECOND, UNDOCUMENTED GAP (round-2 audit item 14, added here, NOT fixed):
+# `.ct_wo_sample_count()` measures "does this work order already have sample
+# rows" by joining sample.uuid_project -> project.name = <work order>. But
+# sample identity is (feature/alias, date, datetime), not (sample, work
+# order) - `.ct_find_or_create_sample()` REUSES an existing sample across
+# work orders and keeps the FIRST writer's `uuid_project`. A work order whose
+# incoming rows all happen to match samples first created under a DIFFERENT
+# work order's project therefore measures n_samples = 0 for itself and is
+# never guarded, even though it has a real prior ingest (an `asset` row would
+# still show one, but `.ct_wo_sample_count()` is consulted first and short-
+# circuits `next` on n_samples == 0 before prior-asset evidence is even
+# checked). Observed incidentally on a real fixture (WO B's samples all
+# reused WO A's), not merely theorised. Do NOT change sample identity or the
+# reuse rule to close this - that is a plan decision, not an implementer's,
+# exactly like the 99-of-423 gap above.
 
 #' Every work order this event's files are RECORDED against (never parsed)
 #' @keywords internal
@@ -188,24 +204,39 @@
   unique(h[!is.na(h) & !(h %in% own_hashes)])
 }
 
-#' The revision RECORDED for this event's own files (never filename-parsed).
+#' The revision RECORDED for THIS work order's own files (never
+#' filename-parsed).
+#'
+#' Round-2 audit item 1 (RANK 1): both the `ingest_file` lookup and the
+#' `clean` fallback are scoped to `wo` - an event can span more than one work
+#' order (the `for (wo in wos)` loop in `.ct_reingest_guard()` proves that),
+#' and `recorded_rev` (`.rc_recorded_revision()`) is itself computed strictly
+#' per work order. Before this fix, this function took `max()` over EVERY
+#' file on the whole event and, failing that, over the WHOLE event's
+#' `clean$revision` - so bundling one legitimately higher-revision file for
+#' work order B into an event exempted a same-revision re-download of work
+#' order A from the guard entirely (a duplicate commit, reproduced). `wo_clean`
+#' is the caller's already-work-order-filtered subset of `clean` (mirroring
+#' `n_rows_blocked`'s `wo_clean` filter, Phase-7b item 8).
 #' @keywords internal
 #' @noRd
-.ct_incoming_revision <- function(con, event, clean) {
+.ct_incoming_revision <- function(con, event, wo_clean, wo) {
   revs <- integer(0)
   files <- event$files
   if (!is.null(files) && nrow(files) > 0 && "hash" %in% names(files)) {
     for (h in files$hash) {
       if (is.na(h)) next
-      row <- DBI::dbGetQuery(con, "SELECT revision FROM ingest_file WHERE hash = ?",
+      row <- DBI::dbGetQuery(con, "SELECT work_order, revision FROM ingest_file WHERE hash = ?",
                              params = list(h))
-      if (nrow(row) > 0 && !is.na(row$revision[[1]])) {
+      if (nrow(row) > 0 &&
+          !is.na(row$work_order[[1]]) && identical(as.character(row$work_order[[1]]), wo) &&
+          !is.na(row$revision[[1]])) {
         revs <- c(revs, as.integer(row$revision[[1]]))
       }
     }
   }
-  if (length(revs) == 0 && !is.null(clean) && "revision" %in% names(clean) && nrow(clean) > 0) {
-    cr <- suppressWarnings(as.integer(clean$revision))
+  if (length(revs) == 0 && !is.null(wo_clean) && "revision" %in% names(wo_clean) && nrow(wo_clean) > 0) {
+    cr <- suppressWarnings(as.integer(wo_clean$revision))
     revs <- cr[!is.na(cr)]
   }
   if (length(revs) == 0) NA_integer_ else max(revs)
@@ -253,6 +284,7 @@
   }
   own_hashes <- .ct_own_hashes(event, resolved)
 
+  rows <- list()
   for (wo in wos) {
     n_samples <- .ct_wo_sample_count(con, wo)
     if (n_samples == 0) next           # first-time work order: never blocked
@@ -261,25 +293,29 @@
     prior <- .ct_wo_prior_asset_hashes(con, wo, own_hashes)
     if (length(prior) == 0) next       # no prior ingest, so not a RE-ingest
 
-    recorded_rev <- .rc_recorded_revision(con, wo, own_hashes)
-    incoming_rev <- .ct_incoming_revision(con, event, clean)
-    if (!is.na(recorded_rev) && !is.na(incoming_rev) && incoming_rev > recorded_rev) {
-      next                             # EXEMPTION 1: A12 supersede re-issue
-    }
-
-    # Phase-7b item 8: filter to the rows actually recorded against THIS work
-    # order before counting - `clean` is the WHOLE event's clean tibble, which
-    # can span more than one work order (this `for (wo in wos)` loop itself
-    # proves that), so counting over all of it overstated n_rows_blocked (and
-    # could reach exemption 3 wrongly) for whichever WO's guard fired first.
-    # `work_order` is absent only for legacy hand-built test fixtures with a
-    # single implicit WO; falling back to the WHOLE tibble there preserves
-    # their existing behaviour.
+    # Phase-7b item 8 / round-2 item 1 (RANK 1): filter to the rows AND files
+    # actually recorded against THIS work order before comparing revisions or
+    # counting - `clean`/`event$files` are the WHOLE event's, which can span
+    # more than one work order (this `for (wo in wos)` loop itself proves
+    # that). Computed BEFORE the revision check (not after, as item 8's own
+    # first cut had it): counting/comparing over the whole event let one WO's
+    # higher-revision file wrongly EXEMPT a different WO's same-revision
+    # re-download from the guard entirely (reproduced; a genuine duplicate
+    # commit). `work_order` is absent only for legacy hand-built test
+    # fixtures with a single implicit WO; falling back to the whole tibble
+    # there preserves their existing behaviour.
     wo_clean <- if ("work_order" %in% names(clean)) {
       clean[!is.na(clean$work_order) & clean$work_order == wo, , drop = FALSE]
     } else {
       clean
     }
+
+    recorded_rev <- .rc_recorded_revision(con, wo, own_hashes)
+    incoming_rev <- .ct_incoming_revision(con, event, wo_clean, wo)
+    if (!is.na(recorded_rev) && !is.na(incoming_rev) && incoming_rev > recorded_rev) {
+      next                             # EXEMPTION 1: A12 supersede re-issue
+    }
+
     unmatched <- .ct_unmatched_clean_rows(con, wo_clean)
     if (length(unmatched) == 0) next   # EXEMPTION 3: everything already matches
 
@@ -294,14 +330,27 @@
         revision_recorded = recorded_rev,
         revision_incoming = incoming_rev,
         n_rows_blocked = length(unmatched),
-        n_rows_clean = nrow(clean)
+        # Phase-7b round-2 item 4: was nrow(clean) (whole-event) - mixed
+        # per-work-order n_rows_blocked with an event-wide n_rows_clean, so
+        # the operator read "1 of 2 blocked" for a WO whose truth was "1 of
+        # 1". Now nrow(wo_clean), the same per-WO granularity as
+        # n_rows_blocked.
+        n_rows_clean = nrow(wo_clean)
       )
     )
-    row <- rq$review
-    row$source_ref <- NA_character_
-    return(row)
+    # Round-2 item 12: the old `row$source_ref <- NA_character_` here was
+    # dead - review_queue has no source_ref column and .ct_commit_review()
+    # rebuilds the row from .rq_row() anyway. Deleted, not carried forward.
+    #
+    # Round-2 item 10: accumulate every blocking work order's row instead of
+    # returning on the first - a multi-WO event where MORE THAN ONE work
+    # order blocks must surface every blocked WO, not silently drop the rest.
+    rows[[length(rows) + 1]] <- rq$review
   }
-  NULL
+  if (length(rows) == 0) {
+    return(NULL)
+  }
+  dplyr::bind_rows(rows)
 }
 
 # ---- step 1: project ---------------------------------------------------------
@@ -832,6 +881,28 @@
     return(hit)
   }
 
+  # Round-2 item 11: refuse a non-Date sample_date rather than silently
+  # storing whatever as.character() gives a POSIXct - the SAME
+  # silent-corruption bug .ct_group_date_start() (E.5) exists to prevent,
+  # twenty lines from here but previously unguarded. Reproduced: a POSIXct
+  # sample_date stored sample.date at its own wall-clock time, not the naive
+  # midnight the comment below promises, breaking F.11's "date is datetime
+  # with the time removed" premise. Not auto-converted for the same reason
+  # .ct_group_date_start()/`.rq_row()`'s expired-date guard both give:
+  # as.Date() on a POSIXct is itself timezone-dependent, so coercing here
+  # would silently PICK a calendar day instead of storing the wrong one.
+  if (!inherits(sample_date, "Date")) {
+    cli::cli_abort(
+      "commit_event(): sample_date must be class Date (got
+       {.cls {class(sample_date)}}); not auto-converted - as.Date() on a
+       POSIXct bound is itself timezone-dependent (the exact
+       silent-corruption bug this check exists to prevent). Convert
+       explicitly, in a timezone the caller (not this generic sample writer)
+       actually knows, before calling commit_event().",
+      class = "sampletidy_error"
+    )
+  }
+
   new_uuid <- uuid::UUIDgenerate()
   # Store the calendar date as a naive midnight (tz = "UTC"), NOT AEST: the
   # duckdb driver converts a POSIXct to UTC on write, so midnight AEST would be
@@ -1089,11 +1160,22 @@
   # silently drop it. Defensive `%in%`: unconverted producers (still
   # legacy-migration pending) may omit a column, in which case it stores NA
   # rather than erroring.
-  # Deliberately NOT overwriting: this function keeps generating its own
-  # per-row `uuid` (not the review tibble's) and takes `work_order` from the
-  # event, not the review row -- both passed straight into `.rq_row()`,
-  # mirroring how `review_queue_add()` passes `work_order` through rather
-  # than overwriting it after construction.
+  # Deliberately NOT overwriting the `uuid`: this function keeps generating
+  # its own per-row `uuid` (not the review tibble's).
+  #
+  # `work_order`, round-2 audit item 2: a real `reconcile_event()` review
+  # shape carries no `work_order` column of its own, so falling back to
+  # `event$work_order` is correct for it. But `.ct_reingest_guard()`'s own
+  # blocking row DOES carry a real, already-resolved `work_order` (the WO it
+  # fired for, which need not equal `event$work_order` in a multi-WO event) -
+  # unconditionally overwriting it with `event$work_order` here wrote a row
+  # whose JSON `payload$work_order` (set at construction) and whose typed
+  # `review_queue.work_order` column (set here) NAMED DIFFERENT WORK ORDERS,
+  # reproduced end to end. An operator (or any WO-scoped query, e.g.
+  # `review_queue_close()`) filtering by the typed column never saw the
+  # blocked WO. Prefer the review row's OWN `work_order` when it carries a
+  # non-NA one; fall back to `event$work_order` only when it doesn't (the
+  # normal reconcile-review case, unchanged).
   #
   # PLAN-16 round-3 R-16.23 (this fix): a reconcile-side `candidates`
   # list-column (`.rc_review_row()`, R/reconcile.R) IS now written, when
@@ -1128,9 +1210,14 @@
   for (i in seq_len(n)) {
     source_hash <- if ("source_hash" %in% names(review)) review$source_hash[[i]] else NA_character_
     row_uuid <- uuid::UUIDgenerate()
+    # Round-2 item 2: prefer the review row's OWN work_order (e.g. the guard
+    # row's) when it is non-NA; only fall back to event$work_order when the
+    # row carries none (the ordinary reconcile-review shape).
+    row_work_order <- col_or_na("work_order", i)
+    if (is.na(row_work_order)) row_work_order <- event$work_order
     rq <- .rq_row(
       kind = review$kind[[i]], subkind = col_or_na("subkind", i),
-      work_order = event$work_order, source_hash = source_hash,
+      work_order = row_work_order, source_hash = source_hash,
       uuid_existing = col_or_na("uuid_existing", i),
       uuid_alias = col_or_na("uuid_alias", i)
     )
@@ -1201,7 +1288,17 @@
       # rejected by the terminal-state check either), so it tripped the
       # illegal-transition guard and rolled back the whole retry instead of
       # being the no-op the blocking contract promises.
+      #
+      # Round-2 item 13: the original fix `next`-ed BEFORE
+      # ingest_file_set_state() ran at all, so a retry's `reason` never
+      # reached `ingest_file.state_reason` - the row stayed stuck on the
+      # FIRST block's reason, the only record of *why* the file is parked.
+      # `reset = TRUE` bypasses the (non-existent) needs_review -> needs_review
+      # self-transition check while still writing state/state_reason/
+      # updated_at, so the state itself is still a true no-op (same value)
+      # but the reason is not lost.
       if (identical(row$state[[1]], "needs_review")) {
+        ingest_file_set_state(con, h, "needs_review", reason = reason, reset = TRUE)
         next
       }
       ingest_file_set_state(con, h, "needs_review", reason = reason)
@@ -1258,27 +1355,62 @@ commit_event <- function(event, resolved, con) {
     # Evaluated first, on reads only, so a blocked event writes no `sample` /
     # `analysis` row at all - and inside the transaction, so the review item
     # and the file-state move land atomically with everything else.
-    guard_row <- .ct_reingest_guard(con, event, resolved)
-    if (!is.null(guard_row)) {
-      blocked_review <- if (!is.null(resolved$review) && nrow(resolved$review) > 0) {
-        dplyr::bind_rows(resolved$review, guard_row)
+    guard_rows <- .ct_reingest_guard(con, event, resolved)
+    if (!is.null(guard_rows)) {
+      # Round-2 item 3: retrying an already-blocked event (step 0 aborts only
+      # on committed/archived; a blocked file stays needs_review, so every
+      # retry re-enters this branch) must be the "clean no-op abort" the
+      # contract promises, not a fresh review row on every call. Reproduced:
+      # 3 successive commit_event() calls minted 3 identical
+      # work_order_reingest rows. Find-or-create, keyed exactly on kind =
+      # 'work_order_reingest' AND work_order = ? AND status = 'open': a work
+      # order whose guard verdict already has an OPEN row is not re-blocked
+      # again here - only a genuinely new blocking WO (or the first call)
+      # writes one.
+      already_open <- vapply(seq_len(nrow(guard_rows)), function(i) {
+        wo_g <- guard_rows$work_order[[i]]
+        if (is.na(wo_g)) {
+          return(FALSE)
+        }
+        existing <- DBI::dbGetQuery(
+          con,
+          "SELECT count(*) AS n FROM review_queue
+            WHERE kind = 'work_order_reingest' AND work_order = ? AND status = 'open'",
+          params = list(wo_g)
+        )
+        existing$n[[1]] > 0
+      }, logical(1))
+      new_guard_rows <- guard_rows[!already_open, , drop = FALSE]
+
+      review_to_insert <- if (!is.null(resolved$review) && nrow(resolved$review) > 0) {
+        if (nrow(new_guard_rows) > 0) {
+          dplyr::bind_rows(resolved$review, new_guard_rows)
+        } else {
+          resolved$review
+        }
       } else {
-        guard_row
+        new_guard_rows
       }
-      .ct_commit_review(con, blocked_review, event, .ct_actor, reason)
+      written_review <- .ct_commit_review(con, review_to_insert, event, .ct_actor, reason)
       # already_present provenance still stands (exemption 2: those rows DID
       # match, and their provenance link is not what F.10 is refusing).
       .ct_record_already_present(con, resolved$skipped, .ct_actor, reason)
       # F.17: an arriving deliverable is archived even when refused, so it is
       # never lost; its files land on `needs_review`, not a terminal state.
       .ct_archive_files(con, event)
-      .ct_set_file_states(con, event$files, 0L, nrow(blocked_review), reason)
+      # The event is still blocked regardless of whether a NEW guard row was
+      # written this call - `n_review` here only decides the needs_review
+      # branch (`.ct_set_file_states()`'s `needs_review_only`), not the
+      # opened-count in the return value below.
+      .ct_set_file_states(con, event$files, 0L, max(nrow(written_review), 1L), reason)
       # Phase-7b item 2: the guard verdict MUST be distinguishable from a real
       # commit in the return value - .ig_reconcile_and_commit() (R/ingest.R)
       # derives its tally from resolved$clean, which is what reconcile WOULD
       # have committed, not what commit_event() actually wrote; without this
-      # a blocked event was silently counted as committed.
-      return(list(blocked = TRUE, n_review = nrow(blocked_review)))
+      # a blocked event was silently counted as committed. `n_review` is what
+      # was ACTUALLY written this call (0 on a pure retry that reuses every
+      # already-open guard row), so review_items_opened does not over-report.
+      return(list(blocked = TRUE, n_review = nrow(written_review)))
     }
 
     uuid_project <- .ct_ensure_project(con, event$work_order, reason)

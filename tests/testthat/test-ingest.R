@@ -711,6 +711,12 @@ test_that("R-15.36: a work order's non-tabular deliverable (a COA PDF) gets an a
   asset_row <- DBI::dbGetQuery(con, "SELECT * FROM asset WHERE hash = ?", params = list(coa_hash))
   expect_equal(nrow(asset_row), 1,
                info = "R-15.36 conjunct 1: the COA PDF must get its own asset row")
+  # Round-2 item 6 (Robin's ruling 3): a COA gets asset.type = "Certificate
+  # of analysis", not the blanket "Chemical analysis" every tabular asset
+  # gets - it is evidence, not chemistry data.
+  if (nrow(asset_row) == 1) {
+    expect_identical(asset_row$type[[1]], "Certificate of analysis")
+  }
 
   # (2) the archived copy is byte-identical to the source. New-ingest code
   # writes only the nested layout <archive_dir>/<uuid>/<filename> (F.18 owns
@@ -827,6 +833,12 @@ test_that("R-15.36: a work order's revision-less deliverable (a COC PDF, the ONL
   asset_row <- DBI::dbGetQuery(con, "SELECT * FROM asset WHERE hash = ?", params = list(coc_hash))
   expect_equal(nrow(asset_row), 1,
                info = "R-15.36 conjunct 1: the COC PDF (revision=NA) must get its own asset row")
+  # Round-2 item 6: a COC is NOT a COA - it must NOT be widened to
+  # "Certificate of analysis" without a separate ruling; it keeps the
+  # existing default.
+  if (nrow(asset_row) == 1) {
+    expect_identical(asset_row$type[[1]], "Chemical analysis")
+  }
 
   # (2) the archived copy is byte-identical to the source.
   asset_uuid <- if (nrow(asset_row) == 1) asset_row$uuid[[1]] else NA_character_
@@ -928,6 +940,12 @@ test_that("R-15.36: a work order's non-PDF non-tabular deliverable (an XTAB.XLS)
   asset_row <- DBI::dbGetQuery(con, "SELECT * FROM asset WHERE hash = ?", params = list(xtab_hash))
   expect_equal(nrow(asset_row), 1,
                info = "R-15.36 conjunct 1: the non-PDF XTAB.XLS deliverable must get its own asset row")
+  # Round-2 item 6: XTAB.XLS is NOT a COA - it must NOT be widened to
+  # "Certificate of analysis" without a separate ruling; it keeps the
+  # existing default.
+  if (nrow(asset_row) == 1) {
+    expect_identical(asset_row$type[[1]], "Chemical analysis")
+  }
 
   # (2) the archived copy is byte-identical to the source.
   asset_uuid <- if (nrow(asset_row) == 1) asset_row$uuid[[1]] else NA_character_
@@ -1006,4 +1024,180 @@ test_that("R-12.7: files_by_state shows 'needs_review' for a needs_review-only e
     unname(report$files_by_state[["needs_review"]]),
     sum(ingest_file_states(setup$db_path)$state == "needs_review")
   )
+})
+
+# ---- Phase-7b round-2 items 5/7: .ig_retain_siblings() containment + the
+#      residual ACIRL work-order-guess silence ------------------------------
+
+test_that("Phase-7b round-2 item 5: one unarchivable retained sibling is contained (cli_warn'd and skipped), not thrown all the way out of ingest_dir() after commits have already landed", {
+  setup <- ingest_test_setup()
+  input_dir <- withr::local_tempdir()
+  esdat_dir <- testthat::test_path("fixtures", "esdat")
+  wo_files <- list.files(esdat_dir, pattern = "ES2617126", full.names = TRUE)
+  for (f in wo_files) file.copy(f, file.path(input_dir, basename(f)))
+
+  # A COA sibling whose retain-archive call is injected to fail (a
+  # dehydrated OneDrive placeholder / permission error / rejected filename
+  # in production; here a mocked archive_file()).
+  coa_path <- file.path(input_dir, "ES2617126_0_COA.pdf")
+  writeBin(charToRaw("fake COA, will fail to archive"), coa_path)
+  coa_hash <- hash_file(coa_path)
+
+  real_archive_file <- archive_file
+  testthat::local_mocked_bindings(
+    archive_file = function(con, path, hash, event, type = "Chemical analysis") {
+      if (identical(basename(path), "ES2617126_0_COA.pdf")) {
+        cli::cli_abort("injected retain-sibling archive failure", class = "sampletidy_error")
+      }
+      real_archive_file(con, path, hash, event, type = type)
+    }
+  )
+
+  # Pre-fix: this threw ingest_dir() out entirely AFTER the tabular event had
+  # already committed - 0 snapshots produced, no report, remove_ingested
+  # never run.
+  expect_warning(
+    report <- ingest_dir(input_dir, db = setup$db_path),
+    regexp = "failed to retain non-tabular deliverable",
+    fixed = TRUE
+  )
+
+  expect_true(report$n_events_committed > 0)
+  expect_false(is.na(report$snapshot_path))
+
+  con <- DBI::dbConnect(duckdb::duckdb(), setup$db_path, read_only = TRUE)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  asset_row <- DBI::dbGetQuery(con, "SELECT * FROM asset WHERE hash = ?", params = list(coa_hash))
+  expect_equal(nrow(asset_row), 0)   # never archived
+
+  coa_state <- ingest_file_states(setup$db_path)
+  coa_state <- coa_state[!is.na(coa_state$hash) & coa_state$hash == coa_hash, ]
+  expect_equal(nrow(coa_state), 1)
+  expect_identical(coa_state$state[[1]], "quarantined")   # stays put, not silently lost
+})
+
+test_that("Phase-7b round-2 item 7: a non-tabular sibling whose work order cannot be filename-guessed (the ACIRL 2400-* shape) still stays quarantined AND is named in a cli_warn - the residual exposure is not silent", {
+  setup <- ingest_test_setup()
+  input_dir <- withr::local_tempdir()
+  esdat_dir <- testthat::test_path("fixtures", "esdat")
+  wo_files <- list.files(esdat_dir, pattern = "ES2617126", full.names = TRUE)
+  for (f in wo_files) file.copy(f, file.path(input_dir, basename(f)))
+
+  # ACIRL work-order trap shape: no ES####### token anywhere in the filename,
+  # so file_meta()$work_order_guess is NA - refusing to filename-parse this
+  # is CORRECT (see commit.R's ACIRL work-order trap header) and must stay;
+  # this test is about the residual silence, not the refusal itself.
+  acirl_path <- file.path(input_dir, "2400-7538-02_QC.pdf")
+  writeBin(charToRaw("fake ACIRL QC PDF, no ES####### token in filename"), acirl_path)
+  acirl_hash <- hash_file(acirl_path)
+
+  expect_warning(
+    report <- ingest_dir(input_dir, db = setup$db_path),
+    regexp = "work order could not be recovered",
+    fixed = TRUE
+  )
+
+  con <- DBI::dbConnect(duckdb::duckdb(), setup$db_path, read_only = TRUE)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  asset_row <- DBI::dbGetQuery(con, "SELECT * FROM asset WHERE hash = ?", params = list(acirl_hash))
+  expect_equal(nrow(asset_row), 0)
+
+  acirl_state <- ingest_file_states(setup$db_path)
+  acirl_state <- acirl_state[!is.na(acirl_state$hash) & acirl_state$hash == acirl_hash, ]
+  expect_equal(nrow(acirl_state), 1)
+  expect_identical(acirl_state$state[[1]], "quarantined")
+})
+
+# ---- Phase-7b round-2 item 9: ingest_dir()-level coverage for the F.10
+#      guard verdict's consumer (commit_event()'s blocked/n_review tally) ---
+#
+# Nothing in this file previously mentioned `blocked`/`reingest`/
+# `work_order_reingest` - the tally logic Phase-7b item 2/9 exists for had
+# zero ingest_dir()-level coverage, and two mutations were measured to
+# survive the whole suite: M5 (`blocked <- FALSE` unconditionally) and M6
+# (`committed_any <- TRUE` -> `committed_any <- !blocked`). This test drives
+# the guard through the REAL adapter (route -> parse -> assemble -> reconcile
+# -> commit_event()), not a hand-built commit_event() fixture.
+
+test_that("Phase-7b round-2 item 9: ingest_dir() over a differently-named, same-revision re-download of an already-loaded work order commits ZERO new rows, commits ZERO events, opens exactly ONE review item, and still snapshots (committed_any stays TRUE for a blocked-only run)", {
+  setup <- ingest_test_setup()
+  esdat_dir <- testthat::test_path("fixtures", "esdat")
+
+  input_dir1 <- withr::local_tempdir()
+  for (f in c("PROJ_A.ESDAT_XX1234567_0.Chemistry2e.CSV",
+              "PROJ_A.ESDAT_XX1234567_0.Sample2e.CSV",
+              "PROJ_A.ESDAT_XX1234567_0.Header.XML")) {
+    file.copy(file.path(esdat_dir, f), file.path(input_dir1, f))
+  }
+  report1 <- ingest_dir(input_dir1, db = setup$db_path)
+  expect_gt(report1$n_events_committed, 0)
+
+  before_sample <- count_rows(setup$db_path, "sample")
+  before_analysis <- count_rows(setup$db_path, "analysis")
+
+  # A differently-named re-download of the SAME work order/revision, whose
+  # ONE sample row does NOT match anything already loaded (feature "T.S01"
+  # and method/analyte are already resolved from run 1, so this row is
+  # genuinely clean/unpending - the ONLY review item this run should open is
+  # the guard's own work_order_reingest row, not an unknown_feature one).
+  # Self-contained header text (not a copy of the real fixture files) so the
+  # header's own hash is guaranteed distinct from run 1's - a byte-identical
+  # copy would be recognised as an already-SEEN hash and skipped rather than
+  # re-parsed.
+  input_dir2 <- withr::local_tempdir()
+  chem_header <- paste(
+    "SampleCode,ChemCode,OriginalChemName,Prefix,Result,Result_Unit,",
+    "Total_or_Filtered,Result_Type,Method_Type,Method_Name,Extraction_Date,",
+    "Analysed_Date,EQL,EQL_Units,Comments,Lab_Qualifier,UCL,LCL",
+    sep = ""
+  )
+  samp_header <- paste(
+    "SampleCode,Sampled_Date_Time,Field_ID,Blank1,Depth,Blank2,Matrix_Type,",
+    "Sample_Type,Parent_Sample,Blank3,SDG,Lab_Name,Lab_SampleID,",
+    "Lab_Comments,Lab_Report_Number",
+    sep = ""
+  )
+  chem2 <- c(
+    chem_header,
+    paste0(
+      "XX1234567099,,pH Value,,6.90,pH Unit,T,Numeric,pH by PC Titrator,",
+      "EA005P: pH by PC Titrator,,26 May 2025,0.01,pH Unit,,,,"
+    )
+  )
+  samp2 <- c(
+    samp_header,
+    paste0(
+      "XX1234567099,01 Sep 2025 09:00,T.S01,,,,WATER,Normal,,,,ALSE-Sydney,",
+      "XX1234567099,,XX1234567"
+    )
+  )
+  hdr2 <- c(
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<ESdat xmlns="http://www.escis.com.au/2013/XML" fileType="eLabResultsHeader">',
+    paste0(
+      '  <LabReport Lab_Report_Number="XX1234567" Date_Reported="2025-09-01" ',
+      'Project_ID="PROJ_A" Lab_Name="ALSE-Sydney" Lab_Signatory="J. Signatory">'
+    ),
+    '    <eCoCs>',
+    '      <eCoC COC_Number="COC-0002"/>',
+    '    </eCoCs>',
+    '  </LabReport>',
+    '</ESdat>'
+  )
+  writeLines(chem2, file.path(input_dir2, "PROJ_A.ESDAT_XX1234567_0_REDL.Chemistry2e.CSV"))
+  writeLines(samp2, file.path(input_dir2, "PROJ_A.ESDAT_XX1234567_0_REDL.Sample2e.CSV"))
+  writeLines(hdr2, file.path(input_dir2, "PROJ_A.ESDAT_XX1234567_0_REDL.Header.XML"))
+
+  report2 <- ingest_dir(input_dir2, db = setup$db_path)
+
+  expect_equal(report2$rows_new, 0L)
+  expect_equal(report2$n_events_committed, 0L)
+  expect_equal(report2$review_items_opened, 1L)
+  # M6 (`committed_any <- TRUE` -> `committed_any <- !blocked`): this run's
+  # ONLY event is the guard-blocked one, so committed_any must still be TRUE
+  # (the guard itself writes review_queue/asset/ingest_file rows worth
+  # snapshotting) - kill-verified: with M6 applied, snapshot_path is NA here.
+  expect_false(is.na(report2$snapshot_path))
+  expect_equal(count_rows(setup$db_path, "sample"), before_sample)
+  expect_equal(count_rows(setup$db_path, "analysis"), before_analysis)
 })

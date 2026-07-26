@@ -544,6 +544,7 @@ add_feature <- function(name, site, lon, lat, flow = NA_character_,
   checkmate::assert_number(lon)
   checkmate::assert_number(lat)
   new_uuid <- uuid::UUIDgenerate()
+  key <- .rc_feature_key(name)
   row <- tibble::tibble(
     uuid = new_uuid, name = name, site = site, lon = lon, lat = lat,
     flow = flow, matrix = matrix, geom_wkt = geom_wkt, virtual = virtual
@@ -551,14 +552,47 @@ add_feature <- function(name, site, lon, lat, flow = NA_character_,
   now <- Sys.time()
   alias_row <- tibble::tibble(
     uuid = uuid::UUIDgenerate(), uuid_feature = new_uuid, name = name,
-    alias_key = .rc_feature_key(name), kind = "self", n_seen = 0L,
+    alias_key = key, kind = "self", n_seen = 0L,
     auto_assign = TRUE, first_seen = now, last_seen = now,
-    confirmed_by = actor,
+    # Phase-7b round-2 item 11: NEVER `actor` here. A machine-created 'self'
+    # arm stamped `confirmed_by = actor` is indistinguishable from a human
+    # confirmation (CONTRACT A55: "an LLM-driven UI may propose, never
+    # confirm"), and it then trips `.fa_confirm_one_alias()`'s
+    # `already_confirmed` guard on the very first real confirmation attempt.
+    # F.9 asks only for `kind = 'self'` + `change_log` provenance - the
+    # `db_append()` call below already stamps `actor` on that row.
+    confirmed_by = NA_character_,
     comments = "Self alias created by add_feature() (PLAN-15 F.9/S-15.8)."
   )
   with_db_write(
     function(con) {
       db_transaction(con, function(con) {
+        # Phase-7b round-2 item 10: a name whose `.rc_feature_key()` is
+        # ALREADY carried by an existing feature_alias row would mint a
+        # SECOND 'self'/auto_assign=TRUE arm sharing that key -
+        # `.rc_feature_candidates()`'s Layer-1 exact match then returns TWO
+        # candidates for the name, and `.rc_resolve_features()` routes it to
+        # feature_pending/unknown_feature (E.7's self-precedence needs
+        # EXACTLY ONE self candidate and cannot rescue this). BOTH features
+        # become unreachable by their own name - the exact failure F.9 exists
+        # to prevent, reached again through F.9's own fix. Checked inside the
+        # transaction, on the SAME `con` about to write, so a concurrent
+        # add_feature() racing on the same name is still serialised by
+        # DuckDB rather than opening a TOCTOU gap at the R level.
+        clash <- DBI::dbGetQuery(
+          con, "SELECT uuid FROM feature_alias WHERE alias_key = ?", params = list(key)
+        )
+        if (nrow(clash) > 0) {
+          cli::cli_abort(
+            paste0(
+              "add_feature(): name '", name, "' (key '", key, "') is already used by an ",
+              "existing feature_alias row ('", clash$uuid[[1]], "'); a second feature under ",
+              "the same name would make BOTH unreachable by it. Pick a distinct name, or ",
+              "resolve the existing alias via confirm_feature_aliases() first."
+            ),
+            class = "sampletidy_error"
+          )
+        }
         db_append(con, "feature", row, actor = actor, reason = reason)
         db_append(con, "feature_alias", alias_row, actor = actor, reason = reason)
       })
@@ -666,11 +700,18 @@ correct_value <- function(uuid_analysis, new_value, reason, actor) {
 
 #' Read `review_queue` rows, filtered by status
 #'
-#' Returns queue rows as a tibble with stable columns (all 14) even on a
+#' Returns queue rows as a tibble with stable columns (all 15 - schema ladder
+#' version 7 added `uuid_incoming` alongside `uuid_existing`) even on a
 #' zero-row result, since the `SELECT` names every column explicitly.
-#' Entity/classification data lives in typed columns (`subkind`, `uuid_existing`,
-#' `uuid_alias`, `uuid_target`); `payload` carries only the diagnostics JSON
-#' remainder.
+#' Entity/classification data lives in typed columns (`subkind`,
+#' `uuid_existing`, `uuid_incoming`, `uuid_alias`, `uuid_target`); `payload`
+#' carries only the diagnostics JSON remainder.
+#'
+#' Phase-7b round-2 item 5b: `uuid_incoming` is written by producers (e.g.
+#' `.fa_merge_samples()`'s `value_conflict`/`alias_merge` row) but was
+#' missing from this SELECT, making it invisible to every caller of this
+#' function regardless of what the table actually stored. Added next to
+#' `uuid_existing`, following that column's own pattern exactly.
 #'
 #' @param con an open DBI connection.
 #' @param status status to filter on, defaults to `"open"`.
@@ -681,7 +722,8 @@ review_queue <- function(con, status = "open") {
   rows <- DBI::dbGetQuery(
     con,
     "SELECT uuid, created_at, kind, subkind, work_order, source_hash, payload,
-            uuid_existing, uuid_alias, uuid_target, status, resolution, resolved_by, resolved_at
+            uuid_existing, uuid_incoming, uuid_alias, uuid_target, status,
+            resolution, resolved_by, resolved_at
      FROM review_queue
      WHERE status = ?",
     params = list(status)

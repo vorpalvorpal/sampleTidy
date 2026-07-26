@@ -172,6 +172,59 @@ test_that("Phase-7 pin (guard 2c): merge_identity_aliases() aborts on an interru
 })
 
 # ======================================================================
+# Guard 2d - Phase-7b round-2 item 6: the SECOND non-atomic window
+# .fa_torn_guard() now also detects - a redundant identity arm left behind
+# by an INTERRUPTED repoint-then-delete run (F.19's post-pass /
+# merge_identity_aliases(), both of which run .fa_repoint_samples() then a
+# separate db_delete() as two separately committed calls, per the guarded
+# exception at the head of R/feature-alias.R). Unlike guard 2a-c, there is
+# no missing "reattach" here - the DELETE itself is the missing step - so
+# this is a genuinely different detection shape, not a copy of the
+# detach/reattach check.
+# ======================================================================
+
+test_that("Phase-7 pin (guard 2d): confirm_feature_aliases() aborts when a redundant identity arm's samples were already re-pointed off it but the arm itself was never deleted (an interrupted repoint-then-delete run)", {
+  setup <- fag_setup()
+  con <- setup$con
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  # A dangling (uuid_feature IS NULL) non-self arm, plus a change_log row
+  # recording a COMPLETED repoint of a sample OFF it - exactly the state a
+  # crash between .fa_repoint_samples() committing and the following
+  # db_delete() leaves.
+  DBI::dbExecute(con, "INSERT INTO feature_alias
+    (uuid, uuid_feature, name, alias_key, kind, n_seen, auto_assign,
+     first_seen, last_seen, confirmed_by) VALUES
+    ('fa-torn-del-01', NULL, 'Z.TORNDEL01', 'z.torndel01', 'transcription_error', 0, TRUE,
+     TIMESTAMP '2025-09-01 08:00:00', TIMESTAMP '2025-09-01 08:00:00', NULL)")
+  .st_write_change_log(
+    con, at = Sys.time(), actor = "prior_run", action = "update",
+    tbl = "sample", uuid_row = "s-torn-del-01", field = "uuid_feature_alias",
+    old = "fa-torn-del-01", new = "fa-0002",
+    reason = paste0(
+      "identity alias: sample re-pointed from the redundant arm 'fa-torn-del-01' ",
+      "onto the surviving self arm 'fa-0002'"
+    ),
+    source_hash = NA_character_
+  )
+
+  expect_error(
+    confirm_feature_aliases("fa-0010", "f-0002", confirmed_by = "alice", db = setup$path),
+    class = "sampletidy_error"
+  )
+})
+
+test_that("Phase-7 pin (guard 2d control): an ordinary UNCONFIRMED pending alias (uuid_feature IS NULL, no repoint trail at all) does NOT trip the new torn-delete check - the guard fires on the change_log trail, not merely on a dangling arm", {
+  setup <- fag_setup()
+  con <- setup$con
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  expect_no_error(
+    confirm_feature_aliases("fa-0010", "f-0002", confirmed_by = "alice", db = setup$path)
+  )
+})
+
+# ======================================================================
 # Guard 3 - .fa_check_kind() vocabulary validation (PLAN-15 F.19)
 # ======================================================================
 # No DB is ever opened: the kind check runs before with_db_write().

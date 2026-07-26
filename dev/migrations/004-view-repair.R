@@ -48,12 +48,21 @@
 #
 # Pure view DDL, like 001's own step 6/10 view rebuild - no base-table row is
 # read, written or logged, so there is no `change_log` entry to write (the
-# same reasoning 001 applies to its view section). The verify gate instead
-# proves the one thing that matters for a view-only migration: every
-# base-table row count and a value checksum over stable columns is BYTE
-# IDENTICAL before and after (mirrors `mig001_counts_checksum()` /
-# `mig001_verify()`, reused in shape, not by reference, since each migration
-# file is `sys.source()`d standalone).
+# same reasoning 001 applies to its view section). The verify gate has TWO
+# distinct halves, not one, and both are required (Phase 7b round 2, item 1):
+# `mig004_verify()` proves the SAFETY property - every base-table row count
+# and a value checksum over stable columns is BYTE IDENTICAL before and
+# after (mirrors `mig001_counts_checksum()` / `mig001_verify()`, reused in
+# shape, not by reference, since each migration file is `sys.source()`d
+# standalone) - i.e. this migration touched nothing it was not licensed to
+# touch. `.mig004_verify_views()` proves the SUCCESS property - the thing
+# this migration actually exists to do: the 5 views exist, carry their
+# restored column set, and (for `v_measurement_epa`) match R-15.35's own
+# base-table count oracle. A migration that rebuilds nothing (a no-op
+# `.mig004_rebuild_views()`) passes the safety half trivially - the base
+# tables really are unchanged - so without the success half it would commit
+# the 1004 marker with the defect it exists to fix still live, permanently
+# (the marker makes every later run return `already_migrated`).
 
 .mig004_marker_version <- 1004L
 
@@ -268,7 +277,10 @@ mig004_backup <- function(db, snapshot_dir, .now = NULL) {
 #' future-proofs the other three), and `date`/`datetime`/`site`/
 #' `feature_flow`/`lon`/`lat`/`feature_name` are restored - all sourced from
 #' tables already in the join (`\"sample\"` s, `feature` f), so restoring them
-#' cannot change the row count either.
+#' cannot change the row count either. `fm.name AS mask_name` is ALSO
+#' restored (item 6): the join to `feature_mask` was already present purely
+#' as a filter, so projecting the one column that is the mask table's whole
+#' reason to exist cannot change the row count either.
 #'
 #' @param con an open read-write DBI connection, inside the caller's
 #'   transaction.
@@ -313,7 +325,8 @@ mig004_backup <- function(db, snapshot_dir, .now = NULL) {
                f.site AS site,
                f.flow AS feature_flow,
                f.lon AS lon,
-               f.lat AS lat
+               f.lat AS lat,
+               fm.name AS mask_name
         FROM analysis a
         JOIN \"sample\" s ON a.uuid_sample = s.uuid
         JOIN feature_alias fa ON fa.uuid = s.uuid_feature_alias
@@ -323,6 +336,94 @@ mig004_backup <- function(db, snapshot_dir, .now = NULL) {
   }
 
   invisible(NULL)
+}
+
+# ---- .mig004_verify_views() ----------------------------------------------
+
+# Restored column set per view (item 6's `mask_name` on all 4 mask views,
+# item 5's F.12(b) full projection restoration on `v_measurement`).
+.mig004_expected_view_cols <- list(
+  v_measurement = c(
+    "uuid_analysis", "uuid_sample", "uuid_feature", "feature_name", "value",
+    "date", "datetime", "analyte_name", "analyte_units", "site",
+    "feature_flow", "lon", "lat", "rl_low", "rl_high"
+  ),
+  v_measurement_epa = c(
+    "uuid_analysis", "uuid_sample", "uuid_feature", "feature_name", "value",
+    "date", "datetime", "site", "feature_flow", "lon", "lat", "mask_name"
+  ),
+  v_measurement_gas_report = c(
+    "uuid_analysis", "uuid_sample", "uuid_feature", "feature_name", "value",
+    "date", "datetime", "site", "feature_flow", "lon", "lat", "mask_name"
+  ),
+  v_measurement_long = c(
+    "uuid_analysis", "uuid_sample", "uuid_feature", "feature_name", "value",
+    "date", "datetime", "site", "feature_flow", "lon", "lat", "mask_name"
+  ),
+  v_measurement_old = c(
+    "uuid_analysis", "uuid_sample", "uuid_feature", "feature_name", "value",
+    "date", "datetime", "site", "feature_flow", "lon", "lat", "mask_name"
+  )
+)
+
+#' The SUCCESS-property verify gate (Phase 7b round 2, item 1) - asserts the
+#' 5 rebuilt views actually exist, each carries its restored column set, and
+#' `v_measurement_epa`'s row count matches R-15.35's own independently
+#' computed base-table oracle
+#'
+#' `mig004_verify()` alone is BLIND to this migration's own reason for
+#' being: it compares only the 6 base tables 004 never writes, so a run
+#' where `.mig004_rebuild_views()` did nothing (or did the wrong thing)
+#' still passes it - the base tables really are unchanged. This is the gate
+#' that looks at what the migration actually exists to fix, called from
+#' inside the same transaction, before COMMIT, so a failure here rolls back
+#' the whole migration (including the 1004 marker) exactly like a
+#' `mig004_verify()` failure does.
+#'
+#' @param con an open DBI connection, inside the caller's transaction (so it
+#'   sees `.mig004_rebuild_views()`'s own writes).
+#' @return invisible(TRUE) if every check holds; throws (`sampletidy_error`)
+#'   otherwise.
+.mig004_verify_views <- function(con) {
+  bad_views <- character(0)
+  for (v in names(.mig004_expected_view_cols)) {
+    cols <- tryCatch(DBI::dbListFields(con, v), error = function(e) NULL)
+    if (is.null(cols) || !setequal(cols, .mig004_expected_view_cols[[v]])) {
+      bad_views <- c(bad_views, v)
+    }
+  }
+  if (length(bad_views) > 0) {
+    cli::cli_abort(
+      "004-view-repair verify failed: view(s) missing or carrying the wrong
+       column set after rebuild: {paste(bad_views, collapse = ', ')}.",
+      class = "sampletidy_error"
+    )
+  }
+
+  # R-15.35's own oracle: v_measurement_epa's row count equals an
+  # independently computed base-table count for the case-insensitive EPA
+  # filter (mirrors test-migration-004.R's own assertion, so a rebuild that
+  # silently regresses to the case-SENSITIVE filter - or to no rows at all -
+  # cannot commit the 1004 marker).
+  epa_view_n <- DBI::dbGetQuery(con, "SELECT COUNT(*) n FROM v_measurement_epa")$n
+  epa_base_n <- DBI::dbGetQuery(con, "
+    SELECT COUNT(*) n
+    FROM analysis a
+    JOIN \"sample\" s ON a.uuid_sample = s.uuid
+    JOIN feature_alias fa ON fa.uuid = s.uuid_feature_alias
+    JOIN feature f ON fa.uuid_feature = f.uuid
+    JOIN feature_mask fm ON fm.uuid_feature = f.uuid AND UPPER(fm.variant) = 'EPA'
+  ")$n
+  if (!identical(as.integer(epa_view_n), as.integer(epa_base_n))) {
+    cli::cli_abort(
+      "004-view-repair verify failed: v_measurement_epa row count
+       ({epa_view_n}) does not match the R-15.35 base-table oracle
+       ({epa_base_n}).",
+      class = "sampletidy_error"
+    )
+  }
+
+  invisible(TRUE)
 }
 
 # ---- mig004_run() -------------------------------------------------------
@@ -342,15 +443,32 @@ mig004_backup <- function(db, snapshot_dir, .now = NULL) {
 mig004_run <- function(db, snapshot_dir, dry_run = FALSE, .now = NULL) {
   logf <- function(fmt, ...) cat(sprintf("[%s] %s\n", db, sprintf(fmt, ...)))
 
-  # ---- Step 0: idempotency guard - read-only, writes nothing. ----
+  # ---- Step 0: idempotency guard AND the 001-dependency precondition -
+  # read-only, writes nothing. Mirrors 003's `schema_version`-exists guard
+  # (item 2) exactly: a DB `ensure_schema()` never touched must die with a
+  # classed `sampletidy_error`, not a raw DuckDB catalog error. The 1001
+  # marker check (item 3) happens HERE, before Step 1's backup - 004 repairs
+  # 001's own rebuilt views (header comment), so on a pre-001 DB there is
+  # nothing to repair, and the backup must not be taken (and left as a
+  # stray file) before that is known. ----
   marker_con <- st_connect(db, read_only = TRUE)
-  marker <- tryCatch(
+  if (!("schema_version" %in% DBI::dbListTables(marker_con))) {
+    DBI::dbDisconnect(marker_con, shutdown = TRUE)
+    cli::cli_abort(
+      "{db}: no schema_version table found - ensure_schema() has never been
+       applied to this database, so 004-view-repair cannot check its own
+       idempotency marker.",
+      class = "sampletidy_error"
+    )
+  }
+  markers <- tryCatch(
     DBI::dbGetQuery(
-      marker_con, "SELECT applied_at FROM schema_version WHERE version = ?",
-      params = list(.mig004_marker_version)
+      marker_con, "SELECT version, applied_at FROM schema_version WHERE version IN (?, ?)",
+      params = list(.mig004_marker_version, 1001L)
     ),
     finally = DBI::dbDisconnect(marker_con, shutdown = TRUE)
   )
+  marker <- markers[markers$version == .mig004_marker_version, ]
 
   if (nrow(marker) > 0) {
     recorded_at <- marker$applied_at[[1]]
@@ -368,6 +486,16 @@ mig004_run <- function(db, snapshot_dir, dry_run = FALSE, .now = NULL) {
       counts_after = counts,
       recorded_at = recorded_at
     )))
+  }
+
+  if (!(1001L %in% markers$version)) {
+    cli::cli_abort(
+      "{db}: 001-alias-indirection has not been applied to this database (no
+       1001 schema_version marker) - 004-view-repair depends on 001 having
+       already run (it repairs 001's OWN rebuilt views; there is nothing to
+       repair pre-001).",
+      class = "sampletidy_error"
+    )
   }
 
   # ---- dry-run: preview only, write nothing (no backup either). ----
@@ -414,9 +542,19 @@ mig004_run <- function(db, snapshot_dir, dry_run = FALSE, .now = NULL) {
             params = list(.mig004_marker_version, recorded_at)
           )
 
-          # ---- hard verify gate, before COMMIT (read-your-own-writes). ----
+          # ---- hard verify gate, before COMMIT (read-your-own-writes).
+          # BOTH halves must pass (see the file header): mig004_verify()
+          # proves the base tables are untouched (SAFETY); .mig004_verify_views()
+          # proves the 5 views were actually repaired (SUCCESS) - item 1. The
+          # marker INSERT above stays before this gate, matching sibling
+          # migration 003's own order (ALTER/flip/bounds, then INSERT, then
+          # verify) - order does not affect correctness here, since the
+          # whole body runs inside one transaction and ANY error before
+          # COMMIT (including one thrown by either verify step) rolls back
+          # everything already written, marker included. ----
           counts_after <- mig004_counts_checksum(con)
           mig004_verify(counts_before, counts_after)
+          .mig004_verify_views(con)
 
           list(counts_after = counts_after)
         },
@@ -427,7 +565,7 @@ mig004_run <- function(db, snapshot_dir, dry_run = FALSE, .now = NULL) {
       )
 
       DBI::dbExecute(con, "COMMIT")
-      logf("Verify passed: base tables unchanged; views rebuilt.")
+      logf("Verify passed: base tables unchanged; views rebuilt and restored.")
 
       list(counts_before = counts_before, counts_after = body$counts_after)
     },

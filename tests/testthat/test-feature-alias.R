@@ -312,13 +312,23 @@ test_that("R-11.10 (D5, cold review C14): override = TRUE merges a collision - w
 
   conflict <- DBI::dbGetQuery(con, "SELECT * FROM review_queue WHERE kind = 'value_conflict'")
   expect_equal(nrow(conflict), 1)
-  # PLAN-16 R-16.19/R-16.20: uuid_existing is now a typed column (an-w2, the
-  # winner's existing analysis); uuid_incoming is deliberately ABSENT (an-l2
-  # has no uuid to name) - the retired "both uuids appear somewhere in
-  # payload" shape becomes: the existing uuid on its own column, and the
-  # incoming uuid nowhere at all.
+  # ROBIN'S RULING 2 (Phase-7b round-2 item 5, 2026-07-26): PLAN-11 R-11.10
+  # pins that the merge's value_conflict item names BOTH analysis uuids, and
+  # the plan wins - via the TYPED `uuid_incoming` column (schema ladder
+  # version 7), never the JSON payload; PLAN-16's whole direction is moving
+  # uuids OUT of payload INTO typed columns, and a cross-producer key-parity
+  # invariant elsewhere (test-review-queue-payload.R, another unit) compares
+  # parsed payload key SETS between producers - putting it in `diagnostics`
+  # would break that invariant. The original comment's justification for
+  # omitting it ("an-l2 has no uuid to name") was itself wrong, not merely
+  # stale: an-l2 is RE-POINTED onto the winner sample, never deleted, and
+  # this very test queries it by that uuid a few lines above (`an_l2 <-
+  # ...WHERE uuid = 'an-l2'`). The payload-absence assertion below is
+  # therefore KEPT as-is (payloads legitimately carry no uuids on this
+  # producer) and a new positive assertion is added for the typed column.
   expect_identical(conflict$uuid_existing[[1]], "an-w2")
   expect_false(grepl("an-l2", conflict$payload[[1]], fixed = TRUE))
+  expect_identical(conflict$uuid_incoming[[1]], "an-l2")
 
   # both analyses now live on the surviving sample - two, not four (an-l1
   # dropped, an-w1/an-w2/an-l2 remain).
@@ -377,6 +387,50 @@ test_that("Phase-7b item 3 (D5, RULED BY ROBIN): two samples on the SAME danglin
   expect_true(grepl("s-9701", txt, fixed = TRUE))
   expect_true(grepl("s-9702", txt, fixed = TRUE))
   expect_true(grepl("2025-08-05", txt, fixed = TRUE))
+
+  # Phase-7b round-2 item 1 (RANK 1): the item this SAME call opened must NOT
+  # be closed by that call's own review_queue_close(uuid_target = uuid_alias)
+  # at the end of .fa_confirm_one_alias() - the two rows share `uuid_target`
+  # (`uuid_alias` is polymorphic), and the close used to have no `kind`
+  # filter, so it swept this row too, in the same transaction, before an
+  # operator could ever see it. Assert BOTH the raw status and that the
+  # public review_queue() reader actually surfaces it as open.
+  expect_identical(review$status[[1]], "open")
+  still_open <- review_queue(con, status = "open")
+  expect_true("fa-9701" %in% still_open$uuid_alias[still_open$kind == "sample_collision"])
+})
+
+test_that("Phase-7b round-2 item 2: confirming the SAME alias to the SAME feature a second (and third, override = TRUE) time is idempotent even when that alias carries two same-date samples - a self-collision must never re-surface as a cross-alias collision against itself", {
+  setup <- fa_setup()
+  con <- setup$con
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  mk_self_collision_fixture(con)
+
+  confirm_feature_aliases("fa-9701", "f-0002", confirmed_by = "alice")
+
+  # Once fa-9701 itself carries uuid_feature = f-0002, `.fa_find_collisions()`
+  # used to see s-9701's OWN sibling s-9702 (reached through the SAME alias)
+  # as a colliding "existing" sample on the SAME feature/date and abort -
+  # R-11.10's pinned "confirming the same alias->feature twice is idempotent"
+  # is false for any alias carrying >=2 same-date samples without this fix.
+  expect_no_error(
+    confirm_feature_aliases("fa-9701", "f-0002", confirmed_by = "alice")
+  )
+  after_alias <- feature_alias_row(con, "fa-9701")
+  expect_identical(after_alias$uuid_feature[[1]], "f-0002")
+  both <- DBI::dbGetQuery(con, "SELECT uuid FROM \"sample\" WHERE uuid IN ('s-9701', 's-9702')")
+  expect_equal(nrow(both), 2) # neither sample merged/deleted by the idempotent re-confirm
+
+  # override = TRUE on the idempotent re-confirm must not abort or
+  # destructively merge the alias's own two samples against each other
+  # either - the reciprocal self-collision pair used to make
+  # .fa_merge_samples() run twice, the second call hitting an
+  # already-deleted sample.
+  expect_no_error(
+    confirm_feature_aliases("fa-9701", "f-0002", confirmed_by = "alice", override = TRUE)
+  )
+  both_after_override <- DBI::dbGetQuery(con, "SELECT uuid FROM \"sample\" WHERE uuid IN ('s-9701', 's-9702')")
+  expect_equal(nrow(both_after_override), 2)
 })
 
 # ---- authority rule + input contract ------------------------------------
@@ -732,6 +786,16 @@ test_that("R-15.37: confirming an identity-mapped pending alias (alias_key == lo
      first_seen, last_seen, confirmed_by) VALUES
     ('fa-9602', NULL, 'Z.IDENT01', 'z.ident01', 'pending', 0, FALSE,
      TIMESTAMP '2025-09-01 08:00:00', TIMESTAMP '2025-09-01 08:00:00', NULL)")
+  # Phase-7b round-2 item 8: a sample hanging off the REDUNDANT arm
+  # (fa-9602) specifically - R-15.37's identity branch was previously only
+  # ever exercised with a ZERO-sample redundant arm, so the repoint half of
+  # Robin's Phase-7b item-2 ruling ("any sample still hanging off the
+  # redundant arm is re-pointed, so a confirmation is never silently
+  # ineffective") had no test at all; nothing would go red if it stopped
+  # working.
+  DBI::dbExecute(con, "INSERT INTO \"sample\"
+    (uuid, uuid_feature_alias, uuid_project, date, datetime, organisation) VALUES
+    ('s-9602', 'fa-9602', 'p-0001', TIMESTAMP '2025-09-01 00:00:00', TIMESTAMP '2025-09-01 09:00:00', 'ALS')")
 
   before_count <- count_rows(con, "feature_alias")
   before_self <- feature_alias_row(con, "fa-9601")
@@ -757,6 +821,12 @@ test_that("R-15.37: confirming an identity-mapped pending alias (alias_key == lo
   # longer lists it.
   expect_equal(nrow(feature_alias_row(con, "fa-9602")), 0)
   expect_false("fa-9602" %in% pending_features(con)$uuid_alias)
+
+  # (b3) Phase-7b round-2 item 8: s-9602 - the sample that was hanging off
+  # the now-deleted redundant arm - landed on the surviving self arm, not
+  # orphaned by the deletion.
+  s9602 <- DBI::dbGetQuery(con, "SELECT uuid_feature_alias FROM \"sample\" WHERE uuid = 's-9602'")
+  expect_identical(s9602$uuid_feature_alias[[1]], "fa-9601")
 
   # (c) a genuine NON-identity alias (key != lower(feature.name)) accepts an
   # explicit `kind`, which round-trips onto the row rather than being
@@ -803,6 +873,83 @@ test_that("R-15.37: confirming an identity-mapped pending alias (alias_key == lo
   defaulted <- feature_alias_row(con, "fa-9604")
   expect_identical(defaulted$kind[[1]], "transcription_error")
   expect_identical(defaulted$uuid_feature[[1]], "f-9601")
+})
+
+# ---- Phase-7b round-2 item 4: normalisation divergence at the identity ----
+#      boundary (a trailing NBSP survives plain tolower()/SQL lower() but not
+#      .rc_feature_key(), the function alias_key was actually built with).
+
+test_that("Phase-7b round-2 item 4: an identity confirmation is recognised even when the feature's own name carries a non-breaking space .rc_feature_key() trims but plain tolower() does not - flips the existing self arm rather than minting a mislabelled duplicate", {
+  setup <- fa_setup()
+  con <- setup$con
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  nbsp_name <- "Z.NBSPTEST01 " # trailing NBSP - .rc_feature_key() trims it, tolower() does not
+  key <- .rc_feature_key(nbsp_name)
+  expect_false(identical(key, tolower(nbsp_name))) # the two folds genuinely diverge on this input
+
+  DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix, lon, lat) VALUES
+    ('f-9901', ?, 'Z', 'surface', 'water', 150.9901, -33.9901)", params = list(nbsp_name))
+  DBI::dbExecute(con, "INSERT INTO feature_alias
+    (uuid, uuid_feature, name, alias_key, kind, n_seen, auto_assign,
+     first_seen, last_seen, confirmed_by) VALUES
+    ('fa-9901', 'f-9901', ?, ?, 'self', 0, TRUE,
+     TIMESTAMP '2025-01-01 00:00:00', TIMESTAMP '2025-01-01 00:00:00', NULL)",
+    params = list(nbsp_name, key))
+  DBI::dbExecute(con, "INSERT INTO feature_alias
+    (uuid, uuid_feature, name, alias_key, kind, n_seen, auto_assign,
+     first_seen, last_seen, confirmed_by) VALUES
+    ('fa-9902', NULL, ?, ?, 'pending', 0, FALSE,
+     TIMESTAMP '2025-09-01 08:00:00', TIMESTAMP '2025-09-01 08:00:00', NULL)",
+    params = list(nbsp_name, key))
+
+  before_count <- count_rows(con, "feature_alias")
+
+  confirm_feature_aliases("fa-9902", "f-9901", confirmed_by = "alice")
+
+  # the identity flip happened (existing self arm fa-9901 carries
+  # confirmed_by; no duplicate second arm minted, so the row count drops by
+  # exactly one, same shape as the fa-9601/fa-9602 test above) - NOT the
+  # buggy "mints a mislabelled transcription_error duplicate" behaviour.
+  after_count <- count_rows(con, "feature_alias")
+  expect_equal(after_count, before_count - 1)
+  after_self <- feature_alias_row(con, "fa-9901")
+  expect_identical(after_self$confirmed_by[[1]], "alice")
+  expect_equal(nrow(feature_alias_row(con, "fa-9902")), 0) # redundant arm deleted, not left as a duplicate
+})
+
+test_that("Phase-7b round-2 item 4: .fa_identity_duplicates()/merge_identity_aliases() find and merge a pre-existing identity duplicate even when the feature's own name carries a non-breaking space (SQL lower() would miss it; the R-side .rc_feature_key() match does not)", {
+  setup <- fa_setup()
+  con <- setup$con
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  nbsp_name <- "Z.NBSPTEST02 "
+  key <- .rc_feature_key(nbsp_name)
+
+  DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix, lon, lat) VALUES
+    ('f-9903', ?, 'Z', 'surface', 'water', 150.9903, -33.9903)", params = list(nbsp_name))
+  DBI::dbExecute(con, "INSERT INTO feature_alias
+    (uuid, uuid_feature, name, alias_key, kind, n_seen, auto_assign,
+     first_seen, last_seen, confirmed_by) VALUES
+    ('fa-9903', 'f-9903', ?, ?, 'self', 0, FALSE,
+     TIMESTAMP '2020-01-01 00:00:00', TIMESTAMP '2020-01-01 00:00:00', NULL)",
+    params = list(nbsp_name, key))
+  DBI::dbExecute(con, "INSERT INTO feature_alias
+    (uuid, uuid_feature, name, alias_key, kind, n_seen, auto_assign,
+     first_seen, last_seen, confirmed_by) VALUES
+    ('fa-9904', 'f-9903', ?, ?, 'transcription_error', 0, TRUE,
+     TIMESTAMP '2026-01-01 00:00:00', TIMESTAMP '2026-01-01 00:00:00', 'R. Shannon')",
+    params = list(nbsp_name, key))
+
+  cand <- .fa_identity_duplicates(con)
+  expect_true("fa-9904" %in% cand$uuid_loser)
+
+  result <- merge_identity_aliases(actor = "phase7b-item4-nbsp-test")
+  expect_true("fa-9904" %in% result$uuid_loser)
+  expect_equal(nrow(feature_alias_row(con, "fa-9904")), 0)
+  survivor <- feature_alias_row(con, "fa-9903")
+  expect_identical(survivor$confirmed_by[[1]], "R. Shannon")
+  expect_true(survivor$auto_assign[[1]])
 })
 
 test_that("Phase-7b item 6: bounding a 'self' arm aborts - own-name reachability (R1) is unconditional and a bound cannot be silently attached to it", {
@@ -864,6 +1011,88 @@ test_that("Phase-7b item 6: bounding a 'self' arm aborts - own-name reachability
   )
   non_self <- feature_alias_row(con, "fa-0009")
   expect_equal(non_self$date_start[[1]], as.Date("2020-01-01"))
+
+  # (d) Phase-7b round-2 item 3: the BOUNDS-ONLY route (`uuid_feature`
+  # omitted) - a DIRECT re-confirm of a row that already carries
+  # kind = 'self', with a bound. The R1 guard above lived entirely inside
+  # the non-bounds-only branch (past that branch's own early `return()`),
+  # so this exact shape - `confirm_feature_aliases(<self arm>,
+  # confirmed_by=, date_end=)` with no `uuid_feature` - used to succeed and
+  # store the bound on a `kind='self'` row with `auto_assign` left TRUE.
+  before_bounds_only <- feature_alias_row(con, "fa-9801")
+  err_bounds_only <- tryCatch(
+    confirm_feature_aliases(
+      "fa-9801", confirmed_by = "alice", date_end = as.Date("2020-01-01")
+    ),
+    error = function(e) e
+  )
+  expect_s3_class(err_bounds_only, "sampletidy_error")
+  after_bounds_only <- feature_alias_row(con, "fa-9801")
+  expect_identical(after_bounds_only, before_bounds_only) # nothing written
+})
+
+# ---- coverage-gap tests for two mutations the round-2 audit measured as ---
+#      SURVIVING the full suite (M1, M4) --------------------------------
+
+test_that("Phase-7b round-2 M1 coverage gap: an identity mapping BECOMING a feature's self arm for the FIRST TIME (no pre-existing self arm at all) with a bound aborts - R1's guard must fire on `is_identity` alone, not only via an already-resolved `self_arm`", {
+  setup <- fa_setup()
+  con <- setup$con
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  # f-9820 has NO self arm yet at all - fa-9820 is a still-pending identity
+  # mapping (alias_key == .rc_feature_key(feature name)) that would become
+  # the feature's self arm for the first time on confirmation. Under the M1
+  # mutant (`target_is_self` dropping `|| is_identity`), `self_arm` stays NA
+  # (no pre-existing self arm to find) AND `alias$kind[[1]]` is 'pending', so
+  # `target_is_self` would be FALSE and the bound would be silently written.
+  DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix, lon, lat) VALUES
+    ('f-9820', 'Z.NEWSELF01', 'Z', 'surface', 'water', 150.9820, -33.9820)")
+  DBI::dbExecute(con, "INSERT INTO feature_alias
+    (uuid, uuid_feature, name, alias_key, kind, n_seen, auto_assign,
+     first_seen, last_seen, confirmed_by) VALUES
+    ('fa-9820', NULL, 'Z.NEWSELF01', 'z.newself01', 'pending', 0, FALSE,
+     TIMESTAMP '2025-09-01 08:00:00', TIMESTAMP '2025-09-01 08:00:00', NULL)")
+
+  err <- tryCatch(
+    confirm_feature_aliases(
+      "fa-9820", "f-9820", confirmed_by = "alice", date_start = as.Date("2025-01-01")
+    ),
+    error = function(e) e
+  )
+  expect_s3_class(err, "sampletidy_error")
+
+  after <- feature_alias_row(con, "fa-9820")
+  expect_true(is.na(after$date_start[[1]])) # nothing written
+  expect_true(is.na(after$uuid_feature[[1]])) # the whole call aborted, not just the bound
+})
+
+test_that("Phase-7b round-2 M4 coverage gap: re-confirming a row that IS ALREADY its own feature's self arm (no kind, no bound - a plain idempotent re-confirm) never deletes it", {
+  setup <- fa_setup()
+  con <- setup$con
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  # fa-9830 IS f-9830's self arm already. `arms` (the query at
+  # `.fa_confirm_one_alias()`'s identity check) finds ITSELF here. Under the
+  # M4 mutant (dropping `&& !identical(arms$uuid[[1]], uuid_alias)`),
+  # `self_arm` would be set to `uuid_alias` itself, and the F.19 post-pass
+  # would then repoint-onto-itself (a no-op) and DELETE the feature's own
+  # self arm.
+  DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix, lon, lat) VALUES
+    ('f-9830', 'Z.SELFRECONF01', 'Z', 'surface', 'water', 150.9830, -33.9830)")
+  DBI::dbExecute(con, "INSERT INTO feature_alias
+    (uuid, uuid_feature, name, alias_key, kind, n_seen, auto_assign,
+     first_seen, last_seen, confirmed_by) VALUES
+    ('fa-9830', 'f-9830', 'Z.SELFRECONF01', 'z.selfreconf01', 'self', 0, TRUE,
+     TIMESTAMP '2025-01-01 00:00:00', TIMESTAMP '2025-01-01 00:00:00', NULL)")
+
+  expect_no_error(
+    confirm_feature_aliases("fa-9830", "f-9830", confirmed_by = "alice")
+  )
+
+  after <- feature_alias_row(con, "fa-9830")
+  expect_equal(nrow(after), 1) # the self arm must survive - never deleted
+  expect_identical(after$confirmed_by[[1]], "alice")
+  expect_identical(after$kind[[1]], "self")
 })
 
 # ======================================================================
@@ -921,6 +1150,18 @@ fa_e8_setup <- function() {
       uuid VARCHAR PRIMARY KEY,
       uuid_feature_alias VARCHAR NOT NULL REFERENCES feature_alias(uuid),
       date TIMESTAMP, datetime TIMESTAMP, organisation VARCHAR)")
+    # Phase-7b round-2 item 7: an `analysis` table WITH a real FK on
+    # `uuid_sample` - unlike the earlier version of this fixture, which (like
+    # `fa_e8_dup_loser_setup()` below) declared no child table referencing
+    # `sample` at all, so `.fa_fk_dependents(con, "sample", ...)` returned
+    # `list()` and `.fa_repoint_samples()` degenerated to a plain
+    # `db_update()`. That is NOT the shape the live registry has - `analysis`
+    # really does reference `sample` - so the detach/reattach dance this
+    # merge is supposed to exercise had never actually run under this test.
+    DBI::dbExecute(con, "CREATE TABLE analysis (
+      uuid VARCHAR PRIMARY KEY,
+      uuid_sample VARCHAR REFERENCES \"sample\"(uuid),
+      value DOUBLE)")
 
     # Phase-5 audit round 2 B1: `.rc_load_registry()` (R/reconcile.R:25-34)
     # does an unconditional `SELECT * FROM` all SIX of feature/feature_alias/
@@ -978,6 +1219,15 @@ fa_e8_setup <- function() {
     DBI::dbExecute(con, "INSERT INTO \"sample\"
       (uuid, uuid_feature_alias, date, datetime, organisation) VALUES
       ('s-e8-01', 'fa-e8-dup', TIMESTAMP '2026-06-01 00:00:00', TIMESTAMP '2026-06-01 09:00:00', 'ALS')")
+    # Phase-7b round-2 item 7: two analyses hanging off s-e8-01 - the sample
+    # that is about to be re-pointed. `.fa_needs_fk_dance()` now sees a real
+    # dependent (an FK-declared `analysis` row referencing `sample.uuid`)
+    # and drives `.fa_guarded_update()` into its detach -> update -> reattach
+    # branch for THIS sample's own repoint, exercising the exact
+    # "thousands of separately committed analysis.uuid_sample NULL/restore
+    # pairs" path the live registry actually runs.
+    DBI::dbExecute(con, "INSERT INTO analysis (uuid, uuid_sample, value) VALUES
+      ('an-e8-01', 's-e8-01', 7.0), ('an-e8-02', 's-e8-01', 8.0)")
   }
 
   list(path = path, con = seed_con(path))
@@ -1038,6 +1288,14 @@ test_that("R-15.44 (E.8): merges a duplicate identity arm into its self arm, del
   expect_equal(after_n, before_n)
   repointed <- DBI::dbGetQuery(con, "SELECT uuid_feature_alias FROM \"sample\" WHERE uuid = 's-e8-01'")$uuid_feature_alias
   expect_identical(repointed, "fa-e8-self") # repoint landed on the survivor, not orphaned
+
+  # (d2) Phase-7b round-2 item 7: the FK-dependent `analysis` rows on the
+  # re-pointed sample - the shape that actually drove `.fa_guarded_update()`
+  # into its detach/reattach dance for THIS repoint - still point at the
+  # SAME sample afterwards, neither orphaned nor left detached.
+  after_analyses <- DBI::dbGetQuery(con, "SELECT uuid, uuid_sample FROM analysis ORDER BY uuid")
+  expect_equal(nrow(after_analyses), 2)
+  expect_true(all(after_analyses$uuid_sample == "s-e8-01"))
 
   # (e) B4: the non-identity pair (different features sharing a key)
   # SURVIVES untouched - never merged, never deleted, both rows intact with
@@ -1130,6 +1388,14 @@ fa_e8_dup_loser_setup <- function() {
       uuid VARCHAR PRIMARY KEY,
       uuid_feature_alias VARCHAR NOT NULL REFERENCES feature_alias(uuid),
       date TIMESTAMP, datetime TIMESTAMP, organisation VARCHAR)")
+    # Phase-7b round-2 item 7: same fix as fa_e8_setup() above - a real FK
+    # child table on `sample`, so the merge's repoint of s-dup-01 actually
+    # exercises `.fa_guarded_update()`'s detach/reattach dance rather than
+    # degenerating to a plain db_update().
+    DBI::dbExecute(con, "CREATE TABLE analysis (
+      uuid VARCHAR PRIMARY KEY,
+      uuid_sample VARCHAR REFERENCES \"sample\"(uuid),
+      value DOUBLE)")
     for (ddl in .st_mig003_empty_ddl) DBI::dbExecute(con, ddl)
 
     DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, lon, lat) VALUES
@@ -1151,6 +1417,8 @@ fa_e8_dup_loser_setup <- function() {
     DBI::dbExecute(con, "INSERT INTO \"sample\"
       (uuid, uuid_feature_alias, date, datetime, organisation) VALUES
       ('s-dup-01', 'fa-dup-loser', TIMESTAMP '2026-06-01 00:00:00', TIMESTAMP '2026-06-01 09:00:00', 'ALS')")
+    DBI::dbExecute(con, "INSERT INTO analysis (uuid, uuid_sample, value) VALUES
+      ('an-dup-01', 's-dup-01', 3.3)")
   }
 
   list(path = path, con = seed_con(path))
@@ -1185,6 +1453,12 @@ test_that("Phase-7b item 4: merge_identity_aliases() de-dups on uuid_loser befor
   # the sample was re-pointed onto whichever self arm actually won.
   sample_row <- DBI::dbGetQuery(con, "SELECT uuid_feature_alias FROM \"sample\" WHERE uuid = 's-dup-01'")
   expect_identical(sample_row$uuid_feature_alias[[1]], result$uuid_winner[[1]])
+
+  # Phase-7b round-2 item 7: the FK-dependent analysis on s-dup-01 - the
+  # shape that drives .fa_guarded_update()'s detach/reattach dance for this
+  # repoint - still points at the same sample afterwards.
+  analysis_row <- DBI::dbGetQuery(con, "SELECT uuid_sample FROM analysis WHERE uuid = 'an-dup-01'")
+  expect_identical(analysis_row$uuid_sample[[1]], "s-dup-01")
 })
 
 # ======================================================================

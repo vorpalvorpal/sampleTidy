@@ -787,6 +787,15 @@ test_that("R-16.19/R-16.20: both value_conflict producers (.rc subkind='measurem
   # R-16.20: uuid_incoming is ABSENT (not NA) for subkind='measurement' - at
   # conflict time the incoming value is not yet a row and has no uuid.
   expect_false("uuid_incoming" %in% names(rc_diag))
+  # ...and it is absent from the TYPED column too, which is a separate claim
+  # from the payload one above. Robin's round-2 ruling 2 added
+  # `review_queue.uuid_incoming` (schema ladder v7) so an operator can compare
+  # both rows of a value conflict; this producer genuinely has no incoming row
+  # to name, so NA here is correct and must stay NA. Asserting only the
+  # payload would let a future change populate the column for `measurement`
+  # with something invented and nothing would notice.
+  rc_uuid_incoming <- if ("uuid_incoming" %in% names(rc_hit)) rc_hit$uuid_incoming[[1]] else NA_character_
+  expect_true(is.na(rc_uuid_incoming))
   # forbidden legacy/mixed-vocabulary key names must not survive anywhere.
   expect_false(any(c("existing_value", "incoming_value", "value_new", "uuid_new") %in% names(rc_diag)))
 
@@ -802,6 +811,15 @@ test_that("R-16.19/R-16.20: both value_conflict producers (.rc subkind='measurem
   expect_identical(fa_subkind, "alias_merge")
   fa_uuid_existing <- if ("uuid_existing" %in% names(fa_hit)) fa_hit$uuid_existing[[1]] else NA_character_
   expect_identical(fa_uuid_existing, "an-w2")
+  # R-16.20 under Robin's round-2 ruling 2: THIS producer must name both
+  # sides. `an-l2` is the loser's analysis - re-pointed onto the winner
+  # sample by `.fa_merge_samples()`, never deleted - so unlike the
+  # `measurement` producer above there IS an incoming uuid to record, and the
+  # plan (PLAN-11 R-11.10) requires it. This is the assertion that
+  # discriminates the ruling: before it, the column was written but nothing
+  # read it, and a producer that silently stopped populating it stayed green.
+  fa_uuid_incoming <- if ("uuid_incoming" %in% names(fa_hit)) fa_hit$uuid_incoming[[1]] else NA_character_
+  expect_identical(fa_uuid_incoming, "an-l2")
 
   fa_diag <- tryCatch(jsonlite::fromJSON(fa_hit$payload[[1]]), error = function(e) list())
   expect_false(any(c("existing_value", "incoming_value", "value_new", "uuid_new") %in% names(fa_diag)))

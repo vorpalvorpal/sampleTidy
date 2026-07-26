@@ -242,3 +242,231 @@ test_that("004-view-repair: runs to completion (does not raw-error) when one of 
   view_n <- DBI::dbGetQuery(con2, "SELECT COUNT(*) n FROM v_measurement_epa")$n
   expect_true(view_n >= 0)
 })
+
+# =============================================================================
+# Phase 7b round 2, item 1 [RANK 2, orchestrator-verified]: mig004_verify()
+# alone compares only the 6 base tables 004 never writes - blind to whether
+# .mig004_rebuild_views() did anything. Reproduced: with the rebuild step
+# replaced by a no-op, mig004_run() used to return status = "migrated" and
+# commit the 1004 marker with the views left unrepaired, permanently (every
+# later run then returns "already_migrated"). The fix is a second gate,
+# .mig004_verify_views(), that must now throw instead.
+# =============================================================================
+
+test_that("004-view-repair: mig004_run() throws (and commits no 1004 marker) when .mig004_rebuild_views() is a no-op - the verify gate must catch an unrepaired view, not just an untouched base table", {
+  mig1 <- .mig001_load()
+  mig4 <- .mig004_load()
+
+  path <- seed_pre_migration_db()
+  con0 <- pre_migration_con(path)
+  .seed_004_epa_case_fixture(con0)
+  DBI::dbDisconnect(con0, shutdown = TRUE)
+
+  mig1$mig001_run(db = path, snapshot_dir = withr::local_tempdir(), dry_run = FALSE)
+
+  # Reproduce the audit's exact mutation: .mig004_rebuild_views() becomes a
+  # no-op inside the loaded environment - mig004_run()'s own lexical scope
+  # is `mig4`, so this reassignment is picked up by the unqualified call
+  # inside it.
+  mig4$.mig004_rebuild_views <- function(con) invisible(NULL)
+
+  snap_dir <- withr::local_tempdir()
+  err <- tryCatch(
+    mig4$mig004_run(db = path, snapshot_dir = snap_dir, dry_run = FALSE),
+    error = function(e) e
+  )
+  expect_s3_class(err, "sampletidy_error")
+
+  con <- pre_migration_con(path)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+  marker_n <- DBI::dbGetQuery(con, "SELECT count(*) n FROM schema_version WHERE version = 1004")$n
+  expect_equal(marker_n, 0)
+  # The pre-existing (001-only, unrepaired) view is still there, still
+  # broken - the transaction rolled back, it did not half-apply.
+  epa_n <- DBI::dbGetQuery(con, "SELECT COUNT(*) n FROM v_measurement_epa")$n
+  expect_equal(epa_n, 0L)
+})
+
+# =============================================================================
+# Phase 7b round 2, item 2: no schema_version-exists guard - mirrors 003's.
+# =============================================================================
+
+test_that("004-view-repair aborts with a classed sampletidy_error (not a raw catalog error) on a database with no schema_version table", {
+  mig4 <- .mig004_load()
+  dir <- withr::local_tempdir()
+  path <- file.path(dir, "no-schema-version.duckdb")
+  con <- DBI::dbConnect(duckdb::duckdb(), path, read_only = FALSE)
+  DBI::dbExecute(con, "CREATE TABLE placeholder (x INTEGER)")
+  DBI::dbDisconnect(con, shutdown = TRUE)
+
+  snap_dir <- withr::local_tempdir()
+  err <- tryCatch(
+    mig4$mig004_run(db = path, snapshot_dir = snap_dir, dry_run = FALSE),
+    error = function(e) e
+  )
+  expect_s3_class(err, "sampletidy_error")
+})
+
+# =============================================================================
+# Phase 7b round 2, item 3: 004 does not assert its documented 001
+# dependency - reproduced: the backup is taken and written BEFORE the
+# failure, on a pre-001 DB. The precondition check must happen before Step
+# 1's backup, so a stray backup is never left behind.
+# =============================================================================
+
+test_that("004-view-repair aborts with a classed sampletidy_error and writes NO backup when 001 has not yet run against this database", {
+  mig4 <- .mig004_load()
+  path <- seed_pre_migration_db()
+
+  snap_dir <- withr::local_tempdir()
+  err <- tryCatch(
+    mig4$mig004_run(db = path, snapshot_dir = snap_dir, dry_run = FALSE),
+    error = function(e) e
+  )
+  expect_s3_class(err, "sampletidy_error")
+  expect_match(conditionMessage(err), "001", fixed = TRUE)
+  # No stray backup file - the precondition check runs before Step 1.
+  expect_equal(length(list.files(snap_dir)), 0L)
+})
+
+# =============================================================================
+# Phase 7b round 2, item 5 (F.12(b)): no test asserted a single restored
+# column on v_measurement, _old, _long or _gas_report. Phase-7a M2 (delete
+# the `an.name AS analyte_name,` projection line from v_measurement)
+# SURVIVED the full suite as a result.
+# =============================================================================
+
+test_that("F.12(b): v_measurement's restored column set includes analyte_name, analyte_units, feature_flow, lon, lat, rl_low, rl_high (Phase-7a M2 killer)", {
+  mig1 <- .mig001_load()
+  mig4 <- .mig004_load()
+  path <- .run_001_then_004(mig1, mig4)
+
+  con <- pre_migration_con(path)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  fields <- DBI::dbListFields(con, "v_measurement")
+  expected <- c(
+    "uuid_analysis", "uuid_sample", "uuid_feature", "feature_name", "value",
+    "date", "datetime", "analyte_name", "analyte_units", "site",
+    "feature_flow", "lon", "lat", "rl_low", "rl_high"
+  )
+  expect_setequal(fields, expected)
+
+  # Non-vacuous: a concrete value, not merely "the column exists".
+  row <- DBI::dbGetQuery(con, "SELECT * FROM v_measurement WHERE uuid_sample = 's-902'")
+  expect_equal(nrow(row), 1L)
+  expect_equal(row$analyte_name, "Analyte X")
+  expect_equal(row$analyte_units, "mg/L")
+})
+
+# =============================================================================
+# Phase 7b round 2, items 5 + 6: the four mask views (_epa/_old/_gas_report/
+# _long) must all carry their restored projection AND `fm.name AS
+# mask_name` (item 6 - the join to feature_mask was already present purely
+# as a filter; projecting the one column that is the mask table's whole
+# reason to exist).
+# =============================================================================
+
+test_that("F.12(b)/item 6: the four mask views (_epa/_old/_gas_report/_long) all carry their restored column set including fm.name AS mask_name", {
+  mig1 <- .mig001_load()
+  mig4 <- .mig004_load()
+  path <- .run_001_then_004(mig1, mig4)
+
+  con <- pre_migration_con(path)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  expected <- c(
+    "uuid_analysis", "uuid_sample", "uuid_feature", "feature_name", "value",
+    "date", "datetime", "site", "feature_flow", "lon", "lat", "mask_name"
+  )
+  for (v in c("v_measurement_epa", "v_measurement_old", "v_measurement_gas_report", "v_measurement_long")) {
+    fields <- DBI::dbListFields(con, v)
+    expect_setequal(fields, expected)
+  }
+
+  # Non-vacuous mask_name value, for the one view with a planted fixture row.
+  row <- DBI::dbGetQuery(con, "SELECT mask_name FROM v_measurement_epa WHERE uuid_sample = 's-epa-201'")
+  expect_equal(row$mask_name, "EPA-PM-CASE")
+})
+
+# =============================================================================
+# Phase 7b round 2, item 5 (Phase-7a M1 killer): the base fixture's own
+# 'old'/'gas_report'/'long' feature_mask rows (seed_pre_migration_db(),
+# f-101/f-102/f-103) give each of the other 3 mask views a real,
+# independently-computable non-zero row, mirroring R-15.35's own oracle
+# shape for v_measurement_epa. Phase-7a M1 (v_measurement_old = "OLD" ->
+# "old") makes UPPER(fm.variant) = 'old' compare against an always-uppercase
+# expression, matching NOTHING - so this is also the M1 killer.
+# =============================================================================
+
+test_that("F.12(a)/M1 killer: v_measurement_old returns a nonzero row count equal to an independently computed base-table oracle for its case-insensitive filter", {
+  mig1 <- .mig001_load()
+  mig4 <- .mig004_load()
+  path <- .run_001_then_004(mig1, mig4)
+
+  con <- pre_migration_con(path)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  view_n <- DBI::dbGetQuery(con, "SELECT COUNT(*) n FROM v_measurement_old")$n
+  base_n <- DBI::dbGetQuery(con, "
+    SELECT COUNT(*) n
+    FROM analysis a
+    JOIN \"sample\" s ON a.uuid_sample = s.uuid
+    JOIN feature_alias fa ON fa.uuid = s.uuid_feature_alias
+    JOIN feature f ON fa.uuid_feature = f.uuid
+    JOIN feature_mask fm ON fm.uuid_feature = f.uuid AND UPPER(fm.variant) = 'OLD'
+  ")$n
+
+  expect_true(view_n > 0)
+  expect_identical(view_n, base_n)
+  expect_equal(view_n, 1L)
+})
+
+# =============================================================================
+# Phase 7b round 2, item 9: idempotence and dry-run, for real.
+# =============================================================================
+
+test_that("004-view-repair: running mig004_run() a second time returns already_migrated, with v_measurement_epa still returning its repaired row", {
+  mig1 <- .mig001_load()
+  mig4 <- .mig004_load()
+  path <- .run_001_then_004(mig1, mig4)
+
+  con <- pre_migration_con(path)
+  epa_n_first <- DBI::dbGetQuery(con, "SELECT COUNT(*) n FROM v_measurement_epa")$n
+  DBI::dbDisconnect(con, shutdown = TRUE)
+  expect_equal(epa_n_first, 1L)
+
+  snap_dir <- withr::local_tempdir()
+  result2 <- mig4$mig004_run(db = path, snapshot_dir = snap_dir, dry_run = FALSE)
+  expect_equal(result2$status, "already_migrated")
+  expect_true(is.na(result2$backup_path))
+
+  con2 <- pre_migration_con(path)
+  withr::defer(DBI::dbDisconnect(con2, shutdown = TRUE))
+  epa_n_second <- DBI::dbGetQuery(con2, "SELECT COUNT(*) n FROM v_measurement_epa")$n
+  expect_equal(epa_n_second, 1L)
+})
+
+test_that("004-view-repair: dry_run = TRUE writes nothing (no backup, no marker, views left unrepaired)", {
+  mig1 <- .mig001_load()
+  mig4 <- .mig004_load()
+
+  path <- seed_pre_migration_db()
+  con0 <- pre_migration_con(path)
+  .seed_004_epa_case_fixture(con0)
+  DBI::dbDisconnect(con0, shutdown = TRUE)
+  mig1$mig001_run(db = path, snapshot_dir = withr::local_tempdir(), dry_run = FALSE)
+
+  snap_dir <- withr::local_tempdir()
+  result <- mig4$mig004_run(db = path, snapshot_dir = snap_dir, dry_run = TRUE)
+  expect_equal(result$status, "dry_run")
+  expect_equal(length(list.files(snap_dir)), 0L)
+
+  con <- pre_migration_con(path)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+  marker_n <- DBI::dbGetQuery(con, "SELECT count(*) n FROM schema_version WHERE version = 1004")$n
+  expect_equal(marker_n, 0)
+  # Views left unrepaired - the EPA case-mismatch defect is still present.
+  epa_n <- DBI::dbGetQuery(con, "SELECT COUNT(*) n FROM v_measurement_epa")$n
+  expect_equal(epa_n, 0L)
+})

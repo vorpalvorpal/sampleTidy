@@ -1030,3 +1030,81 @@ advice about it:**
    itself: the baseline is measured over files whose work orders are NOT yet present. A
    baseline taken by replaying loaded work orders measures the F.10 guard, not the
    resolver.
+
+## [orchestrator] R-15.31 / F.10 / F.17 — work-order identity: filename vs file content, settled by the real corpus (Robin, 2026-07-26)
+
+Round-2 compliance audit surfaced work-order derivation as a defect at three
+independent sites, and the plans do not say which source is authoritative. Robin
+directed an investigation of the actual files. Full numbers and method:
+`dev/tdd-run/acirl-vs-als-work-order-evidence.md`.
+
+**Measured, on the live corpus (read-only; filenames as metadata, only ACIRL
+workbooks/PDFs and ALS crosstabs opened):**
+
+| corpus | files | filename == content | disagree |
+|---|---|---|---|
+| ALS crosstabs (`ES#######_<rev>_XTAB.csv`) | 232 | **232 (100.0%)** | **0** |
+| ACIRL workbooks (`2400*.xls/.xlsx`) | 212 with a `REPORT NO` | 190 (89.6%) | **22 (10.4%)** |
+| ACIRL PDFs (`2400*.pdf`) | 51 of 228 yield a `REPORT NO` at all | 41 (80.4%) | 10 (19.6%) |
+
+**This overturned the premise of the first ruling of the round.** That ruling said
+"populate at ingest from content/router state, never from the filename for `2400-*`",
+on the assumption that content is the trustworthy source. For ACIRL it is not, and it
+fails in a *more dangerous* way: a mangled filename fails to parse, whereas a
+well-formed but wrong `REPORT NO` silently merges two real jobs. Three ACIRL workbooks
+name a different job outright (`2400-7127-01-02` → `2400-7222-01-02`;
+`2400-7127-03-02` → `2400-7222-03-02`; `2400-7223-09-1` → `24007226-09-01`), one has a
+digit typo (`24006889` for `24006989`), and 19 drift by month/sequence with the correct
+source *alternating* between filename and content.
+
+**The approved policy:**
+1. **`ES#######`** — populate `ingest_file.work_order`/`.revision` from the filename and
+   ASSERT the content `Workgroup` matches. 232/232 exact, so a mismatch is a genuine
+   anomaly and should block rather than warn.
+2. **`2400-*`** — derive no merge/grouping key from *either* source. Key the F.10
+   re-ingest guard on the **content hash**, which is exact and needs no dialect rules.
+3. Store the filename token and the content `REPORT NO` as two labelled, provenanced
+   attributes. Never silently choose one.
+4. **Review-queue every disagreement** (~32 one-off items). Chosen over prefer-filename
+   and prefer-content because the corpus shows the correct source alternating, so any
+   fixed preference is wrong about half the time.
+5. `.ig_retain_siblings()` (`R/ingest.R:311`) must stop using
+   `file_meta(path)$work_order_guess` + an exact `project.name` match. For ACIRL that
+   silently `next`s the file — neither retained nor reported — or attaches it to the
+   wrong job. Route by hash.
+
+**New corpus fact:** `2400-7128` and `24007128` are the same Katoomba job written two
+ways — a false split not previously identified. Substring matching also makes
+`2400-7538-02` match inside `2400-7538-02-01`, a false merge. Do not triage the ACIRL
+corpus by filename and report the count as fact.
+
+Scheduled as its own remediation wave; it is new behaviour, not a one-line fix, and it
+touches the router, ingest, commit and reconcile together.
+
+## [orchestrator] R-11.10 — `value_conflict` names BOTH analysis uuids: a ladder column, not a `dev/migrations` script
+
+Robin ruled (2026-07-26) that PLAN-11 R-11.10 wins over the shipped code: the alias
+merge's `value_conflict` review item must name both analysis uuids, via a typed
+`uuid_incoming` column alongside `uuid_existing`, consistent with PLAN-16's direction of
+moving uuids out of the payload into typed columns.
+
+**Correcting my own adjudication note, which said this "needs migration 005".** It does
+not. `uuid_target` (schema version 5) and PLAN-16's `subkind`/`uuid_existing`/
+`uuid_alias` (version 6) both landed as `.st_schema_migrations` ladder entries in
+`R/db-schema.R`; `dev/migrations/00N-*.R` are one-off *data* repairs against the live
+registry, a different mechanism with its own marker namespace (1001–1004). `uuid_incoming`
+is a schema addition and belongs in the ladder, as **version 7**
+(`ALTER TABLE review_queue ADD COLUMN IF NOT EXISTS uuid_incoming VARCHAR`).
+
+A new version 7 rather than an in-place amendment of version 6: version 6's own comment
+permits amendment only while it has never been applied to a real database, and
+establishing that would mean interrogating the live DB for no benefit — a new entry costs
+nothing and is correct either way.
+
+Note also that the shipped test at `tests/testthat/test-feature-alias.R:315-322` pins the
+incoming uuid's ABSENCE, and its stated justification ("an-l2 has no uuid to name") is
+factually false: the analysis is re-pointed onto the winner, not deleted, and the same
+test queries it by that uuid two lines earlier. The cited authority (PLAN-16 R-16.20)
+rules only on `subkind='measurement'`, where the incoming side genuinely has no uuid; for
+`subkind='alias_merge'` it is a real row. `R/reconcile.R:1804`'s `measurement` producer
+correctly leaves it NA.
