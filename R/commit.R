@@ -1007,6 +1007,17 @@
   cand$uuid[[1]]
 }
 
+# The identity key here is feature + date/datetime. Matrix is deliberately NOT
+# part of it, and that is a known limitation rather than an oversight: a
+# two-section (WATER+SOIL) crosstab measuring one analyte at one feature, date
+# and method yields two rows differing only by section matrix, and both land on
+# THIS sample - as two analyses that A45's analysis key (method + analyte +
+# sample) cannot tell apart either. The model cannot currently represent "same
+# feature and date, two matrices" as two samples. It is rare enough to leave
+# alone (multi-section crosstabs are legacy; current exports are single-matrix),
+# but if it does recur do NOT silently pick one matrix over the other - see the
+# known-limitation note in dev/HANDOVER.md, and revisit matrix-in-the-key
+# whenever the datetime convention is next reworked.
 .ct_find_or_create_sample <- function(con, pending, match_feature, alias_uuid,
                                        sample_date, sample_datetime,
                                        uuid_project, organisation, person, reason) {
