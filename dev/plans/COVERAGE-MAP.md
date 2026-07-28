@@ -170,6 +170,18 @@ section.
 - smoke test, two dummy adapters × two paths → `tests/testthat/test-router.R`
   "R-3.6: router_matrix() returns (path, adapter, tier) for every adapter x path, with no state changes"
 
+### R-3.7 `reconsider` (registry verdicts are re-decidable) - added 2026-07-28
+Every arm below pairs the `reconsider = TRUE` assertion with a
+`reconsider = FALSE` control on the same setup, so a green result cannot come
+from the file being claimed for some unrelated reason.
+- unclaimed → claimed once an adapter exists; control leaves it unclaimed → `tests/testthat/test-router.R`
+  "R-3.7: an unclaimed file is re-decided under reconsider = TRUE once an adapter claims it, and is NOT re-decided under reconsider = FALSE"
+- router-`failed` → claimed once `match()` stops throwing; control leaves it failed → "R-3.7: a router-failed file whose match() no longer throws is re-decided under reconsider = TRUE"
+- adapter_tie re-decided; a still-tied re-pass opens NO second review item → "R-3.7: an adapter_tie file is re-decided under reconsider = TRUE, and a still-tied re-pass opens no SECOND review_queue item"
+- `ignored`/`archived` never reconsidered, even with a greedy adapter registered → "R-3.7: `ignored` and `archived` are NEVER reconsidered - they are facts about the file, not about the registry"
+- `reconsider` + `dry_run` writes nothing, and does not strand the row at `seen` → "R-3.7: reconsider = TRUE under dry_run = TRUE writes nothing - the stored verdict is unchanged"
+- still-unclaimed after reconsideration ends terminal, never `seen` → "R-3.7: a file still unclaimed after reconsideration ends terminal (quarantined/unclaimed), never stranded at `seen`"
+
 
 # Adapters (plans 04-06)
 
@@ -377,6 +389,47 @@ ambiguity notes referenced below.
 - TRUE + injected snapshot failure: nothing removed (mocked `snapshot_db()`) → "R-9.6: remove_ingested = TRUE with an injected snapshot failure removes nothing"
 - TRUE + missing archive copy: source kept → "R-9.6: a source with a missing archive copy is kept, never deleted without a verified copy"
 - subsequent run over emptied dir: no-op → "R-9.6: a subsequent run over the emptied directory is a clean no-op"
+
+### R-9.7 `ingest_inbox()` (`tests/testthat/test-ingest.R`) - added 2026-07-28
+- two folders, two batches, no cross-contamination of either report → "R-9.7: two email folders each ingest as their own batch, and neither folder's files appear in the other's report"
+- one folder throws, the others still commit (asserts the good folder LANDED, not merely that nothing propagated) → "R-9.7: a folder whose ingest throws is reported as failed and the OTHER folders still commit"
+- loose root-level files neither routed nor deleted → "R-9.7: loose files sitting directly in the root are neither routed nor deleted"
+- dry_run propagates to every folder, zero writes → "R-9.7: dry_run propagates to every folder - zero DB writes across all of them"
+- empty root → empty roll-up, no error → "R-9.7: an empty root returns an empty roll-up without error"
+
+### R-9.8 folder-sibling work-order inference (`tests/testthat/test-ingest.R`) - added 2026-07-28
+- token-less deliverable in a single-WO folder is attached to that WO → "R-9.8: a deliverable with NO work-order token, in a folder belonging to exactly one work order, is retained and attached to it"
+- same file in a TWO-WO folder is not attached, stays quarantined, warns → "R-9.8: the same token-less deliverable in a folder resolving to TWO work orders is NOT attached, stays quarantined, and warns"
+- ACIRL-shaped name never inferred onto a folder-mate's WO (the false-merge guard) → "R-9.8: an ACIRL-shaped deliverable is NEVER inferred onto a folder-mate's work order, even when the folder resolves to exactly one"
+- a filename that DOES carry a WO always wins over the folder → "R-9.8: inference never overrides a filename that DOES carry a work order"
+- the pre-existing residual-silence test is unchanged and still green → "Phase-7b round-2 item 7: a non-tabular sibling whose work order cannot be filename-guessed (the ACIRL 2400-* shape) still stays quarantined AND is named in a cli_warn - the residual exposure is not silent"
+
+### R-9.9 empty-folder cleanup (`tests/testthat/test-ingest.R`) - added 2026-07-28
+- emptied folder deleted, and a `.DS_Store` does not keep it alive → "R-9.9: a folder emptied by a clean run is deleted, and a .DS_Store does not keep it alive"
+- folder holding a kept-back (quarantined) file survives → "R-9.9: a folder still holding a quarantined file survives"
+- nothing deleted when `remove_ingested` is FALSE → "R-9.9: nothing is deleted when remove_ingested is FALSE"
+
+### R-9.10 retention alone earns a snapshot (`tests/testthat/test-ingest.R`) - added 2026-07-28
+- retain-only run snapshots and removes its source (asserted inside the R-15.36a cross-run test, which is the only place a retain-only run occurs naturally) → "R-15.36a: a COA arriving in a LATER run, in its own directory, attaches to the work order committed by an earlier run"
+- a run that neither commits nor retains produces NO snapshot and removes nothing → "R-9.10: a run that neither commits nor retains produces NO snapshot and removes nothing"
+
+### R-9.11 `quarantine_report()` (`tests/testthat/test-ingest.R`) - added 2026-07-28
+- exactly the non-archived terminal rows, derived work_order_guess, no writes → "R-9.11: quarantine_report() returns exactly the non-archived terminal rows, with a derived work_order_guess and no writes"
+- clean DB → zero-ROW tibble with every column, not NULL → "R-9.11: quarantine_report() on a clean DB returns a zero-ROW tibble with the full column set, not NULL"
+- works when the quarantined files are gone from disk → "R-9.11: quarantine_report() works when the quarantined files no longer exist on disk"
+
+### R-15.36a / R-15.36b retention rulings (`tests/testthat/test-ingest.R`) - added 2026-07-28
+- cross-run COA attaches to the earlier run's WO, adds no project row → "R-15.36a: a COA arriving in a LATER run, in its own directory, attaches to the work order committed by an earlier run"
+- unknown WO creates no project row and stays quarantined (asserts the project COUNT, not just the asset's absence) → "R-15.36a: a COA for a work order that has NEVER committed creates no project row and stays quarantined"
+- all five deliverable kinds land their ruled `asset.type`, asserted per token → "R-15.36b: each retained deliverable kind lands its ruled asset.type (COA/QC/QCI/COC/XTAB asserted per-token)"
+
+### Test-suite hygiene lint (`tests/testthat/test-mock-scope-lint.R`) - added 2026-07-28
+Not a criterion of any plan - a guard on the SUITE. A bare `on.exit()`
+(`add = FALSE` by default) discards `local_mocked_bindings()`'s own restore
+handler, leaking the mock into every later test in the file. Found the
+expensive way; seven instances existed across five files, all silent.
+- no test_that block mixes the two → "no test_that() block mixes local_mocked_bindings() with a bare on.exit() - the mock's own cleanup would be discarded"
+- calibration control: the detector fires on a known-bad snippet and not on the `add = TRUE` form → "the lint's own detector fires on a known-bad snippet (calibration control)"
 
 ## Plan 10 - e2e / router matrix / corpus gates
 

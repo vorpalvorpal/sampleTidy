@@ -308,11 +308,21 @@
 #' `work_order_guess` - NEVER inferred from a bare `2400-*` filename, which
 #' cannot be parsed reliably; only `ES#######`-shaped tokens are used, per
 #' `file_meta()`). A file whose work order cannot be guessed, or whose work
-#' order has no `project` row (i.e. no event for that work order committed
-#' in THIS run), is left alone - retaining a file with nothing to hang it
-#' off would satisfy "the bytes are kept" while failing "the file is
-#' discoverably attached to its work order" (B-15.F17's second, easy-to-miss
-#' obligation).
+#' order has no `project` row, is left alone - retaining a file with nothing
+#' to hang it off would satisfy "the bytes are kept" while failing "the file
+#' is discoverably attached to its work order" (B-15.F17's second,
+#' easy-to-miss obligation).
+#'
+#' The `project` lookup is **not** run-scoped, and this comment used to say it
+#' was ("no event for that work order committed in THIS run"), which was never
+#' what the SQL did. `project` is a persistent table (559 rows in the live DB),
+#' so a COA arriving in its own email a day after the data attaches to the work
+#' order the earlier run committed - Robin ruled on 2026-07-28 that it must
+#' (R-15.36a, PLAN-09 R-9.10). Equally binding is the other half of that
+#' ruling: this stays **find-only** and must never become
+#' `.ct_ensure_project()`'s find-or-create. A work order we have never seen
+#' data for is a guess, and attaching evidence to a guess is worse than the
+#' warning we emit instead.
 #'
 #' Otherwise the file is archived via [archive_file()] (reused as-is: it
 #' already resolves the event's project from `event$work_order`, dedupes on
@@ -345,12 +355,125 @@
   grepl("(?i)_coa(\\[[0-9]+\\])?\\.[a-z0-9]+$", filename, perl = TRUE)
 }
 
+# R-15.36b (Robin, 2026-07-28): the separate ruling the note above asks for.
+#
+# Mapped onto the vocabulary the live `asset` table ALREADY uses - 938
+# "Chemical analysis", 272 "QA", 222 "QC" - rather than onto new strings,
+# because the point of `type` is that Robin's existing queries keep working.
+# Order matters: the first matching token wins, and `_QCI` must be tested
+# before `_QC` would otherwise swallow it. ("Certificate of analysis" is the
+# one value not already in the live vocabulary; it was ruled separately on
+# 2026-07-23 and is left as it stands.)
+#
+# ONE table, not four scattered branches, so re-ruling any row is a one-line
+# edit rather than a hunt.
+.ST_RETAINED_ASSET_TYPES <- list(
+  list(pattern = "(?i)_coa(\\[[0-9]+\\])?\\.[a-z0-9]+$", type = "Certificate of analysis"),
+  list(pattern = "(?i)_qci(\\[[0-9]+\\])?\\.[a-z0-9]+$", type = "QC"),
+  list(pattern = "(?i)_qc(\\[[0-9]+\\])?\\.[a-z0-9]+$",  type = "QC"),
+  # A chain of custody is a QA record - who took the sample, when, and who
+  # handled it - not a result.
+  list(pattern = "(?i)_coc(\\[[0-9]+\\])?\\.[a-z0-9]+$", type = "QA"),
+  # XTAB.XLS genuinely IS results: an ALS crosstab rendering of the same
+  # chemistry its `.csv` twin carries, which we merely cannot read yet
+  # (SpreadsheetML, parked post-MVP - R/adapter-crosstab.R).
+  list(pattern = "(?i)_xtab(\\[[0-9]+\\])?\\.[a-z0-9]+$", type = "Chemical analysis")
+)
+
+#' `asset.type` for one retained non-tabular deliverable (R-15.36b)
+#'
+#' Falls back to `"Chemical analysis"` for anything the table does not name,
+#' preserving the pre-ruling default for a kind nobody has ruled on. That
+#' fallback is unreachable from `.ig_retain_siblings()` today, whose selection
+#' gate admits only the five tokens above - but the gate and this table are
+#' separate lists, and a widened gate must not silently start typing a new
+#' kind by accident.
+#' @keywords internal
+#' @noRd
+.ig_retained_asset_type <- function(filename) {
+  for (entry in .ST_RETAINED_ASSET_TYPES) {
+    if (grepl(entry$pattern, filename, perl = TRUE)) {
+      return(entry$type)
+    }
+  }
+  "Chemical analysis"
+}
+
+# R-9.8: does this filename carry an ACIRL-shaped work-order token?
+#
+# `2400-7538-02` and friends CANNOT be parsed from a filename (false merges
+# AND false splits - see the ACIRL work-order trap in R/commit.R), and that
+# refusal stays. But a file carrying one is not merely "unidentifiable": it
+# POSITIVELY DECLARES a work order of its own, one we decline to name. That is
+# a reason to leave it alone, not a licence to adopt it onto a folder-mate's
+# work order - doing so would file ACIRL chemistry under an ALS work order,
+# which is precisely the false merge the refusal exists to prevent.
+#
+# Deliberately loose (`\d{4}-\d{4}` anywhere in the name): this gate decides
+# whether to STAY OUT of a file's business, so over-matching costs one warning
+# and a file left safely quarantined, while under-matching costs a wrong
+# attachment in the database. Those are not symmetric.
+.ig_is_acirl_shaped <- function(filename) {
+  grepl("[0-9]{4}-[0-9]{4}", filename)
+}
+
+#' The work order a folder unambiguously belongs to, or `NA` (R-9.8)
+#'
+#' PowerAutomate drops one lab email's attachments into their own folder, so
+#' folder membership is an association that needs no filename parsing: if the
+#' *other* files here resolved to a work order, a token-less deliverable
+#' belongs to it.
+#'
+#' Returns a work order only when the folder resolves to **exactly one** that
+#' also has a `project` row. The exactly-one guard is load-bearing, not
+#' defensive padding: the real `batch-2026-07-23` folder held **eight** work
+#' orders, and any first-wins or majority-wins rule would have attached each
+#' COA to an arbitrary one of them.
+#'
+#' Never creates a project row - candidates are filtered to work orders that
+#' already have one, so an inferred target is by construction a work order we
+#' have really seen data for (R-15.36a's ruling, applied here too).
+#' @keywords internal
+#' @noRd
+.ig_folder_work_order <- function(con, routed, path) {
+  folder <- dirname(path)
+  same_folder <- which(!is.na(routed$path) & dirname(routed$path) == folder)
+  if (length(same_folder) == 0) {
+    return(NA_character_)
+  }
+
+  # Parse from the stored FILENAME, via the same helper file_meta() uses -
+  # never a relaxed regex, so ACIRL work orders stay unparsed here exactly as
+  # they are everywhere else.
+  guesses <- vapply(
+    routed$filename[same_folder],
+    function(fn) .st_guess_work_order_revision(fn)$work_order_guess,
+    character(1), USE.NAMES = FALSE
+  )
+  candidates <- unique(guesses[!is.na(guesses)])
+  if (length(candidates) == 0) {
+    return(NA_character_)
+  }
+
+  known <- candidates[vapply(candidates, function(wo) {
+    nrow(DBI::dbGetQuery(
+      con, "SELECT 1 FROM project WHERE name = ? LIMIT 1", params = list(wo)
+    )) > 0
+  }, logical(1))]
+
+  if (length(known) == 1) known[[1]] else NA_character_
+}
+
 #' @param con an open read-write DBI connection (already past
 #'   `.ig_reconcile_and_commit()`, so any committed event's `project` row
 #'   exists).
 #' @param routed the tibble returned by [route_files()].
-#' @return character vector of retained hashes (invisibly informative only;
-#'   callers do not currently use the return value).
+#' @return character vector of retained hashes. `ingest_dir()` uses this to
+#'   decide whether the run did anything worth snapshotting (R-9.10): a
+#'   retain-only run is a run that wrote `asset` rows, so it earns a snapshot
+#'   on the same reasoning a commit does - and without one,
+#'   `.ig_remove_verified()` never runs and the source sits in the input
+#'   directory forever.
 #' @keywords internal
 #' @noRd
 .ig_retain_siblings <- function(con, routed) {
@@ -403,6 +526,16 @@
       {
         fm <- file_meta(path)
         work_order <- fm$work_order_guess
+
+        # R-9.8: the filename is the primary source and always wins. Folder
+        # inference is a FALLBACK for a name that carries no work order at
+        # all - it must never override a name that does, or one work order's
+        # certificate gets filed under another whenever a folder happens to
+        # look tidier than the filename.
+        if (is.na(work_order) && !.ig_is_acirl_shaped(fm$filename)) {
+          work_order <- .ig_folder_work_order(con, routed, path)
+        }
+
         if (is.na(work_order)) {
           # Round-2 item 7: refusing to filename-parse a `2400-*` ACIRL work
           # order is CORRECT (see the ACIRL work-order trap, R/commit.R) and
@@ -412,11 +545,23 @@
           # realised-loss shape PLAN-CHANGE-REQUESTS records for 13 files),
           # with no report field naming them - `retained` is returned then
           # discarded by the caller. Name it loudly instead.
+          #
+          # R-9.8 does NOT close this gap for ACIRL, and it is worth being
+          # exact about why rather than leaving a reader to assume it did: an
+          # ACIRL email's folder contains ACIRL files only, so it resolves to
+          # zero ES#######-shaped work orders and there is nothing to infer
+          # from; and the workbook's own event is an ORPHAN (PLAN-07 R-7.1),
+          # whose project row is the shared anonymous one - attaching a COA to
+          # that keeps the bytes while failing F.17's "discoverably attached to
+          # its work order". ACIRL retention stays blocked on the ACIRL
+          # work-order plan. What R-9.8 does fix is the token-less name (a
+          # renamed attachment) in an unambiguous folder.
           cli::cli_warn(
             "ingest_dir(): {.path {path}} looks like a non-tabular lab
              deliverable but its work order could not be recovered from its
-             filename (no {.val ES#######}-shaped token) - F.17 retention is
-             skipped for it; it stays quarantined and unarchived."
+             filename (no {.val ES#######}-shaped token) nor inferred from its
+             folder - F.17 retention is skipped for it; it stays quarantined
+             and unarchived."
           )
           NA_character_
         } else {
@@ -427,18 +572,13 @@
           if (nrow(project_row) == 0) {
             NA_character_
           } else {
-            # Round-2 item 6: an appropriate asset.type, not the blanket
-            # "Chemical analysis" every other archived file gets - a
-            # retained sibling is evidence, not chemistry data (PLAN-15
-            # F.17). Only a positively-identified COA gets the ruled type;
-            # every other retained kind (COC/QC/QCI/XTAB.XLS/unknown) keeps
-            # the existing default pending a separate ruling - NOT widened
-            # here.
-            sibling_type <- if (.ig_is_coa_deliverable(basename(path))) {
-              "Certificate of analysis"
-            } else {
-              "Chemical analysis"
-            }
+            # Round-2 item 6 asked for an appropriate asset.type rather than
+            # the blanket "Chemical analysis" every other archived file gets -
+            # a retained sibling is evidence, not chemistry data (PLAN-15
+            # F.17) - and typed only the COA, parking the rest pending a
+            # ruling. Robin ruled the remaining kinds on 2026-07-28
+            # (R-15.36b), so all five now route through one pinned lookup.
+            sibling_type <- .ig_retained_asset_type(basename(path))
             # commit-3 (round-3): `archive_file()` (writes the `asset` row)
             # and `ingest_file_set_state()` (the terminal transition) used to
             # run as two independent DB writes with no `db_transaction()`
@@ -482,6 +622,104 @@
   }
 
   retained
+}
+
+# ---- R-9.9 empty-folder cleanup -------------------------------------------
+
+#' Is this directory empty *for our purposes*? (R-9.9)
+#'
+#' Not `length(dir(f)) == 0`. That literal test essentially never fires in
+#' production: the real `batch-2026-07-23` folder is "empty" and still on disk
+#' today purely because Finder left a `.DS_Store` in it. A folder holding
+#' nothing but files `ignore_rule()` would ignore is empty in every sense that
+#' matters, and leaving it behind means the inbox silently accumulates one
+#' husk per email forever.
+#'
+#' Conversely a folder holding ANY non-ignorable file is not empty, whatever
+#' its state - a quarantined deliverable, a `failed` file, a source whose
+#' removal was refused for a missing archive copy. Those are precisely the
+#' files a human still has to look at, so the folder stays.
+#' @keywords internal
+#' @noRd
+.ig_folder_is_spent <- function(folder) {
+  entries <- list.files(folder, all.files = TRUE, no.. = TRUE, full.names = TRUE)
+  if (length(entries) == 0) {
+    return(TRUE)
+  }
+  # A subdirectory always keeps the folder alive: we did not route its contents
+  # (ingest is non-recursive) so we know nothing about what is in it.
+  if (any(dir.exists(entries))) {
+    return(FALSE)
+  }
+  all(vapply(entries, function(p) {
+    # ignore_rule() takes a file_meta() list; build one defensively, since a
+    # file that vanished mid-sweep must not abort the cleanup of the rest.
+    keep_it <- tryCatch(is.na(ignore_rule(file_meta(p))), error = function(e) TRUE)
+    !isTRUE(keep_it)
+  }, logical(1)))
+}
+
+#' Delete one per-email folder if this run spent it (R-9.9)
+#'
+#' Called from [ingest_inbox()], never from [ingest_dir()]. That placement is
+#' the whole design constraint, not an implementation detail: the folder to
+#' delete is the directory `ingest_dir()` was *called on*, and a function must
+#' not delete its own root - the first attempt at this did exactly that and the
+#' guard below (correctly) refused every folder, so nothing was ever cleaned
+#' up. `ingest_inbox()` is the only layer that can see both the inbox root and
+#' the folder as distinct things.
+#'
+#' @param root the inbox root. Never deleted, empty or not.
+#' @param folder the per-email folder just ingested.
+#' @param report that folder's `ingest_report`. Cleanup requires the run to
+#'   have actually removed something: a folder still holding a quarantined
+#'   deliverable is not spent, and a folder we merely previewed must be
+#'   untouched.
+#' @return `TRUE` if the folder was deleted.
+#' @keywords internal
+#' @noRd
+.ig_remove_spent_folder <- function(root, folder, report) {
+  if (isTRUE(report$failed) || isTRUE(report$dry_run)) {
+    return(FALSE)
+  }
+  if (length(report$removed_files) == 0) {
+    return(FALSE)
+  }
+  if (!isTRUE(as.logical(st_config("remove_ingested")))) {
+    return(FALSE)
+  }
+  if (!dir.exists(folder)) {
+    return(FALSE)
+  }
+
+  root_real <- normalizePath(root, mustWork = FALSE)
+  folder_real <- normalizePath(folder, mustWork = FALSE)
+
+  # Strictly BELOW the root. `identical()` catches the root itself; the prefix
+  # test catches anything outside the tree, however it was spelled. Anything
+  # failing either is skipped outright rather than trusted.
+  if (identical(folder_real, root_real)) {
+    return(FALSE)
+  }
+  if (!startsWith(folder_real, paste0(root_real, .Platform$file.sep))) {
+    return(FALSE)
+  }
+  if (!.ig_folder_is_spent(folder_real)) {
+    return(FALSE)
+  }
+
+  # `recursive = TRUE` takes the ignorable cruft with the folder - deliberate,
+  # and safe only because `.ig_folder_is_spent()` has already established that
+  # cruft is ALL that remains.
+  ok <- unlink(folder_real, recursive = TRUE, force = FALSE)
+  if (!identical(as.integer(ok), 0L)) {
+    cli::cli_warn(
+      "ingest_inbox(): could not remove the emptied input folder
+       {.path {folder_real}}; it is left in place."
+    )
+    return(FALSE)
+  }
+  TRUE
 }
 
 # ---- remove switch (R-9.6, A13) ------------------------------------------
@@ -674,15 +912,22 @@
 #' @param db path to the DuckDB file to ingest into.
 #' @param dry_run if `TRUE`, reconcile but do not commit, snapshot, or
 #'   remove anything.
+#' @param reconsider R-3.7. Passed to [route_files()]: re-decide files whose
+#'   stored state is an adapter-registry verdict (`unclaimed`, `adapter_tie`,
+#'   router-`failed`) instead of reading it back. Use after adding a missing
+#'   adapter or fixing a buggy one. `ignored` and `archived` are never
+#'   reconsidered.
 #' @return an `ingest_report` (a named list) summarising the run: file
 #'   counts by terminal state, events processed/committed, row tallies
 #'   (new/already_present/superseded/skipped), review items opened, the
 #'   snapshot path (or `NA`), and any removed files.
 #' @export
-ingest_dir <- function(path, db = st_config("live_db"), dry_run = FALSE) {
+ingest_dir <- function(path, db = st_config("live_db"), dry_run = FALSE,
+                       reconsider = FALSE) {
   checkmate::assert_string(path)
   checkmate::assert_string(db)
   checkmate::assert_flag(dry_run)
+  checkmate::assert_flag(reconsider)
 
   register_builtin_adapters()
 
@@ -692,7 +937,7 @@ ingest_dir <- function(path, db = st_config("live_db"), dry_run = FALSE) {
     function(con) {
       ensure_schema(con)
 
-      routed <- route_files(paths, con, dry_run)
+      routed <- route_files(paths, con, dry_run, reconsider)
 
       parsed <- .ig_parse_claimed(con, routed, dry_run)
 
@@ -705,14 +950,17 @@ ingest_dir <- function(path, db = st_config("live_db"), dry_run = FALSE) {
 
       outcome <- .ig_reconcile_and_commit(con, events, dry_run)
 
-      # R-15.36/B-15.F17: retain the non-tabular deliverables of a work
-      # order once (and only once) that work order has actually committed
-      # in this run (`.ig_retain_siblings()` needs the `project` row a
-      # commit creates). Skipped on `dry_run` - archiving is a core-table
-      # write, and `ingest_dir()`'s own contract is that a dry run makes
-      # ZERO core-table writes (see roxygen above).
+      # R-15.36/B-15.F17: retain the non-tabular deliverables of a work order
+      # that has a `project` row. NOT "committed in this run", which is what
+      # this comment used to say and what the SQL never did - `project` is
+      # persistent, so a COA arriving in its own email a day later attaches to
+      # the work order an EARLIER run committed (Robin's ruling, R-15.36a).
+      # Skipped on `dry_run` - archiving is a core-table write, and
+      # `ingest_dir()`'s own contract is that a dry run makes ZERO core-table
+      # writes (see roxygen above).
+      retained <- character(0)
       if (!dry_run) {
-        .ig_retain_siblings(con, routed)
+        retained <- .ig_retain_siblings(con, routed)
       }
 
       # Capture the live terminal states now, while `con` is still open -
@@ -720,15 +968,27 @@ ingest_dir <- function(path, db = st_config("live_db"), dry_run = FALSE) {
       # `.ig_current_states()`).
       file_states <- .ig_current_states(con, routed$hash)
 
-      list(routed = routed, events = events, outcome = outcome, file_states = file_states)
+      list(routed = routed, events = events, outcome = outcome,
+           file_states = file_states, retained = retained)
     },
     db = db
   )
 
   # Snapshot AFTER the pipeline connection has closed (DuckDB is
   # single-writer) - and let a snapshot error propagate uncaught.
+  #
+  # R-9.10: retention counts as well as commits. `.ig_retain_siblings()` writes
+  # `asset` rows and moves `ingest_file` states, so a retain-only run has
+  # changed the database exactly as much as a committing one has - and gating
+  # only on `committed_any` meant the COA arriving in its own email got
+  # archived and then never removed, because `.ig_remove_verified()` below
+  # requires a snapshot. The folder consequently never emptied and R-9.9 never
+  # fired. The strict commit -> archive -> snapshot -> remove ORDER of R-9.6 is
+  # untouched; this only widens what counts as "something happened".
+  did_something <- isTRUE(pipeline$outcome$committed_any) ||
+    length(pipeline$retained) > 0
   snapshot_path <- NA_character_
-  if (isTRUE(pipeline$outcome$committed_any) && !dry_run) {
+  if (did_something && !dry_run) {
     snapshot_path <- snapshot_db(db = db, dest_dir = st_config("snapshot_dir"))
   }
 
@@ -748,4 +1008,171 @@ ingest_dir <- function(path, db = st_config("live_db"), dry_run = FALSE) {
   )
 
   report
+}
+
+# ---- R-9.7 ingest_inbox(): one batch per email folder ---------------------
+
+#' Ingest an inbox of per-email folders, one batch per folder
+#'
+#' PowerAutomate saves the attachments of a single lab email into their own
+#' folder under the inbox root, so a folder is the durable record of "these
+#' files arrived together". [ingest_dir()] is deliberately non-recursive (A8,
+#' R-9.5) and stays that way; this walks the root's immediate subdirectories
+#' and calls it once per folder, in sorted order.
+#'
+#' Per-folder rather than a `recurse = TRUE` flag on `ingest_dir()`, for three
+#' reasons each independently sufficient:
+#'
+#' * it keeps one email's files as one batch, which is what makes R-9.8's
+#'   "does this folder belong to exactly one work order?" a meaningful
+#'   question - flattened into a single batch it would be asking about the
+#'   whole inbox, and the real `batch-2026-07-23` folder held eight work
+#'   orders;
+#' * a folder that throws is contained, and the rest of the inbox still
+#'   commits (the same A27/R-12.1 containment discipline every other per-item
+#'   stage in this file follows);
+#' * it gives R-9.9 a well-defined unit to delete once emptied.
+#'
+#' Files sitting loose in `root` are deliberately NOT ingested: mixing them
+#' into the sweep would make the batch boundary ambiguous, and they are
+#' `ingest_dir(root)`'s job if you want them. They are never deleted either,
+#' since nothing here routes them.
+#'
+#' @param root directory holding one subdirectory per email.
+#' @param db path to the DuckDB file to ingest into.
+#' @param dry_run passed through to each [ingest_dir()] call.
+#' @param reconsider passed through to each [ingest_dir()] call (R-3.7).
+#' @return a list with `n_folders`, `n_folders_failed`, and `folders`: a named
+#'   list (folder basename -> that folder's `ingest_report`, or a
+#'   `list(failed = TRUE, error = <message>)` for one that threw).
+#' @export
+ingest_inbox <- function(root, db = st_config("live_db"), dry_run = FALSE,
+                         reconsider = FALSE) {
+  checkmate::assert_string(root)
+  checkmate::assert_string(db)
+  checkmate::assert_flag(dry_run)
+  checkmate::assert_flag(reconsider)
+
+  if (!dir.exists(root)) {
+    cli::cli_abort(
+      "ingest_inbox(): {.path {root}} is not an existing directory.",
+      class = "sampletidy_error"
+    )
+  }
+
+  folders <- sort(list.dirs(root, full.names = TRUE, recursive = FALSE))
+
+  reports <- list()
+  n_failed <- 0L
+  n_folded <- 0L
+  for (folder in folders) {
+    name <- basename(folder)
+    reports[[name]] <- tryCatch(
+      ingest_dir(folder, db = db, dry_run = dry_run, reconsider = reconsider),
+      error = function(e) {
+        # Contained per folder, and NAMED - a silently-skipped email folder is
+        # indistinguishable from one that had nothing in it, which is exactly
+        # the ambiguity that lets a delivery go missing unnoticed.
+        cli::cli_warn(
+          "ingest_inbox(): folder {.path {name}} failed and was skipped:
+           {conditionMessage(e)} - the other folders in this inbox are
+           unaffected."
+        )
+        list(failed = TRUE, error = conditionMessage(e))
+      }
+    )
+    if (isTRUE(reports[[name]]$failed)) {
+      n_failed <- n_failed + 1L
+    }
+
+    # R-9.9. Contained: failing to tidy up a folder must never lose the report
+    # of the ingest that succeeded, nor stop the remaining folders.
+    folded <- tryCatch(
+      .ig_remove_spent_folder(root, folder, reports[[name]]),
+      error = function(e) {
+        cli::cli_warn(
+          "ingest_inbox(): folder {.path {name}} ingested successfully but
+           could not be cleaned up: {conditionMessage(e)}"
+        )
+        FALSE
+      }
+    )
+    if (isTRUE(folded)) {
+      n_folded <- n_folded + 1L
+    }
+  }
+
+  cli::cli_inform(
+    "ingest_inbox({.path {root}}): {length(folders)} folder(s),
+     {n_failed} failed, {n_folded} emptied folder(s) removed."
+  )
+
+  list(
+    n_folders = length(folders),
+    n_folders_failed = n_failed,
+    n_folders_removed = n_folded,
+    folders = reports
+  )
+}
+
+# ---- R-9.11 quarantine_report() -------------------------------------------
+
+#' Report the files ingest could not place (R-9.11)
+#'
+#' Every `ingest_file` row in a terminal state that is NOT `archived`: today
+#' that means `quarantined` (no adapter claimed it, or two tied) and `failed`
+#' (an adapter threw, or its event's reconcile/commit did). `ignored` is
+#' excluded - a `.bak` or a zero-byte file is a decision, not a backlog.
+#'
+#' Nothing in the package surfaced these rows before this function existed,
+#' which is how 19 of them sat unnoticed in the live DB from 2026-07-23 until
+#' someone went looking by hand.
+#'
+#' `work_order_guess` is derived from the STORED filename, never by re-reading
+#' the file: by the time anyone runs this report the input folder is routinely
+#' gone, and a report that errors on a missing file is a report nobody runs.
+#' It uses the same helper [file_meta()] does, so an ACIRL `2400-*` name yields
+#' `NA` here exactly as it does everywhere else - the report must not become
+#' the one place that guesses.
+#'
+#' Read-only: opens a read-only connection and closes it before returning.
+#'
+#' @param db path to the DuckDB file to report on.
+#' @return a tibble `(hash, filename, path_first_seen, state, state_reason,
+#'   work_order_guess, first_seen_at)`, newest first. Zero rows (with every
+#'   column present) when there is nothing to report.
+#' @export
+quarantine_report <- function(db = st_config("live_db")) {
+  checkmate::assert_string(db)
+
+  con <- st_connect(db, read_only = TRUE)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
+
+  rows <- DBI::dbGetQuery(
+    con,
+    "SELECT hash, filename, path_first_seen, state, state_reason, first_seen_at
+       FROM ingest_file
+      WHERE state IN ('quarantined', 'failed')
+      ORDER BY first_seen_at DESC, filename"
+  )
+
+  # Build the column set explicitly rather than relying on dplyr::mutate over a
+  # zero-row frame: the empty case is the one downstream code is most likely to
+  # hit first (a clean DB) and least likely to be tested against.
+  tibble::tibble(
+    hash = as.character(rows$hash),
+    filename = as.character(rows$filename),
+    path_first_seen = as.character(rows$path_first_seen),
+    state = as.character(rows$state),
+    state_reason = as.character(rows$state_reason),
+    work_order_guess = vapply(
+      as.character(rows$filename),
+      function(fn) {
+        if (is.na(fn)) return(NA_character_)
+        .st_guess_work_order_revision(fn)$work_order_guess
+      },
+      character(1), USE.NAMES = FALSE
+    ),
+    first_seen_at = rows$first_seen_at
+  )
 }

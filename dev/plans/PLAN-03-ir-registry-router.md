@@ -82,3 +82,60 @@ registered adapter × path (no state changes). Criterion: over the plan-04/05/06
 fixture set, every fixture is claimed by **exactly one** adapter at its
 winning tier — this test lives in plan 10 but the harness lands here and has
 a smoke test with two dummy adapters.
+
+## R-3.7 `reconsider` — registry verdicts are not durable facts about a file
+
+**Added 2026-07-28 (Robin).** `route_files()` short-circuits on
+`already_routed <- nrow(existing) > 0 && !identical(existing$state[[1]], "seen")`,
+and `unclaimed`, `adapter_tie` and router-`failed` are all terminal under
+R-1.6. Together those make an adapter-registry verdict permanent.
+
+But those three are not statements about the file. `ignored` (a `.bak`, a
+zero-byte file) and `archived` are durable facts about the file itself;
+`unclaimed`/`adapter_tie`/`failed` are statements about **the adapter registry
+as it stood at the moment of the call**. The file did not change; our code did,
+or will. Concretely, and already realised: `R/adapter-crosstab.R:104` records
+that real ALS `.XLS` is SpreadsheetML, which `readxl` cannot open, so the peek
+returns NULL and `match()` returns `"no"` — "SpreadsheetML parsing is parked
+post-MVP". Eight `XTAB.XLS` files sit `unclaimed` in the live DB behind exactly
+that. Unpark it and re-run, and nothing happens: they short-circuit at
+`already_routed` and the new adapter is never consulted.
+
+`route_files(paths, con, dry_run = FALSE, reconsider = FALSE)`. When
+`reconsider` is TRUE, a stored state in the **registry-verdict set**
+(`quarantined` with reason `unclaimed` or `adapter_tie`, or `failed`) is
+treated as not-already-routed: the row is reset to `seen`
+(`ingest_file_set_state(..., reset = TRUE)`) and re-decided from scratch.
+`ignored` and `archived` are never reconsidered at any setting — those are
+file facts. `claimed` and the mid-pipeline states are untouched: they are not
+verdicts and resetting one would re-run work already done.
+
+Deliberately **not** an R-1.6 change. The transition graph and its terminal set
+stay exactly as pinned; `reset = TRUE` is the existing, explicit override and
+this is precisely the case it exists for. `reconsider` defaults FALSE, so no
+existing caller changes behaviour.
+
+Under `dry_run` the reset is skipped along with every other write, matching
+T1.2: a preview must not mutate `ingest_file`, and re-deciding without
+persisting would report a verdict the DB does not hold.
+
+Criteria:
+- an `unclaimed` file, then an adapter registered that claims it, then
+  `reconsider = TRUE` → `claimed` with that adapter (and the same call with
+  `reconsider = FALSE` leaves it `unclaimed` — the control that proves the
+  test can produce both outcomes);
+- an `adapter_tie` file under `reconsider = TRUE` with the tie resolved →
+  `claimed`; with the tie still live → `quarantined`/`adapter_tie` again and
+  **exactly one** review_queue item in total, not a second one per pass;
+- a router-`failed` file whose adapter's `match()` no longer throws →
+  `claimed`;
+- an `ignored` file (`.bak`, zero-byte) is NOT reconsidered even under
+  `reconsider = TRUE` — still `ignored`, and `ignore_rule()` is what decides
+  that, not the registry;
+- an `archived` file is NOT reconsidered — the strongest guard, since
+  re-deciding one could re-commit data already in the DB;
+- `reconsider = TRUE, dry_run = TRUE` writes nothing: the stored state is
+  still the old verdict afterwards;
+- a file still unclaimed after reconsideration is left `quarantined`/
+  `unclaimed`, not `seen` — a reset that fails to re-decide must not strand
+  the row in a non-terminal state.

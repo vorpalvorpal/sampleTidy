@@ -136,3 +136,182 @@ Order is strict: commit → archive → snapshot → remove. Criteria:
   that source is kept and the report warns — never delete without a verified
   copy;
 - a subsequent run over the emptied dir is a clean no-op.
+
+---
+
+**Added 2026-07-28 (Robin).** R-9.7 … R-9.11 below all descend from one
+operational decision: PowerAutomate will drop the attachments of a single lab
+email into their own folder under the input root, so a *folder* becomes the
+durable record of "these files arrived together". R-9.5's non-recursive
+listing stays exactly as pinned — none of these change `ingest_dir()`'s own
+contract — and the R-9.5 criterion "subdirectory content untouched" remains
+live and must keep passing.
+
+## R-9.7 `ingest_inbox()` (`R/ingest.R`) — one batch per email folder
+
+`ingest_inbox(root, db = st_config("live_db"), dry_run = FALSE)`: list the
+immediate subdirectories of `root` (never `root`'s own loose files — those are
+`ingest_dir()`'s job and mixing the two would make the batch boundary
+ambiguous) and call `ingest_dir()` once per subdirectory, in sorted order.
+Returns a named list of per-folder `ingest_report`s plus a roll-up.
+
+Per-folder rather than `recurse = TRUE` deliberately, for three reasons that
+are each independently sufficient: it keeps one email's files as one batch, so
+R-9.8's "exactly one work order in this folder" test means something; a folder
+that throws does not take the rest of the inbox with it; and it gives R-9.9 a
+well-defined thing to delete. Criteria:
+- two folders each holding a different work order's files → two reports, both
+  committed, and neither folder's files appear in the other's report;
+- a folder whose ingest throws is reported as failed and the *other* folders
+  still commit (contained, like every other per-item stage in this file);
+- loose files sitting directly in `root` are not routed and are not deleted;
+- `dry_run = TRUE` propagates to every folder: zero DB writes across all of
+  them;
+- an empty `root` returns an empty roll-up without error.
+
+## R-9.8 Folder-sibling work-order inference for retained deliverables
+
+`.ig_retain_siblings()` (B-15.F17) keys retention on `file_meta()`'s
+`work_order_guess`, i.e. on parsing `ES#######` out of the filename. When that
+returns NA the file is warned about and left quarantined forever — the
+realised loss of 13 ACIRL files recorded in PLAN-CHANGE-REQUESTS, because a
+`2400-*` ACIRL work order **must not** be filename-parsed (see the ACIRL
+work-order trap, `R/commit.R`) and never will be.
+
+A folder gives a second, independent association that needs no filename
+parsing: if the *other* files in this file's directory resolved to a work
+order, this file belongs to it. Rule: when `work_order_guess` is NA, collect
+the work orders of every routed file in the same directory that has one and
+whose `project` row exists; infer **only when that set has exactly one
+member**; otherwise fall back to today's warn-and-skip.
+
+The exactly-one guard is not defensive padding — the real
+`batch-2026-07-23` folder held **eight** work orders, and a majority-wins or
+first-wins rule would have attached each COA to an arbitrary one of them.
+
+**Scope correction, and it narrows the claim this criterion was drafted with.**
+Folder inference does **not** recover the 13 ACIRL files, and must not be
+allowed to appear to. Two reasons, found by checking this rule against the
+suite that already exists:
+
+1. `test-ingest.R`'s "Phase-7b round-2 item 7" pins that `2400-7538-02_QC.pdf`
+   sitting in a directory alongside ES2617126's files stays quarantined and
+   warns. A naive folder rule would flip that test green by attaching an
+   **ACIRL** deliverable to an **ALS** work order — a false merge, and exactly
+   the failure the ACIRL work-order trap exists to prevent. The existing test
+   is right and must keep passing.
+2. In production an ACIRL email's folder contains ACIRL files only, so the
+   folder resolves to zero `ES#######` work orders and there is nothing to
+   infer from. The ACIRL workbook's own event is an *orphan* (PLAN-07 R-7.1,
+   unparseable report no → `work_order = NA`), and orphans share one anonymous
+   `project` row — attaching a COA to that satisfies "bytes retained" while
+   failing F.17's second obligation, "discoverably attached to its work order".
+
+So this rule fixes the case it can actually fix — a deliverable carrying **no
+work-order token at all** (a renamed attachment, `Certificate.pdf`, `scan001.pdf`)
+in a folder that unambiguously belongs to one work order. ACIRL retention
+stays blocked on the ACIRL work-order plan, which is Robin's standing separate
+piece of work, and the warning keeps naming those files until it lands.
+
+Hence a third guard alongside the exactly-one rule: a file whose name carries
+an **ACIRL-shaped `\d{4}-\d{4}` token** is never inferred onto a folder-mate's
+work order. It positively declares a work order of its own that we refuse to
+parse; that is a reason to leave it alone, not a licence to adopt it.
+
+Criteria:
+- a deliverable whose filename carries no work order at all, in a folder whose
+  other files all belong to one WO, is archived and attached to that WO;
+- the same deliverable in a folder resolving to **two** work orders is NOT
+  archived, stays quarantined, and warns;
+- a `2400-*` ACIRL-shaped deliverable in a folder resolving to exactly one
+  `ES#######` work order is **NOT** attached to it — stays quarantined and
+  warns (the existing Phase-7b round-2 item 7 test, which must stay green);
+- inference never fires when the filename *does* yield a work order — the
+  filename wins, and a folder disagreeing with it does not override it;
+- inference never *creates* a project row: a folder resolving to one WO that
+  has no `project` row leaves the file quarantined (R-9.10's rule, applied
+  here too);
+- a `2400-*` ACIRL name is still never parsed for a work order — inference
+  comes from the folder, provably, not from a relaxed regex.
+
+## R-9.9 Empty-folder cleanup
+
+Once `.ig_remove_verified()` has deleted the sources it verified, delete the
+per-email folder if nothing but ignorable cruft remains in it.
+
+**This belongs to `ingest_inbox()`, not `ingest_dir()`** — a design constraint,
+not a detail. The folder to delete is the directory `ingest_dir()` was *called
+on*, and a function must not delete its own root. The first implementation put
+the sweep inside `ingest_dir()`, where the never-delete-the-root guard
+(correctly) refused every folder it was handed and nothing was ever cleaned up;
+the R-9.9 test caught it. `ingest_inbox()` is the only layer that sees the inbox
+root and the folder as two different things.
+
+Guards, all required:
+- only directories strictly below the inbox root — never the root itself;
+- "empty" means *no file that `ignore_rule()` would not ignore*, so a folder
+  containing only `.DS_Store`/`.bak`/`.tmp` cruft counts as empty and that
+  cruft is deleted with it. A literal `length(dir(f)) == 0` test never fires
+  in practice: the real `batch-2026-07-23` folder is "empty" and still on disk
+  precisely because Finder left a `.DS_Store` in it;
+- never delete a folder holding a file that was kept back (quarantined,
+  failed, or removal-refused for a missing/mismatched archive copy) — those
+  are the files a human still has to look at;
+- only when `remove_ingested` is TRUE and the run reached its snapshot, i.e.
+  strictly downstream of R-9.6's existing gate.
+Criteria: folder emptied by a clean run is gone; folder holding a `.DS_Store`
+alongside removed sources is gone and the `.DS_Store` with it; folder holding
+one quarantined file survives; the ingest root itself always survives, empty
+or not.
+
+## R-9.10 Retention alone justifies a snapshot
+
+`.ig_remove_verified()` runs only when the run reached a snapshot, and a
+snapshot happens only when `outcome$committed_any`. A run that commits nothing
+but *does* retain a sibling — the COA that arrives in its own email a day
+after the data, which Robin ruled on 2026-07-28 must attach to the existing
+work order — therefore archives the file and then never removes the source, so
+the folder never empties and R-9.9 never fires.
+
+Retention is a core-table write (`asset` row + `ingest_file` transition), so it
+earns a snapshot on exactly the same reasoning commits do. Snapshot when the
+run committed anything **or** retained anything. The strict
+commit → archive → snapshot → remove order of R-9.6 is unchanged; this only
+widens what counts as "something happened". Criteria:
+- a run whose only work is retaining one COA produces a snapshot and, under
+  `remove_ingested = TRUE`, removes that COA's source;
+- a run that neither commits nor retains still produces **no** snapshot and
+  removes nothing;
+- the R-9.6 criterion "TRUE + injected snapshot failure → nothing removed"
+  still holds on the retain-only path.
+
+**Ruled by Robin, 2026-07-28 — retention across runs.** A deliverable whose
+work order committed in an *earlier* run attaches to that existing work order.
+It must **never** create a project row: a work order we have never seen data
+for is a guess, and `.ig_retain_siblings()`'s find-only
+`SELECT uuid FROM project WHERE name = ?` is therefore correct as written and
+must not be widened to `.ct_ensure_project()`'s find-or-create. The behaviour
+already satisfies this ruling (the `project` table is persistent — 559 rows in
+the live DB); what was wrong was only the roxygen at `R/ingest.R:310` and the
+inline comment at `:707`, both of which claimed the work order had to have
+committed "in THIS run". Criterion lives with R-15.36, which owns F.17.
+
+## R-9.11 `quarantine_report()` (`R/ingest.R`)
+
+Read-only, no writes, no connection left open: return one row per `ingest_file`
+in a non-`archived` terminal state (`quarantined`, `failed`) with
+`hash, filename, path_first_seen, state, state_reason, work_order_guess,
+first_seen_at`, newest first. Nothing today surfaces these rows at all, which
+is why 19 of them sat unnoticed in the live DB from 2026-07-23 until they were
+found by hand.
+
+`work_order_guess` is derived from the stored `filename`, not by re-reading the
+file — the file is routinely gone by the time anyone runs the report, and a
+report that errors on a missing file is a report nobody runs. Criteria:
+- a DB with two quarantined rows and one archived row returns exactly the two;
+- a clean DB returns a zero-row tibble with the full column set, not `NULL`
+  and not a zero-column frame;
+- the returned `work_order_guess` is populated for an `ES#######` filename and
+  NA for a `2400-*` one (never guessed — the ACIRL trap);
+- runs against a DB whose quarantined files no longer exist on disk;
+- opens read-only and writes nothing (row counts across all tables unchanged).

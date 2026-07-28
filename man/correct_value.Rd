@@ -20,5 +20,30 @@ correct_value(uuid_analysis, new_value, reason, actor)
 }
 \description{
 Resolves its own connection via \code{with_db_write(st_config("live_db"))}
-(A16). Thin wrapper over \code{db_update()}.
+(A16). An \code{analysis} row's \code{value} is not independent - \code{quantified}
+records whether it is a genuine measurement, below detection (\code{rl_low}), or
+above detection (\code{rl_high}), and a stale \code{quantified} after a value
+correction makes the row self-contradictory (e.g. a corrected value sitting
+above its own \code{rl_low} while still flagged below-detection). This function
+therefore reads the row's other columns first and picks one of two paths:
+}
+\details{
+\itemize{
+\item \strong{numeric-shaped row} (\code{value_chr} is \code{NA}): \code{quantified} is
+RECOMPUTED from \code{new_value} against the row's existing \code{rl_low}/\code{rl_high}
+(still below/above its detection limit -> \code{FALSE}; otherwise -> \code{TRUE})
+and written alongside \code{value} in the SAME \code{db_update()} call, so both
+land in \code{change_log} (no silent derived write). This is mechanical: the
+detection limits do not change, only which side of them the corrected
+value falls on.
+\item \strong{text-observation row} (\code{value_chr} is not \code{NA}, \code{quantified} is
+\code{NA} - "not a measurement", e.g. a field note or a "no sample taken"
+registry entry): REFUSED. There is no value-vs-limit comparison that
+tells you whether a sample was actually taken; inferring "yes, now
+there's a reading" from a bare number would assert an observation that
+may never have happened (the same hazard \code{parse_value()} was written to
+avoid - see \code{R/values.R}). Callers who really mean to reclassify such a
+row must go through \code{db_update()} directly and set \code{value}, \code{value_chr},
+and \code{quantified} together, as a deliberate act.
+}
 }

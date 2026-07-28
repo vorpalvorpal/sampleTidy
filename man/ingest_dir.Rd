@@ -4,7 +4,12 @@
 \alias{ingest_dir}
 \title{Ingest every file in a flat directory into the sampleTidy database}
 \usage{
-ingest_dir(path, db = st_config("live_db"), dry_run = FALSE)
+ingest_dir(
+  path,
+  db = st_config("live_db"),
+  dry_run = FALSE,
+  reconsider = FALSE
+)
 }
 \arguments{
 \item{path}{directory to ingest (non-recursive, A8).}
@@ -13,6 +18,12 @@ ingest_dir(path, db = st_config("live_db"), dry_run = FALSE)
 
 \item{dry_run}{if \code{TRUE}, reconcile but do not commit, snapshot, or
 remove anything.}
+
+\item{reconsider}{R-3.7. Passed to \code{\link[=route_files]{route_files()}}: re-decide files whose
+stored state is an adapter-registry verdict (\code{unclaimed}, \code{adapter_tie},
+router-\code{failed}) instead of reading it back. Use after adding a missing
+adapter or fixing a buggy one. \code{ignored} and \code{archived} are never
+reconsidered.}
 }
 \value{
 an \code{ingest_report} (a named list) summarising the run: file
@@ -40,7 +51,27 @@ lock-wait and fail.
 returned report reflects what the run \emph{would} do), but skips
 \code{commit_event()} and the snapshot entirely - the only two core-table/
 snapshot writers - so a dry run makes zero core-table writes and
-produces no snapshot file.
+produces no snapshot file. T1.2 (Robin's ruling, 2026-07-26): a dry run
+ALSO makes zero \code{ingest_file} STATE writes - parsing/assembly/reconcile
+still run in memory to build the preview, but none of it is persisted, so
+a following run (dry or real) re-discovers the same files at the same
+\code{route_files()}-assigned state and re-processes them for real. Before
+this fix, the parse/assemble/reconcile stages silently advanced
+\code{ingest_file.state} regardless of \code{dry_run}, so a dry run followed by a
+real run over the SAME directory committed nothing - the exact
+consequence of the cautious habit of dry-running first.
+
+\code{\link[=route_files]{route_files()}} gets the same \code{dry_run} treatment for every decision it
+makes that is NOT safe to persist unconditionally: \code{unclaimed}, \code{failed}
+and \code{adapter_tie} are all skipped under \code{dry_run} (state, route and, for
+a tie, its \code{review_queue} item, all together) because each writes one of
+\code{ingest_file}'s TERMINAL states, and that state is a verdict about the
+adapter registry as it stood at that moment - not a durable fact about
+the file - so persisting it during a preview would permanently stop the
+hash from ever being re-decided once the registry is fixed (see the tie
+branch in \code{R/router.R} for the full reasoning). Only \code{claimed} persists on
+a dry run: it is a non-terminal handoff still re-visited by the
+\code{dry_run}-gated stages above, not a verdict.
 
 When \code{st_config("remove_ingested")} is \code{TRUE} (default \code{FALSE}, A13) and
 this run produced a successful snapshot, every input file whose content

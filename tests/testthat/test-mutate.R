@@ -1203,7 +1203,9 @@ test_that("R-15.30/B3: a failure on the SECOND write of add_feature()'s atomic p
   path <- seed_db()
   withr::local_options(list("sampletidy.live_db" = path))
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  # withr::defer, not on.exit - a bare on.exit() in a mocking block discards
+  # local_mocked_bindings()'s restore handler (see test-mock-scope-lint.R).
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   before_feature <- DBI::dbGetQuery(con, "SELECT count(*) AS n FROM feature")$n
   before_log <- count_change_log(con)
@@ -1502,7 +1504,9 @@ test_that("W-F: db_update() does NOT share the dbAppendTable masking hazard - a 
 test_that("R-12.6: a commit-time failure rolls back the whole call and aborts sampletidy_error, leaving no partial write (dbCommit() must sit inside the tryCatch)", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  # withr::defer, not on.exit - a bare on.exit() in a mocking block discards
+  # local_mocked_bindings()'s restore handler (see test-mock-scope-lint.R).
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # Force DBI::dbCommit() itself to fail - a commit-time error, distinct from
   # a mutation error inside fn(con). Mocks the DBI generic the same way

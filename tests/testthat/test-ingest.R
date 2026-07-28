@@ -1019,11 +1019,16 @@ test_that("R-15.36: a work order's revision-less deliverable (a COC PDF, the ONL
   asset_row <- DBI::dbGetQuery(con, "SELECT * FROM asset WHERE hash = ?", params = list(coc_hash))
   expect_equal(nrow(asset_row), 1,
                info = "R-15.36 conjunct 1: the COC PDF (revision=NA) must get its own asset row")
-  # Round-2 item 6: a COC is NOT a COA - it must NOT be widened to
-  # "Certificate of analysis" without a separate ruling; it keeps the
-  # existing default.
+  # Round-2 item 6: a COC is NOT a COA and must NOT be widened to
+  # "Certificate of analysis". That still holds. What has changed is the
+  # fallback: this assertion used to pin the PARKED default
+  # ("Chemical analysis", pending a ruling), and Robin made the ruling on
+  # 2026-07-28 (R-15.36b) - a chain of custody is a QA record, not a result,
+  # so it is now "QA" against the live table's existing vocabulary. The
+  # negative half of the original assertion is what mattered and is unchanged.
   if (nrow(asset_row) == 1) {
-    expect_identical(asset_row$type[[1]], "Chemical analysis")
+    expect_identical(asset_row$type[[1]], "QA")
+    expect_false(identical(asset_row$type[[1]], "Certificate of analysis"))
   }
 
   # (2) the archived copy is byte-identical to the source.
@@ -1252,7 +1257,14 @@ test_that("Phase-7b round-2 item 5: one unarchivable retained sibling is contain
   expect_false(is.na(report$snapshot_path))
 
   con <- DBI::dbConnect(duckdb::duckdb(), setup$db_path, read_only = TRUE)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  # withr::defer, NOT on.exit: `on.exit()` defaults to add = FALSE, which
+  # REPLACES every handler already registered on this frame - including the one
+  # local_mocked_bindings() above registered to undo itself. The bare on.exit()
+  # that used to sit here silently leaked the mocked archive_file() into every
+  # subsequent test in this file; it went unnoticed for as long as no later
+  # test happened to archive a file named ES2617126_0_COA.pdf, and then cost an
+  # afternoon when R-15.36a did exactly that.
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   asset_row <- DBI::dbGetQuery(con, "SELECT * FROM asset WHERE hash = ?", params = list(coa_hash))
   expect_equal(nrow(asset_row), 0)   # never archived
 
@@ -1515,7 +1527,10 @@ test_that("commit-3: a retained sibling whose state-transition write fails atomi
   )
 
   con <- DBI::dbConnect(duckdb::duckdb(), setup$db_path, read_only = TRUE)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  # withr::defer, not on.exit - see the note in the round-2 item 5 test above:
+  # a bare on.exit() here wiped local_mocked_bindings()'s own restore handler
+  # and leaked the mocked ingest_file_set_state() into the rest of the file.
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   asset_row <- DBI::dbGetQuery(con, "SELECT uuid FROM asset WHERE hash = ?", params = list(h))
   expect_equal(nrow(asset_row), 0)   # the asset insert rolled back WITH the failed transition
 
@@ -1560,4 +1575,576 @@ test_that("commit-9: a [N]-marked duplicate-download COA (the ordinary browser-r
   expect_true(sampleTidy:::.ig_is_coa_deliverable("ES2617126_0_COA.PDF"))
   # COC must NOT be widened by this fix (round-2 item 6's separate ruling).
   expect_false(sampleTidy:::.ig_is_coa_deliverable("ES2617126_0_COC[1].pdf"))
+})
+
+# ---- R-15.36a: retention across runs (Robin, 2026-07-28) -------------------
+#
+# Ruling: a deliverable whose work order committed in an EARLIER run attaches
+# to that existing work order, and must NEVER create a project row.
+#
+# The first arm is a characterisation test - the behaviour already works,
+# because .ig_retain_siblings() looks up the PERSISTENT `project` table, not
+# anything run-scoped. It is written anyway because nothing pinned it, so the
+# find-only lookup could be "tidied" into .ct_ensure_project()'s find-or-create
+# by anyone reading the (wrong) comments that said the WO had to commit in the
+# same run. The second arm is the one that pins the ruling's teeth.
+
+# A COA PDF for `wo`, written to `dir`, with enough filler that it is not a
+# degenerate file. Returns path/hash/bytes, all captured BEFORE ingest, since
+# a remove_ingested pass deletes the source out from under the assertions.
+write_coa_fixture <- function(dir, wo) {
+  path <- file.path(dir, sprintf("%s_0_COA.pdf", wo))
+  bytes <- charToRaw(paste(
+    c(sprintf("%%PDF-1.4 fake Certificate of Analysis for work order %s", wo),
+      sprintf("line %02d: filler so this is not a degenerate file", 1:20)),
+    collapse = "\n"
+  ))
+  writeBin(bytes, path)
+  list(path = path, hash = hash_file(path), bytes = bytes)
+}
+
+test_that("R-15.36a: a COA arriving in a LATER run, in its own directory, attaches to the work order committed by an earlier run", {
+  setup <- ingest_test_setup()
+
+  # Run 1: the data files only. No COA anywhere - so nothing in this run can
+  # be what run 2's assertions later observe.
+  run1_dir <- withr::local_tempdir()
+  esdat_dir <- testthat::test_path("fixtures", "esdat")
+  wo_files <- list.files(esdat_dir, pattern = "ES2617126", full.names = TRUE)
+  expect_true(length(wo_files) == 3,
+              info = "ES2617126 esdat fixture triple must exist")
+  for (f in wo_files) file.copy(f, file.path(run1_dir, basename(f)))
+
+  report1 <- ingest_dir(run1_dir, db = setup$db_path)
+  expect_true(report1$n_events_committed > 0)
+
+  # The project row now exists and outlives run 1 - that persistence is the
+  # whole mechanism, so assert it rather than assuming it.
+  con1 <- DBI::dbConnect(duckdb::duckdb(), setup$db_path, read_only = TRUE)
+  project_before <- DBI::dbGetQuery(con1, "SELECT uuid FROM project WHERE name = 'ES2617126'")
+  project_count_before <- DBI::dbGetQuery(con1, "SELECT count(*) AS n FROM project")$n
+  DBI::dbDisconnect(con1, shutdown = TRUE)
+  expect_equal(nrow(project_before), 1)
+
+  # Run 2: a SEPARATE ingest_dir() call over a DIFFERENT directory holding
+  # only the COA. Nothing here commits; the only work is retention.
+  withr::local_options(list("sampletidy.remove_ingested" = TRUE))
+  run2_dir <- withr::local_tempdir()
+  coa <- write_coa_fixture(run2_dir, "ES2617126")
+
+  report2 <- ingest_dir(run2_dir, db = setup$db_path)
+  expect_equal(report2$n_events_committed, 0,
+               info = "R-15.36a: run 2 must commit nothing - retention is its only work")
+
+  con <- DBI::dbConnect(duckdb::duckdb(), setup$db_path, read_only = TRUE)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  asset_row <- DBI::dbGetQuery(con, "SELECT * FROM asset WHERE hash = ?", params = list(coa$hash))
+  expect_equal(nrow(asset_row), 1,
+               info = "R-15.36a: the cross-run COA must get an asset row")
+  if (nrow(asset_row) == 1) {
+    expect_identical(asset_row$type[[1]], "Certificate of analysis")
+  }
+
+  # Attached to run 1's project row specifically - not to a new one minted
+  # for it, which is the failure the ruling forbids.
+  linked <- DBI::dbGetQuery(
+    con,
+    "SELECT a.hash FROM asset a JOIN project p ON a.uuid_project = p.uuid
+     WHERE p.name = 'ES2617126' AND a.hash = ?",
+    params = list(coa$hash)
+  )
+  expect_equal(nrow(linked), 1,
+               info = "R-15.36a: the COA must be reachable from the EARLIER run's work order")
+  if (nrow(asset_row) == 1) {
+    expect_identical(asset_row$uuid_project[[1]], project_before$uuid[[1]])
+  }
+  expect_equal(
+    DBI::dbGetQuery(con, "SELECT count(*) AS n FROM project")$n, project_count_before,
+    info = "R-15.36a: retaining a cross-run COA must not add a project row"
+  )
+
+  # R-9.10: retention alone must earn a snapshot, or remove_ingested never
+  # runs and the source sits there forever.
+  expect_false(is.na(report2$snapshot_path),
+               info = "R-9.10: a retain-only run must still produce a snapshot")
+  expect_false(file.exists(coa$path),
+               info = "R-9.10: a retain-only run under remove_ingested = TRUE must delete the source")
+})
+
+test_that("R-15.36a: a COA for a work order that has NEVER committed creates no project row and stays quarantined", {
+  setup <- ingest_test_setup()
+  withr::local_options(list("sampletidy.remove_ingested" = TRUE))
+
+  input_dir <- withr::local_tempdir()
+  # ES2699999 appears nowhere in any fixture: there is no data for it and
+  # never was. Attaching evidence to it would mean inventing a work order.
+  coa <- write_coa_fixture(input_dir, "ES2699999")
+
+  con0 <- DBI::dbConnect(duckdb::duckdb(), setup$db_path, read_only = TRUE)
+  project_count_before <- DBI::dbGetQuery(con0, "SELECT count(*) AS n FROM project")$n
+  DBI::dbDisconnect(con0, shutdown = TRUE)
+
+  ingest_dir(input_dir, db = setup$db_path)
+
+  con <- DBI::dbConnect(duckdb::duckdb(), setup$db_path, read_only = TRUE)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  # The strong assertion, and the reason this arm exists: asserting only that
+  # the asset is absent would still pass if we had minted a project row and
+  # then failed to archive for some unrelated reason.
+  expect_equal(
+    DBI::dbGetQuery(con, "SELECT count(*) AS n FROM project")$n, project_count_before,
+    info = "R-15.36a: an unknown work order must NOT be created - find-only, never find-or-create"
+  )
+  expect_equal(
+    nrow(DBI::dbGetQuery(con, "SELECT 1 FROM project WHERE name = 'ES2699999'")), 0
+  )
+  expect_equal(nrow(DBI::dbGetQuery(con, "SELECT 1 FROM asset WHERE hash = ?", params = list(coa$hash))), 0)
+
+  states <- ingest_file_states(setup$db_path)
+  coa_state <- states[!is.na(states$hash) & states$hash == coa$hash, ]
+  expect_equal(nrow(coa_state), 1)
+  expect_identical(coa_state$state[[1]], "quarantined")
+  expect_true(file.exists(coa$path),
+              info = "R-15.36a: an unattached deliverable must never be deleted from the input dir")
+})
+
+# ---- R-15.36b: asset.type per retained kind (Robin, 2026-07-28) -----------
+
+test_that("R-15.36b: each retained deliverable kind lands its ruled asset.type (COA/QC/QCI/COC/XTAB asserted per-token)", {
+  setup <- ingest_test_setup()
+
+  input_dir <- withr::local_tempdir()
+  esdat_dir <- testthat::test_path("fixtures", "esdat")
+  for (f in list.files(esdat_dir, pattern = "ES2617126", full.names = TRUE)) {
+    file.copy(f, file.path(input_dir, basename(f)))
+  }
+
+  # One file per ruled token, all in one run - a single-arm test would pass
+  # while three of the four mappings were wrong.
+  expected <- c(
+    "ES2617126_0_COA.pdf"  = "Certificate of analysis",
+    "ES2617126_0_QC.pdf"   = "QC",
+    "ES2617126_0_QCI.pdf"  = "QC",
+    "ES2617126_COC.pdf"    = "QA",
+    "ES2617126_0_XTAB.XLS" = "Chemical analysis"
+  )
+  hashes <- vapply(names(expected), function(fn) {
+    p <- file.path(input_dir, fn)
+    writeBin(charToRaw(paste0("fake ", fn, " payload, non-degenerate filler ",
+                              paste(1:20, collapse = " "))), p)
+    hash_file(p)
+  }, character(1))
+
+  ingest_dir(input_dir, db = setup$db_path)
+
+  con <- DBI::dbConnect(duckdb::duckdb(), setup$db_path, read_only = TRUE)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  for (fn in names(expected)) {
+    row <- DBI::dbGetQuery(con, "SELECT type FROM asset WHERE hash = ?", params = list(hashes[[fn]]))
+    expect_equal(nrow(row), 1, info = sprintf("R-15.36b: %s must be retained at all", fn))
+    if (nrow(row) == 1) {
+      expect_identical(row$type[[1]], unname(expected[[fn]]),
+                       info = sprintf("R-15.36b: %s must be typed %s", fn, expected[[fn]]))
+    }
+  }
+})
+
+# ---- R-9.8: folder-sibling work-order inference ---------------------------
+
+test_that("R-9.8: a deliverable with NO work-order token, in a folder belonging to exactly one work order, is retained and attached to it", {
+  setup <- ingest_test_setup()
+
+  input_dir <- withr::local_tempdir()
+  esdat_dir <- testthat::test_path("fixtures", "esdat")
+  for (f in list.files(esdat_dir, pattern = "ES2617126", full.names = TRUE)) {
+    file.copy(f, file.path(input_dir, basename(f)))
+  }
+
+  # The real shape this rule is for: PowerAutomate saved the attachment under
+  # the name the sender used, which carries no work order at all. Note it is
+  # ALSO not ACIRL-shaped - no \d{4}-\d{4} token - so nothing about it declares
+  # a work order of its own.
+  renamed <- file.path(input_dir, "Certificate of Analysis_COA.pdf")
+  writeBin(charToRaw(paste("fake COA saved under the sender's own filename",
+                           paste(1:20, collapse = " "))), renamed)
+  renamed_hash <- hash_file(renamed)
+  expect_true(is.na(file_meta(renamed)$work_order_guess),
+              info = "R-9.8 precondition: the fixture must have NO parseable work order, else this tests nothing")
+
+  ingest_dir(input_dir, db = setup$db_path)
+
+  con <- DBI::dbConnect(duckdb::duckdb(), setup$db_path, read_only = TRUE)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  linked <- DBI::dbGetQuery(
+    con,
+    "SELECT a.hash FROM asset a JOIN project p ON a.uuid_project = p.uuid
+     WHERE p.name = 'ES2617126' AND a.hash = ?",
+    params = list(renamed_hash)
+  )
+  expect_equal(nrow(linked), 1,
+               info = "R-9.8: folder inference must attach the token-less deliverable to the folder's single work order")
+})
+
+test_that("R-9.8: the same token-less deliverable in a folder resolving to TWO work orders is NOT attached, stays quarantined, and warns", {
+  setup <- ingest_test_setup()
+
+  input_dir <- withr::local_tempdir()
+  esdat_dir <- testthat::test_path("fixtures", "esdat")
+  copied <- 0L
+  for (f in list.files(esdat_dir, full.names = TRUE)) {
+    if (grepl("ES2617126|XX1234567", basename(f))) {
+      file.copy(f, file.path(input_dir, basename(f)))
+      copied <- copied + 1L
+    }
+  }
+  expect_true(copied > 3,
+              info = "R-9.8 precondition: the folder must hold TWO work orders' files, else the ambiguity under test does not exist")
+
+  renamed <- file.path(input_dir, "Certificate of Analysis_COA.pdf")
+  writeBin(charToRaw(paste("fake COA, ambiguous folder",
+                           paste(1:20, collapse = " "))), renamed)
+  renamed_hash <- hash_file(renamed)
+
+  expect_warning(
+    ingest_dir(input_dir, db = setup$db_path),
+    regexp = "work order could not be recovered",
+    fixed = TRUE
+  )
+
+  con <- DBI::dbConnect(duckdb::duckdb(), setup$db_path, read_only = TRUE)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  expect_equal(
+    nrow(DBI::dbGetQuery(con, "SELECT 1 FROM asset WHERE hash = ?", params = list(renamed_hash))), 0,
+    info = "R-9.8: an ambiguous folder must not pick a work order - eight WOs shared the real batch-2026-07-23 folder"
+  )
+
+  states <- ingest_file_states(setup$db_path)
+  st <- states[!is.na(states$hash) & states$hash == renamed_hash, ]
+  expect_identical(st$state[[1]], "quarantined")
+})
+
+test_that("R-9.8: an ACIRL-shaped deliverable is NEVER inferred onto a folder-mate's work order, even when the folder resolves to exactly one", {
+  setup <- ingest_test_setup()
+
+  input_dir <- withr::local_tempdir()
+  esdat_dir <- testthat::test_path("fixtures", "esdat")
+  for (f in list.files(esdat_dir, pattern = "ES2617126", full.names = TRUE)) {
+    file.copy(f, file.path(input_dir, basename(f)))
+  }
+
+  # This is the arm that stops folder inference from becoming a false-merge
+  # engine. A 2400-* file positively declares a work order of its own that we
+  # deliberately refuse to parse (the ACIRL trap, R/commit.R) - so the folder
+  # resolving cleanly to ES2617126 is NOT permission to adopt it. Attaching
+  # ACIRL chemistry to an ALS work order is precisely the failure the refusal
+  # exists to prevent.
+  acirl <- file.path(input_dir, "2400-7538-02_QC.pdf")
+  writeBin(charToRaw(paste("fake ACIRL QC PDF", paste(1:20, collapse = " "))), acirl)
+  acirl_hash <- hash_file(acirl)
+
+  expect_warning(
+    ingest_dir(input_dir, db = setup$db_path),
+    regexp = "work order could not be recovered",
+    fixed = TRUE
+  )
+
+  con <- DBI::dbConnect(duckdb::duckdb(), setup$db_path, read_only = TRUE)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  expect_equal(
+    nrow(DBI::dbGetQuery(con, "SELECT 1 FROM asset WHERE hash = ?", params = list(acirl_hash))), 0,
+    info = "R-9.8: an ACIRL 2400-* deliverable must never be attached to an ALS work order"
+  )
+})
+
+test_that("R-9.8: inference never overrides a filename that DOES carry a work order", {
+  setup <- ingest_test_setup()
+
+  input_dir <- withr::local_tempdir()
+  esdat_dir <- testthat::test_path("fixtures", "esdat")
+  for (f in list.files(esdat_dir, pattern = "ES2617126", full.names = TRUE)) {
+    file.copy(f, file.path(input_dir, basename(f)))
+  }
+
+  # A COA naming a DIFFERENT, uncommitted work order. The folder resolves
+  # cleanly to ES2617126, so a rule that let the folder win would attach this
+  # to ES2617126 - silently filing one work order's certificate under another.
+  coa <- write_coa_fixture(input_dir, "ES2699999")
+
+  ingest_dir(input_dir, db = setup$db_path)
+
+  con <- DBI::dbConnect(duckdb::duckdb(), setup$db_path, read_only = TRUE)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  expect_equal(
+    nrow(DBI::dbGetQuery(con, "SELECT 1 FROM asset WHERE hash = ?", params = list(coa$hash))), 0,
+    info = "R-9.8: the filename's own work order wins; a folder disagreeing with it must not override it"
+  )
+  expect_equal(
+    nrow(DBI::dbGetQuery(con, "SELECT 1 FROM project WHERE name = 'ES2699999'")), 0
+  )
+})
+
+# ---- R-9.7: ingest_inbox(), one batch per email folder --------------------
+#
+# PowerAutomate drops one lab email's attachments into their own folder under
+# the input root. ingest_dir() is deliberately non-recursive (R-9.5, and its
+# "subdirectory content untouched" criterion is still live), so the inbox needs
+# its own entry point rather than a recurse flag.
+
+# Copy one work order's esdat triple into `dir`, returning the file count.
+seed_wo_folder <- function(dir, wo) {
+  dir.create(dir, recursive = TRUE, showWarnings = FALSE)
+  files <- list.files(testthat::test_path("fixtures", "esdat"), pattern = wo, full.names = TRUE)
+  for (f in files) file.copy(f, file.path(dir, basename(f)))
+  length(files)
+}
+
+test_that("R-9.7: two email folders each ingest as their own batch, and neither folder's files appear in the other's report", {
+  setup <- ingest_test_setup()
+  root <- withr::local_tempdir()
+
+  expect_equal(seed_wo_folder(file.path(root, "email-001"), "ES2617126"), 3)
+  expect_equal(seed_wo_folder(file.path(root, "email-002"), "XX1234567"), 3)
+
+  reports <- ingest_inbox(root, db = setup$db_path)
+
+  expect_setequal(names(reports$folders), c("email-001", "email-002"))
+  expect_equal(reports$n_folders, 2L)
+
+  # Batch isolation is the whole point of per-folder over recurse: each report
+  # must account for its OWN three files and no others. A recursive single
+  # batch would show 6 in one report and nothing would catch it.
+  expect_equal(reports$folders[["email-001"]]$n_files_routed, 3)
+  expect_equal(reports$folders[["email-002"]]$n_files_routed, 3)
+
+  con <- DBI::dbConnect(duckdb::duckdb(), setup$db_path, read_only = TRUE)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  expect_equal(nrow(DBI::dbGetQuery(con, "SELECT 1 FROM project WHERE name = 'ES2617126'")), 1)
+  expect_equal(nrow(DBI::dbGetQuery(con, "SELECT 1 FROM project WHERE name = 'XX1234567'")), 1)
+})
+
+test_that("R-9.7: a folder whose ingest throws is reported as failed and the OTHER folders still commit", {
+  setup <- ingest_test_setup()
+  root <- withr::local_tempdir()
+  seed_wo_folder(file.path(root, "email-bad"), "ES2617126")
+  seed_wo_folder(file.path(root, "email-good"), "XX1234567")
+
+  real_ingest_dir <- ingest_dir
+  testthat::local_mocked_bindings(
+    ingest_dir = function(path, ...) {
+      if (identical(basename(path), "email-bad")) {
+        cli::cli_abort("injected per-folder failure", class = "sampletidy_error")
+      }
+      real_ingest_dir(path, ...)
+    }
+  )
+
+  expect_warning(
+    reports <- ingest_inbox(root, db = setup$db_path),
+    regexp = "email-bad"
+  )
+
+  expect_true(reports$folders[["email-bad"]]$failed)
+  expect_match(reports$folders[["email-bad"]]$error, "injected per-folder failure", fixed = TRUE)
+  expect_equal(reports$n_folders_failed, 1L)
+
+  # Containment is the claim, so assert the good folder actually landed rather
+  # than merely that no error propagated.
+  con <- DBI::dbConnect(duckdb::duckdb(), setup$db_path, read_only = TRUE)
+  # withr::defer, not on.exit - this test mocks ingest_dir() above, and a bare
+  # on.exit() would wipe the mock's own restore handler (see the round-2 item 5
+  # test earlier in this file).
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+  expect_equal(nrow(DBI::dbGetQuery(con, "SELECT 1 FROM project WHERE name = 'XX1234567'")), 1)
+})
+
+test_that("R-9.7: loose files sitting directly in the root are neither routed nor deleted", {
+  setup <- ingest_test_setup()
+  withr::local_options(list("sampletidy.remove_ingested" = TRUE))
+  root <- withr::local_tempdir()
+  seed_wo_folder(file.path(root, "email-001"), "ES2617126")
+
+  # A stray file at the root - a half-finished download, a note, whatever.
+  # Mixing root-level files into the sweep would make the batch boundary
+  # ambiguous, so they are ingest_dir()'s job and not ours.
+  loose <- file.path(root, "ES2617126_0_COA.pdf")
+  writeBin(charToRaw(paste("loose COA at the root", paste(1:20, collapse = " "))), loose)
+  loose_hash <- hash_file(loose)
+
+  ingest_inbox(root, db = setup$db_path)
+
+  expect_true(file.exists(loose),
+              info = "R-9.7: a root-level file must never be deleted by an inbox sweep")
+  states <- ingest_file_states(setup$db_path)
+  expect_equal(sum(!is.na(states$hash) & states$hash == loose_hash), 0,
+               info = "R-9.7: a root-level file must not be routed at all")
+})
+
+test_that("R-9.7: dry_run propagates to every folder - zero DB writes across all of them", {
+  setup <- ingest_test_setup()
+  root <- withr::local_tempdir()
+  seed_wo_folder(file.path(root, "email-001"), "ES2617126")
+  seed_wo_folder(file.path(root, "email-002"), "XX1234567")
+
+  before <- all_core_counts(setup$db_path)
+  reports <- ingest_inbox(root, db = setup$db_path, dry_run = TRUE)
+  after <- all_core_counts(setup$db_path)
+
+  expect_equal(after, before)
+  expect_true(all(vapply(reports$folders, function(r) isTRUE(r$dry_run), logical(1))))
+})
+
+test_that("R-9.7: an empty root returns an empty roll-up without error", {
+  setup <- ingest_test_setup()
+  root <- withr::local_tempdir()
+
+  reports <- ingest_inbox(root, db = setup$db_path)
+  expect_equal(reports$n_folders, 0L)
+  expect_length(reports$folders, 0L)
+})
+
+# ---- R-9.9: empty-folder cleanup ------------------------------------------
+
+test_that("R-9.9: a folder emptied by a clean run is deleted, and a .DS_Store does not keep it alive", {
+  setup <- ingest_test_setup()
+  withr::local_options(list("sampletidy.remove_ingested" = TRUE))
+  root <- withr::local_tempdir()
+  folder <- file.path(root, "email-001")
+  seed_wo_folder(folder, "ES2617126")
+
+  # The trap this criterion exists for: the real batch-2026-07-23 folder is
+  # "empty" and still on disk today purely because Finder left a .DS_Store in
+  # it. A literal length(dir()) == 0 emptiness test never fires in practice.
+  writeBin(charToRaw("finder cruft"), file.path(folder, ".DS_Store"))
+
+  ingest_inbox(root, db = setup$db_path)
+
+  expect_false(dir.exists(folder),
+               info = "R-9.9: a folder holding only ignorable cruft after removal must be deleted")
+  expect_true(dir.exists(root),
+              info = "R-9.9: the inbox root itself must always survive")
+})
+
+test_that("R-9.9: a folder still holding a quarantined file survives", {
+  setup <- ingest_test_setup()
+  withr::local_options(list("sampletidy.remove_ingested" = TRUE))
+  root <- withr::local_tempdir()
+  folder <- file.path(root, "email-001")
+  seed_wo_folder(folder, "ES2617126")
+
+  # An unattachable deliverable: ES2699999 never committed, so this stays
+  # quarantined and un-removed. The folder holds a file a human still has to
+  # look at, so deleting the folder would delete the only copy.
+  orphan <- write_coa_fixture(folder, "ES2699999")
+
+  ingest_inbox(root, db = setup$db_path)
+
+  expect_true(dir.exists(folder),
+              info = "R-9.9: a folder holding a kept-back file must survive")
+  expect_true(file.exists(orphan$path))
+})
+
+test_that("R-9.9: nothing is deleted when remove_ingested is FALSE", {
+  setup <- ingest_test_setup()   # remove_ingested defaults FALSE here
+  root <- withr::local_tempdir()
+  folder <- file.path(root, "email-001")
+  seed_wo_folder(folder, "ES2617126")
+
+  ingest_inbox(root, db = setup$db_path)
+
+  expect_true(dir.exists(folder),
+              info = "R-9.9: folder cleanup is strictly downstream of R-9.6's remove gate")
+  expect_true(length(list.files(folder)) > 0)
+})
+
+# ---- R-9.10: retention alone earns a snapshot (negative arm) --------------
+
+test_that("R-9.10: a run that neither commits nor retains produces NO snapshot and removes nothing", {
+  setup <- ingest_test_setup()
+  withr::local_options(list("sampletidy.remove_ingested" = TRUE))
+  input_dir <- withr::local_tempdir()
+
+  # Ordinary cruft: ignored by ignore_rule(), never retained, never committed.
+  # Without this arm, "snapshot when anything happened" could degenerate into
+  # "always snapshot", and the R-9.6 gate would stop meaning anything.
+  bak <- file.path(input_dir, "old_export.bak")
+  writeBin(charToRaw("not a deliverable"), bak)
+
+  report <- ingest_dir(input_dir, db = setup$db_path)
+
+  expect_true(is.na(report$snapshot_path),
+              info = "R-9.10: no commit and no retention means no snapshot")
+  expect_length(report$removed_files, 0L)
+  expect_true(file.exists(bak))
+})
+
+# ---- R-9.11: quarantine_report() ------------------------------------------
+
+test_that("R-9.11: quarantine_report() returns exactly the non-archived terminal rows, with a derived work_order_guess and no writes", {
+  setup <- ingest_test_setup()
+  input_dir <- withr::local_tempdir()
+  esdat_dir <- testthat::test_path("fixtures", "esdat")
+  for (f in list.files(esdat_dir, pattern = "ES2617126", full.names = TRUE)) {
+    file.copy(f, file.path(input_dir, basename(f)))
+  }
+
+  # One quarantined file we CAN name a work order for, one we deliberately
+  # cannot (the ACIRL trap) - the report must show both and guess neither
+  # wrongly.
+  als <- write_coa_fixture(input_dir, "ES2699999")   # unattachable -> quarantined
+  acirl <- file.path(input_dir, "2400-7538-02_QC.pdf")
+  writeBin(charToRaw(paste("fake ACIRL QC", paste(1:20, collapse = " "))), acirl)
+  acirl_hash <- hash_file(acirl)
+
+  suppressWarnings(ingest_dir(input_dir, db = setup$db_path))
+
+  before <- all_core_counts(setup$db_path)
+  rep <- quarantine_report(db = setup$db_path)
+  after <- all_core_counts(setup$db_path)
+  expect_equal(after, before, info = "R-9.11: the report must write nothing")
+
+  expect_true(all(c("hash", "filename", "path_first_seen", "state", "state_reason",
+                    "work_order_guess", "first_seen_at") %in% names(rep)))
+
+  # Exactly the quarantined pair - the three committed esdat files are
+  # `archived` and must NOT appear.
+  expect_setequal(rep$hash, c(als$hash, acirl_hash))
+  expect_true(all(rep$state %in% c("quarantined", "failed")))
+
+  als_row <- rep[rep$hash == als$hash, ]
+  expect_identical(als_row$work_order_guess[[1]], "ES2699999")
+  acirl_row <- rep[rep$hash == acirl_hash, ]
+  expect_true(is.na(acirl_row$work_order_guess[[1]]),
+              info = "R-9.11: a 2400-* name must never be guessed at - the ACIRL trap applies to the report too")
+})
+
+test_that("R-9.11: quarantine_report() on a clean DB returns a zero-ROW tibble with the full column set, not NULL", {
+  setup <- ingest_test_setup()
+  rep <- quarantine_report(db = setup$db_path)
+
+  expect_s3_class(rep, "tbl_df")
+  expect_equal(nrow(rep), 0)
+  expect_true(all(c("hash", "filename", "path_first_seen", "state", "state_reason",
+                    "work_order_guess", "first_seen_at") %in% names(rep)),
+              info = "R-9.11: a zero-row result must still carry every column, or downstream code breaks only when there is nothing to report")
+})
+
+test_that("R-9.11: quarantine_report() works when the quarantined files no longer exist on disk", {
+  setup <- ingest_test_setup()
+  input_dir <- withr::local_tempdir()
+  coa <- write_coa_fixture(input_dir, "ES2699999")
+  ingest_dir(input_dir, db = setup$db_path)
+
+  # By the time anyone runs this report the input folder is routinely gone -
+  # a report that re-reads the file to derive its metadata would error, and a
+  # report that errors is a report nobody runs.
+  file.remove(coa$path)
+  expect_false(file.exists(coa$path))
+
+  rep <- quarantine_report(db = setup$db_path)
+  expect_equal(nrow(rep), 1)
+  expect_identical(rep$work_order_guess[[1]], "ES2699999")
 })

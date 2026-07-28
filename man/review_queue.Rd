@@ -15,9 +15,17 @@ review_queue(con, status = "open")
 a tibble of \code{review_queue} rows.
 }
 \description{
-Returns queue rows as a tibble with stable columns (all 14) even on a
+Returns queue rows as a tibble with stable columns (all 15 - schema ladder
+version 7 added \code{uuid_incoming} alongside \code{uuid_existing}) even on a
 zero-row result, since the \code{SELECT} names every column explicitly.
-Entity/classification data lives in typed columns (\code{subkind}, \code{uuid_existing},
-\code{uuid_alias}, \code{uuid_target}); \code{payload} carries only the diagnostics JSON
-remainder.
+Entity/classification data lives in typed columns (\code{subkind},
+\code{uuid_existing}, \code{uuid_incoming}, \code{uuid_alias}, \code{uuid_target}); \code{payload}
+carries only the diagnostics JSON remainder.
+}
+\details{
+Phase-7b round-2 item 5b: \code{uuid_incoming} is written by producers (e.g.
+\code{.fa_merge_samples()}'s \code{value_conflict}/\code{alias_merge} row) but was
+missing from this SELECT, making it invisible to every caller of this
+function regardless of what the table actually stored. Added next to
+\code{uuid_existing}, following that column's own pattern exactly.
 }

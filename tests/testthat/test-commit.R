@@ -189,7 +189,10 @@ test_that("R-9.2: a second commit_event() call on already-terminal files aborts"
 test_that("R-9.2: mid-commit failure leaves zero new rows anywhere (atomicity)", {
   setup <- commit_test_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  # withr::defer, not on.exit: this block mocks bindings, and on.exit()
+  # defaults to add = FALSE, which would discard local_mocked_bindings()'s own
+  # restore handler and leak the mock into every later test in this file.
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # Force step 5 (review_queue insert) to fail on a PK collision: pre-insert
   # a review_queue row at a fixed uuid, then make every subsequent

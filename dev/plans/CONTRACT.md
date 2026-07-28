@@ -83,7 +83,38 @@ merge_identity_aliases(db = st_config("live_db"), actor, dry_run = FALSE)
 # own PRIMARY KEY (not the polymorphic uuid_target, which closes across
 # producers), and records the human in `resolved_by` per A55.
 resolve_review(uuid, resolution, resolved_by, db = st_config("live_db"))
+
+# plan 09 R-9.7 / R-9.11, added 2026-07-28 (Robin's ruling). Both operator-run
+# tools, hence the A16 human-callable convention.
+#
+# ingest_inbox(): PowerAutomate saves one lab email's attachments into their
+# own folder under the inbox root, and ingest_dir() is deliberately
+# NON-recursive (A8/R-9.5) - so without this there is no entry point for that
+# layout at all. One ingest_dir() batch per folder, contained per folder, and
+# the only layer that may delete an emptied folder (R-9.9): the folder is
+# ingest_dir()'s own root, and a function must not delete its own root.
+ingest_inbox(root, db = st_config("live_db"), dry_run = FALSE,
+             reconsider = FALSE)
+
+# quarantine_report(): every ingest_file row in a terminal state that is not
+# `archived` (quarantined, failed) - `ignored` excluded, since a .bak is a
+# decision, not a backlog. EXPORTED because nothing surfaced these rows: 19 sat
+# unnoticed in the live DB from 2026-07-23 until they were found by hand. Same
+# reasoning as resolve_review() above - a backlog nobody can list is a backlog
+# nobody drains. Read-only, and derives work_order_guess from the STORED
+# filename (the file itself is routinely gone by report time).
+quarantine_report(db = st_config("live_db"))   # -> tibble
 ```
+
+`ingest_dir()` gained a fourth argument in the same change:
+`reconsider = FALSE` (R-3.7). When TRUE, files whose stored state is an
+adapter-**registry verdict** (`unclaimed`, `adapter_tie`, router-`failed`) are
+re-decided against the current registry instead of read back. Those three are
+statements about the registry at the moment of the call, not facts about the
+file — add a missing adapter or fix a buggy one and the same file should be
+reconsidered. `ignored` and `archived` are never reconsidered at any setting,
+and this is **not** an R-1.6 change: the terminal set and the transition graph
+are untouched, and `reset = TRUE` is the existing override this is the case for.
 
 `confirm_feature_aliases()`'s `kind` defaults to `transcription_error` on a
 non-identity confirmation (Robin's ruling 2026-07-26, overriding PCR-5's

@@ -408,7 +408,22 @@ test_that("R-10.6: NAMESPACE exports equal the CONTRACT-pinned public API exactl
     # exports were read-only. The open queue therefore grew monotonically and
     # never drained. A57 puts resolution in the operator's hands, so the close
     # path has to be on the public surface with `change_log` provenance.
-    "resolve_review"
+    "resolve_review",
+    # PLAN-09 R-9.7 / R-9.11, added 2026-07-28 (Robin's ruling) and added to
+    # CONTRACT.md's public-API list in the same change. Both EXPORTED because
+    # both are operator-run tools with the A16 human-callable convention (a
+    # `db = st_config("live_db")` default; `dry_run` on the ingesting one):
+    #
+    # `ingest_inbox()` is how the PowerAutomate inbox is actually consumed -
+    # one batch per email folder. `ingest_dir()` stays non-recursive (R-9.5),
+    # so without this the folder layout has no entry point at all.
+    #
+    # `quarantine_report()` because NOTHING in the package surfaced a
+    # quarantined or failed file: 19 of them sat unnoticed in the live DB from
+    # 2026-07-23 until they were found by hand. A backlog nobody can list is a
+    # backlog nobody drains - the same reasoning that put `resolve_review`
+    # above on the public surface.
+    "ingest_inbox", "quarantine_report"
   )
   actual <- getNamespaceExports("sampleTidy")
   expect_setequal(actual, pinned)

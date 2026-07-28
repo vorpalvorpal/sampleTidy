@@ -60,7 +60,10 @@ REVIEW instead of committing). Fix: write the \code{feature} row AND its
 uses), each with its own \code{change_log} provenance row. A failure on the
 second write (the alias) rolls the first (the feature) back too - this is
 a single atomic unit, not two independent \code{with_db_write()} calls. The
-self alias is written already \code{confirmed_by = actor} and \code{auto_assign = TRUE} (the only combination Layer-1's exact match reaches - PLAN-15 test
-R-15.30), with \code{alias_key = .rc_feature_key(name)} matching migration
-001's \code{.mig001_normalize()} convention exactly.
+self alias is written already \code{auto_assign = TRUE} and \code{confirmed_by = NA_character_} (Phase-7b round-2 item 11 - NEVER \code{confirmed_by = actor}: a
+machine-stamped \code{confirmed_by} is indistinguishable from a human
+confirmation, which CONTRACT A55 forbids), with \code{alias_key = .rc_feature_key(name)} matching migration 001's \code{.mig001_normalize()}
+convention exactly. Layer-1's exact match reaches this row on
+\code{auto_assign} alone (\code{R/reconcile.R:388-398}); it never reads
+\code{confirmed_by} at all.
 }

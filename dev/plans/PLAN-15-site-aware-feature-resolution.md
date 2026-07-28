@@ -2471,7 +2471,49 @@ AND **that the row is reachable from the work order** AND that a subsequent
 would pass while the PDF still sat unclaimed, and one that stops at the archive
 copy would pass while the file was retained but unattached.
 
-<!-- block: B-15.F18 -->
+### R-15.36a Retention across runs (Robin, 2026-07-28)
+
+**Ruling:** a deliverable whose work order committed in an **earlier** run
+attaches to that existing work order. It must **never** create a project row —
+a work order we have never seen data for is a guess, and attaching evidence to
+a guess is worse than leaving it quarantined with a warning naming the file.
+
+This is already the behaviour: `.ig_retain_siblings()` does a find-only
+`SELECT uuid FROM project WHERE name = ?` against the **persistent** `project`
+table (559 rows in the live DB), not against anything scoped to the run. What
+was wrong is only the prose — this plan's own F.17 block, the roxygen at
+`R/ingest.R:310` and the inline comment at `:707` all said the work order had
+to have committed "in THIS run", which the SQL never said. The ruling is
+recorded here so a future reader does not "fix" the find-only lookup into
+`.ct_ensure_project()`'s find-or-create and silently start minting projects for
+stray PDFs.
+
+Criteria (both arms required — the negative is the one that pins the ruling):
+- run 1 ingests ES2617126's data files; run 2, a *separate* `ingest_dir()` call
+  over a *different* directory holding only `ES2617126_0_COA.pdf`, retains it,
+  archives it, and attaches it to the run-1 project row;
+- a COA for a work order with no `project` row leaves the file quarantined,
+  creates **no** project row (assert the `project` count is unchanged, not just
+  that the asset is absent), and warns.
+
+### R-15.36b `asset.type` for the non-COA retained kinds (Robin, 2026-07-28)
+
+`R/archive.R:38-41` parks every retained kind other than COA on the blanket
+`"Chemical analysis"` pending a ruling. Ruled now, against the vocabulary the
+live `asset` table actually uses — 938 `Chemical analysis`, 272 `QA`, 222 `QC`,
+34 NA — rather than inventing new strings, since the point of the type is that
+Robin's existing queries keep working:
+
+| filename token | `asset.type` | why |
+|---|---|---|
+| `_COA` | `Certificate of analysis` | already ruled 2026-07-23; unchanged |
+| `_QC`, `_QCI` | `QC` | existing vocabulary, exact fit |
+| `_COC` | `QA` | a chain of custody is a QA record, not a result |
+| `XTAB.XLS` | `Chemical analysis` | it *is* results — an unreadable rendering of the same chemistry the `.csv` twin carries |
+
+One pinned lookup, not four scattered branches, so changing a verdict is a
+one-line edit. Criterion: each of the four tokens above lands its mapped type,
+asserted per-token (a single-arm test passes while three mappings are wrong).
 ### F.18 Legacy `asset` rows with no retained bytes (RESOLVED 2026-07-23)
 **1,272 of 2,556 `asset` rows have no archive copy on disk**, and a sample of 40
 of their filenames could not be found anywhere under the `assets/` tree. These
