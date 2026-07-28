@@ -37,3 +37,13 @@ ever seen); if found, does NOT bulk-convert or link, and opens a
 \code{units_drift} review item instead (see PLAN-11 R-11.11 and the RULED PIN
 on the drift-detection mechanism).
 }
+\details{
+Re-confirming an already-confirmed method (\code{action = "already_confirmed"})
+is a safe no-op ONLY when nothing is left to do. If THIS function set the
+link but an earlier call never finished converting every dependent
+analysis (interrupted by a crash, or - before this fix - by a sibling
+item's failure in the same bulk call), a re-run completes that outstanding
+conversion rather than reporting success over it; see the guarded-exception
+note at the head of this file. A link set by anything else (e.g. resolved
+at ingest) is left untouched, exactly as ever.
+}

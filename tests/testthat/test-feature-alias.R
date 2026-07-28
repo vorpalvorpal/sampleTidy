@@ -2080,7 +2080,9 @@ test_that("Phase-8b regression: already_confirmed recognizes a link set by the F
   # real call below is unmocked.
   setup <- fa_fk_tear_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  # withr::defer, not on.exit - a bare on.exit() in a mocking block discards
+  # local_mocked_bindings()'s restore handler (see test-mock-scope-lint.R).
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   before_value <- DBI::dbGetQuery(con, "SELECT value FROM analysis WHERE uuid = 'an-9501'")$value[[1]]
   expect_equal(before_value, 5)

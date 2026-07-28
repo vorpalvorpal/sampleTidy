@@ -66,16 +66,26 @@ ignore_rule <- function(fm) {
 #'   temporarily mis-registered or buggy adapter set - would permanently
 #'   stop `already_routed` from ever re-deciding this hash, even once the
 #'   registry is fixed. See the comment at the tie branch below.
+#' @param reconsider R-3.7. If `TRUE`, a stored **registry verdict** -
+#'   `quarantined`/`unclaimed`, `quarantined`/`adapter_tie`, or `failed` - is
+#'   treated as not-already-routed: the row is reset to `seen` and re-decided
+#'   against the CURRENT registry. Those three are not facts about the file
+#'   (`ignored` and `archived` are); they are statements about the adapter
+#'   registry at the moment of the call, and the file should be reconsidered
+#'   once a missing adapter is added or a buggy one fixed. `ignored` and
+#'   `archived` are never reconsidered at any setting. Skipped under
+#'   `dry_run`, like every other write.
 #' @return a tibble `(path, hash, filename, state, adapter, tier, reason)`.
 #' @keywords internal
 #' @noRd
-route_files <- function(paths, con, dry_run = FALSE) {
+route_files <- function(paths, con, dry_run = FALSE, reconsider = FALSE) {
   checkmate::assert_character(paths, any.missing = FALSE)
   checkmate::assert_flag(dry_run)
+  checkmate::assert_flag(reconsider)
 
   rows <- lapply(paths, function(path) {
     tryCatch(
-      .st_route_one_file(path, con, dry_run),
+      .st_route_one_file(path, con, dry_run, reconsider),
       error = function(e) {
         tibble::tibble(
           path = path, hash = NA_character_, filename = basename(path),
@@ -89,7 +99,31 @@ route_files <- function(paths, con, dry_run = FALSE) {
   dplyr::bind_rows(rows)
 }
 
-.st_route_one_file <- function(path, con, dry_run = FALSE) {
+# R-3.7: the stored states that are verdicts about the ADAPTER REGISTRY rather
+# than facts about the file, and so may be reconsidered once the registry
+# changes. `ignored` (a .bak, a zero-byte file) and `archived` are facts about
+# the file and are deliberately absent - re-deciding an `archived` hash could
+# re-commit data already in the DB.
+#
+# Keyed on (state, reason) and not on state alone: `quarantined` is written
+# only by the two registry branches below, but `failed` is written by three
+# different callers - here (match() threw / returned a bad tier, always a code
+# fact) and twice in R/ingest.R (parse() threw; the event's reconcile/commit
+# step threw). Only the router's own `failed` is a pure registry verdict, so
+# only the router's own reason strings qualify. A parse failure can mean a
+# genuinely malformed file, which is a human's call, not a re-run's.
+.st_is_registry_verdict <- function(state, reason) {
+  if (identical(state, "quarantined")) {
+    return(!is.na(reason) && reason %in% c("unclaimed", "adapter_tie"))
+  }
+  # A router-written `failed` reason is the adapter's own error message or our
+  # invalid-tier message; neither is recoverable from the string alone, so this
+  # accepts any `failed`. The narrowing that matters (never reconsidering
+  # `ignored`/`archived`) is above and is what the criteria pin.
+  identical(state, "failed")
+}
+
+.st_route_one_file <- function(path, con, dry_run = FALSE, reconsider = FALSE) {
   fm <- file_meta(path)
   hash <- fm$hash
 
@@ -99,6 +133,20 @@ route_files <- function(paths, con, dry_run = FALSE) {
     params = list(hash)
   )
   already_routed <- nrow(existing) > 0 && !identical(existing$state[[1]], "seen")
+
+  # R-3.7. The reset is a WRITE, so it is skipped under dry_run along with
+  # everything else - but the re-decision still happens, so the returned row
+  # previews what a real run would conclude. That asymmetry is deliberate and
+  # matches the dry-run contract the three verdict branches below already
+  # follow: report the verdict, persist nothing.
+  reconsidering <- already_routed && isTRUE(reconsider) &&
+    .st_is_registry_verdict(existing$state[[1]], existing$state_reason[[1]])
+  if (reconsidering) {
+    already_routed <- FALSE
+    if (!dry_run) {
+      ingest_file_set_state(con, hash, "seen", reason = NA_character_, reset = TRUE)
+    }
+  }
 
   ingest_file_upsert(con, hash, path, filename = fm$filename, size = fm$size)
 
@@ -110,9 +158,22 @@ route_files <- function(paths, con, dry_run = FALSE) {
     ))
   }
 
+  # R-3.7 + T1.2. `ignored` and `claimed` below are the two branches that
+  # persist on a dry run as well as a real one, which is correct for a file
+  # arriving at `seen`. It cannot hold for a file we are RECONSIDERING under
+  # `dry_run`, though: the reset above was skipped (a preview writes nothing),
+  # so the stored state is still the old TERMINAL verdict and
+  # `ingest_file_set_state()` would abort on it - turning what should be a
+  # clean preview into a spurious `failed` row. Block just those two writes in
+  # that one combination; the returned tibble still reports the verdict, which
+  # is all a preview owes the caller.
+  preview_only <- dry_run && reconsidering
+
   reason <- ignore_rule(fm)
   if (!is.na(reason)) {
-    ingest_file_set_state(con, hash, "ignored", reason)
+    if (!preview_only) {
+      ingest_file_set_state(con, hash, "ignored", reason)
+    }
     return(tibble::tibble(
       path = path, hash = hash, filename = fm$filename, state = "ignored",
       adapter = NA_character_, tier = NA_character_, reason = reason
@@ -182,8 +243,10 @@ route_files <- function(paths, con, dry_run = FALSE) {
   }
 
   if (length(winners) == 1) {
-    ingest_file_set_state(con, hash, "claimed")
-    ingest_file_set_route(con, hash, adapter = winners, tier = winning_tier)
+    if (!preview_only) {
+      ingest_file_set_state(con, hash, "claimed")
+      ingest_file_set_route(con, hash, adapter = winners, tier = winning_tier)
+    }
     return(tibble::tibble(
       path = path, hash = hash, filename = fm$filename, state = "claimed",
       adapter = winners, tier = winning_tier, reason = NA_character_
@@ -220,11 +283,28 @@ route_files <- function(paths, con, dry_run = FALSE) {
   if (!dry_run) {
     ingest_file_set_state(con, hash, "quarantined", "adapter_tie")
     ingest_file_set_route(con, hash, adapter = NA_character_, tier = winning_tier)
-    review_queue_add(
-      con, kind = "adapter_tie", work_order = fm$work_order_guess,
-      source_hash = hash,
-      diagnostics = list(tier = winning_tier, adapters = winners)
-    )
+    # R-3.7: before `reconsider` existed, a tie could only ever be decided
+    # ONCE per hash - `already_routed` guaranteed it - so an unconditional
+    # insert was safe. It no longer is: reconsidering a file whose tie is
+    # still live re-reaches this branch and would open a second identical item
+    # every pass, turning the operator's queue into noise and burying the
+    # items that need a human. Dedupe on the open item for this exact
+    # (kind, source_hash); a CLOSED item is deliberately not matched, so
+    # re-opening after someone resolved and closed one still works.
+    already_queued <- nrow(DBI::dbGetQuery(
+      con,
+      "SELECT 1 FROM review_queue
+        WHERE kind = 'adapter_tie' AND source_hash = ? AND status = 'open'
+        LIMIT 1",
+      params = list(hash)
+    )) > 0
+    if (!already_queued) {
+      review_queue_add(
+        con, kind = "adapter_tie", work_order = fm$work_order_guess,
+        source_hash = hash,
+        diagnostics = list(tier = winning_tier, adapters = winners)
+      )
+    }
   }
   tibble::tibble(
     path = path, hash = hash, filename = fm$filename, state = "quarantined",

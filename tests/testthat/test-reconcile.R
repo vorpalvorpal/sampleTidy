@@ -1647,7 +1647,10 @@ test_that("R-11.5a: a genuinely first-sighted unknown feature finds no existing 
 })
 
 test_that("R-11.5a: reconcile issues no writes while resolving pending rows against existing dangling registry entries (db_transaction spy, alongside the R-9.1 lint)", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path)
+  # withr::defer, not on.exit - a bare on.exit() in a mocking block discards
+  # local_mocked_bindings()'s restore handler (see test-mock-scope-lint.R).
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   called <- FALSE
   testthat::local_mocked_bindings(
     db_transaction = function(con, fn) { called <<- TRUE; fn(con) }

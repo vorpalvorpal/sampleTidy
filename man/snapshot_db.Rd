@@ -17,8 +17,31 @@ the path to the final (non-\code{.tmp}) snapshot file.
 \description{
 Opens \code{db} via \code{with_db_write()}, runs \code{CHECKPOINT} to flush WAL contents
 into the main file, then copies the file to
-\code{dest_dir/monitoring_YYYY-MM-DD.duckdb.tmp} and atomically \code{file.rename()}s
-it to the final dated name. A same-day re-call overwrites the existing
-snapshot (the destination filename is date-only, so it is identical for
-repeat calls on the same day).
+\code{dest_dir/monitoring_YYYY-MM-DD.duckdb.tmp}, verifies the copy actually
+contains tables, and only then atomically \code{file.rename()}s it to the final
+dated name. A same-day re-call overwrites the existing snapshot (the
+destination filename is date-only, so it is identical for repeat calls on
+the same day).
+}
+\details{
+Two refusal layers guard against a good snapshot being replaced by a
+worthless one:
+\itemize{
+\item \strong{\code{db} must already exist.} \code{with_db_write()} opens read-write, and
+DuckDB silently \emph{creates} a missing file on connect - so a mistyped \code{db}
+path used to conjure a brand-new, empty database, checkpoint it (trivially
+valid), and copy it over the dated snapshot the operator actually wanted,
+with no error. A snapshot of a database that did not exist a moment ago
+is never what anyone meant, so this is refused outright before any
+connection is opened.
+\item \strong{The copy is verified before it replaces anything.} After copying to
+\code{tmp_path}, the copy is opened read-only and checked for at least one
+table. Because the \emph{existing} dated snapshot is only ever touched by the
+final \code{file.rename()}, a degenerate or truncated copy is deleted in place
+and the function aborts - the good snapshot on disk is never overwritten
+with it. This also covers an interrupted copy: \code{file.rename()} only runs
+after \code{file.copy()} reports success AND the copy passes verification, so
+a copy that dies partway (returns \code{FALSE}, or leaves a truncated/
+unreadable file) is caught before touching \code{final_path}.
+}
 }
