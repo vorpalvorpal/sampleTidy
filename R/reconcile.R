@@ -1780,6 +1780,17 @@
 #' pending key (or a first-sighting dangling method with no `uuid_lab`) finds
 #' nothing.
 #'
+#' Matrix is deliberately absent from this key, and that is a known limitation
+#' rather than an oversight. A two-section (WATER+SOIL) crosstab measuring one
+#' analyte at one feature, date and method produces two rows differing only by
+#' section matrix; they land on one sample (whose own key is feature +
+#' date/datetime - see `.ct_find_or_create_sample()`) and this key cannot tell
+#' them apart either, so the model cannot represent "same feature and date, two
+#' matrices". Left alone because multi-section crosstabs are legacy and current
+#' exports are single-matrix, but if it recurs do NOT silently pick one matrix
+#' over the other; see the known-limitation note in `dev/HANDOVER.md` and
+#' revisit matrix-in-the-key when the datetime convention is next reworked.
+#'
 #' PLAN-7b round-2 D6: the query below carries an explicit `ORDER BY a.uuid`
 #' (the convention `.rc_resolve_one_analyte()` already uses at `:1232`/
 #' `:1244`, for the identical reason). Without it, when more than one

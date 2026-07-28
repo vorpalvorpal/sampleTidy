@@ -266,6 +266,8 @@ ambiguity notes referenced below.
 - ESdat event gains datetime/sample_type, "unknown"s gone → "R-7.3: ESdat event gains Sample2e datetime and sample_type, unknowns gone"
 - fallback join on feature_raw (single-visit case; see ambiguity note on the "date part") → "R-7.3: fallback join matches on feature_raw when lab_sample_id is absent"
 - engineered datetime mismatch → exactly one review flag, rest of event unblocked (assumes a `needs_review` column - ambiguity noted) → "R-7.3: an engineered sample_datetime_raw mismatch flags exactly one row for review without blocking the rest"
+- **R-7.3a** results but no sample metadata AND no feature_raw → warns and names the work order; either source of a point name suppresses the warning → "R-7.3a: an event with results but no sample metadata AND no feature_raw warns and names the work order; an event with either source of a point name does not" (`test-assemble.R`). Recorded at Phase-9 sign-off: the test existed throughout, only this map entry was missing, which is why R-7.3a carried an UNKNOWN coverage status.
+- **R-7.3 (sample_type conflicts)** a `sample_type` disagreement among matched rows is flagged for review under BOTH row orders → "R-7.3: a sample_type disagreement among matched sample rows is flagged for review regardless of row order" (`test-assemble.R`)
 
 ### R-7.4 multi-work-order ESdat partitioning
 - event contains only its own work order's rows → "R-7.4: multi-work-order ESdat file contributes only its own work order's rows to the event"

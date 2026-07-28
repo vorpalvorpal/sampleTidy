@@ -286,6 +286,11 @@ in code round-trips as a vector. Test in `test-config.R`.
 <!-- block: B-12.12 -->
 ## R-12.12 `sample.organisation` provenance (F19) (low)
 
+**DEFERRED:** the plan text below says it outright - "no criterion pinned yet",
+deferred to the datetime-convention revisit. Confirmed at PLAN-15 Phase-9 sign-off:
+there is deliberately nothing to test here yet, so this is a recorded deferral rather
+than a coverage gap.
+
 `.ct_resolve_samples()`/`.ct_find_or_create_sample()` always write the adapter org
 as `sample.organisation` (`commit.R:116,161`); R-9.2 step 2 says "organisation =
 sampler org if known else org". For ESdat the collector arguably is not ALS. Low
@@ -315,6 +320,13 @@ first). Test in `test-reconcile.R` or `test-commit.R`.
 
 <!-- block: B-12.14 -->
 ## R-12.14 Matrix-not-in-identity-key — documented limitation (A-6)
+
+**DOC-ONLY:** the fix IS the documentation - the plan text below says "Doc-only; no
+test". Discharged at PLAN-15 Phase-9 sign-off: the known-limitation note is in
+`dev/HANDOVER.md`, and the required comments now sit at BOTH identity-key sites -
+`.ct_find_or_create_sample()` (R/commit.R, the sample key) and `.rc_find_existing()`
+(R/reconcile.R, A45's analysis key). Both say explicitly: do not silently pick one
+matrix over the other if this recurs.
 
 A two-section (WATER+SOIL) crosstab measuring the same analyte at one
 feature+date+method yields two rows whose only difference is section matrix; they
@@ -385,6 +397,11 @@ call. CONTRACT A13's layout clause is re-pinned on landing.
 
 <!-- block: B-12.16 -->
 ## R-12.16 Reconciler hot-path precompute (PERF-1, PERF-2) — optional
+
+**DEFERRED:** optional performance work, marked so in the heading itself and
+"not load-bearing at fixture scale" in the text below. Not undertaken; re-confirmed
+as a deliberate deferral at PLAN-15 Phase-9 sign-off. Behaviour is unchanged, which
+is why no test names it.
 
 Not load-bearing at fixture scale, but the reconciler is the corpus hot path:
 - **PERF-1:** `.rc_feature_candidates()` / `.rc_lab_method_candidates()`

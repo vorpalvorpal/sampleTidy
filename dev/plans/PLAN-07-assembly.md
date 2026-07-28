@@ -54,6 +54,34 @@ disagreement in the *date part* marks the row `needs_review` payload
 - an engineered datetime mismatch produces exactly one review payload and
   does not block the rest of the event.
 
+**Added at PLAN-15 Phase 8b.** The rule above ("sample-metadata wins for
+`sample_type`") settles a result row disagreeing with its sample row. It never
+covered *two matched sample rows disagreeing with each other*, and that case
+silently resolved by arrival order — deciding whether a row committed or was
+dropped by the QC filter, since LAB_D rows are filtered and Normal rows are
+not. Such a disagreement is now flagged for review (`value_conflict` /
+`sample_type_mismatch`) under either row order, matching what the
+`sample_datetime_raw` check two lines above it already did. Criterion:
+- a `sample_type` disagreement among matched sample rows is flagged for review
+  regardless of the order the rows arrive in.
+
+## R-7.3a Event with results but neither sample metadata nor `feature_raw`
+
+Declared retrospectively at PLAN-15 Phase-9 sign-off. The behaviour and its
+test both predate this heading — `test-assemble.R` has covered it throughout
+— but no plan declared the ID, so the criterion lint reported it as UNKNOWN
+("declared by no plan") while the coverage lint could not credit it. Writing
+it down is the whole fix; no behaviour changes.
+
+An event carrying result rows but no sample-metadata source *and* no
+`feature_raw` has no way to name its sampling point. It warns, naming the work
+order so the operator can find the file, rather than failing silently or
+aborting the batch. An event with either source of a point name does not warn.
+Criteria:
+- results with no sample metadata and no `feature_raw` warn, and the warning
+  names the work order;
+- an event with either source of a point name produces no such warning.
+
 ## R-7.4 Multi-work-order ESdat partitioning
 
 An ESdat file whose results span several work orders (QC context; DESIGN

@@ -693,6 +693,13 @@ pin a shape, and the behavioural criteria are where the gate really is.
   that difference must be pinned rather than assumed.
 
 ### R-16.16 review_queue()'s documented contract matches reality
+
+**DOC-ONLY:** gated by inspection at sign-off rather than by a source-scanning
+meta-test, per RULING 2 which retired that instrument. Inspected and PASSED at
+PLAN-15 Phase-9 sign-off: `review_queue()`'s roxygen now enumerates the typed
+identity columns and qualifies the remainder as "the diagnostics JSON remainder",
+so the unqualified "JSON text" description this criterion was written against is
+gone.
 - `R/mutate.R:577` no longer describes the payload as "JSON text" without qualification.
   Doc-only, gated by inspection at sign-off rather than by a source-scanning meta-test —
   per RULING 2, that instrument is retired.
