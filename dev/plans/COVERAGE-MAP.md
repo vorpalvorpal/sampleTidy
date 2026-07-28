@@ -455,8 +455,20 @@ and temp dirs start actually being cleaned up, and any test that had come to
 depend on the leak would begin failing. **Swept 2026-07-29**, smallest file
 first, each tier run before the next; no fallout materialised. The baseline is
 now `integer(0)`: every file must have zero, and any entry added back is a
-regression being tolerated. Suite-wide after the sweep: no `sampletidy.*` option
-leaks out of a full run, and `test-ingest.R` leaves no temp directory behind.
+regression being tolerated.
+
+Chasing the three temp directories that STILL survived a full run after the
+sweep found a hole in the rule itself: it only knew the indirect carrier (a
+setup helper binding via `.local_envir`) and never the direct one (a
+`withr::local_*()` call written straight into the test body, binding to that
+very frame). `test-pending.R` had exactly that shape and nothing fired. Rule 2
+now collects both kinds of carrier, with a calibration pinning that a bare
+`local_*()` counts for its own frame while one passing `.local_envir` does not.
+The other two were a different class entirely - a bare `tempfile()` in
+`test-db-connect.R`'s subprocess helper that registered no cleanup at all.
+Suite-wide after both fixes: **no `sampletidy.*` option leaks out of a full run,
+and a full run leaves zero temp directories behind** (measured 0 before / 0
+after, against 47 from `test-ingest.R` alone before any of this).
 
 ### Traceability lint (`tests/testthat/test-coverage-map-lint.R`) - added 2026-07-28
 Not a criterion of any plan - a guard on THIS document. Every test name quoted

@@ -15,7 +15,13 @@
 #' Returns TRUE iff a fresh OS process can immediately open `path` read-write
 #' and disconnect cleanly (i.e. no OS-level lock is held on it by us).
 subprocess_can_connect_rw <- function(path, timeout_s = 5) {
-  script <- tempfile(fileext = ".R")
+  # local_tempfile(), not tempfile(): this helper is called once per test that
+  # needs a cross-process lock check, and a bare tempfile() registers no cleanup
+  # at all, so every call left a 231-byte script behind in tempdir() forever.
+  # Cleanup is bound to THIS function's frame, which is safe on both exits below
+  # - `p$wait()` has returned or the process has been killed by then, so nothing
+  # is still reading the script.
+  script <- withr::local_tempfile(fileext = ".R")
   writeLines(c(
     "path <- commandArgs(trailingOnly = TRUE)[1]",
     "res <- tryCatch({",
