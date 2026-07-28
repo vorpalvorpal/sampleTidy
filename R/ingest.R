@@ -650,15 +650,17 @@
 #' real run over the SAME directory committed nothing - the exact
 #' consequence of the cautious habit of dry-running first.
 #'
-#' [route_files()] gets the same `dry_run` treatment for the one decision it
-#' can make that is NOT safe to persist unconditionally: an `adapter_tie`
-#' (two adapters claiming a file at the same tier) writes a `review_queue`
-#' item alongside the terminal `quarantined` state, and both are skipped
-#' under `dry_run` together (see the tie branch in `R/router.R` for why the
-#' state can't be persisted alone). `claimed`/`unclaimed` decisions still
-#' persist on a dry run exactly as before - they carry no such review item
-#' and (for `claimed`) are still re-visited by the `dry_run`-gated stages
-#' above.
+#' [route_files()] gets the same `dry_run` treatment for every decision it
+#' makes that is NOT safe to persist unconditionally: `unclaimed`, `failed`
+#' and `adapter_tie` are all skipped under `dry_run` (state, route and, for
+#' a tie, its `review_queue` item, all together) because each writes one of
+#' `ingest_file`'s TERMINAL states, and that state is a verdict about the
+#' adapter registry as it stood at that moment - not a durable fact about
+#' the file - so persisting it during a preview would permanently stop the
+#' hash from ever being re-decided once the registry is fixed (see the tie
+#' branch in `R/router.R` for the full reasoning). Only `claimed` persists on
+#' a dry run: it is a non-terminal handoff still re-visited by the
+#' `dry_run`-gated stages above, not a verdict.
 #'
 #' When `st_config("remove_ingested")` is `TRUE` (default `FALSE`, A13) and
 #' this run produced a successful snapshot, every input file whose content

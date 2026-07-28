@@ -149,13 +149,16 @@ all_table_counts <- function(db_path) {
   )
 }
 
-# `route_files()` persists a fresh hash's OWN routing decision (`claimed`/
-# `unclaimed`/`failed`) whether or not the run is a dry run (T1.2) - a later
-# run's "already routed" check needs that row to avoid re-deciding it, and
-# unlike `adapter_tie` (below), neither carries a further side effect that a
-# dry run could leave orphaned. `ingest_sighting` is the same hash's per-path
-# bookkeeping. Both are ops tables, not core data - every OTHER base table
-# must show zero growth from a dry run.
+# `route_files()` always upserts a fresh hash's `ingest_file` row (at least
+# to record the sighting), so `ingest_file` grows even on a dry run - but
+# only `claimed` advances that row's STATE on a dry run (T1.2). `unclaimed`,
+# `failed` and `adapter_tie` all leave the row at `seen`: each would write a
+# TERMINAL state, which is a verdict about the adapter registry at that
+# moment, not a durable fact about the file, so persisting it during a
+# preview would permanently stop a later run from re-deciding the hash once
+# the registry is fixed (see the tie branch in `R/router.R`). `ingest_sighting`
+# is the same hash's per-path bookkeeping. Both are ops tables, not core
+# data - every OTHER base table must show zero growth from a dry run.
 .dry_run_exempt_tables <- c("ingest_file", "ingest_sighting")
 
 expect_dry_run_writes_nothing_but_routing <- function(db_path, run) {
@@ -238,6 +241,78 @@ test_that("R-3.5/T1.2: an adapter tie writes nothing (review_queue/change_log, o
   DBI::dbDisconnect(con, shutdown = TRUE)
   expect_equal(nrow(queue), 1)
   expect_identical(queue$status[[1]], "open")
+})
+
+test_that("R-3.5/T1.2: an unclaimed file writes nothing terminal under dry_run, and a later real run still quarantines it", {
+  setup <- ingest_test_setup()
+  input_dir <- withr::local_tempdir()
+
+  # No built-in adapter claims a bare `.xyz` file (esdat/crosstab require a
+  # matching extension, acirl-field requires xls/xlsx) - a real verdict of
+  # `unclaimed`, not a fixture artefact.
+  nobody <- st_test_write_file(input_dir, "NOBODY_WANTS_THIS_0.xyz", content = "irrelevant")
+  nobody_hash <- hash_file(nobody)
+
+  expect_dry_run_writes_nothing_but_routing(setup$db_path, function() {
+    suppressMessages(ingest_dir(input_dir, db = setup$db_path, dry_run = TRUE))
+  })
+
+  # the verdict is not merely un-persisted in aggregate (the row-count guard
+  # above) - the hash itself must still be at `seen`, not stuck `quarantined`
+  # (a terminal state route_files() never re-decides), or adding/fixing an
+  # adapter later could never reclaim this file.
+  dry_state <- ingest_file_states(setup$db_path)
+  dry_row <- dry_state[!is.na(dry_state$hash) & dry_state$hash == nobody_hash, ]
+  expect_equal(nrow(dry_row), 1)
+  expect_identical(dry_row$state, "seen")
+
+  suppressMessages(ingest_dir(input_dir, db = setup$db_path, dry_run = FALSE))
+
+  real_state <- ingest_file_states(setup$db_path)
+  real_row <- real_state[!is.na(real_state$hash) & real_state$hash == nobody_hash, ]
+  expect_equal(nrow(real_row), 1)
+  expect_identical(real_row$state, "quarantined")
+  expect_identical(real_row$state_reason, "unclaimed")
+})
+
+test_that("R-3.5/T1.2/R-12.1: a match() crash writes nothing terminal under dry_run, and a later real run still marks the file failed", {
+  setup <- ingest_test_setup()
+  input_dir <- withr::local_tempdir()
+
+  thrower_id <- "t8b_dryrun_thrower"
+  register_adapter(list(
+    id = thrower_id, version = "1.0",
+    match = function(fm) if (grepl("CRASHME", fm$filename)) stop("kaboom from match()") else "no",
+    parse = function(path, file_meta) stop("never called: file is failed, not claimed")
+  ))
+  withr::defer({
+    if (exists(thrower_id, envir = sampleTidy:::.st_adapter_registry, inherits = FALSE)) {
+      rm(list = thrower_id, envir = sampleTidy:::.st_adapter_registry)
+    }
+  })
+
+  crashy <- st_test_write_file(input_dir, "CRASHME_0.csv", content = "a,b\n1,2\n")
+  crashy_hash <- hash_file(crashy)
+
+  expect_dry_run_writes_nothing_but_routing(setup$db_path, function() {
+    suppressMessages(ingest_dir(input_dir, db = setup$db_path, dry_run = TRUE))
+  })
+
+  # as above: the row itself must still be `seen`, not stuck `failed` - a
+  # buggy adapter fixed after a dry-run preview must not have permanently
+  # condemned every file it crashed on while the bug was live.
+  dry_state <- ingest_file_states(setup$db_path)
+  dry_row <- dry_state[!is.na(dry_state$hash) & dry_state$hash == crashy_hash, ]
+  expect_equal(nrow(dry_row), 1)
+  expect_identical(dry_row$state, "seen")
+
+  suppressMessages(ingest_dir(input_dir, db = setup$db_path, dry_run = FALSE))
+
+  real_state <- ingest_file_states(setup$db_path)
+  real_row <- real_state[!is.na(real_state$hash) & real_state$hash == crashy_hash, ]
+  expect_equal(nrow(real_row), 1)
+  expect_identical(real_row$state, "failed")
+  expect_match(real_row$state_reason, "kaboom from match()", fixed = TRUE)
 })
 
 test_that("R-9.5: an adapter crash on one file is recorded as failed and the run completes", {
