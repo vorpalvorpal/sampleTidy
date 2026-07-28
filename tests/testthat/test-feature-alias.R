@@ -1809,6 +1809,169 @@ fa_fk_setup <- function() {
   list(path = path, con = seed_con(path))
 }
 
+#' Like `fa_fk_setup()` but with MISMATCHED units (`lab_method` mg/L,
+#' `analyte` ug/L) so a real conversion actually changes the stored value.
+#' `fa_fk_setup()`'s own fixture uses matching units on purpose (it is scoped
+#' to the FK-repoint behaviour, not conversion math), which makes "conversion
+#' ran" and "conversion never ran" leave the identical number in place -
+#' useless for catching a torn repoint-without-conversion, which needs
+#' exactly that distinction to be observable.
+fa_fk_tear_setup <- function() {
+  env <- parent.frame()
+  dir <- withr::local_tempdir(.local_envir = env)
+  path <- file.path(dir, "fk-tear-seed.duckdb")
+  withr::local_options(list("sampletidy.live_db" = path), .local_envir = env)
+
+  {
+    con <- DBI::dbConnect(duckdb::duckdb(), path, read_only = FALSE)
+    on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+    ensure_schema(con) # review_queue/change_log/schema_version - reused, not re-derived
+
+    DBI::dbExecute(con, "CREATE TABLE analyte (
+      uuid VARCHAR PRIMARY KEY, name VARCHAR, units VARCHAR,
+      conversion_constant DOUBLE, type VARCHAR, CAS VARCHAR)")
+    DBI::dbExecute(con, "CREATE TABLE lab_method (
+      uuid VARCHAR PRIMARY KEY,
+      uuid_analyte VARCHAR REFERENCES analyte(uuid),
+      name VARCHAR, method VARCHAR, organisation VARCHAR,
+      rl_low DOUBLE, rl_high DOUBLE, reported_as VARCHAR, api VARCHAR,
+      uuid_project VARCHAR, uuid_feature VARCHAR, comments VARCHAR,
+      units VARCHAR, conversion_constant DOUBLE)")
+    DBI::dbExecute(con, "CREATE TABLE analysis (
+      uuid VARCHAR PRIMARY KEY, uuid_sample VARCHAR,
+      uuid_lab VARCHAR REFERENCES lab_method(uuid),
+      value DOUBLE, value_chr VARCHAR, quantified BOOLEAN,
+      rl_low DOUBLE, rl_high DOUBLE, purpose VARCHAR, comments VARCHAR)")
+
+    DBI::dbExecute(con, "INSERT INTO analyte (uuid, name, units, type, CAS) VALUES
+      ('a-9501', 'Tear Analyte', 'ug/L', 'metal', NULL)")
+    DBI::dbExecute(con, "INSERT INTO lab_method
+      (uuid, uuid_analyte, name, method, organisation, rl_low, units) VALUES
+      ('lm-9501', NULL, 'Tear Method', 'M-TEAR', 'ALS', 0.1, 'mg/L')")
+    DBI::dbExecute(con, "INSERT INTO analysis
+      (uuid, uuid_sample, uuid_lab, value, quantified, rl_low) VALUES
+      ('an-9501', 's-9501-nofk', 'lm-9501', 5, TRUE, 0.1)")
+  }
+
+  list(path = path, con = seed_con(path))
+}
+
+test_that("Phase-8b regression: a bulk confirm where a LATER item aborts does not tear an EARLIER FK-dance item's link away from its unit conversion", {
+  # Reproduces the tear this once opened: the F.14 pre-pass used to commit
+  # ONLY the repoint for every item up front, leaving the conversion to the
+  # shared transaction below - so item 2 aborting rolled item 1's conversion
+  # back while item 1's already-separately-committed repoint stayed. The
+  # fix bundles repoint+conversion into one pre-pass unit per item, so
+  # neither can be undone by a sibling item's failure.
+  setup <- fa_fk_tear_setup()
+  con <- setup$con
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  before_value <- DBI::dbGetQuery(con, "SELECT value FROM analysis WHERE uuid = 'an-9501'")$value[[1]]
+  expect_equal(before_value, 5)
+
+  # item 2 (lm-missing/a-missing) does not exist - aborts the shared
+  # transaction that a pre-fix build would ALSO be relying on to hold item
+  # 1's conversion.
+  err <- tryCatch(
+    confirm_analyte_methods(
+      c("lm-9501", "lm-missing"), c("a-9501", "a-missing"),
+      confirmed_by = "alice"
+    ),
+    error = function(e) e
+  )
+  expect_true(inherits(err, "error"))
+
+  after_lab <- DBI::dbGetQuery(con, "SELECT uuid_analyte FROM lab_method WHERE uuid = 'lm-9501'")
+  expect_identical(after_lab$uuid_analyte[[1]], "a-9501") # F.14 repoint stays committed, as documented
+
+  after_value <- DBI::dbGetQuery(con, "SELECT value FROM analysis WHERE uuid = 'an-9501'")$value[[1]]
+  expect_equal(after_value, 5000) # 5 mg/L -> 5000 ug/L - conversion travels WITH the repoint, not lost to it
+})
+
+test_that("Phase-8b regression: already_confirmed does not infer a conversion happened from the link alone - it completes an outstanding conversion left by an earlier, incomplete confirmation (ordinary in-transaction writer)", {
+  # The "incomplete confirmation" precondition is built by CALLING
+  # confirm_analyte_methods() itself, not by hand-authoring a change_log row:
+  # a fixture-authored reason string only ever tests the reader
+  # (.am_link_set_by_confirm()) against itself, never against a real writer.
+  #
+  # lm-9601 has no dependent analyses yet, so the shared test schema (no
+  # declared FK - see .fa_fk_columns()'s own docstring) sends it through
+  # .am_confirm_one_method()'s ordinary in-transaction path, not the F.14
+  # pre-pass - exercising the writer at R/feature-alias.R:1838. A brand-new
+  # analysis then arrives (as ingest would add one) for an already-confirmed
+  # method, still in the method's raw units: real "outstanding work left for
+  # a later run" instead of a fabricated one.
+  setup <- fa_setup()
+  con <- setup$con
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  DBI::dbExecute(con, "INSERT INTO analyte (uuid, name, units, type, CAS) VALUES
+    ('a-9601', 'Late Analyte', 'ug/L', 'metal', NULL)")
+  DBI::dbExecute(con, "INSERT INTO lab_method
+    (uuid, uuid_analyte, name, method, organisation, rl_low, units) VALUES
+    ('lm-9601', NULL, 'Late Method', 'M-LATE', 'ALS', 0.1, 'mg/L')")
+
+  first <- confirm_analyte_methods("lm-9601", "a-9601", confirmed_by = "alice")
+  expect_equal(first$action[[1]], "confirmed")
+  expect_equal(first$n_converted[[1]], 0) # nothing dependent on it yet
+
+  DBI::dbExecute(con, "INSERT INTO analysis
+    (uuid, uuid_sample, uuid_lab, value, quantified, rl_low) VALUES
+    ('an-9601', 's-0001', 'lm-9601', 5, TRUE, 0.1)")
+
+  result <- confirm_analyte_methods("lm-9601", "a-9601", confirmed_by = "alice")
+
+  expect_equal(result$action[[1]], "already_confirmed")
+  expect_equal(result$n_converted[[1]], 1) # completed the newly-arrived analysis's conversion, not a blind 0
+
+  after_value <- DBI::dbGetQuery(con, "SELECT value FROM analysis WHERE uuid = 'an-9601'")$value[[1]]
+  expect_equal(after_value, 5000) # 5 mg/L -> 5000 ug/L
+})
+
+test_that("Phase-8b regression: already_confirmed recognizes a link set by the F.14 pre-pass writer too, and finishes the conversion a simulated crash left outstanding", {
+  # Same defect, the OTHER writer: .am_fk_prerepoint()'s F.14 pre-pass
+  # commits its repoint in separately-committed statements, before the main
+  # transaction opens (see the guarded-exception note at the head of this
+  # file) - so a real crash between that repoint and .am_convert_analyses()
+  # finishing can leave exactly this state on a real database. Simulated here
+  # by making .am_convert_analyses() throw, mocked only for the duration of
+  # one call (the mock unwinds when simulate_crash() returns) so the second,
+  # real call below is unmocked.
+  setup <- fa_fk_tear_setup()
+  con <- setup$con
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  before_value <- DBI::dbGetQuery(con, "SELECT value FROM analysis WHERE uuid = 'an-9501'")$value[[1]]
+  expect_equal(before_value, 5)
+
+  simulate_crash <- function() {
+    testthat::local_mocked_bindings(
+      .am_convert_analyses = function(...) stop("simulated crash mid-conversion")
+    )
+    tryCatch(
+      confirm_analyte_methods("lm-9501", "a-9501", confirmed_by = "alice"),
+      error = function(e) e
+    )
+  }
+  err <- simulate_crash()
+  expect_true(inherits(err, "error"))
+
+  mid_lab <- DBI::dbGetQuery(con, "SELECT uuid_analyte FROM lab_method WHERE uuid = 'lm-9501'")
+  expect_identical(mid_lab$uuid_analyte[[1]], "a-9501") # F.14 repoint durably committed
+  mid_value <- DBI::dbGetQuery(con, "SELECT value FROM analysis WHERE uuid = 'an-9501'")$value[[1]]
+  expect_equal(mid_value, 5) # conversion never ran - the crash landed before it
+
+  result <- confirm_analyte_methods("lm-9501", "a-9501", confirmed_by = "alice")
+
+  expect_equal(result$action[[1]], "already_confirmed")
+  expect_equal(result$n_converted[[1]], 1) # completed the outstanding conversion, not a blind 0
+
+  after_value <- DBI::dbGetQuery(con, "SELECT value FROM analysis WHERE uuid = 'an-9501'")$value[[1]]
+  expect_equal(after_value, 5000) # 5 mg/L -> 5000 ug/L
+})
+
 test_that("R-15.34: confirm_analyte_methods() succeeds on a method WITH dependent analyses (real FK chain: analyte <- lab_method <- analysis) - lab_method.uuid_analyte moves AND every dependent analysis still points at the same lab_method", {
   setup <- fa_fk_setup()
   con <- setup$con

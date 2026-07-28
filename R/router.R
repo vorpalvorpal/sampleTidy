@@ -54,15 +54,27 @@ ignore_rule <- function(fm) {
 #'
 #' @param paths character vector of file paths to route.
 #' @param con an open read-write DBI connection (R-3.5/A21).
+#' @param dry_run ingest.R's dry-run switch. The `claimed`/`unclaimed`
+#'   decisions persist on both a dry and a real run (T1.2) - a later run's
+#'   "already routed" check reads them back instead of re-deciding, and
+#'   nothing downstream is lost by that (a persisted `claimed` state still
+#'   waits on its own `dry_run`-gated parse/assemble/reconcile transitions;
+#'   a persisted `unclaimed` quarantine carries no further side effect). An
+#'   `adapter_tie` decision is the one exception: it is skipped entirely
+#'   under `dry_run` (state, route AND the `review_queue` item together),
+#'   because persisting just the terminal state would permanently stop this
+#'   hash from ever being re-decided - see the comment at the tie branch
+#'   below.
 #' @return a tibble `(path, hash, filename, state, adapter, tier, reason)`.
 #' @keywords internal
 #' @noRd
-route_files <- function(paths, con) {
+route_files <- function(paths, con, dry_run = FALSE) {
   checkmate::assert_character(paths, any.missing = FALSE)
+  checkmate::assert_flag(dry_run)
 
   rows <- lapply(paths, function(path) {
     tryCatch(
-      .st_route_one_file(path, con),
+      .st_route_one_file(path, con, dry_run),
       error = function(e) {
         tibble::tibble(
           path = path, hash = NA_character_, filename = basename(path),
@@ -76,7 +88,7 @@ route_files <- function(paths, con) {
   dplyr::bind_rows(rows)
 }
 
-.st_route_one_file <- function(path, con) {
+.st_route_one_file <- function(path, con, dry_run = FALSE) {
   fm <- file_meta(path)
   hash <- fm$hash
 
@@ -172,13 +184,36 @@ route_files <- function(paths, con) {
   }
 
   # Tie at the winning tier: quarantine, never pick a winner (DESIGN §5).
-  ingest_file_set_state(con, hash, "quarantined", "adapter_tie")
-  ingest_file_set_route(con, hash, adapter = NA_character_, tier = winning_tier)
-  review_queue_add(
-    con, kind = "adapter_tie", work_order = fm$work_order_guess,
-    source_hash = hash,
-    diagnostics = list(tier = winning_tier, adapters = winners)
-  )
+  #
+  # Unlike the `claimed`/`unclaimed` branches above, this decision is NOT
+  # persisted under `dry_run`. Those two are safe to persist regardless: a
+  # persisted `claimed` state is a non-terminal handoff that a later run
+  # still has to act on (parse/assemble/reconcile all re-check `dry_run`
+  # themselves before advancing it further), and a persisted `unclaimed`
+  # quarantine carries no side effect beyond the state itself. `adapter_tie`
+  # is different on both counts: `quarantined` is a TERMINAL state (R-1.6),
+  # so once written it makes `already_routed` true forever and `route_files()`
+  # never re-evaluates this hash again - and the whole point of the tie is
+  # the `review_queue` item that names the tied adapters for a human to
+  # resolve. Persisting the state during a dry run (a preview a caller may
+  # run repeatedly, e.g. against a temporarily mis-registered adapter set)
+  # while skipping the item - the previous shape here - would have permanently
+  # quarantined the hash WITHOUT ever recording why, so even a later real run
+  # over the identical, still-tied input would just read the stale state back
+  # and silently skip both the review item AND any chance of the file being
+  # claimed once the tie is resolved. Neither write happens here under a dry
+  # run; the returned row still reports the tie for the preview, but the
+  # `ingest_file` row itself is left at `seen` so the FIRST run that is not a
+  # dry run makes this decision - state, route and review item - atomically.
+  if (!dry_run) {
+    ingest_file_set_state(con, hash, "quarantined", "adapter_tie")
+    ingest_file_set_route(con, hash, adapter = NA_character_, tier = winning_tier)
+    review_queue_add(
+      con, kind = "adapter_tie", work_order = fm$work_order_guess,
+      source_hash = hash,
+      diagnostics = list(tier = winning_tier, adapters = winners)
+    )
+  }
   tibble::tibble(
     path = path, hash = hash, filename = fm$filename, state = "quarantined",
     adapter = NA_character_, tier = winning_tier, reason = "adapter_tie"

@@ -251,75 +251,103 @@ test_that("PLAN-14 R-14.1/A32: db_update()/db_delete() abort when a composite `k
 #     `sql <- paste0("UPDATE ...", ...); dbExecute(con, sql)` shape was
 #     missed - decoy B below only ever passed because it ALSO contains the
 #     unconditionally-forbidden `duckdb_register`, not because this pattern
-#     covered the shape its own name claims. `.rq9_var_built_sql_pattern`
-#     below closes it: a symbol assigned from a `paste0`/`paste`/`sprintf`/
-#     `glue` call containing an INSERT/UPDATE/DELETE literal, then passed to
-#     `dbExecute()` as a bare argument - checked on the comment-only-stripped
-#     text too, for the same string-content reason.
+#     covered the shape its own name claims. Closed by matching the RHS of a
+#     `paste0`/`paste`/`sprintf`/`glue` assignment for an INSERT/UPDATE/
+#     DELETE literal, then checking whether that variable is referenced
+#     inside a `dbExecute()` call anywhere in the file.
+#
+# Phase-8b F8 (round-4, the SAME class again, one level up): the write-door
+# check above matched the SQL keyword literally (`INSERT|UPDATE|DELETE`),
+# case-sensitively - so `DBI::dbExecute(con, "delete from feature")`, valid
+# SQL DuckDB executes identically to the uppercase form, walked straight
+# past it. Fixed below by finding the `dbExecute()` CALL on the parse tree
+# (`.st_find_calls()`, immune to line-wrapping and to a comment or forbidden
+# name merely mentioned elsewhere) and then checking ITS OWN string-literal
+# argument(s) for the keyword case-INsensitively - the keyword-inside-a-
+# string check itself has no parse-tree equivalent (SQL is not R syntax),
+# so it stays a content regex, just one now anchored to the exact call span
+# the parser found rather than a `[^)]*` character class reconstructing that
+# boundary by hand (which a `)` inside the SQL string itself, e.g. `IN
+# (1,2)`, could also break).
 
-.rq9_forbidden_calls_pattern <- "dbAppendTable|dbSendStatement|dbWriteTable|duckdb_register"
-.rq9_write_door_pattern <- "dbExecute\\s*\\([^)]*(INSERT|UPDATE|DELETE)"
-.rq9_var_built_sql_pattern <- "\\b([A-Za-z._][A-Za-z0-9._]*)\\s*<-\\s*(paste0?|sprintf|glue(::glue)?)\\([^)]*(INSERT|UPDATE|DELETE)"
+.rq9_forbidden_calls <- c("dbAppendTable", "dbSendStatement", "dbWriteTable", "duckdb_register")
+.rq9_sql_builder_calls <- c("paste0", "paste", "sprintf", "glue")
+.rq9_write_door_keyword_pattern <- "INSERT|UPDATE|DELETE"
 
-#' Strip only real `#` comment tokens (via `getParseData()`), joining `lines`
-#' into one string - string content is deliberately PRESERVED (unlike
-#' `.st_strip_source_noise()`): the dbExecute()/paste0() checks below need
-#' the call's own SQL string argument intact. Silently returns the raw text
-#' on a parse failure (round-2 behaviour) - safe here because `.rq9_scan()`
-#' always calls `.st_strip_source_noise()` FIRST, which already aborted
-#' loudly (A8) if `lines` cannot be parsed at all.
+#' TRUE if any of `str_rows` (a `getParseData()` STR_CONST subset) falls
+#' inside `outer`'s span and contains an INSERT/UPDATE/DELETE keyword,
+#' matched case-insensitively (valid SQL, unlike the R identifiers matched
+#' elsewhere in this scan, is not case-sensitive).
 #' @keywords internal
-.rq9_strip_comments <- function(lines) {
-  text <- paste(lines, collapse = "\n")
-  pd <- tryCatch(
-    utils::getParseData(parse(text = text, keep.source = TRUE)),
-    error = function(e) NULL
-  )
-  if (is.null(pd) || nrow(pd) == 0) {
-    return(text)
+.rq9_span_has_write_keyword <- function(outer, str_rows) {
+  if (nrow(str_rows) == 0) {
+    return(FALSE)
   }
-  comments <- pd[pd$token == "COMMENT", ]
-  if (nrow(comments) == 0) {
-    return(text)
-  }
-  out_lines <- lines
-  for (i in seq_len(nrow(comments))) {
-    ln <- comments$line1[[i]]
-    col1 <- comments$col1[[i]]
-    s <- out_lines[[ln]]
-    if (col1 <= nchar(s) + 1) {
-      out_lines[[ln]] <- substr(s, 1, col1 - 1)
-    }
-  }
-  paste(out_lines, collapse = "\n")
+  inside <- str_rows[.st_span_contains(
+    outer$line1, outer$col1, outer$line2, outer$col2,
+    str_rows$line1, str_rows$col1, str_rows$line2, str_rows$col2
+  ), , drop = FALSE]
+  nrow(inside) > 0 && any(grepl(.rq9_write_door_keyword_pattern, inside$text, ignore.case = TRUE, perl = TRUE))
 }
 
 #' TRUE if `lines` (a file's raw `readLines()` output) contains a forbidden
-#' raw-write call: one of the four unconditionally-forbidden identifiers
-#' (matched comment/string-immune, via `.st_strip_source_noise()`), a
+#' raw-write call: one of the four unconditionally-forbidden identifiers, a
 #' write-door literal sitting inside the `dbExecute(...)` call itself, or
-#' (A6) a symbol assigned via `paste0`/`sprintf`/`glue` and passed to
-#' `dbExecute()` as a bare argument. Aborts (A8) rather than returning FALSE
-#' when `lines` cannot be parsed at all.
+#' (A6) a symbol assigned via `paste0`/`sprintf`/`glue` and referenced
+#' inside a `dbExecute()` call. All three are matched on the PARSE TREE
+#' (`.st_find_calls()`/`.st_find_assignments()`/`.st_span_contains()`), so
+#' none can be evaded by line-wrapping, a comment, or a merely-mentioned
+#' identifier in a string; only the SQL-keyword-inside-a-string-literal
+#' check is still a (case-insensitive) content regex, because SQL text is
+#' not something `getParseData()` parses. Aborts (A8) rather than returning
+#' FALSE when `lines` cannot be parsed at all.
 #' @keywords internal
 .rq9_scan <- function(lines) {
-  noise_free <- paste(.st_strip_source_noise(lines, file_label = "A32 lint fixture"), collapse = "\n")
-  if (grepl(.rq9_forbidden_calls_pattern, noise_free, perl = TRUE)) {
+  pd <- .st_parse_tree(lines, file_label = "A32 lint fixture")
+
+  if (nrow(.st_find_calls(pd, .rq9_forbidden_calls)) > 0) {
     return(TRUE)
   }
 
-  comment_free <- .rq9_strip_comments(lines)
-  if (grepl(.rq9_write_door_pattern, comment_free, perl = TRUE)) {
-    return(TRUE)
+  strs <- pd[pd$token == "STR_CONST", , drop = FALSE]
+  execute_calls <- .st_find_calls(pd, "dbExecute")
+  for (i in seq_len(nrow(execute_calls))) {
+    if (.rq9_span_has_write_keyword(execute_calls[i, ], strs)) {
+      return(TRUE)
+    }
   }
-  hits <- regmatches(comment_free, gregexpr(.rq9_var_built_sql_pattern, comment_free, perl = TRUE))[[1]]
-  if (length(hits) == 0) {
+
+  if (nrow(execute_calls) == 0) {
     return(FALSE)
   }
-  vars <- unique(sub(.rq9_var_built_sql_pattern, "\\1", hits, perl = TRUE))
-  for (v in vars) {
-    call_pattern <- paste0("dbExecute\\s*\\([^,]*,\\s*", v, "\\s*[,)]")
-    if (grepl(call_pattern, comment_free, perl = TRUE)) {
+  build_calls <- .st_find_calls(pd, .rq9_sql_builder_calls)
+  if (nrow(build_calls) == 0) {
+    return(FALSE)
+  }
+  assigns <- .st_find_assignments(pd)
+  sql_vars <- character(0)
+  for (i in seq_len(nrow(assigns))) {
+    a <- assigns[i, ]
+    rhs_has_builder <- any(.st_span_contains(
+      a$rhs_line1, a$rhs_col1, a$rhs_line2, a$rhs_col2,
+      build_calls$line1, build_calls$col1, build_calls$line2, build_calls$col2
+    ))
+    if (rhs_has_builder && .rq9_span_has_write_keyword(
+      list(line1 = a$rhs_line1, col1 = a$rhs_col1, line2 = a$rhs_line2, col2 = a$rhs_col2), strs
+    )) {
+      sql_vars <- c(sql_vars, a$lhs)
+    }
+  }
+  if (length(sql_vars) == 0) {
+    return(FALSE)
+  }
+  refs <- pd[pd$token == "SYMBOL" & pd$text %in% sql_vars, , drop = FALSE]
+  for (i in seq_len(nrow(execute_calls))) {
+    call <- execute_calls[i, ]
+    if (any(.st_span_contains(
+      call$line1, call$col1, call$line2, call$col2,
+      refs$line1, refs$col1, refs$line2, refs$col2
+    ))) {
       return(TRUE)
     }
   }
@@ -398,6 +426,60 @@ test_that("Phase-7b round-3 A6 (decoy D): the scanner catches a paste0()-built U
   decoy <- c(
     "k <- function(con, tbl) {",
     "  sql <- paste0(\"UPDATE \", tbl, \" SET x = 1\")",
+    "  DBI::dbExecute(con, sql)",
+    "}"
+  )
+  expect_true(.rq9_scan(decoy))
+})
+
+# ---- Phase-8b F8 self-tests: the write-door keyword check is case-blind ----
+#
+# `.rq9_write_door_pattern` matched INSERT/UPDATE/DELETE case-sensitively, so
+# `dbExecute(con, "delete from feature")` - valid SQL, DuckDB executes it
+# identically to the uppercase form - walked straight past the lint (decoy A
+# above already proved the UPPERCASE form was caught; these prove the
+# lowercase/mixed-case/wrapped/commented forms of the SAME violation are too).
+
+test_that("Phase-8b F8 (a, one line): a lowercase raw DELETE inside dbExecute() is caught", {
+  decoy <- c(
+    "f <- function(con) DBI::dbExecute(con, \"delete from feature\")"
+  )
+  expect_true(.rq9_scan(decoy))
+})
+
+test_that("Phase-8b F8 (b, wrapped): a lowercase raw DELETE inside a multi-line dbExecute() call is caught", {
+  decoy <- c(
+    "f <- function(con) {",
+    "  DBI::dbExecute(",
+    "    con,",
+    "    \"delete from feature where uuid = 'x'\")",
+    "}"
+  )
+  expect_true(.rq9_scan(decoy))
+})
+
+test_that("Phase-8b F8 (c, mixed case): a mixed-case raw UPDATE inside dbExecute() is caught", {
+  decoy <- c(
+    "f <- function(con) DBI::dbExecute(con, \"UpDaTe feature SET x = 1\")"
+  )
+  expect_true(.rq9_scan(decoy))
+})
+
+test_that("Phase-8b F8 (d, comment interleaved): a lowercase raw INSERT is caught even with a comment between the dbExecute() arguments", {
+  decoy <- c(
+    "f <- function(con) {",
+    "  DBI::dbExecute(",
+    "    con,  # the connection",
+    "    \"insert into feature values (1)\")",
+    "}"
+  )
+  expect_true(.rq9_scan(decoy))
+})
+
+test_that("Phase-8b F8 (same class, A6 path): a lowercase paste0()-built raw SQL statement assigned to a variable and passed to dbExecute() as a bare symbol is caught", {
+  decoy <- c(
+    "k <- function(con, tbl) {",
+    "  sql <- paste0(\"update \", tbl, \" set x = 1\")",
     "  DBI::dbExecute(con, sql)",
     "}"
   )

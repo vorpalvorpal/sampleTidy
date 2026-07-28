@@ -650,6 +650,16 @@
 #' real run over the SAME directory committed nothing - the exact
 #' consequence of the cautious habit of dry-running first.
 #'
+#' [route_files()] gets the same `dry_run` treatment for the one decision it
+#' can make that is NOT safe to persist unconditionally: an `adapter_tie`
+#' (two adapters claiming a file at the same tier) writes a `review_queue`
+#' item alongside the terminal `quarantined` state, and both are skipped
+#' under `dry_run` together (see the tie branch in `R/router.R` for why the
+#' state can't be persisted alone). `claimed`/`unclaimed` decisions still
+#' persist on a dry run exactly as before - they carry no such review item
+#' and (for `claimed`) are still re-visited by the `dry_run`-gated stages
+#' above.
+#'
 #' When `st_config("remove_ingested")` is `TRUE` (default `FALSE`, A13) and
 #' this run produced a successful snapshot, every input file whose content
 #' hash has a *verified* archive copy (an `asset` row whose archive file
@@ -680,7 +690,7 @@ ingest_dir <- function(path, db = st_config("live_db"), dry_run = FALSE) {
     function(con) {
       ensure_schema(con)
 
-      routed <- route_files(paths, con)
+      routed <- route_files(paths, con, dry_run)
 
       parsed <- .ig_parse_claimed(con, routed, dry_run)
 

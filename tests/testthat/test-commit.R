@@ -2565,3 +2565,94 @@ test_that("Phase-7b round-2 item 13: a second .ct_set_file_states() call with a 
   expect_identical(second$state[[1]], "needs_review")
   expect_identical(second$state_reason[[1]], "second block reason")
 })
+
+# ---- orphan (NA work_order) project find-or-create -------------------------
+#
+# `name = ?` bound to `NA` compiles to `name = NULL`, which SQL's three-valued
+# logic never satisfies for any row - the find half of .ct_ensure_project()'s
+# find-or-create silently never matched for an orphan (no work order) event,
+# so every orphan commit minted its own indistinguishable `name IS NULL`
+# project row with nothing to ever collapse them.
+
+test_that(".ct_ensure_project(): two calls with a NA (orphan) work_order return the SAME project uuid, not two NULL-name rows", {
+  dir <- withr::local_tempdir()
+  db_path <- seed_db(dir = dir)
+  con <- seed_con(db_path)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  null_name_count <- function() {
+    DBI::dbGetQuery(con, "SELECT count(*) AS n FROM project WHERE name IS NULL")$n
+  }
+  expect_equal(null_name_count(), 0)
+
+  uuid1 <- .ct_ensure_project(con, NA_character_, "test orphan 1")
+  uuid2 <- .ct_ensure_project(con, NA_character_, "test orphan 2")
+
+  expect_identical(uuid1, uuid2)
+  expect_equal(null_name_count(), 1)
+
+  # A real (non-NA) work order is unaffected: still find-or-create by name.
+  uuid3 <- .ct_ensure_project(con, "XX1234567", "test named")
+  uuid4 <- .ct_ensure_project(con, "XX1234567", "test named again")
+  expect_identical(uuid3, uuid4)
+  expect_equal(null_name_count(), 1)
+})
+
+test_that("commit_event(): two DIFFERENT orphan work orders (no work order recorded) share ONE anonymous project row, not one each", {
+  dir <- withr::local_tempdir()
+  db_path <- seed_db(dir = dir)
+  con <- seed_con(db_path)
+  ensure_test_asset_table(con)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  archive_dir <- withr::local_tempdir()
+  withr::local_options(list("sampletidy.archive_dir" = archive_dir))
+
+  src_dir <- withr::local_tempdir()
+  mk_orphan_event <- function(i) {
+    path <- file.path(src_dir, sprintf("2400-753%d-01_ACIRL_Field.CSV", i))
+    writeLines(sprintf("field sheet %d", i), path)
+    hash <- hash_file(path)
+    DBI::dbExecute(con,
+      "INSERT INTO ingest_file (hash, filename, path_first_seen, state, work_order, revision)
+       VALUES (?, ?, ?, 'reconciled', NULL, 0)",
+      params = list(hash, basename(path), path))
+    files <- tibble::tibble(hash = hash, kept = TRUE)
+    list(
+      hash = hash,
+      event = list(
+        work_order = NA_character_, orphan = TRUE, results = tibble::tibble(),
+        samples = tibble::tibble(), files = files, report = list()
+      )
+    )
+  }
+  mk_orphan_clean <- function(hash, feat, dt) mk_clean_row(
+    source_hash = hash, source_ref = "r1", work_order = NA_character_,
+    feature_raw = feat, sample_date = as.Date(dt),
+    sample_datetime = as.POSIXct(NA)
+  )
+
+  null_name_count <- function() {
+    DBI::dbGetQuery(con, "SELECT count(*) AS n FROM project WHERE name IS NULL")$n
+  }
+  expect_equal(null_name_count(), 0)
+
+  wo1 <- mk_orphan_event(1)
+  wo2 <- mk_orphan_event(2)
+  r1 <- commit_event(wo1$event,
+    mk_resolved(clean = mk_orphan_clean(wo1$hash, "T.S01", "2025-06-10")), con)
+  r2 <- commit_event(wo2$event,
+    mk_resolved(clean = mk_orphan_clean(wo2$hash, "T.S02", "2025-06-11")), con)
+
+  expect_false(isTRUE(r1$blocked))
+  expect_false(isTRUE(r2$blocked))
+  # Pre-fix: this was 2 - a fresh NULL-name "Work order" project row per
+  # orphan commit, growing without bound and never collapsing.
+  expect_equal(null_name_count(), 1)
+
+  # Both orphan events' samples hang off the SAME shared anonymous project.
+  proj_uuids <- DBI::dbGetQuery(con,
+    'SELECT DISTINCT p.uuid FROM "sample" s JOIN project p ON p.uuid = s.uuid_project
+      WHERE p.name IS NULL')
+  expect_equal(nrow(proj_uuids), 1)
+})

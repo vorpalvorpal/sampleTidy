@@ -12,7 +12,15 @@
 #
 # Both open exactly one mutation-layer transaction per call
 # (with_db_write() -> db_transaction()) so a multi-item bulk call is one
-# atomic unit: an error on item N rolls back items 1..N-1 too, not just N.
+# atomic unit: an error on item N rolls back items 1..N-1 too, not just N -
+# EXCEPT for a confirm_analyte_methods() item that needs the F.14 FK-dance
+# below (a method with dependent analyses, on a database that actually
+# declares the analyte <- lab_method <- analysis FK chain). That item's link
+# write and its unit conversion commit TOGETHER, as one unit, BEFORE this
+# transaction even opens, and so cannot be rolled back by a later item's
+# failure inside it - see the GUARDED EXCEPTION note below for why, and for
+# why what is given up is atomicity ACROSS bulk-call items, never atomicity
+# of one item's own link+conversion pair.
 #
 # ---------------------------------------------------------------------------
 # GUARDED EXCEPTION to the one-transaction contract above
@@ -47,6 +55,31 @@
 # run left an unpaired detach (modelled on `.mig002_torn_guard()`, and keyed
 # off the byte-identical reason suffixes so the two guards see each other's
 # torn runs).
+#
+# THE TEAR THIS ONCE OPENED, AND HOW IT IS CLOSED (Phase-8b remediation):
+# `confirm_analyte_methods()`'s F.14 pre-pass used to do ONLY the repoint,
+# durably, for every item in the bulk call, before the shared transaction
+# even opened - and left that same transaction to do the item's UNIT
+# CONVERSION alongside every other item's work. A later item's abort then
+# rolled the transaction back, undoing the repointed item's conversion while
+# its already-separately-committed repoint stayed put: the link moved, the
+# values it was supposed to bring with it did not. Worse, the recovery path
+# (`already_confirmed`) inferred "conversion already happened" from the
+# link's mere presence, so a routine re-run of the failed item reported
+# success over a value still in the wrong units, with nothing to catch it.
+#
+# The fix bundles the repoint AND the conversion into ONE unit, both done in
+# the pre-pass, both before the shared transaction opens (`.am_fk_prepass_item()`
+# below) - so no later item's rollback can ever separate them again. And the
+# `already_confirmed` idempotent branch (`.am_confirm_one_method()`) no longer
+# trusts the link: it checks, via `.am_link_set_by_confirm()`, whether THIS
+# function set that link, and if so completes any analysis this exact
+# confirmation still owes a conversion to (`.am_analysis_already_converted()`
+# makes that check, and re-running, safe rather than a double-convert
+# hazard). A link set some other way (e.g. resolved at ingest, never this
+# function's doing) is left exactly alone, as before - this function has no
+# way to know whether that value is already canonical, and is not the one
+# that put it there.
 
 # ======================================================================
 # The duckdb chained-FK workaround (PLAN-15 F.14 / E.8) - see the guarded
@@ -1405,6 +1438,15 @@ merge_identity_aliases <- function(db = st_config("live_db"), actor, dry_run = F
 #' `units_drift` review item instead (see PLAN-11 R-11.11 and the RULED PIN
 #' on the drift-detection mechanism).
 #'
+#' Re-confirming an already-confirmed method (`action = "already_confirmed"`)
+#' is a safe no-op ONLY when nothing is left to do. If THIS function set the
+#' link but an earlier call never finished converting every dependent
+#' analysis (interrupted by a crash, or - before this fix - by a sibling
+#' item's failure in the same bulk call), a re-run completes that outstanding
+#' conversion rather than reporting success over it; see the guarded-exception
+#' note at the head of this file. A link set by anything else (e.g. resolved
+#' at ingest) is left untouched, exactly as ever.
+#'
 #' @param uuid_lab character vector of `lab_method.uuid`.
 #' @param uuid_analyte character vector of `analyte.uuid`, same length as
 #'   `uuid_lab`. `NA` is rejected (an analyte must exist).
@@ -1443,19 +1485,25 @@ confirm_analyte_methods <- function(uuid_lab, uuid_analyte, confirmed_by,
       # method - which is every method that arrived with data, i.e. the
       # normal case. The detach -> repoint -> reattach loop that works around
       # it needs separately committed statements, so it runs here, BEFORE the
-      # one transaction opens, and only for the items that actually need it.
-      repointed <- vapply(
+      # one transaction opens, and only for the items that actually need it -
+      # and, per `.am_fk_prepass_item()`'s own comment, does that item's unit
+      # conversion right here too: bundled with the repoint, not left for the
+      # shared transaction below to lose on some LATER item's rollback.
+      prepass <- lapply(
         seq_along(uuid_lab),
-        function(i) .am_fk_prerepoint(con, uuid_lab[[i]], uuid_analyte[[i]], confirmed_by),
-        logical(1)
+        function(i) .am_fk_prepass_item(con, uuid_lab[[i]], uuid_analyte[[i]], confirmed_by)
       )
 
       db_transaction(con, function(con) {
         rows <- purrr::map(seq_along(uuid_lab), function(i) {
-          .am_confirm_one_method(
-            con, uuid_lab[[i]], uuid_analyte[[i]], confirmed_by = confirmed_by,
-            repointed = repointed[[i]]
-          )
+          # A non-NULL prepass result means this item's repoint AND
+          # conversion are already fully, durably done above - use it as-is
+          # rather than asking `.am_confirm_one_method()` to redo (and
+          # potentially double-convert) work this transaction never touched.
+          if (!is.null(prepass[[i]])) {
+            return(prepass[[i]])
+          }
+          .am_confirm_one_method(con, uuid_lab[[i]], uuid_analyte[[i]], confirmed_by = confirmed_by)
         })
         dplyr::bind_rows(rows)
       })
@@ -1486,19 +1534,28 @@ confirm_analyte_methods <- function(uuid_lab, uuid_analyte, confirmed_by,
   )$val
 }
 
+#' The `change_log.reason` written, verbatim and un-suffixed, for every
+#' `lab_method.uuid_analyte` UPDATE that `confirm_analyte_methods()` performs
+#' - by either of its own writers, `.am_fk_prerepoint()`'s F.14 pre-pass or
+#' `.am_confirm_one_method()`'s ordinary in-transaction path - and read back
+#' by `.am_link_set_by_confirm()` to ask whether THIS function is the one
+#' that set a given link. One constant shared by all three call sites, not
+#' three independent string literals: there is nothing left to drift apart.
+#' @keywords internal
+#' @noRd
+.am_confirm_reason <- "confirm_analyte_methods()"
+
 #' F.14 pre-pass: move `lab_method.uuid_analyte` with duckdb's FK
 #' detach/reattach dance, in separately committed statements, for the one
 #' case that needs it - a method with dependent analyses on a database that
 #' really declares the analyte <- lab_method <- analysis chain.
 #'
-#' Returns TRUE only if it actually moved the column; the caller then tells
-#' `.am_confirm_one_method()` to skip its own `lab_method` UPDATE (and not to
-#' mistake the already-moved column for an idempotent re-confirm, which would
-#' skip the unit conversion). Every reason NOT to act here - a missing
-#' method/analyte, an NA analyte, an already-set `uuid_analyte`, units drift,
-#' no dependents, or no declared FK - returns FALSE and leaves the ordinary
-#' in-transaction path to do exactly what it does today, INCLUDING raising
-#' each of those errors with an empty database behind it.
+#' Returns TRUE only if it actually moved the column. Every reason NOT to act
+#' here - a missing method/analyte, an NA analyte, an already-set
+#' `uuid_analyte`, units drift, no dependents, or no declared FK - returns
+#' FALSE and leaves the item to `.am_confirm_one_method()`'s ordinary
+#' in-transaction path, INCLUDING raising each of those errors with an empty
+#' database behind it.
 #' @keywords internal
 #' @noRd
 .am_fk_prerepoint <- function(con, uuid_lab, uuid_analyte, confirmed_by) {
@@ -1522,94 +1579,76 @@ confirm_analyte_methods <- function(uuid_lab, uuid_analyte, confirmed_by,
 
   .fa_guarded_update(
     con, "lab_method", uuid_lab, changes = list(uuid_analyte = uuid_analyte),
-    actor = confirmed_by, reason = "confirm_analyte_methods()"
+    actor = confirmed_by, reason = .am_confirm_reason
   )
   TRUE
 }
 
-#' Confirm exactly one (uuid_lab, uuid_analyte) pair. `repointed = TRUE` when
-#' the F.14 pre-pass has already moved `lab_method.uuid_analyte` outside this
-#' transaction (see `.am_fk_prerepoint()`).
+#' Has `.am_convert_analyses()` (below) already committed a conversion for
+#' this exact analysis? Keyed off its own `change_log` reason string, which
+#' is unique to that one call site - nothing else in the codebase writes
+#' `analysis.value` with this reason. Lets a re-run (after a crash or an
+#' aborted sibling item) skip what is already done instead of re-applying
+#' `unify_value()` to an already-canonical number.
 #' @keywords internal
 #' @noRd
-.am_confirm_one_method <- function(con, uuid_lab, uuid_analyte, confirmed_by,
-                                    repointed = FALSE) {
-  method <- DBI::dbGetQuery(con, "SELECT * FROM lab_method WHERE uuid = ?", params = list(uuid_lab))
-  if (nrow(method) == 0) {
-    cli::cli_abort("No lab_method with uuid '{uuid_lab}'.", class = "sampletidy_error")
-  }
-  if (is.na(uuid_analyte)) {
-    cli::cli_abort(
-      "uuid_analyte must not be NA (confirming lab_method '{uuid_lab}').",
-      class = "sampletidy_error"
-    )
-  }
-  analyte <- DBI::dbGetQuery(con, "SELECT * FROM analyte WHERE uuid = ?", params = list(uuid_analyte))
-  if (nrow(analyte) == 0) {
-    cli::cli_abort("No analyte with uuid '{uuid_analyte}'.", class = "sampletidy_error")
-  }
+.am_analysis_already_converted <- function(con, uuid_analysis) {
+  nrow(DBI::dbGetQuery(
+    con,
+    "SELECT 1 FROM change_log
+      WHERE tbl = 'analysis' AND uuid_row = ? AND field = 'value'
+        AND reason = 'confirm_analyte_methods(): unit conversion'
+      LIMIT 1",
+    params = list(uuid_analysis)
+  )) > 0
+}
 
-  current_analyte <- method$uuid_analyte[[1]]
-  analyses <- DBI::dbGetQuery(con, "SELECT * FROM analysis WHERE uuid_lab = ?", params = list(uuid_lab))
-  n_analyses <- nrow(analyses)
-
-  # Idempotent no-op: already confirmed to this exact analyte (lm-0012-style
-  # re-confirm). Values were converted (or not) the first time; do not
-  # re-attempt conversion, which would double-convert an already-canonical
-  # value.
-  if (!repointed && !is.na(current_analyte) && identical(current_analyte, uuid_analyte)) {
-    return(tibble::tibble(
-      uuid_lab = uuid_lab, uuid_analyte = uuid_analyte,
-      n_analyses = n_analyses, n_converted = 0L, action = "already_confirmed"
-    ))
+#' Is there already an OPEN `unknown_unit` review row for this analysis?
+#' Scans `payload` JSON (modelled on `.fa_self_collision_already_open()`) -
+#' `uuid_analysis` has no typed column of its own in `review_queue`'s
+#' polymorphic map, so it only ever travels in `diagnostics`. Keeps a re-run
+#' from opening a second review item for a unit that is still, correctly,
+#' unconvertible.
+#' @keywords internal
+#' @noRd
+.am_unknown_unit_already_open <- function(con, uuid_analysis) {
+  rows <- DBI::dbGetQuery(
+    con, "SELECT payload FROM review_queue WHERE kind = 'unknown_unit' AND status = 'open'"
+  )
+  if (nrow(rows) == 0) {
+    return(FALSE)
   }
-
-  if (!repointed && !is.na(current_analyte) && !identical(current_analyte, uuid_analyte)) {
-    cli::cli_abort(
-      paste0(
-        "lab_method '", uuid_lab, "' is already confirmed to analyte '", current_analyte,
-        "'; refusing to silently re-point it to a different analyte '", uuid_analyte, "'."
-      ),
-      class = "sampletidy_error"
-    )
+  for (p in rows$payload) {
+    diag <- tryCatch(jsonlite::fromJSON(p), error = function(e) NULL)
+    if (is.null(diag)) next
+    if (identical(as.character(diag$uuid_analysis), uuid_analysis)) {
+      return(TRUE)
+    }
   }
+  FALSE
+}
 
-  # Units-drift check (RULED PIN): scan change_log for every distinct
-  # non-NULL `units` value ever recorded (old or new) for this method. >1
-  # distinct value -> do not bulk-convert or link; surface it instead.
-  drift_units <- .am_units_drift(con, uuid_lab)
-
-  if (length(drift_units) > 1) {
-    # PLAN-16 R-16.8: routed through .rq_row() - diagnostics -> JSON, no
-    # hand-built k=v string. `units_drift` has no `uuid_existing` referent
-    # in B-16.ddl's polymorphic map, so uuid_lab travels in diagnostics.
-    review_row <- .rq_row(
-      kind = "units_drift",
-      diagnostics = list(uuid_lab = uuid_lab, units = drift_units)
-    )$review
-    db_append(
-      con, "review_queue", review_row, actor = confirmed_by,
-      reason = "confirm_analyte_methods(): units drift detected, not bulk-converting"
-    )
-    return(tibble::tibble(
-      uuid_lab = uuid_lab, uuid_analyte = uuid_analyte,
-      n_analyses = n_analyses, n_converted = 0L, action = "units_drift"
-    ))
-  }
-
-  if (!repointed) {
-    db_update(
-      con, "lab_method", uuid_lab, changes = list(uuid_analyte = uuid_analyte),
-      actor = confirmed_by, reason = "confirm_analyte_methods()"
-    )
-  }
-
+#' Convert every analysis in `analyses` from `method`'s units to `analyte`'s,
+#' via `unify_value()` (D7 reversed), skipping any this exact confirmation
+#' has ALREADY converted or already sent to review - the shared, idempotent
+#' worker behind both the ordinary confirm path and the `already_confirmed`
+#' branch's completion of an earlier, incomplete run's leftover work (see the
+#' guarded-exception note at the head of this file). Returns the count
+#' actually converted THIS call.
+#' @keywords internal
+#' @noRd
+.am_convert_analyses <- function(con, uuid_lab, analyses, method, analyte, confirmed_by) {
   units_from <- normalise_lab_text(method$units[[1]])
   units_to <- normalise_lab_text(analyte$units[[1]])
 
   n_converted <- 0L
   for (i in seq_len(nrow(analyses))) {
     a <- analyses[i, ]
+
+    if (.am_analysis_already_converted(con, a$uuid) || .am_unknown_unit_already_open(con, a$uuid)) {
+      next
+    }
+
     conv <- tryCatch(
       unify_value(
         c(a$value, a$rl_low, a$rl_high),
@@ -1645,6 +1684,172 @@ confirm_analyte_methods <- function(uuid_lab, uuid_analyte, confirmed_by,
     )
     n_converted <- n_converted + 1L
   }
+  n_converted
+}
+
+#' Did THIS function - not ingest, not a fixture, not any other producer -
+#' set `lab_method.uuid_analyte` to `uuid_analyte` on `uuid_lab`? Keyed off
+#' the exact `change_log` reason `.am_fk_prerepoint()`/`.am_confirm_one_method()`
+#' both write the parent-table UPDATE with ("confirm_analyte_methods()",
+#' un-suffixed - the F.14 detach/reattach dance only appends its own suffix
+#' to the CHILD rows it touches, never to this row). Load-bearing for the
+#' `already_confirmed` branch: a link this function did not create might
+#' already carry a value in canonical units by some other route this
+#' function knows nothing about (lm-0012-style pre-resolved fixtures/ingest
+#' output) - attempting to "complete" a conversion there would risk
+#' double-converting an already-correct number. A link THIS function set is
+#' different: this function is the only writer that can leave it
+#' incomplete, so this function is the only one that can safely finish it.
+#' @keywords internal
+#' @noRd
+.am_link_set_by_confirm <- function(con, uuid_lab, uuid_analyte) {
+  nrow(DBI::dbGetQuery(
+    con,
+    "SELECT 1 FROM change_log
+      WHERE tbl = 'lab_method' AND uuid_row = ? AND field = 'uuid_analyte'
+        AND new = ? AND reason = ?
+      LIMIT 1",
+    params = list(uuid_lab, uuid_analyte, .am_confirm_reason)
+  )) > 0
+}
+
+#' F.14 pre-pass, one item: repoint AND convert, bundled into one unit,
+#' entirely before the shared transaction in `confirm_analyte_methods()`
+#' opens (see the guarded-exception note at the head of this file for why
+#' bundling them here - not splitting the conversion off into that shared
+#' transaction - is what keeps a LATER item's abort from ever being able to
+#' roll back this item's already-durably-committed repoint while discarding
+#' the conversion it was supposed to bring with it).
+#'
+#' Returns the item's finished result row (`action` `"confirmed"` or
+#' `"units_drift"`), or `NULL` when `.am_fk_prerepoint()` did not act - in
+#' which case `.am_confirm_one_method()` handles the item exactly as it
+#' always has.
+#' @keywords internal
+#' @noRd
+.am_fk_prepass_item <- function(con, uuid_lab, uuid_analyte, confirmed_by) {
+  if (!.am_fk_prerepoint(con, uuid_lab, uuid_analyte, confirmed_by)) {
+    return(NULL)
+  }
+
+  method <- DBI::dbGetQuery(con, "SELECT * FROM lab_method WHERE uuid = ?", params = list(uuid_lab))
+  analyte <- DBI::dbGetQuery(con, "SELECT * FROM analyte WHERE uuid = ?", params = list(uuid_analyte))
+  analyses <- DBI::dbGetQuery(con, "SELECT * FROM analysis WHERE uuid_lab = ?", params = list(uuid_lab))
+
+  # `.am_fk_prerepoint()` already refused units drift before repointing, so
+  # this cannot fire in practice today - kept so a future drift-recording
+  # race does not silently bulk-convert instead of surfacing it, mirroring
+  # `.am_confirm_one_method()`'s own check.
+  drift_units <- .am_units_drift(con, uuid_lab)
+  if (length(drift_units) > 1) {
+    review_row <- .rq_row(
+      kind = "units_drift",
+      diagnostics = list(uuid_lab = uuid_lab, units = drift_units)
+    )$review
+    db_append(
+      con, "review_queue", review_row, actor = confirmed_by,
+      reason = "confirm_analyte_methods(): units drift detected, not bulk-converting"
+    )
+    return(tibble::tibble(
+      uuid_lab = uuid_lab, uuid_analyte = uuid_analyte,
+      n_analyses = nrow(analyses), n_converted = 0L, action = "units_drift"
+    ))
+  }
+
+  n_converted <- .am_convert_analyses(con, uuid_lab, analyses, method, analyte, confirmed_by)
+
+  tibble::tibble(
+    uuid_lab = uuid_lab, uuid_analyte = uuid_analyte,
+    n_analyses = nrow(analyses), n_converted = n_converted, action = "confirmed"
+  )
+}
+
+#' Confirm exactly one (uuid_lab, uuid_analyte) pair. Reached only for items
+#' `.am_fk_prepass_item()` declined - i.e. items that never needed the F.14
+#' FK dance, so their link write and conversion both run inside the shared
+#' transaction and are genuinely, ordinarily atomic with it.
+#' @keywords internal
+#' @noRd
+.am_confirm_one_method <- function(con, uuid_lab, uuid_analyte, confirmed_by) {
+  method <- DBI::dbGetQuery(con, "SELECT * FROM lab_method WHERE uuid = ?", params = list(uuid_lab))
+  if (nrow(method) == 0) {
+    cli::cli_abort("No lab_method with uuid '{uuid_lab}'.", class = "sampletidy_error")
+  }
+  if (is.na(uuid_analyte)) {
+    cli::cli_abort(
+      "uuid_analyte must not be NA (confirming lab_method '{uuid_lab}').",
+      class = "sampletidy_error"
+    )
+  }
+  analyte <- DBI::dbGetQuery(con, "SELECT * FROM analyte WHERE uuid = ?", params = list(uuid_analyte))
+  if (nrow(analyte) == 0) {
+    cli::cli_abort("No analyte with uuid '{uuid_analyte}'.", class = "sampletidy_error")
+  }
+
+  current_analyte <- method$uuid_analyte[[1]]
+  analyses <- DBI::dbGetQuery(con, "SELECT * FROM analysis WHERE uuid_lab = ?", params = list(uuid_lab))
+  n_analyses <- nrow(analyses)
+
+  # Idempotent no-op: already confirmed to this exact analyte (lm-0012-style
+  # re-confirm, or a plain repeat call). If THIS function is the one that set
+  # this link (`.am_link_set_by_confirm()`), it may still owe some of these
+  # analyses a conversion - an earlier bulk call that repointed this method
+  # and then aborted on a LATER item, before the F.14 fix above existed, or a
+  # crash mid-way through `.am_convert_analyses()`'s own separately-committed
+  # updates. Complete exactly that outstanding work rather than silently
+  # reporting success over it. A link set some other way (e.g. resolved at
+  # ingest) is left alone, exactly as before: this function cannot tell
+  # whether that value is already canonical, and did not put it there.
+  if (!is.na(current_analyte) && identical(current_analyte, uuid_analyte)) {
+    n_converted <- 0L
+    if (.am_link_set_by_confirm(con, uuid_lab, uuid_analyte)) {
+      n_converted <- .am_convert_analyses(con, uuid_lab, analyses, method, analyte, confirmed_by)
+    }
+    return(tibble::tibble(
+      uuid_lab = uuid_lab, uuid_analyte = uuid_analyte,
+      n_analyses = n_analyses, n_converted = n_converted, action = "already_confirmed"
+    ))
+  }
+
+  if (!is.na(current_analyte) && !identical(current_analyte, uuid_analyte)) {
+    cli::cli_abort(
+      paste0(
+        "lab_method '", uuid_lab, "' is already confirmed to analyte '", current_analyte,
+        "'; refusing to silently re-point it to a different analyte '", uuid_analyte, "'."
+      ),
+      class = "sampletidy_error"
+    )
+  }
+
+  # Units-drift check (RULED PIN): scan change_log for every distinct
+  # non-NULL `units` value ever recorded (old or new) for this method. >1
+  # distinct value -> do not bulk-convert or link; surface it instead.
+  drift_units <- .am_units_drift(con, uuid_lab)
+
+  if (length(drift_units) > 1) {
+    # PLAN-16 R-16.8: routed through .rq_row() - diagnostics -> JSON, no
+    # hand-built k=v string. `units_drift` has no `uuid_existing` referent
+    # in B-16.ddl's polymorphic map, so uuid_lab travels in diagnostics.
+    review_row <- .rq_row(
+      kind = "units_drift",
+      diagnostics = list(uuid_lab = uuid_lab, units = drift_units)
+    )$review
+    db_append(
+      con, "review_queue", review_row, actor = confirmed_by,
+      reason = "confirm_analyte_methods(): units drift detected, not bulk-converting"
+    )
+    return(tibble::tibble(
+      uuid_lab = uuid_lab, uuid_analyte = uuid_analyte,
+      n_analyses = n_analyses, n_converted = 0L, action = "units_drift"
+    ))
+  }
+
+  db_update(
+    con, "lab_method", uuid_lab, changes = list(uuid_analyte = uuid_analyte),
+    actor = confirmed_by, reason = .am_confirm_reason
+  )
+
+  n_converted <- .am_convert_analyses(con, uuid_lab, analyses, method, analyte, confirmed_by)
 
   tibble::tibble(
     uuid_lab = uuid_lab, uuid_analyte = uuid_analyte,

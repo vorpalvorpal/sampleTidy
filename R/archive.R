@@ -14,8 +14,10 @@
 
 #' Archive one ingested source file as an `asset` row
 #'
-#' Resolves the event's project via `event$work_order` (`SELECT uuid FROM
-#' project WHERE name = <work_order>`), copies `path` to
+#' Resolves the event's project via `event$work_order` (`.ct_ensure_project()`,
+#' R/commit.R - find-or-create, so an orphan (NA) work order and a genuinely
+#' new one both resolve to a real project row rather than `NA`), copies
+#' `path` to
 #' `file.path(st_config("archive_dir"), <new asset uuid>, basename(path))`
 #' (directory-per-asset, A70), and inserts the `asset` row through
 #' `db_append()`. If an `asset` row with the same `hash` already exists, the
@@ -62,12 +64,23 @@ archive_file <- function(con, path, hash, event, type = "Chemical analysis") {
     return(existing$uuid[[1]])
   }
 
-  project_row <- DBI::dbGetQuery(
-    con,
-    "SELECT uuid FROM project WHERE name = ?",
-    params = list(event$work_order)
-  )
-  uuid_project <- if (nrow(project_row) > 0) project_row$uuid[[1]] else NA_character_
+  # `.ct_ensure_project()` (R/commit.R) is the ONE place that resolves a
+  # work_order to its project row, orphan (NA) work_order included - reused
+  # here rather than duplicated, which is how this lookup and that one first
+  # drifted apart (a plain `WHERE name = ?` here never matched an orphan's
+  # `name IS NULL` project row, so every orphan asset landed with
+  # `uuid_project = NA` even once `.ct_ensure_project()`'s own orphan branch
+  # started minting a real anonymous row for it - `name = ?` bound to NA is
+  # never TRUE in SQL's three-valued logic, for ANY row).
+  #
+  # Also find-OR-CREATE, not find-only: `commit_event()`'s blocked-event
+  # branch calls `.ct_archive_files()` (hence this) BEFORE it ever calls
+  # `.ct_ensure_project()` (that call sits on the non-blocked path only), so
+  # a still-orphaned event's very first archive can run before any project
+  # row exists at all. Delegating the create half here too means the shared
+  # anonymous project row exists by the time it is needed either way,
+  # instead of only on a later, non-blocked retry.
+  uuid_project <- .ct_ensure_project(con, event$work_order, "archive source file")
 
   new_uuid <- uuid::UUIDgenerate()
   archive_dir <- st_config("archive_dir")

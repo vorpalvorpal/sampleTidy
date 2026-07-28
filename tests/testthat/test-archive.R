@@ -232,3 +232,73 @@ test_that("Phase-7b round-2 item 6: archive_file()'s `type` argument controls th
   coa_row_after <- DBI::dbGetQuery(con, "SELECT type FROM asset WHERE hash = ?", params = list(coa_hash))
   expect_identical(coa_row_after$type[[1]], "Certificate of analysis")
 })
+
+# ---- orphan (NA work_order) project find-or-create (Phase-8b) --------------
+#
+# `name = ?` bound to `NA` compiles to `name = NULL`, which SQL's
+# three-valued logic never satisfies for any row - a plain lookup keyed off
+# `event$work_order` never finds the shared anonymous project row an orphan
+# (no work order recorded) event resolves to, so the archived asset silently
+# lost its project link (`uuid_project = NA`) even though a matching project
+# row exists (`.ct_ensure_project()`, R/commit.R, find-or-creates it).
+
+test_that("archive_file(): an orphan event's asset gets the shared anonymous project's uuid, not NA", {
+  setup <- archive_test_setup()
+  con <- setup$con
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  null_name_count <- function() {
+    DBI::dbGetQuery(con, "SELECT count(*) AS n FROM project WHERE name IS NULL")$n
+  }
+  expect_equal(null_name_count(), 0)
+
+  src_dir <- withr::local_tempdir()
+  src_path <- file.path(src_dir, "2400-75301-01_ACIRL_Field.CSV")
+  writeLines("orphan field sheet", src_path)
+  hash <- hash_file(src_path)
+
+  archive_file(con, src_path, hash, event = list(work_order = NA_character_))
+
+  asset_row <- DBI::dbGetQuery(con, "SELECT uuid_project FROM asset WHERE hash = ?", params = list(hash))
+  expect_equal(nrow(asset_row), 1)
+  expect_false(is.na(asset_row$uuid_project[[1]]))
+
+  anon_project <- DBI::dbGetQuery(
+    con, "SELECT uuid FROM project WHERE name IS NULL AND type = 'Work order'"
+  )
+  expect_equal(nrow(anon_project), 1)
+  expect_identical(asset_row$uuid_project[[1]], anon_project$uuid[[1]])
+})
+
+test_that("archive_file(): two DIFFERENT orphan events' assets share ONE anonymous project row, not one each", {
+  setup <- archive_test_setup()
+  con <- setup$con
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  null_name_count <- function() {
+    DBI::dbGetQuery(con, "SELECT count(*) AS n FROM project WHERE name IS NULL")$n
+  }
+  expect_equal(null_name_count(), 0)
+
+  src_dir <- withr::local_tempdir()
+  path1 <- file.path(src_dir, "2400-75301-01_ACIRL_Field.CSV")
+  writeLines("orphan field sheet 1", path1)
+  hash1 <- hash_file(path1)
+  path2 <- file.path(src_dir, "2400-75302-01_ACIRL_Field.CSV")
+  writeLines("orphan field sheet 2", path2)
+  hash2 <- hash_file(path2)
+
+  archive_file(con, path1, hash1, event = list(work_order = NA_character_))
+  archive_file(con, path2, hash2, event = list(work_order = NA_character_))
+
+  # Pre-fix: this was 2 - a fresh NULL-name "Work order" project row per
+  # orphan archive_file() call, growing without bound and never collapsing.
+  expect_equal(null_name_count(), 1)
+
+  assets <- DBI::dbGetQuery(
+    con, "SELECT DISTINCT uuid_project FROM asset WHERE hash IN (?, ?)",
+    params = list(hash1, hash2)
+  )
+  expect_equal(nrow(assets), 1)
+  expect_false(is.na(assets$uuid_project[[1]]))
+})
