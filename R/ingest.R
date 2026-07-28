@@ -401,13 +401,23 @@
 
 # R-9.8: does this filename carry an ACIRL-shaped work-order token?
 #
-# `2400-7538-02` and friends CANNOT be parsed from a filename (false merges
-# AND false splits - see the ACIRL work-order trap in R/commit.R), and that
-# refusal stays. But a file carrying one is not merely "unidentifiable": it
-# POSITIVELY DECLARES a work order of its own, one we decline to name. That is
-# a reason to leave it alone, not a licence to adopt it onto a folder-mate's
-# work order - doing so would file ACIRL chemistry under an ALS work order,
-# which is precisely the false merge the refusal exists to prevent.
+# `2400-7538-02` and friends CANNOT be parsed from a filename (false merges AND
+# false splits - see the ACIRL work-order trap in R/commit.R), and that refusal
+# stays. A file carrying one is not merely "unidentifiable": it POSITIVELY
+# DECLARES a work order of its own, one we decline to name, so this treats that
+# as a reason to leave the file alone rather than adopt it onto a folder-mate's
+# work order.
+#
+# PROVISIONAL, and say so plainly. This guard is INERT against the real corpus
+# (the selection gate in .ig_retain_siblings() requires a
+# _(coa|coc|qc|qci|xtab) token and zero of the 272 real ACIRL files carry one),
+# so today it costs nothing and proves nothing. It becomes live only if that
+# gate is widened to retain the 137 ACIRL PDFs - and at that moment it is an
+# OPEN QUESTION whether it is still right, because Robin's 2026-07-28
+# correction says an ACIRL email almost always carries the underlying ALS work
+# order's files too, i.e. the ACIRL report and the ALS work order describe the
+# same sampling event. Filing the report under that work order may be exactly
+# what is wanted. Do not widen the gate without re-deciding this.
 #
 # Deliberately loose (`\d{4}-\d{4}` anywhere in the name): this gate decides
 # whether to STAY OUT of a file's business, so over-matching costs one warning
@@ -546,16 +556,24 @@
           # with no report field naming them - `retained` is returned then
           # discarded by the caller. Name it loudly instead.
           #
-          # R-9.8 does NOT close this gap for ACIRL, and it is worth being
-          # exact about why rather than leaving a reader to assume it did: an
-          # ACIRL email's folder contains ACIRL files only, so it resolves to
-          # zero ES#######-shaped work orders and there is nothing to infer
-          # from; and the workbook's own event is an ORPHAN (PLAN-07 R-7.1),
-          # whose project row is the shared anonymous one - attaching a COA to
-          # that keeps the bytes while failing F.17's "discoverably attached to
-          # its work order". ACIRL retention stays blocked on the ACIRL
-          # work-order plan. What R-9.8 does fix is the token-less name (a
-          # renamed attachment) in an unambiguous folder.
+          # R-9.8 does NOT close this gap for ACIRL. The reason is NOT the
+          # one first written here ("an ACIRL email's folder contains ACIRL
+          # files only") - Robin corrected that on 2026-07-28: an ACIRL email
+          # almost always carries the underlying ALS work order's files too,
+          # which matches this package's own ACIRL adapter header (the workbook
+          # is field data PLUS copies of ALS lab results, i.e. the same
+          # sampling event under two identifiers).
+          #
+          # The real reason is the SELECTION gate above: it requires a
+          # _(coa|coc|qc|qci|xtab) token, and zero of the 272 real ACIRL files
+          # carry one (they are named descriptively - "2400-7454-05 May 2025
+          # Monthly Katoomba WMF.pdf"). Nothing ACIRL reaches this branch at
+          # all. The 13 files PLAN-CHANGE-REQUESTS records as lost were ALS,
+          # not ACIRL - every one carries an ES####### token.
+          #
+          # What R-9.8 does fix is the token-less name (a renamed attachment)
+          # in an unambiguous folder. Retaining the 137 ACIRL PDFs is a
+          # separate, still-open question - see PLAN-09 R-9.8.
           cli::cli_warn(
             "ingest_dir(): {.path {path}} looks like a non-tabular lab
              deliverable but its work order could not be recovered from its

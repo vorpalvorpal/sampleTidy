@@ -174,7 +174,7 @@ well-defined thing to delete. Criteria:
 `.ig_retain_siblings()` (B-15.F17) keys retention on `file_meta()`'s
 `work_order_guess`, i.e. on parsing `ES#######` out of the filename. When that
 returns NA the file is warned about and left quarantined forever — the
-realised loss of 13 ACIRL files recorded in PLAN-CHANGE-REQUESTS, because a
+realised loss of 13 files recorded in PLAN-CHANGE-REQUESTS, because a
 `2400-*` ACIRL work order **must not** be filename-parsed (see the ACIRL
 work-order trap, `R/commit.R`) and never will be.
 
@@ -189,9 +189,16 @@ The exactly-one guard is not defensive padding — the real
 `batch-2026-07-23` folder held **eight** work orders, and a majority-wins or
 first-wins rule would have attached each COA to an arbitrary one of them.
 
-**Scope correction, and it narrows the claim this criterion was drafted with.**
-Folder inference does **not** recover the 13 ACIRL files, and must not be
-allowed to appear to. Two reasons, found by checking this rule against the
+**Correction, 2026-07-28 — the "13 ACIRL files" framing above and in the first
+draft of this criterion was wrong on the facts.** PLAN-CHANGE-REQUESTS records
+the 13 lost files as *"the COA / COC / QC / QCI PDFs and `XTAB.XLS` siblings of
+work orders ES2600185, ES2610538, ES2612444, ES2614070 and ES2617126"* — all
+**ALS**, all carrying an `ES#######` token, none ACIRL. They are recovered by
+plain F.17 filename retention and have nothing to do with folder inference.
+Read this criterion without that claim attached to it.
+
+**Scope, then.** Folder inference does not recover anything ACIRL, and must not
+be allowed to appear to. Two reasons, found by checking this rule against the
 suite that already exists:
 
 1. `test-ingest.R`'s "Phase-7b round-2 item 7" pins that `2400-7538-02_QC.pdf`
@@ -200,18 +207,45 @@ suite that already exists:
    **ACIRL** deliverable to an **ALS** work order — a false merge, and exactly
    the failure the ACIRL work-order trap exists to prevent. The existing test
    is right and must keep passing.
-2. In production an ACIRL email's folder contains ACIRL files only, so the
+2. ~~In production an ACIRL email's folder contains ACIRL files only, so the
    folder resolves to zero `ES#######` work orders and there is nothing to
-   infer from. The ACIRL workbook's own event is an *orphan* (PLAN-07 R-7.1,
-   unparseable report no → `work_order = NA`), and orphans share one anonymous
-   `project` row — attaching a COA to that satisfies "bytes retained" while
-   failing F.17's second obligation, "discoverably attached to its work order".
+   infer from.~~ **WRONG — corrected by Robin, 2026-07-28: "An ACIRL email will
+   almost always contain the underlying ALS WO files as well."** That is
+   consistent with the adapter's own header (`R/adapter-acirl-field.R:5`: the
+   workbook is "a transposed field-data block plus copies of ALS lab results
+   which must be [dropped]"), i.e. ACIRL and ALS describe the *same sampling
+   event* under two different identifiers. So an ACIRL email's folder does
+   generally resolve to exactly one `ES#######` work order, and reason 2 as
+   drafted does not hold.
 
-So this rule fixes the case it can actually fix — a deliverable carrying **no
-work-order token at all** (a renamed attachment, `Certificate.pdf`, `scan001.pdf`)
-in a folder that unambiguously belongs to one work order. ACIRL retention
-stays blocked on the ACIRL work-order plan, which is Robin's standing separate
-piece of work, and the warning keeps naming those files until it lands.
+**What actually keeps ACIRL out, measured rather than assumed.** The retention
+SELECTION gate requires a `_(coa|coc|qc|qci|xtab)` token, and no real ACIRL file
+carries one. Counted over the 1,227 files in `assets/unprocessed` on
+2026-07-28:
+
+| set | files | with a `_COA/_COC/_QC/_QCI/_XTAB` token |
+|---|---|---|
+| `2400-*` (ACIRL) | 272 (137 pdf, 135 xls/xlsx) | **0** |
+| `ES#######` (ALS) | 873 | 287 |
+
+Real ACIRL names are descriptive, not tokenised — `2400-7454-05 May 2025
+Monthly Katoomba WMF.pdf`. So the ACIRL guard in `.ig_retain_siblings()` is
+**inert against the real corpus**: nothing ACIRL reaches it, because the gate
+excluded the file first. It is a belt on top of a brace, and its cost is that
+it also blocks any future widening of the gate.
+
+That leaves a **separate, live exposure this criterion does not address**: 137
+ACIRL PDFs are never retained at all, and — because the same token gate also
+narrows the warning (commit-5, round 3) — never *warned about* either. They
+route `quarantined`/`unclaimed` in silence. R-9.11's `quarantine_report()` is
+now the only thing that would surface them. Widening retention to cover them,
+and deciding what they attach to, is a **ruling for Robin**, recorded here
+rather than guessed at.
+
+So this rule, as implemented, fixes the case it can demonstrably fix — a
+deliverable carrying **no work-order token at all** (a renamed attachment,
+`Certificate.pdf`, `scan001.pdf`) in a folder that unambiguously belongs to one
+work order.
 
 Hence a third guard alongside the exactly-one rule: a file whose name carries
 an **ACIRL-shaped `\d{4}-\d{4}` token** is never inferred onto a folder-mate's
