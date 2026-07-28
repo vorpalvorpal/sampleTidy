@@ -149,7 +149,8 @@ live and must keep passing.
 
 ## R-9.7 `ingest_inbox()` (`R/ingest.R`) — one batch per email folder
 
-`ingest_inbox(root, db = st_config("live_db"), dry_run = FALSE)`: list the
+`ingest_inbox(root, db = st_config("live_db"), dry_run = FALSE,
+reconsider = FALSE)`: list the
 immediate subdirectories of `root` (never `root`'s own loose files — those are
 `ingest_dir()`'s job and mixing the two would make the batch boundary
 ambiguous) and call `ingest_dir()` once per subdirectory, in sorted order.
@@ -197,26 +198,25 @@ work orders ES2600185, ES2610538, ES2612444, ES2614070 and ES2617126"* — all
 plain F.17 filename retention and have nothing to do with folder inference.
 Read this criterion without that claim attached to it.
 
-**Scope, then.** Folder inference does not recover anything ACIRL, and must not
-be allowed to appear to. Two reasons, found by checking this rule against the
-suite that already exists:
+**Scope. This criterion was drafted with an ACIRL carve-out, and that
+carve-out was OVERTURNED the same day — see R-9.12, which is the governing
+rule for ACIRL.** The history is kept because the reasoning is instructive, but
+nothing in it is binding:
 
-1. `test-ingest.R`'s "Phase-7b round-2 item 7" pins that `2400-7538-02_QC.pdf`
-   sitting in a directory alongside ES2617126's files stays quarantined and
-   warns. A naive folder rule would flip that test green by attaching an
-   **ACIRL** deliverable to an **ALS** work order — a false merge, and exactly
-   the failure the ACIRL work-order trap exists to prevent. The existing test
-   is right and must keep passing.
+1. ~~`test-ingest.R`'s "Phase-7b round-2 item 7" pins that a `2400-*`
+   deliverable alongside ES2617126's files stays quarantined, so a folder rule
+   attaching an ACIRL deliverable to an ALS work order would be a false
+   merge.~~ **SUPERSEDED.** That test has been re-pointed at the *ambiguous*
+   folder; its single-work-order case is now R-9.12's retain case.
 2. ~~In production an ACIRL email's folder contains ACIRL files only, so the
    folder resolves to zero `ES#######` work orders and there is nothing to
    infer from.~~ **WRONG — corrected by Robin, 2026-07-28: "An ACIRL email will
-   almost always contain the underlying ALS WO files as well."** That is
-   consistent with the adapter's own header (`R/adapter-acirl-field.R:5`: the
-   workbook is "a transposed field-data block plus copies of ALS lab results
-   which must be [dropped]"), i.e. ACIRL and ALS describe the *same sampling
-   event* under two different identifiers. So an ACIRL email's folder does
-   generally resolve to exactly one `ES#######` work order, and reason 2 as
-   drafted does not hold.
+   almost always contain the underlying ALS WO files as well."** Consistent with
+   the adapter's own header (`R/adapter-acirl-field.R:5`: the workbook is "a
+   transposed field-data block plus copies of ALS lab results which must be
+   [dropped]"), i.e. ACIRL and ALS describe the *same sampling event* under two
+   identifiers. So an ACIRL email's folder does generally resolve to exactly one
+   `ES#######` work order.
 
 **What actually keeps ACIRL out, measured rather than assumed.** The retention
 SELECTION gate requires a `_(coa|coc|qc|qci|xtab)` token, and no real ACIRL file
@@ -292,19 +292,11 @@ Criteria:
   precondition, so the trap cannot be quietly relaxed under cover of this
   change).
 
-Hence a third guard alongside the exactly-one rule: a file whose name carries
-an **ACIRL-shaped `\d{4}-\d{4}` token** is never inferred onto a folder-mate's
-work order. It positively declares a work order of its own that we refuse to
-parse; that is a reason to leave it alone, not a licence to adopt it.
-
-Criteria:
+Criteria (ACIRL is **not** among them — see R-9.12):
 - a deliverable whose filename carries no work order at all, in a folder whose
   other files all belong to one WO, is archived and attached to that WO;
 - the same deliverable in a folder resolving to **two** work orders is NOT
   archived, stays quarantined, and warns;
-- a `2400-*` ACIRL-shaped deliverable in a folder resolving to exactly one
-  `ES#######` work order is **NOT** attached to it — stays quarantined and
-  warns (the existing Phase-7b round-2 item 7 test, which must stay green);
 - inference never fires when the filename *does* yield a work order — the
   filename wins, and a folder disagreeing with it does not override it;
 - inference never *creates* a project row: a folder resolving to one WO that
@@ -336,12 +328,35 @@ Guards, all required:
 - never delete a folder holding a file that was kept back (quarantined,
   failed, or removal-refused for a missing/mismatched archive copy) — those
   are the files a human still has to look at;
-- only when `remove_ingested` is TRUE and the run reached its snapshot, i.e.
-  strictly downstream of R-9.6's existing gate.
+- never delete a folder holding a **subdirectory**. Ingest is non-recursive
+  (R-9.5), so nothing in there was ever routed and we know nothing about its
+  contents; deleting it would breach R-9.5's "subdirectory content untouched"
+  by unlinking data the pipeline never even looked at;
+- never delete a folder holding a **zero-byte** file. `ignore_rule()` calls one
+  `empty_file`, but that is a property of the file *right now*, not a permanent
+  one like `.bak`/`.tmp`/`.DS_Store`: on a OneDrive/PowerAutomate inbox a
+  0-byte file is routinely an attachment still mid-delivery. Treating it as
+  ignorable meant attachment 1 committing and being removed (so the run *had*
+  removed files, so the folder read as spent) while attachment 2 was destroyed
+  before it was ever routed — the only copy of a lab deliverable, deleted
+  unseen. An undeleted folder costs nothing; the next run tidies it once the
+  bytes land;
+- only when `remove_ingested` is TRUE. For a folder holding **real** files this
+  is strictly downstream of R-9.6's existing gate, because those files are only
+  removed once the run reached a verified snapshot. A **cruft-only** folder is
+  the deliberate exception: nothing was committed and nothing retained, so
+  there is no snapshot and no `removed_files` — and R-9.6's gate governs
+  deleting files the DB now holds copies of, of which there are none here.
+  Pinned by the AUDIT-5 test, which asserts `snapshot_path` is NA on exactly
+  that path, so this exception cannot quietly widen.
 Criteria: folder emptied by a clean run is gone; folder holding a `.DS_Store`
-alongside removed sources is gone and the `.DS_Store` with it; folder holding
-one quarantined file survives; the ingest root itself always survives, empty
-or not.
+alongside removed sources is gone and the `.DS_Store` with it; a folder holding
+**only** cruft is gone even though this run removed nothing from it (otherwise
+`batch-2026-07-23`, the folder this whole feature was written for, can never be
+cleaned); folder holding one quarantined file survives; folder holding a
+subdirectory survives, with the subdirectory's contents intact; folder holding
+a zero-byte file survives, with that file intact; the ingest root itself always
+survives, empty or not.
 
 ## R-9.10 Retention alone justifies a snapshot
 

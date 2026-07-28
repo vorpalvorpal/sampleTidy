@@ -15,7 +15,7 @@ section.
 - option wins over env var → "R-1.1: option wins over env var"
 - `live_db` default under `R_user_dir` → "R-1.1: live_db default lives under R_user_dir, never a cloud-sync path"
 - `field_analytes` pinned default → "R-1.1: field_analytes default is the pinned vector"
-- `remove_ingested` default FALSE (A13) → "R-1.1: remove_ingested default is FALSE (A13)"
+- `remove_ingested` default TRUE (supersedes A13's FALSE, 2026-07-23) → "R-1.1: remove_ingested default is TRUE (supersedes A13's FALSE, 2026-07-23)"
 - `corpus_dir` special default via `Sys.getenv("SAMPLETIDY_CORPUS")` → "R-1.1: corpus_dir defaults from Sys.getenv(SAMPLETIDY_CORPUS)", "R-1.1: corpus_dir defaults to empty string when SAMPLETIDY_CORPUS unset"
 
 ### R-1.2 `hash_file()`
@@ -181,6 +181,7 @@ from the file being claimed for some unrelated reason.
 - `ignored`/`archived` never reconsidered, even with a greedy adapter registered → "R-3.7: `ignored` and `archived` are NEVER reconsidered - they are facts about the file, not about the registry"
 - `reconsider` + `dry_run` writes nothing, and does not strand the row at `seen` → "R-3.7: reconsider = TRUE under dry_run = TRUE writes nothing - the stored verdict is unchanged"
 - still-unclaimed after reconsideration ends terminal, never `seen` → "R-3.7: a file still unclaimed after reconsideration ends terminal (quarantined/unclaimed), never stranded at `seen`"
+- a `claimed` file mid-pipeline is never reconsidered; the registry is emptied before the reconsidering pass so a wrongly-reset row cannot be re-claimed back into looking correct (mutation-verified) → "R-3.7: a `claimed` file mid-pipeline is NEVER reconsidered - reconsideration must not reset work already in flight"
 
 
 # Adapters (plans 04-06)
@@ -301,7 +302,7 @@ ambiguity notes referenced below.
 
 ### R-8.2 feature resolution
 - direct name resolves → "R-8.2: direct feature name resolves"
-- mask alias resolves → "R-8.2: mask alias resolves to the masked feature's uuid"
+- a mask-only name does NOT resolve (the `feature_mask` join was removed by R-11.4; this line previously recorded the opposite, pre-R-11.4 behaviour) → "R-8.2: a mask-only name does not resolve (feature_mask join removed, R-11.4)"
 - typo queues one grouped review item covering all rows → "R-8.2: a typo feature queues one grouped review item covering all its rows"
 - ambiguity queues both candidate uuids → "R-8.2: an ambiguous feature name queues review listing both candidate uuids"
 - no fuzzy matching (Levenshtein-1 miss stays unknown) → "R-8.2: no fuzzy matching - a Levenshtein-1 miss stays unknown_feature"
@@ -350,7 +351,7 @@ ambiguity notes referenced below.
 - update 2 fields → 2 log rows old/new → "R-9.1: db_update() changing 2 fields writes 2 change_log rows with correct old/new"
 - failing update rolls back the log (atomicity) → "R-9.1: a failing update (bad column) rolls back the change_log too (atomicity)"
 - db_delete() removes row + logs delete (bonus, not explicitly required) → "R-9.1: db_delete() removes the row and writes a change_log delete entry"
-- lint guard (fails gracefully on empty R/) → "R-9.1: direct-write bypass is lint-guarded - no forbidden raw SQL writes in R/"
+- lint guard (fails gracefully on empty R/) → "R-9.1: direct-write bypass is lint-guarded - no forbidden raw SQL writes in R/ (comment/string-aware, continuation-line-aware; Phase-7b round-2 item 9)"
 - add_feature()/add_analyte()/add_project()/correct_value() row+log each (con-less signature assumption - see ambiguity note) → "R-9.1: add_feature() inserts a row and a change_log entry", "R-9.1: add_analyte() inserts a row and a change_log entry", "R-9.1: add_project() inserts a row and a change_log entry", "R-9.1: correct_value() updates the analysis and logs the old value"
 - review_queue() filters by status → "R-9.1: review_queue() filters by status"
 - review_queue() zero-row stable columns → "R-9.1: review_queue() has stable columns on a zero-row result"
@@ -427,13 +428,53 @@ ambiguity notes referenced below.
 - unknown WO creates no project row and stays quarantined (asserts the project COUNT, not just the asset's absence) → "R-15.36a: a COA for a work order that has NEVER committed creates no project row and stays quarantined"
 - all five deliverable kinds land their ruled `asset.type`, asserted per token → "R-15.36b: each retained deliverable kind lands its ruled asset.type (COA/QC/QCI/COC/XTAB asserted per-token)"
 
-### Test-suite hygiene lint (`tests/testthat/test-mock-scope-lint.R`) - added 2026-07-28
-Not a criterion of any plan - a guard on the SUITE. A bare `on.exit()`
-(`add = FALSE` by default) discards `local_mocked_bindings()`'s own restore
-handler, leaking the mock into every later test in the file. Found the
-expensive way; seven instances existed across five files, all silent.
-- no test_that block mixes the two → "no test_that() block mixes local_mocked_bindings() with a bare on.exit() - the mock's own cleanup would be discarded"
-- calibration control: the detector fires on a known-bad snippet and not on the `add = TRUE` form → "the lint's own detector fires on a known-bad snippet (calibration control)"
+### Test-suite hygiene lint (`tests/testthat/test-mock-scope-lint.R`) - added 2026-07-28, rewritten same day
+Not a criterion of any plan - a guard on the SUITE. An `on.exit()` without
+`add = TRUE` REPLACES every handler already on the frame. Two different things
+register handlers there and are silently discarded: `local_mocked_bindings()`'s
+restore handler (leaking the mock into every later test in the file), and the
+`withr` cleanups a setup helper binds to the CALLING test's frame via
+`.local_envir` (leaking global options and temp directories).
+- rule 1, mocks, scanning test-*.R AND helper-*.R → "no on.exit() discards a local_mocked_bindings() restore handler registered on the same frame"
+- rule 2, frame-borrowing setup helpers, ratcheted against `.ST_RULE2_BASELINE` → "no on.exit() discards the withr cleanups a setup helper bound to the calling test's frame"
+- calibration: the real bareness detector, over a battery incl. `add = FALSE`, positional `add`, `rm(add)`, and an inner call's `add = TRUE` → "calibration: the bareness detector reads on.exit()'s add argument semantically, not textually"
+- calibration: both rules fire on known-bad snippets, incl. a helper function with NO enclosing test_that, plus the nested-function negative control → "calibration: both rules fire on a known-bad snippet, including inside a helper function with no enclosing test_that()"
+
+The first version of this lint shipped two holes of its own, both fixed here
+and both worth recording as the generic ways a source lint rots. It decided
+bareness with `!grepl("\\badd\\b", ...)`, so `on.exit(..., add = FALSE)` - the
+same thing as a bare call - read as safe; and its "calibration control" never
+invoked the bareness check at all, which is exactly how that hole survived
+being written. Rule 2 exists because auditing the lint, not running it, is what
+found the second leak class: eleven blocks in `test-ingest.R` wiped
+`ingest_test_setup()`'s cleanups (measured: 3 options left set globally and 47
+temp dirs leaked per file run; 0 and 0 after). 400 pre-existing instances remain
+across 14 other files, recorded in `.ST_RULE2_BASELINE` as a ratchet - see the
+note there for why they are a separate task.
+
+### Traceability lint (`tests/testthat/test-coverage-map-lint.R`) - added 2026-07-28
+Not a criterion of any plan - a guard on THIS document. Every test name quoted
+on a mapping line must resolve to a real `test_that()` description, or the map
+claims coverage that does not exist and a name-anchored criterion sweep skips
+the entry in silence. Three stale quotes were found the expensive way (by a
+reviewer reading the map), two of which recorded behaviour the codebase had
+since reversed: `remove_ingested`'s default (FALSE → TRUE, 2026-07-23) and
+R-8.2's mask alias (R-11.4 removed the `feature_mask` join, so the real test
+now pins the opposite). Non-test literals live in an explicit
+`.ST_COVMAP_LITERALS` allowlist, which is itself checked for rot.
+- every quoted name resolves; the allowlist holds nothing stale → "every test name quoted in COVERAGE-MAP.md resolves to a real test_that() description"
+- calibration: a fabricated map entry naming a non-existent test IS reported, and a quoted phrase on a non-mapping line is not → "calibration: the traceability check reports a quoted name that does not exist"
+
+### Audit-round regression tests (`tests/testthat/test-ingest.R`) - added 2026-07-28
+From the four-way Fable audit of this session's changes. Each fails against the
+code as it was written, verified by mutation, not by assertion.
+- an ACIRL selector matching both dialects and no non-ACIRL scan → "AUDIT-1: the ACIRL selector matches the unhyphenated dialect and does NOT match an unrelated year range or a scanner timestamp"
+- a zero-byte file keeps its folder alive (mutation-verified: without the guard the folder is unlinked AND the in-flight attachment destroyed) → "AUDIT-2: a folder holding a ZERO-BYTE file is never deleted - an attachment mid-delivery must not be unlinked with the folder"
+- folder ambiguity is counted BEFORE the project lookup (mutation-verified: filter-then-count files the anonymous COA under the wrong work order) → "AUDIT-3: a folder naming TWO work orders declines inference even when only ONE of them has a project row"
+- an interrupted run's sources are removed on the NEXT run, and the trigger is self-limiting → "AUDIT-4: a run interrupted before its snapshot still removes its sources on the NEXT run, instead of stalling forever"
+- a cruft-only folder is removed even though this run removed nothing from it → "AUDIT-5: a folder holding only ignorable cruft is removed even though this run removed nothing from it"
+- a folder holding a SUBDIRECTORY survives with its unrouted contents intact (R-9.5); written against the behaviour, not the `dir.exists` line, which measurement showed is redundant defence-in-depth → "AUDIT-6: a folder containing a SUBDIRECTORY is never removed, even when everything else in it is spent"
+- R-9.10's third criterion, previously declared and untested: R-9.6's snapshot gate holds on the RETAIN-ONLY path, with a reachability arm proving an unmocked re-run does remove → "AUDIT-7: R-9.6's snapshot gate still holds on the RETAIN-ONLY path - an injected snapshot failure removes nothing"
 
 ## Plan 10 - e2e / router matrix / corpus gates
 

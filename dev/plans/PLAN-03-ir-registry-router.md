@@ -134,6 +134,13 @@ Criteria:
   that, not the registry;
 - an `archived` file is NOT reconsidered — the strongest guard, since
   re-deciding one could re-commit data already in the DB;
+- a `claimed` file is NOT reconsidered — it is mid-pipeline, not a verdict,
+  and resetting it would silently re-run a parse already in flight. The test
+  must **empty the adapter registry before the reconsidering pass**: with a
+  claimant still registered, a wrongly-reset row is immediately re-claimed and
+  the stored state reads `claimed` either way, so the bug is invisible. Found
+  by mutation — widening the registry-verdict set to include `claimed` did not
+  fail the first draft of this test;
 - `reconsider = TRUE, dry_run = TRUE` writes nothing: the stored state is
   still the old verdict afterwards;
 - a file still unclaimed after reconsideration is left `quarantined`/

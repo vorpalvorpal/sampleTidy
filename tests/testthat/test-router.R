@@ -496,6 +496,46 @@ test_that("R-3.7: `ignored` and `archived` are NEVER reconsidered - they are fac
   expect_equal(redone$state[redone$path == arch][[1]], "archived")
 })
 
+test_that("R-3.7: a `claimed` file mid-pipeline is NEVER reconsidered - reconsideration must not reset work already in flight", {
+  clear_adapters()
+  withr::defer({ clear_adapters(); register_builtin_adapters() })
+  register_adapter(make_matcher_adapter("greedy", function(fm) "format"))
+
+  dir <- withr::local_tempdir()
+  db <- seed_db(dir)
+  con <- seed_con(db)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  f <- st_test_write_file(dir, "ES2617126_0_XTAB.csv", content = "a,b\n1,2\n")
+  first <- route_files(f, con)
+  hash <- first$hash[[1]]
+  expect_identical(stored_route(con, hash)$state[[1]], "claimed")
+
+  # `claimed` is neither a registry verdict nor a terminal state - it is a file
+  # partway through the pipeline, already handed to an adapter. R-3.7 only ever
+  # re-decides `unclaimed`/`adapter_tie`/router-`failed`, but nothing pinned
+  # that, so a regression widening `.st_is_registry_verdict()` (say, to "any
+  # non-archived state") would reset a claimed row to `seen` and silently
+  # re-run its parse - and every existing R-3.7 test would still pass.
+  #
+  # The registry is EMPTIED before the reconsidering pass, and that is what
+  # makes this test discriminate rather than merely pass. With the greedy
+  # adapter still registered, a wrongly-reconsidered file resets to `seen` and
+  # is then immediately re-claimed, so the stored state reads `claimed` either
+  # way and the bug is invisible - verified by mutation: widening
+  # `.st_is_registry_verdict()` to include "claimed" did NOT fail the first
+  # draft of this test. With no adapter left to re-claim it, a reset can only
+  # land at `quarantined`/`unclaimed`, so the two behaviours finally differ.
+  clear_adapters()
+  redone <- route_files(f, con, reconsider = TRUE)
+
+  expect_identical(stored_route(con, hash)$state[[1]], "claimed",
+                   info = "R-3.7: reconsideration must leave a claimed file exactly as it found it")
+  expect_false(identical(stored_route(con, hash)$state[[1]], "seen"),
+               info = "R-3.7: and must never strand it back at `seen`")
+  expect_equal(redone$state[[1]], "claimed")
+})
+
 test_that("R-3.7: reconsider = TRUE under dry_run = TRUE writes nothing - the stored verdict is unchanged", {
   clear_adapters()
   withr::defer({ clear_adapters(); register_builtin_adapters() })

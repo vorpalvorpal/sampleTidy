@@ -291,6 +291,173 @@
 
 # ---- retain non-tabular deliverables (R-15.36, B-15.F17) -----------------
 
+# R-15.36b (Robin, 2026-07-28): the separate ruling that `archive_file()`'s
+# roxygen (R/archive.R) asks for before any retained kind is typed as anything
+# other than the default.
+#
+# Mapped onto the vocabulary the live `asset` table ALREADY uses rather than
+# onto new strings, because the point of `type` is that Robin's existing
+# queries keep working. "Certificate of analysis" is the one exception: it was
+# a new string when Robin ruled it on 2026-07-23, and on 2026-07-28 he had the
+# 259 legacy COA rows retyped to match, so it is now in the live vocabulary
+# too. Live split after that retype: 679 "Chemical analysis" / 272 "QA" /
+# 259 "Certificate of analysis" / 222 "QC" / 34 NA.
+# First match wins. `_QCI` is listed before `_QC` defensively, NOT because it
+# has to be: `_qc` requires the extension dot (or an `[N]` marker) immediately
+# after, so it cannot match `_QCI.pdf` - verified, not assumed. Both map to
+# "QC" anyway, so the order is belt-and-braces against a future edit to either
+# pattern, and this comment says so rather than claiming a dependency that
+# does not exist.
+#
+# ONE table, not four scattered branches, so re-ruling any row is a one-line
+# edit rather than a hunt.
+.ST_RETAINED_ASSET_TYPES <- list(
+  list(pattern = "(?i)_coa(\\[[0-9]+\\])?\\.[a-z0-9]+$", type = "Certificate of analysis"),
+  list(pattern = "(?i)_qci(\\[[0-9]+\\])?\\.[a-z0-9]+$", type = "QC"),
+  list(pattern = "(?i)_qc(\\[[0-9]+\\])?\\.[a-z0-9]+$",  type = "QC"),
+  # A chain of custody is a QA record - who took the sample, when, and who
+  # handled it - not a result.
+  list(pattern = "(?i)_coc(\\[[0-9]+\\])?\\.[a-z0-9]+$", type = "QA"),
+  # XTAB.XLS genuinely IS results: an ALS crosstab rendering of the same
+  # chemistry its `.csv` twin carries, which we merely cannot read yet
+  # (SpreadsheetML, parked post-MVP - R/adapter-crosstab.R).
+  list(pattern = "(?i)_xtab(\\[[0-9]+\\])?\\.[a-z0-9]+$", type = "Chemical analysis"),
+  # R-9.12: ACIRL reports. LAST, so a hypothetical ACIRL file that also carried
+  # a deliverable token would still be typed by the token. "Chemical analysis"
+  # is the legacy majority - 108 of the 124 ACIRL asset rows in the live DB
+  # (the other 16 are "QA", with no rule distinguishing them). Listed
+  # explicitly rather than left to the fallback below, because relying on a
+  # fallback to encode a RULING makes the ruling invisible at the point of
+  # decision.
+  list(pattern = "(^|[^0-9])2400-?[0-9]{4}", type = "Chemical analysis")
+)
+
+#' `asset.type` for one retained non-tabular deliverable (R-15.36b)
+#'
+#' Falls back to `"Chemical analysis"` for anything the table does not name,
+#' preserving the pre-ruling default for a kind nobody has ruled on. The gate
+#' in `.ig_retain_siblings()` and this table are separate lists, and that is
+#' deliberate: a widened gate must not silently start typing a new kind by
+#' accident. (An earlier version of this comment claimed the fallback was
+#' unreachable. R-9.12's widening made that false - real ACIRL names carry no
+#' token, so every one of them reached the fallback - which is exactly why the
+#' ACIRL row is now listed explicitly above.)
+#' @keywords internal
+#' @noRd
+.ig_retained_asset_type <- function(filename) {
+  for (entry in .ST_RETAINED_ASSET_TYPES) {
+    if (grepl(entry$pattern, filename, perl = TRUE)) {
+      return(entry$type)
+    }
+  }
+  "Chemical analysis"
+}
+
+# R-9.8: does this filename carry an ACIRL-shaped work-order token?
+#
+# `2400-7538-02` and friends CANNOT be parsed from a filename (false merges AND
+# false splits - see the ACIRL work-order trap in R/commit.R), and that refusal
+# stays. A file carrying one is not merely "unidentifiable": it POSITIVELY
+# DECLARES a work order of its own, one we decline to name, so this treats that
+# as a reason to leave the file alone rather than adopt it onto a folder-mate's
+# work order.
+#
+# R-9.12 (Robin, 2026-07-28): this is now used ONLY to SELECT ACIRL files for
+# retention, never to refuse them. The earlier version blocked folder inference
+# for an ACIRL-shaped name on the theory that adopting it onto a folder-mate's
+# work order would be a false merge. That was overturned on the evidence: an
+# ACIRL email carries the underlying ALS work order's files too (matching this
+# package's own ACIRL adapter header - the workbook is field data plus copies
+# of ALS lab results, i.e. one sampling event under two identifiers), and the
+# live DB shows the legacy system already filed 104 of 124 ACIRL assets against
+# an ES####### project, one report per work order.
+#
+# The ACIRL work-order trap is untouched: we still never PARSE `2400-*` into a
+# work order. The attachment comes from the folder, which is a different and
+# safer question, and it still requires the folder to resolve to exactly one.
+#
+# Deliberately loose (`\d{4}-\d{4}` anywhere in the name): this gate decides
+# whether to STAY OUT of a file's business, so over-matching costs one warning
+# and a file left safely quarantined, while under-matching costs a wrong
+# attachment in the database. Those are not symmetric.
+# Anchored on the literal ACIRL job prefix `2400`, and tolerant of the
+# unhyphenated dialect, because the loose `[0-9]{4}-[0-9]{4}` this replaced was
+# wrong in BOTH directions against the real corpus (1,227 files in
+# assets/unprocessed, 272 of them ACIRL):
+#
+#   * it MISSED 27 real ACIRL files - the whole unhyphenated `24006989-01`
+#     dialect, which the work-order evidence file records as a real spelling
+#     ("job 6989 only ever appears unhyphenated"). `24006989-10` has only two
+#     digits after its hyphen, so `[0-9]{4}-[0-9]{4}` never matched it;
+#   * it FALSELY matched 4 real non-ACIRL scans - `Blx Quarterly
+#     13-06-21062024141257-0001.pdf` and friends, whose scanner timestamp
+#     contains a 4-4 digit run. Under R-9.12 a false match is no longer
+#     harmless: the selector now RETAINS, and folder inference then attaches,
+#     so an arbitrary scan would be archived as an `asset` of a work order and
+#     its source deleted from the input directory.
+#
+# The replacement is exact on that corpus: 272/272 matched, zero false
+# positives. `(^|[^0-9])` stops `12400-1234` from qualifying.
+.ig_is_acirl_shaped <- function(filename) {
+  grepl("(^|[^0-9])2400-?[0-9]{4}", filename)
+}
+
+#' The work order a folder unambiguously belongs to, or `NA` (R-9.8)
+#'
+#' PowerAutomate drops one lab email's attachments into their own folder, so
+#' folder membership is an association that needs no filename parsing: if the
+#' *other* files here resolved to a work order, a token-less deliverable
+#' belongs to it.
+#'
+#' Returns a work order only when the folder resolves to **exactly one** that
+#' also has a `project` row. The exactly-one guard is load-bearing, not
+#' defensive padding: the real `batch-2026-07-23` folder held **eight** work
+#' orders, and any first-wins or majority-wins rule would have attached each
+#' COA to an arbitrary one of them.
+#'
+#' Never creates a project row - candidates are filtered to work orders that
+#' already have one, so an inferred target is by construction a work order we
+#' have really seen data for (R-15.36a's ruling, applied here too).
+#' @keywords internal
+#' @noRd
+.ig_folder_work_order <- function(con, routed, path) {
+  folder <- dirname(path)
+  same_folder <- which(!is.na(routed$path) & dirname(routed$path) == folder)
+  if (length(same_folder) == 0) {
+    return(NA_character_)
+  }
+
+  # Parse from the stored FILENAME, via the same helper file_meta() uses -
+  # never a relaxed regex, so ACIRL work orders stay unparsed here exactly as
+  # they are everywhere else.
+  guesses <- vapply(
+    routed$filename[same_folder],
+    function(fn) .st_guess_work_order_revision(fn)$work_order_guess,
+    character(1), USE.NAMES = FALSE
+  )
+  candidates <- unique(guesses[!is.na(guesses)])
+  if (length(candidates) == 0) {
+    return(NA_character_)
+  }
+
+  # The exactly-one test runs on the FOLDER's work orders, before any lookup.
+  # Filtering to known-project work orders first and counting after would let a
+  # genuinely ambiguous folder resolve, whenever only one of its work orders
+  # happened to have a `project` row: an email carrying ES1111111 (committed
+  # last month) and ES2222222 (this run's event failed, so no project row yet)
+  # would silently file the deliverable under ES1111111. The ambiguity is a
+  # property of the folder, not of what we have managed to commit from it.
+  if (length(candidates) > 1) {
+    return(NA_character_)
+  }
+
+  has_project <- nrow(DBI::dbGetQuery(
+    con, "SELECT 1 FROM project WHERE name = ? LIMIT 1", params = list(candidates[[1]])
+  )) > 0
+
+  if (has_project) candidates[[1]] else NA_character_
+}
+
 #' Retain a work order's non-tabular deliverables (COA/COC/QC/QCI PDFs,
 #' `XTAB.XLS`, ...) that no adapter claims (R-15.36, B-15.F17)
 #'
@@ -333,150 +500,6 @@
 #' `.ig_remove_verified()` picks it up unmodified and the run's
 #' `files_by_state` report no longer shows it as `quarantined`.
 #'
-#' Round-2 audit item 6: is `filename` a COA (Certificate of Analysis) PDF,
-#' the one retained kind PLAN-15 F.17 + Robin's ruling name an explicit
-#' `asset.type` for? Real-corpus shape "<work order>_<revision>_COA.<ext>"
-#' (e.g. "ES2617126_0_COA.pdf"): a literal `_COA.` token, case-insensitive,
-#' immediately before the extension, with an OPTIONAL `[N]` duplicate-
-#' download marker (round-3 item 9) - `ignore_rule()` (R/router.R)
-#' DELIBERATELY passes a `[N]` browser-redownload twin through rather than
-#' filtering it, so hash dedup (not filename guesswork) handles the ordinary
-#' case where both copies are present; but when the `[1]` copy is the ONLY
-#' copy on disk (the original was moved/deleted between downloads), it must
-#' still be recognised as a COA, not silently typed `"Chemical analysis"`
-#' (reproduced: `ES2617126_0_COA[1].pdf` was typed `"Chemical analysis"`
-#' pre-fix). Otherwise deliberately narrow - `.ig_retain_
-#' siblings()` also retains COC/QC/QCI PDFs and `XTAB.XLS`, none of which are
-#' COAs; widening `"Certificate of analysis"` to cover them needs a separate
-#' ruling (see the round-2 report's enumerated list), not a guess here.
-#' @keywords internal
-#' @noRd
-.ig_is_coa_deliverable <- function(filename) {
-  grepl("(?i)_coa(\\[[0-9]+\\])?\\.[a-z0-9]+$", filename, perl = TRUE)
-}
-
-# R-15.36b (Robin, 2026-07-28): the separate ruling the note above asks for.
-#
-# Mapped onto the vocabulary the live `asset` table ALREADY uses - 938
-# "Chemical analysis", 272 "QA", 222 "QC" - rather than onto new strings,
-# because the point of `type` is that Robin's existing queries keep working.
-# Order matters: the first matching token wins, and `_QCI` must be tested
-# before `_QC` would otherwise swallow it. ("Certificate of analysis" is the
-# one value not already in the live vocabulary; it was ruled separately on
-# 2026-07-23 and is left as it stands.)
-#
-# ONE table, not four scattered branches, so re-ruling any row is a one-line
-# edit rather than a hunt.
-.ST_RETAINED_ASSET_TYPES <- list(
-  list(pattern = "(?i)_coa(\\[[0-9]+\\])?\\.[a-z0-9]+$", type = "Certificate of analysis"),
-  list(pattern = "(?i)_qci(\\[[0-9]+\\])?\\.[a-z0-9]+$", type = "QC"),
-  list(pattern = "(?i)_qc(\\[[0-9]+\\])?\\.[a-z0-9]+$",  type = "QC"),
-  # A chain of custody is a QA record - who took the sample, when, and who
-  # handled it - not a result.
-  list(pattern = "(?i)_coc(\\[[0-9]+\\])?\\.[a-z0-9]+$", type = "QA"),
-  # XTAB.XLS genuinely IS results: an ALS crosstab rendering of the same
-  # chemistry its `.csv` twin carries, which we merely cannot read yet
-  # (SpreadsheetML, parked post-MVP - R/adapter-crosstab.R).
-  list(pattern = "(?i)_xtab(\\[[0-9]+\\])?\\.[a-z0-9]+$", type = "Chemical analysis")
-)
-
-#' `asset.type` for one retained non-tabular deliverable (R-15.36b)
-#'
-#' Falls back to `"Chemical analysis"` for anything the table does not name,
-#' preserving the pre-ruling default for a kind nobody has ruled on. That
-#' fallback is unreachable from `.ig_retain_siblings()` today, whose selection
-#' gate admits only the five tokens above - but the gate and this table are
-#' separate lists, and a widened gate must not silently start typing a new
-#' kind by accident.
-#' @keywords internal
-#' @noRd
-.ig_retained_asset_type <- function(filename) {
-  for (entry in .ST_RETAINED_ASSET_TYPES) {
-    if (grepl(entry$pattern, filename, perl = TRUE)) {
-      return(entry$type)
-    }
-  }
-  "Chemical analysis"
-}
-
-# R-9.8: does this filename carry an ACIRL-shaped work-order token?
-#
-# `2400-7538-02` and friends CANNOT be parsed from a filename (false merges AND
-# false splits - see the ACIRL work-order trap in R/commit.R), and that refusal
-# stays. A file carrying one is not merely "unidentifiable": it POSITIVELY
-# DECLARES a work order of its own, one we decline to name, so this treats that
-# as a reason to leave the file alone rather than adopt it onto a folder-mate's
-# work order.
-#
-# R-9.12 (Robin, 2026-07-28): this is now used ONLY to SELECT ACIRL files for
-# retention, never to refuse them. The earlier version blocked folder inference
-# for an ACIRL-shaped name on the theory that adopting it onto a folder-mate's
-# work order would be a false merge. That was overturned on the evidence: an
-# ACIRL email carries the underlying ALS work order's files too (matching this
-# package's own ACIRL adapter header - the workbook is field data plus copies
-# of ALS lab results, i.e. one sampling event under two identifiers), and the
-# live DB shows the legacy system already filed 104 of 124 ACIRL assets against
-# an ES####### project, one report per work order.
-#
-# The ACIRL work-order trap is untouched: we still never PARSE `2400-*` into a
-# work order. The attachment comes from the folder, which is a different and
-# safer question, and it still requires the folder to resolve to exactly one.
-#
-# Deliberately loose (`\d{4}-\d{4}` anywhere in the name): this gate decides
-# whether to STAY OUT of a file's business, so over-matching costs one warning
-# and a file left safely quarantined, while under-matching costs a wrong
-# attachment in the database. Those are not symmetric.
-.ig_is_acirl_shaped <- function(filename) {
-  grepl("[0-9]{4}-[0-9]{4}", filename)
-}
-
-#' The work order a folder unambiguously belongs to, or `NA` (R-9.8)
-#'
-#' PowerAutomate drops one lab email's attachments into their own folder, so
-#' folder membership is an association that needs no filename parsing: if the
-#' *other* files here resolved to a work order, a token-less deliverable
-#' belongs to it.
-#'
-#' Returns a work order only when the folder resolves to **exactly one** that
-#' also has a `project` row. The exactly-one guard is load-bearing, not
-#' defensive padding: the real `batch-2026-07-23` folder held **eight** work
-#' orders, and any first-wins or majority-wins rule would have attached each
-#' COA to an arbitrary one of them.
-#'
-#' Never creates a project row - candidates are filtered to work orders that
-#' already have one, so an inferred target is by construction a work order we
-#' have really seen data for (R-15.36a's ruling, applied here too).
-#' @keywords internal
-#' @noRd
-.ig_folder_work_order <- function(con, routed, path) {
-  folder <- dirname(path)
-  same_folder <- which(!is.na(routed$path) & dirname(routed$path) == folder)
-  if (length(same_folder) == 0) {
-    return(NA_character_)
-  }
-
-  # Parse from the stored FILENAME, via the same helper file_meta() uses -
-  # never a relaxed regex, so ACIRL work orders stay unparsed here exactly as
-  # they are everywhere else.
-  guesses <- vapply(
-    routed$filename[same_folder],
-    function(fn) .st_guess_work_order_revision(fn)$work_order_guess,
-    character(1), USE.NAMES = FALSE
-  )
-  candidates <- unique(guesses[!is.na(guesses)])
-  if (length(candidates) == 0) {
-    return(NA_character_)
-  }
-
-  known <- candidates[vapply(candidates, function(wo) {
-    nrow(DBI::dbGetQuery(
-      con, "SELECT 1 FROM project WHERE name = ? LIMIT 1", params = list(wo)
-    )) > 0
-  }, logical(1))]
-
-  if (length(known) == 1) known[[1]] else NA_character_
-}
-
 #' @param con an open read-write DBI connection (already past
 #'   `.ig_reconcile_and_commit()`, so any committed event's `project` row
 #'   exists).
@@ -676,8 +699,23 @@
     return(FALSE)
   }
   all(vapply(entries, function(p) {
-    # ignore_rule() takes a file_meta() list; build one defensively, since a
-    # file that vanished mid-sweep must not abort the cleanup of the rest.
+    # ignore_rule() conflates two different things, and only one of them may
+    # authorise deleting the enclosing folder:
+    #
+    #   * a PERMANENT property of the file - `.bak`, `.tmp`, `.DS_Store`. Safe.
+    #   * `empty_file`, which is a property of the file RIGHT NOW. On a
+    #     OneDrive/PowerAutomate inbox a 0-byte file is routinely an attachment
+    #     mid-delivery. Treating it as ignorable meant: attachment 1 commits
+    #     and is removed -> `removed_files` non-empty -> folder judged spent ->
+    #     unlink(recursive = TRUE) destroys attachment 2 before it was ever
+    #     routed. That is the only copy of a lab deliverable, deleted unseen.
+    #
+    # So a zero-byte file KEEPS the folder alive. It costs an undeleted folder
+    # (which the next run tidies once the bytes land); the alternative costs
+    # the file.
+    if (isTRUE(tryCatch(file.size(p) == 0, error = function(e) FALSE))) {
+      return(FALSE)
+    }
     keep_it <- tryCatch(is.na(ignore_rule(file_meta(p))), error = function(e) TRUE)
     !isTRUE(keep_it)
   }, logical(1)))
@@ -706,18 +744,33 @@
   if (isTRUE(report$failed) || isTRUE(report$dry_run)) {
     return(FALSE)
   }
-  if (length(report$removed_files) == 0) {
+  if (!isTRUE(as.logical(st_config("remove_ingested")))) {
     return(FALSE)
   }
-  if (!isTRUE(as.logical(st_config("remove_ingested")))) {
+  # Gating on "this run removed something" alone left the motivating case
+  # uncleanable: `batch-2026-07-23` holds nothing but a `.DS_Store` and is still
+  # on disk today, and a re-run routes nothing, removes nothing, and therefore
+  # never tidies it. A folder holding ONLY permanently-ignorable cruft is safe
+  # to remove whether or not this run did the emptying - deleting a `.DS_Store`
+  # destroys nothing, so it needs no snapshot to have happened first. A folder
+  # holding real files still requires this run to have verified-and-removed
+  # them (which is what earns the snapshot), so the data path is unchanged.
+  #
+  # `.ig_folder_is_spent()` treats a ZERO-BYTE file as still-live precisely so
+  # this relaxation cannot delete an attachment mid-delivery.
+  if (length(report$removed_files) == 0 && !.ig_folder_is_spent(folder)) {
     return(FALSE)
   }
   if (!dir.exists(folder)) {
     return(FALSE)
   }
 
-  root_real <- normalizePath(root, mustWork = FALSE)
-  folder_real <- normalizePath(folder, mustWork = FALSE)
+  # winslash = "/" so the containment test below compares like with like:
+  # normalizePath() returns backslashes on Windows while .Platform$file.sep is
+  # "/", which would make every folder fail the prefix test and silently
+  # disable this whole feature there.
+  root_real <- normalizePath(root, winslash = "/", mustWork = FALSE)
+  folder_real <- normalizePath(folder, winslash = "/", mustWork = FALSE)
 
   # Strictly BELOW the root. `identical()` catches the root itself; the prefix
   # test catches anything outside the tree, however it was spelled. Anything
@@ -725,7 +778,7 @@
   if (identical(folder_real, root_real)) {
     return(FALSE)
   }
-  if (!startsWith(folder_real, paste0(root_real, .Platform$file.sep))) {
+  if (!startsWith(folder_real, paste0(root_real, "/"))) {
     return(FALSE)
   }
   if (!.ig_folder_is_spent(folder_real)) {
@@ -992,8 +1045,32 @@ ingest_dir <- function(path, db = st_config("live_db"), dry_run = FALSE,
       # `.ig_current_states()`).
       file_states <- .ig_current_states(con, routed$hash)
 
+      # R-9.10 re-entrancy. `did_something` below decides whether to snapshot,
+      # and a snapshot is what unlocks `.ig_remove_verified()`. Computed from
+      # THIS run's commits and retentions alone, it stalls forever after an
+      # interrupted run: run 1 archives a file then dies at snapshot_db(); run 2
+      # finds it already `archived`, so commits nothing and retains nothing, so
+      # takes no snapshot, so never removes the source - silently, on every
+      # subsequent run. Count work that is still PENDING as something to do:
+      # a routed source still on disk whose hash already has an asset row.
+      # Self-limiting - once removal succeeds the file is gone and this is
+      # empty again.
+      removable_pending <- character(0)
+      if (isTRUE(as.logical(st_config("remove_ingested"))) && !dry_run) {
+        for (i in seq_len(nrow(routed))) {
+          h <- routed$hash[[i]]
+          if (is.na(h) || !file.exists(routed$path[[i]])) next
+          if (nrow(DBI::dbGetQuery(
+            con, "SELECT 1 FROM asset WHERE hash = ? LIMIT 1", params = list(h)
+          )) > 0) {
+            removable_pending <- c(removable_pending, h)
+          }
+        }
+      }
+
       list(routed = routed, events = events, outcome = outcome,
-           file_states = file_states, retained = retained)
+           file_states = file_states, retained = retained,
+           removable_pending = unique(removable_pending))
     },
     db = db
   )
@@ -1010,7 +1087,8 @@ ingest_dir <- function(path, db = st_config("live_db"), dry_run = FALSE,
   # fired. The strict commit -> archive -> snapshot -> remove ORDER of R-9.6 is
   # untouched; this only widens what counts as "something happened".
   did_something <- isTRUE(pipeline$outcome$committed_any) ||
-    length(pipeline$retained) > 0
+    length(pipeline$retained) > 0 ||
+    length(pipeline$removable_pending) > 0
   snapshot_path <- NA_character_
   if (did_something && !dry_run) {
     snapshot_path <- snapshot_db(db = db, dest_dir = st_config("snapshot_dir"))
@@ -1066,8 +1144,9 @@ ingest_dir <- function(path, db = st_config("live_db"), dry_run = FALSE,
 #' @param db path to the DuckDB file to ingest into.
 #' @param dry_run passed through to each [ingest_dir()] call.
 #' @param reconsider passed through to each [ingest_dir()] call (R-3.7).
-#' @return a list with `n_folders`, `n_folders_failed`, and `folders`: a named
-#'   list (folder basename -> that folder's `ingest_report`, or a
+#' @return a list with `n_folders`, `n_folders_failed`, `n_folders_removed`
+#'   (emptied folders deleted, R-9.9) and `folders`: a named list (folder
+#'   basename -> that folder's `ingest_report`, or a
 #'   `list(failed = TRUE, error = <message>)` for one that threw).
 #' @export
 ingest_inbox <- function(root, db = st_config("live_db"), dry_run = FALSE,

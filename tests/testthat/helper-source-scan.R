@@ -125,6 +125,102 @@
   do.call(rbind, rows)
 }
 
+#' The literal source text of one parse-tree span, reassembled from `lines`.
+#' Line-wrap-safe: a multi-line span is stitched with the first line clipped at
+#' `col1`, the last at `col2`, and everything between taken whole. Exists so a
+#' lint can inspect a CALL'S OWN argument text without reverse-engineering
+#' character offsets, and without a regex over the file catching an occurrence
+#' somewhere else entirely.
+#' @param lines character vector, one element per source line.
+#' @param line1,col1,line2,col2 a single span, as returned by `.st_find_calls()`.
+#' @return a length-1 character string (embedded newlines preserved as `"\n"`).
+#' @keywords internal
+.st_span_text <- function(lines, line1, col1, line2, col2) {
+  seg <- lines[line1:line2]
+  if (length(seg) == 1L) {
+    return(substr(seg, col1, col2))
+  }
+  seg[[1]] <- substr(seg[[1]], col1, nchar(seg[[1]]))
+  seg[[length(seg)]] <- substr(seg[[length(seg)]], 1L, col2)
+  paste(seg, collapse = "\n")
+}
+
+#' Every `function(...) ...` definition's fully-enclosing span. A function body
+#' is a FRAME, which is what `on.exit()` registers against - so any lint
+#' reasoning about handler scope needs these alongside call spans, or it
+#' attributes a helper function's `on.exit()` to whatever block the helper
+#' happens to be written inside.
+#' @param pd a `getParseData()` frame (see `.st_parse_tree()`).
+#' @return data.frame with the same span columns as `.st_find_calls()`.
+#' @keywords internal
+.st_find_function_defs <- function(pd) {
+  if (nrow(pd) == 0) {
+    return(.st_empty_calls)
+  }
+  # Both spellings of a function definition. `\(x)` does NOT parse as FUNCTION
+  # (nor as any "LAMBDA" token - that guess was wrong and silently covered
+  # nothing): R 4.4 gives its backslash the token `'\\'`, four characters, a
+  # quoted single backslash. Verified against getParseData() directly rather
+  # than assumed, because a wrong token name here fails OPEN - the scan simply
+  # finds no lambdas and reports a clean result.
+  fns <- pd[pd$token %in% c("FUNCTION", "'\\\\'"), , drop = FALSE]
+  if (nrow(fns) == 0) {
+    return(.st_empty_calls)
+  }
+  rows <- lapply(seq_len(nrow(fns)), function(i) {
+    parent <- pd[pd$id == fns$parent[[i]], , drop = FALSE]
+    if (nrow(parent) != 1) {
+      return(NULL)
+    }
+    data.frame(
+      text = "function", line1 = parent$line1[[1]], col1 = parent$col1[[1]],
+      line2 = parent$line2[[1]], col2 = parent$col2[[1]], stringsAsFactors = FALSE
+    )
+  })
+  rows <- rows[!vapply(rows, is.null, logical(1))]
+  if (length(rows) == 0) {
+    return(.st_empty_calls)
+  }
+  do.call(rbind, rows)
+}
+
+#' For each span in `inner`, the row index of the SMALLEST span in `scopes`
+#' that fully contains it, or `NA` when nothing does (top level).
+#'
+#' "Smallest containing scope" is the whole point: `on.exit()` registers on the
+#' innermost frame, so a handler written inside a helper function nested in a
+#' `test_that()` block belongs to the HELPER, not the block. A lint that asks
+#' only "is it somewhere inside the block" both over-reports (nested functions
+#' that are actually fine) and under-reports (it never looks at helper files at
+#' all, where there is no enclosing block to be inside of).
+#' @param scopes data.frame of candidate scope spans (see `.st_find_calls()`).
+#' @param inner data.frame of spans to place.
+#' @return integer vector, length `nrow(inner)`, indexing rows of `scopes`.
+#' @keywords internal
+.st_innermost_scope <- function(scopes, inner) {
+  if (nrow(inner) == 0) {
+    return(integer(0))
+  }
+  vapply(seq_len(nrow(inner)), function(i) {
+    if (nrow(scopes) == 0) {
+      return(NA_integer_)
+    }
+    hits <- .st_span_contains(
+      scopes$line1, scopes$col1, scopes$line2, scopes$col2,
+      inner$line1[[i]], inner$col1[[i]], inner$line2[[i]], inner$col2[[i]]
+    )
+    if (!any(hits)) {
+      return(NA_integer_)
+    }
+    idx <- which(hits)
+    # Smallest by span extent; line count first, then column width, which is a
+    # total order here because containment makes the candidates strictly nested.
+    extent <- (scopes$line2[idx] - scopes$line1[idx]) * 1e6 +
+      (scopes$col2[idx] - scopes$col1[idx])
+    idx[[which.min(extent)]]
+  }, integer(1))
+}
+
 .st_empty_assignments <- data.frame(
   lhs = character(0), rhs_line1 = integer(0), rhs_col1 = integer(0),
   rhs_line2 = integer(0), rhs_col2 = integer(0), stringsAsFactors = FALSE

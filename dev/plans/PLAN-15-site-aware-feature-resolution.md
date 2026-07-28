@@ -2499,10 +2499,19 @@ Criteria (both arms required — the negative is the one that pins the ruling):
 ### R-15.36b `asset.type` for the non-COA retained kinds (Robin, 2026-07-28)
 
 `R/archive.R:38-41` parks every retained kind other than COA on the blanket
-`"Chemical analysis"` pending a ruling. Ruled now, against the vocabulary the
-live `asset` table actually uses — 938 `Chemical analysis`, 272 `QA`, 222 `QC`,
-34 NA — rather than inventing new strings, since the point of the type is that
-Robin's existing queries keep working:
+`"Chemical analysis"` pending a ruling. Ruled now against the vocabulary the
+live `asset` table already uses, rather than inventing new strings, since the
+point of the type is that Robin's existing queries keep working.
+
+The `_COA` row is the one exception and is NOT an instance of that principle:
+`"Certificate of analysis"` was a new string when Robin ruled it on 2026-07-23,
+and it is carried forward unchanged here rather than re-argued. The other four
+rows come from the live vocabulary, which before this ruling was 938
+`Chemical analysis` / 272 `QA` / 222 `QC` / 34 NA. Those counts are now
+historical: on 2026-07-28 Robin had the 259 legacy COA rows retyped from
+`Chemical analysis` to `Certificate of analysis` (through the mutation layer,
+one `change_log` row each), so the live split is now 679 / 272 / 259 / 222 / 34
+and the `_COA` row is true of the data as well as of the spec.
 
 | filename token | `asset.type` | why |
 |---|---|---|
@@ -2511,9 +2520,12 @@ Robin's existing queries keep working:
 | `_COC` | `QA` | a chain of custody is a QA record, not a result |
 | `XTAB.XLS` | `Chemical analysis` | it *is* results — an unreadable rendering of the same chemistry the `.csv` twin carries |
 
-One pinned lookup, not four scattered branches, so changing a verdict is a
-one-line edit. Criterion: each of the four tokens above lands its mapped type,
-asserted per-token (a single-arm test passes while three mappings are wrong).
+One pinned lookup, not five scattered branches, so changing a verdict is a
+one-line edit. Criterion: each of the five tokens above (`_COA`, `_QC`, `_QCI`,
+`_COC`, `XTAB.XLS`) lands its mapped type, asserted per-token — a single-arm
+test passes while four mappings are wrong.
+
+<!-- block: B-15.F18 -->
 ### F.18 Legacy `asset` rows with no retained bytes (RESOLVED 2026-07-23)
 **1,272 of 2,556 `asset` rows have no archive copy on disk**, and a sample of 40
 of their filenames could not be found anywhere under the `assets/` tree. These

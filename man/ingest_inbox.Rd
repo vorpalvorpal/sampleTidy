@@ -21,8 +21,9 @@ ingest_inbox(
 \item{reconsider}{passed through to each \code{\link[=ingest_dir]{ingest_dir()}} call (R-3.7).}
 }
 \value{
-a list with \code{n_folders}, \code{n_folders_failed}, and \code{folders}: a named
-list (folder basename -> that folder's \code{ingest_report}, or a
+a list with \code{n_folders}, \code{n_folders_failed}, \code{n_folders_removed}
+(emptied folders deleted, R-9.9) and \code{folders}: a named list (folder
+basename -> that folder's \code{ingest_report}, or a
 \verb{list(failed = TRUE, error = <message>)} for one that threw).
 }
 \description{

@@ -34,11 +34,16 @@
 #' caller/test - `.ct_archive_files()`, R/commit.R, archives the event's own
 #' tabular deliverables and never passes `type`). PLAN-15 F.17 pins that a
 #' retained non-tabular sibling is "evidence, not `Chemical analysis` data";
-#' `.ig_retain_siblings()` (R/ingest.R) is the one caller that passes
-#' `type = "Certificate of analysis"`, and only for a file it can positively
-#' identify as a COA. Do NOT widen `"Certificate of analysis"` to any other
-#' retained kind (COC/QC/QCI/XTAB.XLS/other) without a separate ruling - see
-#' the round-2 report for the enumerated non-COA kinds.
+#' `.ig_retain_siblings()` (R/ingest.R) is the one caller that passes a
+#' non-default `type`.
+#'
+#' That "do NOT widen `Certificate of analysis` without a separate ruling"
+#' note used to end here. The ruling exists: R-15.36b (PLAN-15) maps each
+#' retained deliverable kind to its own `asset.type` - `_COA` ->
+#' `"Certificate of analysis"`, `_QC`/`_QCI` -> `"QC"`, `_COC` -> `"QA"`,
+#' `_XTAB` and an ACIRL-shaped report -> `"Chemical analysis"` - and
+#' `.ig_retained_asset_type()` is the single place that decides it. Widen
+#' nothing here; change the lookup table there.
 #'
 #' @param con an open read-write DBI connection.
 #' @param path path to the source file to archive.
