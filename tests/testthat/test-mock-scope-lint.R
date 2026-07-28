@@ -249,15 +249,47 @@ test_that("no on.exit() discards the withr cleanups a setup helper bound to the 
     lines <- parsed[[f]]
     s <- .st_scan_exit_frames(lines, basename(f))
     if (nrow(s$exits) == 0) next
-    calls <- .st_find_calls(s$pd, helpers)
-    if (nrow(calls) == 0) next
-    call_scope <- .st_innermost_scope(s$scopes, calls)
+
+    # A frame carries withr cleanups two ways, and the first version of this
+    # rule only knew the indirect one:
+    #   (a) it calls a setup helper that binds to the caller via .local_envir;
+    #   (b) it calls `withr::local_*()` DIRECTLY, which binds to that very
+    #       frame - the simpler and more obvious case, and the one the rule
+    #       missed. Found by chasing three temp directories still surviving a
+    #       full suite run after the 2026-07-29 sweep: `test-pending.R` called
+    #       `withr::local_tempdir()` in the test body and then wiped it with a
+    #       bare `on.exit()`, and no setup helper was involved so nothing fired.
+    # Both are collected here into one set of cleanup-carrying frames.
+    carriers <- .st_find_calls(s$pd, helpers)
+
+    direct <- s$pd[s$pd$token == "SYMBOL_FUNCTION_CALL" &
+                     grepl("^local_", s$pd$text), , drop = FALSE]
+    if (nrow(direct) > 0) {
+      dcalls <- .st_find_calls(s$pd, unique(direct$text))
+      # A `local_*()` call that passes `.local_envir` binds to a DIFFERENT
+      # frame (that is the whole point of the argument), so it must not count
+      # as registering on the frame it is written in - otherwise every setup
+      # helper reports itself.
+      envir_tok <- s$pd[s$pd$token == "SYMBOL_SUB" &
+                          s$pd$text == ".local_envir", , drop = FALSE]
+      binds_own_frame <- vapply(seq_len(nrow(dcalls)), function(i) {
+        if (nrow(envir_tok) == 0) return(TRUE)
+        !any(.st_span_contains(
+          dcalls$line1[[i]], dcalls$col1[[i]], dcalls$line2[[i]], dcalls$col2[[i]],
+          envir_tok$line1, envir_tok$col1, envir_tok$line2, envir_tok$col2
+        ))
+      }, logical(1))
+      carriers <- rbind(carriers, dcalls[binds_own_frame, , drop = FALSE])
+    }
+
+    if (nrow(carriers) == 0) next
+    carrier_scope <- .st_innermost_scope(s$scopes, carriers)
 
     n <- 0L
     for (i in seq_len(nrow(s$exits))) {
       if (!s$replaces[[i]]) next
       si <- s$exit_scope[[i]]
-      if (is.na(si) || !(si %in% call_scope[!is.na(call_scope)])) next
+      if (is.na(si) || !(si %in% carrier_scope[!is.na(carrier_scope)])) next
       n <- n + 1L
       detail <- c(detail, sprintf("%s:%d", basename(f), s$exits$line1[[i]]))
     }
@@ -439,6 +471,41 @@ test_that("calibration: both rules fire on a known-bad snippet, including inside
   defs <- .st_find_function_defs(.st_parse_tree(both_forms, "<calibration-lambda>"))
   expect_equal(nrow(defs), 2,
                info = "a backslash lambda must be recognised as a function definition")
+
+  # Rule 2's DIRECT arm: a `withr::local_*()` written straight into the test
+  # body binds to that body's frame, with no setup helper involved. This is the
+  # case the rule originally missed, so pin the two halves that make it work -
+  # a bare local_* call counts for its own frame, and one passing
+  # `.local_envir` does not (it binds elsewhere, which is how a setup helper
+  # avoids reporting itself).
+  direct_bad <- c(
+    'test_that("offender", {',
+    "  dir <- withr::local_tempdir()",
+    "  con <- 1",
+    "  on.exit(rm(con))",
+    "  expect_true(TRUE)",
+    "})"
+  )
+  pd_d <- .st_parse_tree(direct_bad, "<calibration-direct>")
+  own <- .st_find_calls(pd_d, "local_tempdir")
+  expect_equal(nrow(own), 1)
+  envir_tok <- pd_d[pd_d$token == "SYMBOL_SUB" & pd_d$text == ".local_envir", , drop = FALSE]
+  expect_equal(nrow(envir_tok), 0,
+               info = "a bare local_tempdir() binds to its own frame, so it must count")
+
+  s_d <- .st_scan_exit_frames(direct_bad, "<calibration-direct>")
+  own_scope <- .st_innermost_scope(s_d$scopes, own)
+  expect_true(s_d$replaces[[1]])
+  expect_true(s_d$exit_scope[[1]] %in% own_scope,
+              info = "the inline withr call and the on.exit must share the test_that frame")
+
+  delegating <- sub("withr::local_tempdir()", "withr::local_tempdir(.local_envir = env)",
+                    direct_bad, fixed = TRUE)
+  pd_del <- .st_parse_tree(delegating, "<calibration-delegating>")
+  expect_equal(
+    nrow(pd_del[pd_del$token == "SYMBOL_SUB" & pd_del$text == ".local_envir", , drop = FALSE]), 1,
+    info = "a local_* call passing .local_envir binds elsewhere and must NOT count for its own frame"
+  )
 
   # And the negative control for rule 2: an on.exit inside a NESTED function is
   # a different frame and must not be attributed to the block.

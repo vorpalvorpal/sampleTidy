@@ -37,7 +37,11 @@ test_that("R-11.12: pending_features()/pending_analytes() have stable columns on
   dir <- withr::local_tempdir()
   path <- file.path(dir, "empty.duckdb")
   con <- DBI::dbConnect(duckdb::duckdb(), path, read_only = FALSE)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  # withr::defer(), not on.exit(): `withr::local_tempdir()` above registered its
+  # cleanup on THIS frame, and a bare on.exit() would replace it, leaking the
+  # directory. This one survived the 2026-07-29 sweep because the rule only
+  # looked for setup helpers, and here the withr call is written inline.
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   ensure_schema(con)
   for (ddl in .st_test_core_ddl) DBI::dbExecute(con, ddl)
   # No feature_alias / lab_method / sample / analysis rows at all - the
