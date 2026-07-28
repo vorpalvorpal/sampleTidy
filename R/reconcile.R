@@ -1523,10 +1523,10 @@
 # ---- R-8.4/R-11.6: units & value -------------------------------------------
 
 #' Convert `value_num`/`rl` to the resolved analyte's canonical units, route
-#' `parse_value` skips / unit errors out (R-8.4). ANALYTE-PENDING rows are NOT
-#' converted (no analyte -> no canonical units): the value passes through
-#' unconverted and `units_raw` is left set (S-5); an unconvertible unit is NOT
-#' an error for them.
+#' `parse_value` skips / unit errors / unparseable-or-ambiguous values out
+#' (R-8.4). ANALYTE-PENDING rows are NOT converted (no analyte -> no
+#' canonical units): the value passes through unconverted and `units_raw` is
+#' left set (S-5); an unconvertible unit is NOT an error for them.
 #' @return `list(kept, skipped, review)`.
 #' @keywords internal
 #' @noRd
@@ -1552,6 +1552,21 @@
       skipped_list[[length(skipped_list) + 1]] <- tibble::tibble(
         source_ref = rows$source_ref[[i]], reason = parsed$skip_reason[[i]],
         payload = NA_character_, source_hash = rows$source_hash[[i]]
+      )
+      next
+    }
+
+    if (!is.na(parsed$parse_error[[i]])) {
+      # parse_value() refused to guess at this value (an unparseable
+      # below/above-detection limit, or a thousands-vs-decimal-comma
+      # ambiguity) - route to a human via review_queue the same way an
+      # unresolvable unit or datetime already does, instead of committing a
+      # row with a wrong or missing number.
+      keep[[i]] <- FALSE
+      review_list[[length(review_list) + 1]] <- .rc_review_row(
+        source_ref = rows$source_ref[[i]], kind = "parse_error", n_rows = 1L,
+        source_hash = rows$source_hash[[i]], subkind = "value",
+        diagnostics = list(value_raw = rows$value_raw[[i]], reason = parsed$parse_error[[i]])
       )
       next
     }

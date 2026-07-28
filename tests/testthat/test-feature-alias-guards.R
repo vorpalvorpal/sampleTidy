@@ -125,6 +125,21 @@ test_that("Phase-7 pin (guard 1b): confirm_feature_aliases() rejects a POSIXct d
   )
 })
 
+test_that("Phase-8b pin (guard 1c): confirm_feature_aliases() rejects a TRANSPOSED date_start/date_end pair (kills a disabled .fa_check_bound_order()) - no DB is ever opened, mirroring guard 1a/1b", {
+  db_path <- withr::local_tempfile()
+  expect_error(
+    confirm_feature_aliases(
+      "fa-0010", "f-0002", confirmed_by = "alice",
+      date_start = as.Date("2030-01-01"), date_end = as.Date("2020-01-01"),
+      db = db_path
+    ),
+    class = "sampletidy_error"
+  )
+  # No DB file was ever created - the argument-level check runs before
+  # with_db_write() is reached, exactly like guard 1a/1b.
+  expect_false(file.exists(db_path))
+})
+
 # ======================================================================
 # Guard 2 - .fa_torn_guard() (PLAN-15 F.14, the atomicity buy-back) - all
 # three entry points that call it.

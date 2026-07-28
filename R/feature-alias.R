@@ -207,6 +207,44 @@
   invisible(NULL)
 }
 
+#' Run `body_fn()` (a thunk closing over an open connection), reclassifying
+#' any error that escapes it and is not already a `sampletidy_error` into one
+#' that names `db` (Phase-8b C3).
+#'
+#' Without this, a raw duckdb `Catalog Error` - typically thrown by
+#' `.fa_torn_guard()`'s own preflight reads, or by the F.14/F.19
+#' detach/reattach pre-/post-passes, none of which run inside a
+#' `db_transaction()` (that is the whole point of the guarded exception
+#' documented at the head of this file, and `db_transaction()` is the only
+#' place in the mutation layer that currently reclassifies) - escapes this
+#' file's three entry points unclassed, with no mention of which database
+#' file was open. The commonest trigger is an ordinary path typo: a
+#' nonexistent `db` connects read-write just fine (duckdb creates the file),
+#' so the failure surfaces two calls later as "table does not exist", far
+#' from the path that caused it. `resolve_review()` (R/db-schema.R) already
+#' gets this right for its own shape, by running entirely inside
+#' `db_transaction()`; this mirrors its classing (an error already carrying
+#' `sampletidy_error` is re-signalled untouched - it already named its own
+#' problem honestly, and wrapping it again would just bury the real message
+#' under a second layer) for the shapes here that `db_transaction()` cannot
+#' reach.
+#' @keywords internal
+#' @noRd
+.fa_with_db_error_context <- function(db, body_fn) {
+  tryCatch(
+    body_fn(),
+    error = function(e) {
+      if (inherits(e, "sampletidy_error")) {
+        stop(e)
+      }
+      cli::cli_abort(
+        "Database operation on {.path {db}} failed: {conditionMessage(e)}",
+        class = "sampletidy_error", parent = e
+      )
+    }
+  )
+}
+
 #' This table's own outgoing foreign-key columns, per the duckdb catalog.
 #' Returns `character(0)` when the catalog cannot be read or the table
 #' declares no FKs (e.g. the shared test DDL, which declares none at all -
@@ -417,6 +455,7 @@ confirm_feature_aliases <- function(uuid_alias, uuid_feature = NULL, confirmed_b
   kind <- .fa_check_kind(kind)
   date_start <- .fa_check_bound(date_start, "date_start")
   date_end <- .fa_check_bound(date_end, "date_end")
+  .fa_check_bound_order(date_start, date_end)
 
   if (length(uuid_alias) == 0) {
     return(invisible(tibble::tibble(
@@ -426,7 +465,7 @@ confirm_feature_aliases <- function(uuid_alias, uuid_feature = NULL, confirmed_b
   }
 
   result <- with_db_write(
-    function(con) {
+    function(con) .fa_with_db_error_context(db, function() {
       .fa_torn_guard(con)
 
       out <- db_transaction(con, function(con) {
@@ -498,7 +537,7 @@ confirm_feature_aliases <- function(uuid_alias, uuid_feature = NULL, confirmed_b
       }
 
       out[, c("uuid_alias", "uuid_feature", "n_samples", "action")]
-    },
+    }),
     db = db
   )
 
@@ -570,6 +609,54 @@ confirm_feature_aliases <- function(uuid_alias, uuid_feature = NULL, confirmed_b
     )
   }
   x
+}
+
+#' Reject a TRANSPOSED validity window (`date_start` after `date_end`) up
+#' front, before any connection opens (Phase-8b C2).
+#'
+#' The stored interval is read INCLUSIVE at both ends and compared as DATE
+#' (`.rc_alias_bound()`, R/reconcile.R: `date_start <= sample_date AND
+#' sample_date <= date_end`) - swap the two arguments (an ordinary typo) and
+#' that interval is unsatisfiable at EVERY date, not merely narrow. Nothing
+#' downstream notices: the write itself succeeds (`action = "confirmed"`),
+#' and an alias resolving at zero dates does not show up in
+#' `pending_features()` (which lists UNCONFIRMED aliases, and this one now
+#' looks confirmed) or anywhere else an operator would look - so the typo
+#' would silently reopen `unknown_feature` for that sampling-point name on
+#' every future ingest, forever, with no visible sign anything is wrong.
+#' Caught here, before `with_db_write()` even opens a connection, so a
+#' rejected call writes nothing at all - there is no partial state to roll
+#' back.
+#'
+#' Only compares two REAL, fully-specified bounds. Either argument being
+#' absent (`NULL`, the E.4 leave-alone default - already resolved to `NULL`
+#' by `.fa_check_bound()` before this runs) or the E.4 clear sentinel
+#' (`as.Date(NA)`) means there is no interval to check here: an absent side
+#' is unbounded (open-ended), and cannot be "after" or "before" anything.
+#' Equal bounds (`date_start == date_end`) are deliberately NOT rejected: a
+#' single calendar day is a legitimate, if narrow, validity window,
+#' satisfiable by a sample dated exactly that day - unlike a transposed pair,
+#' it is not unsatisfiable.
+#' @keywords internal
+#' @noRd
+.fa_check_bound_order <- function(date_start, date_end) {
+  if (is.null(date_start) || is.null(date_end)) {
+    return(invisible(NULL))
+  }
+  if (is.na(date_start) || is.na(date_end)) {
+    return(invisible(NULL))
+  }
+  if (date_start > date_end) {
+    cli::cli_abort(
+      paste0(
+        "date_start (", as.character(date_start), ") must not be after date_end (",
+        as.character(date_end), "): this validity window would be unsatisfiable at ",
+        "every date - the two arguments look transposed."
+      ),
+      class = "sampletidy_error"
+    )
+  }
+  invisible(NULL)
 }
 
 #' The bound half of a `changes` list: only the bounds the caller actually
@@ -1334,7 +1421,7 @@ merge_identity_aliases <- function(db = st_config("live_db"), actor, dry_run = F
   checkmate::assert_flag(dry_run)
 
   with_db_write(
-    function(con) {
+    function(con) .fa_with_db_error_context(db, function() {
       .fa_torn_guard(con)
 
       cand <- .fa_identity_duplicates(con)
@@ -1415,7 +1502,7 @@ merge_identity_aliases <- function(db = st_config("live_db"), actor, dry_run = F
       }
 
       dplyr::bind_rows(rows)
-    },
+    }),
     db = db
   )
 }
@@ -1476,7 +1563,7 @@ confirm_analyte_methods <- function(uuid_lab, uuid_analyte, confirmed_by,
   }
 
   result <- with_db_write(
-    function(con) {
+    function(con) .fa_with_db_error_context(db, function() {
       .fa_torn_guard(con)
 
       # F.14, GUARDED EXCEPTION (see the head of this file): on a real
@@ -1507,7 +1594,7 @@ confirm_analyte_methods <- function(uuid_lab, uuid_analyte, confirmed_by,
         })
         dplyr::bind_rows(rows)
       })
-    },
+    }),
     db = db
   )
 
@@ -1587,16 +1674,30 @@ confirm_analyte_methods <- function(uuid_lab, uuid_analyte, confirmed_by,
 #' Has `.am_convert_analyses()` (below) already committed a conversion for
 #' this exact analysis? Keyed off its own `change_log` reason string, which
 #' is unique to that one call site - nothing else in the codebase writes
-#' `analysis.value` with this reason. Lets a re-run (after a crash or an
-#' aborted sibling item) skip what is already done instead of re-applying
-#' `unify_value()` to an already-canonical number.
+#' this reason. Lets a re-run (after a crash or an aborted sibling item)
+#' skip what is already done instead of re-applying `unify_value()` to an
+#' already-canonical number.
+#'
+#' Deliberately NOT scoped to `field = 'value'` (or to any other single
+#' field): `db_update()` writes a `change_log` row only for a field whose
+#' new value differs from its old one, and a unit conversion routinely
+#' leaves `value` bit-for-bit unchanged - a non-detect (`value = NA`), a
+#' `value = 0` row, or any row surviving an identity-units conversion. If
+#' this guard asked only about `value`, it would report "not yet converted"
+#' forever on exactly those rows while `rl_low`/`rl_high` (which usually DO
+#' move) get re-multiplied on every re-run - the Phase-8b regression this
+#' guard exists to prevent. So "converted" must be a durable fact about the
+#' ANALYSIS, not an inference from whichever field happened to move: this
+#' asks only whether ANY change_log row - real field update or the explicit
+#' completion marker `.am_convert_analyses()` always writes - carries this
+#' reason for this `uuid_row`, regardless of `field`.
 #' @keywords internal
 #' @noRd
 .am_analysis_already_converted <- function(con, uuid_analysis) {
   nrow(DBI::dbGetQuery(
     con,
     "SELECT 1 FROM change_log
-      WHERE tbl = 'analysis' AND uuid_row = ? AND field = 'value'
+      WHERE tbl = 'analysis' AND uuid_row = ?
         AND reason = 'confirm_analyte_methods(): unit conversion'
       LIMIT 1",
     params = list(uuid_analysis)
@@ -1650,11 +1751,33 @@ confirm_analyte_methods <- function(uuid_lab, uuid_analyte, confirmed_by,
     }
 
     conv <- tryCatch(
-      unify_value(
-        c(a$value, a$rl_low, a$rl_high),
-        c(units_from, units_from, units_from),
-        c(units_to, units_to, units_to)
-      ),
+      {
+        # A method with NO recorded units (`units IS NULL`, e.g. an ordinary
+        # ESdat row whose `Result_Unit` was empty) is LESS knowable than a
+        # junk string like 'n/a' or '-': those already fail the
+        # `is_valid_unit()` check inside `unify_value()` and land in the
+        # `unknown_unit` branch below. `units_from = NA`, though, is
+        # `unify_value()`'s OWN documented "nothing to convert from" signal
+        # (used correctly by callers with a genuinely optional conversion) -
+        # it passes the value through unchanged rather than erroring, so
+        # left to itself it would report `n_converted = 1` for a conversion
+        # that never happened. Force it down the SAME `unknown_unit` path as
+        # 'n/a'/'-' rather than trusting unify_value()'s passthrough here.
+        if (is.na(units_from)) {
+          cli::cli_abort(
+            paste0(
+              "lab_method '", uuid_lab, "' has no recorded units (NA); analysis '",
+              a$uuid, "' cannot be placed in the analyte's canonical units."
+            ),
+            class = c("sampletidy_units_error", "sampletidy_error")
+          )
+        }
+        unify_value(
+          c(a$value, a$rl_low, a$rl_high),
+          c(units_from, units_from, units_from),
+          c(units_to, units_to, units_to)
+        )
+      },
       sampletidy_units_error = function(e) e
     )
 
@@ -1681,6 +1804,23 @@ confirm_analyte_methods <- function(uuid_lab, uuid_analyte, confirmed_by,
       con, "analysis", a$uuid,
       changes = list(value = conv[[1]], rl_low = conv[[2]], rl_high = conv[[3]]),
       actor = confirmed_by, reason = "confirm_analyte_methods(): unit conversion"
+    )
+    # Explicit, unconditional completion marker - written even when
+    # `db_update()` just above found every field identical and so wrote NO
+    # row of its own (identity units, or a value/rl pair that does not move
+    # under this particular conversion). Modelled on the established
+    # `action = "provenance"` idiom (e.g. `.ct_record_already_present()`,
+    # R/commit.R) for "record that this happened" rows with no single field
+    # to hang a diff on: `field`/`old`/`new` are NA, so nothing reading
+    # change_log for a real field change - the EPA reporting path included -
+    # can mistake it for one, while `.am_analysis_already_converted()` above
+    # always finds it on a re-run regardless of what did or did not move.
+    .st_write_change_log(
+      con, at = Sys.time(), actor = confirmed_by, action = "provenance",
+      tbl = "analysis", uuid_row = a$uuid, field = NA_character_,
+      old = NA_character_, new = NA_character_,
+      reason = "confirm_analyte_methods(): unit conversion",
+      source_hash = NA_character_
     )
     n_converted <- n_converted + 1L
   }

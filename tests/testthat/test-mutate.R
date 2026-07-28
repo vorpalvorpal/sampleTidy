@@ -557,6 +557,82 @@ test_that("R-9.1: correct_value() updates the analysis and logs the old value", 
   expect_equal(log_row$old, "100")
 })
 
+# ---- Phase-8b F13: correct_value() must not leave the row self-contradictory
+
+test_that("Phase-8b F13: correct_value() recomputes `quantified` from the new value against `rl_low`, so a below-detection row corrected ABOVE its own limit is no longer flagged below-detection", {
+  path <- seed_db()
+  withr::local_options(list("sampletidy.live_db" = path))
+  con <- seed_con(path)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  # below-detection shape: value == rl_low, quantified = FALSE (parse_value()'s
+  # own convention for a "<" reading), value_chr NA.
+  db_append(con, "analysis",
+            tibble::tibble(uuid = "bdl-1", uuid_sample = "s-0001", uuid_lab = "lm-0002",
+                            value = 100, value_chr = NA_character_, quantified = FALSE, rl_low = 100),
+            actor = "pipeline", reason = "seed")
+  before <- count_change_log(con)
+
+  correct_value(uuid_analysis = "bdl-1", new_value = 250, reason = "lab re-issued the certificate", actor = "rjs")
+
+  row <- DBI::dbGetQuery(con, "SELECT value, quantified, rl_low, value_chr FROM analysis WHERE uuid = 'bdl-1'")
+  expect_equal(row$value, 250)
+  expect_true(row$quantified)
+  expect_equal(row$rl_low, 100) # detection limit itself is untouched - only which side of it changed
+
+  logs <- DBI::dbGetQuery(con, "SELECT field, old, new FROM change_log WHERE uuid_row = 'bdl-1' AND field IS NOT NULL ORDER BY field")
+  expect_equal(logs$field, c("quantified", "value"))
+  expect_equal(logs$old[logs$field == "quantified"], "FALSE")
+  expect_equal(logs$new[logs$field == "quantified"], "TRUE")
+  expect_gt(count_change_log(con), before)
+})
+
+test_that("Phase-8b F13: correct_value() leaves `quantified` FALSE (and logs no spurious change) when the corrected value is still below its `rl_low`", {
+  path <- seed_db()
+  withr::local_options(list("sampletidy.live_db" = path))
+  con <- seed_con(path)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  db_append(con, "analysis",
+            tibble::tibble(uuid = "bdl-2", uuid_sample = "s-0001", uuid_lab = "lm-0002",
+                            value = 100, value_chr = NA_character_, quantified = FALSE, rl_low = 100),
+            actor = "pipeline", reason = "seed")
+
+  correct_value(uuid_analysis = "bdl-2", new_value = 40, reason = "still below detection", actor = "rjs")
+
+  row <- DBI::dbGetQuery(con, "SELECT value, quantified FROM analysis WHERE uuid = 'bdl-2'")
+  expect_equal(row$value, 40)
+  expect_false(row$quantified)
+
+  logs <- DBI::dbGetQuery(con, "SELECT field FROM change_log WHERE uuid_row = 'bdl-2' AND field IS NOT NULL")
+  expect_equal(logs$field, "value") # quantified was already FALSE and stays FALSE - not logged again
+})
+
+test_that("Phase-8b F13: correct_value() REFUSES a text-observation row (value_chr set, quantified NA) rather than silently asserting a measurement that may not have happened", {
+  path <- seed_db()
+  withr::local_options(list("sampletidy.live_db" = path))
+  con <- seed_con(path)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  db_append(con, "analysis",
+            tibble::tibble(uuid = "txt-1", uuid_sample = "s-0001", uuid_lab = "lm-0002",
+                            value = NA_real_, value_chr = "Clear, low flow", quantified = NA, rl_low = NA_real_),
+            actor = "pipeline", reason = "seed")
+  before <- count_change_log(con)
+
+  err <- tryCatch(
+    correct_value(uuid_analysis = "txt-1", new_value = 7.4, reason = "field note was actually a pH reading", actor = "rjs"),
+    error = function(e) e
+  )
+  expect_s3_class(err, "sampletidy_error")
+
+  row <- DBI::dbGetQuery(con, "SELECT value, value_chr, quantified FROM analysis WHERE uuid = 'txt-1'")
+  expect_true(is.na(row$value))
+  expect_equal(row$value_chr, "Clear, low flow")
+  expect_true(is.na(row$quantified))
+  expect_equal(count_change_log(con), before) # refused before any write, not rolled back after one
+})
+
 # ---- review_queue reader -----------------------------------------------------
 
 test_that("R-9.1: review_queue() filters by status", {
@@ -662,6 +738,46 @@ test_that("R-11.17: add_feature() omitting lon/lat aborts as sampletidy_error at
   )
 
   n_features <- DBI::dbGetQuery(con, "SELECT count(*) AS n FROM feature WHERE name = 'T.NOLONLAT'")$n
+  expect_equal(n_features, 0)
+  after <- count_change_log(con)
+  expect_equal(after, before)
+})
+
+test_that("Phase-8b C4: add_feature() with an empty/whitespace-only name aborts as sampletidy_error naming the problem, not a raw NOT NULL constraint error", {
+  path <- seed_db()
+  withr::local_options(list("sampletidy.live_db" = path))
+  con <- seed_con(path)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  before <- count_change_log(con)
+
+  err_empty <- tryCatch(
+    add_feature(name = "", site = "TestSite", lon = 150.99, lat = -33.99,
+                actor = "tester", reason = "blank name"),
+    error = function(e) e
+  )
+  expect_s3_class(err_empty, "sampletidy_error")
+  expect_false(
+    grepl("constraint failed", conditionMessage(err_empty), ignore.case = TRUE),
+    info = paste("raw constraint text leaked instead of a validated message:",
+                 conditionMessage(err_empty))
+  )
+
+  err_blank <- tryCatch(
+    add_feature(name = "   ", site = "TestSite", lon = 150.98, lat = -33.98,
+                actor = "tester", reason = "whitespace-only name"),
+    error = function(e) e
+  )
+  expect_s3_class(err_blank, "sampletidy_error")
+  expect_false(
+    grepl("constraint failed", conditionMessage(err_blank), ignore.case = TRUE)
+  )
+
+  # No partial write from either attempt: no feature/alias row, no change_log
+  # growth (the argument check fires before any connection is opened, so
+  # there is nothing to roll back).
+  n_features <- DBI::dbGetQuery(
+    con, "SELECT count(*) AS n FROM feature WHERE lon IN (150.99, 150.98)"
+  )$n
   expect_equal(n_features, 0)
   after <- count_change_log(con)
   expect_equal(after, before)
@@ -923,6 +1039,81 @@ test_that("PLAN-11/A32: db_update() logs TIMESTAMP change_log old/new in a singl
             actor = "tester", reason = "no-op re-submit, same instant, same tz expression")
   after2 <- count_change_log(con)
   expect_equal(after2, before2)
+})
+
+# ---- Phase-8b F14: sub-second POSIXct changes must not be treated as no-ops
+
+test_that("Phase-8b F14: db_update() detects a POSIXct change that differs only BELOW the second, and change_log records both instants distinguishably", {
+  withr::local_timezone("Australia/Sydney")
+
+  path <- seed_db()
+  con <- seed_con(path)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  # A genuinely sub-second fixture (0.1s) - `options(digits.secs)` is a print
+  # option only, so it doesn't protect this from getting silently rounded to
+  # a whole second somewhere between the R literal and the stored value.
+  t0 <- as.POSIXct("2025-03-01 10:00:00.100", tz = "Australia/Sydney")
+  db_append(con, "sample",
+            tibble::tibble(uuid = "s-ms", uuid_feature_alias = "fa-0001", uuid_project = "p-0001",
+                            date = as.Date(t0), datetime = t0, organisation = "ALS"),
+            actor = "a", reason = "seed a sub-second sampling instant")
+
+  # Confirm the seed itself round-tripped sub-second precision (not rounded
+  # on the way IN - the reviewer's note on this finding).
+  seeded_str <- DBI::dbGetQuery(
+    con, "SELECT strftime(datetime, '%Y-%m-%d %H:%M:%S.%f') s FROM \"sample\" WHERE uuid = 's-ms'"
+  )$s
+  expect_equal(seeded_str, "2025-02-28 23:00:00.100000") # 10:00:00.1 AEDT (UTC+11 in March) -> 23:00:00.1 UTC prev day
+
+  t1 <- as.POSIXct("2025-03-01 10:00:00.900", tz = "Australia/Sydney") # 0.8s later, real different instant
+  before <- count_change_log(con)
+  db_update(con, "sample", "s-ms", changes = list(datetime = t1),
+            actor = "analyst", reason = "corrected clock")
+  after <- count_change_log(con)
+  expect_equal(after - before, 1)
+
+  stored_str <- DBI::dbGetQuery(
+    con, "SELECT strftime(datetime, '%Y-%m-%d %H:%M:%S.%f') s FROM \"sample\" WHERE uuid = 's-ms'"
+  )$s
+  expect_equal(stored_str, "2025-02-28 23:00:00.900000")
+
+  log_row <- DBI::dbGetQuery(
+    con, "SELECT old, new FROM change_log WHERE uuid_row = 's-ms' AND field = 'datetime'"
+  )
+  expect_equal(nrow(log_row), 1)
+  # The audit trail must actually be able to DESCRIBE the sub-second change,
+  # not just detect it - old/new stay distinguishable at microsecond precision.
+  # ".099999" (not ".100000") on the old side is R's own double-precision
+  # POSIXct representation, not this fix: 0.1s is not exactly representable
+  # in a binary double, so the round-trip through R's `format()` carries a
+  # 1-microsecond drift already present before `.st_changelog_str()` ever
+  # sees it (confirmed: DuckDB's own `strftime()` above, which never goes
+  # through an R POSIXct double, renders the SAME stored instant exactly as
+  # ".100000"). What this fix guarantees is that old != new and both are
+  # distinguishable strings - not sub-microsecond exactness R itself can't
+  # promise.
+  expect_equal(log_row$old, "2025-02-28 23:00:00.099999")
+  expect_equal(log_row$new, "2025-02-28 23:00:00.900000")
+  expect_false(identical(log_row$old, log_row$new))
+})
+
+test_that("Phase-8b F14: db_update() still skips a no-op re-submit of the SAME sub-second instant (no spurious change_log row)", {
+  path <- seed_db()
+  con <- seed_con(path)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  t0 <- as.POSIXct("2025-03-01 10:00:00.100", tz = "UTC")
+  db_append(con, "sample",
+            tibble::tibble(uuid = "s-ms2", uuid_feature_alias = "fa-0001", uuid_project = "p-0001",
+                            date = as.Date(t0), datetime = t0, organisation = "ALS"),
+            actor = "a", reason = "seed a sub-second sampling instant")
+
+  before <- count_change_log(con)
+  db_update(con, "sample", "s-ms2", changes = list(datetime = t0),
+            actor = "analyst", reason = "no-op re-submit, same sub-second instant")
+  after <- count_change_log(con)
+  expect_equal(after, before)
 })
 
 # ---- R-15.30: add_feature() creates a self alias, resolves by name (F.9) --
