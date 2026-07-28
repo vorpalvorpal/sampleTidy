@@ -103,7 +103,7 @@ test_that("R-10.2: the pinned <0.1 mg/L fluoride row matches the pre-existing an
   ingest_dir(input_dir, db = db_path)
 
   con <- DBI::dbConnect(duckdb::duckdb(), db_path, read_only = TRUE)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   an0001 <- DBI::dbGetQuery(con, "SELECT value, quantified, rl_low FROM analysis WHERE uuid = 'an-0001'")
   expect_equal(an0001$value, 100)
   expect_false(an0001$quantified)
@@ -118,7 +118,7 @@ test_that("R-10.2: the uS/cm to mS/cm EC row lands converted on a new analysis",
   ingest_dir(input_dir, db = db_path)
 
   con <- DBI::dbConnect(duckdb::duckdb(), db_path, read_only = TRUE)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   # PLAN-11: sample no longer carries uuid_feature directly - it points at a
   # feature_alias (sample.uuid_feature_alias -> feature_alias.uuid), which in
   # turn resolves to the feature (feature_alias.uuid_feature -> feature.uuid).
@@ -139,7 +139,7 @@ test_that("R-10.2: every new analysis joins cleanly to a sample and a feature (n
   ingest_dir(input_dir, db = db_path)
 
   con <- DBI::dbConnect(duckdb::duckdb(), db_path, read_only = TRUE)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   # PLAN-11 referential integrity across the alias chain: every analysis must
   # resolve to a real sample, every sample to a real feature_alias, and every
   # feature_alias that IS resolved (uuid_feature not null) to a real feature.
@@ -165,7 +165,7 @@ test_that("R-10.2: the provenance chain is intact - source_hash matches an archi
   ingest_dir(input_dir, db = db_path)
 
   con <- DBI::dbConnect(duckdb::duckdb(), db_path, read_only = TRUE)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   inserts <- DBI::dbGetQuery(con, "SELECT * FROM change_log WHERE tbl = 'analysis' AND action = 'insert'")
   expect_true(nrow(inserts) > 0)
   for (i in seq_len(nrow(inserts))) {
@@ -190,7 +190,7 @@ test_that("R-10.2: ACIRL field rows are date-only with the sampler recorded on s
   ingest_dir(input_dir, db = db_path)
 
   con <- DBI::dbConnect(duckdb::duckdb(), db_path, read_only = TRUE)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   acirl_samples <- DBI::dbGetQuery(con, "SELECT * FROM \"sample\" WHERE organisation = 'ACIRL'")
   expect_true(nrow(acirl_samples) > 0, info = "expected at least one ACIRL field sample once fixtures/acirl/ lands")
   expect_true(all(!is.na(acirl_samples$date)))
@@ -204,7 +204,7 @@ test_that("R-10.2: QC rows are skipped with the fixture's known counts and revie
   report <- ingest_dir(input_dir, db = db_path)
 
   con <- DBI::dbConnect(duckdb::duckdb(), db_path, read_only = TRUE)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   # ESdat is source-of-record for XX1234567 (source preference), so only its
   # 1 LCS + 1 MB QC rows should ever reach reconcile's QC filter
   reviews <- DBI::dbGetQuery(con, "SELECT * FROM review_queue")
@@ -270,7 +270,7 @@ test_that("Phase-7b item 7: ingest_dir() reports a guard-blocked re-download as 
   report2 <- ingest_dir(redl_dir, db = db_path)
 
   con2 <- DBI::dbConnect(duckdb::duckdb(), db_path, read_only = TRUE)
-  on.exit(DBI::dbDisconnect(con2, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con2, shutdown = TRUE))
   after_sample <- DBI::dbGetQuery(con2, "SELECT count(*) AS n FROM \"sample\"")$n
   after_analysis <- DBI::dbGetQuery(con2, "SELECT count(*) AS n FROM analysis")$n
   after_review <- DBI::dbGetQuery(con2, "SELECT count(*) AS n FROM review_queue")$n
@@ -356,7 +356,7 @@ test_that("R-10.4: ingesting a _1_ revision XTAB after the _0_ updates the chang
   ingest_dir(input_dir, db = db_path)
 
   con <- DBI::dbConnect(duckdb::duckdb(), db_path, read_only = TRUE)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   after_analysis <- DBI::dbGetQuery(con, "SELECT count(*) AS n FROM analysis")$n
   updated <- DBI::dbGetQuery(con, "SELECT value FROM analysis WHERE uuid = 'an-0001'")
   v0_state_after <- DBI::dbGetQuery(con, "SELECT state FROM ingest_file WHERE filename = 'XX1234567_0_XTAB.csv'")

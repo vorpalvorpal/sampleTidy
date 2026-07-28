@@ -61,7 +61,7 @@ count_core_rows <- function(con) {
 test_that("R-8.1: LCS/MB rows are skipped with reasons qc_LCS/qc_MB and counts match", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   event <- mk_event(mk_rows(
     mk_row(source_ref = "r1", sample_type = "LCS"),
@@ -77,7 +77,7 @@ test_that("R-8.1: LCS/MB rows are skipped with reasons qc_LCS/qc_MB and counts m
 test_that("R-8.1: unknown sample_type rows are not skipped", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   event <- mk_event(mk_rows(
     mk_row(source_ref = "r1", sample_type = "unknown", value_raw = "2.3",
@@ -99,7 +99,7 @@ test_that("R-8.1: unknown sample_type rows are not skipped", {
 test_that("R-8.1: an NCP row, if somehow present, is still skipped as QC-like (defensive)", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   event <- mk_event(mk_row(source_ref = "r1", sample_type = "NCP"))
   out <- reconcile_event(event, con)
@@ -111,7 +111,7 @@ test_that("R-8.1: an NCP row, if somehow present, is still skipped as QC-like (d
 test_that("R-8.2: direct feature name resolves", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # Fresh date (no seeded analysis at f-0001/20 May) so the row lands in `clean`
   # to expose its resolved uuid_feature; the default 24-May row is the seeded
@@ -125,7 +125,7 @@ test_that("R-8.2: direct feature name resolves", {
 test_that("R-8.2: a mask-only name does not resolve (feature_mask join removed, R-11.4)", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # "Test Surface 01" only exists in feature_mask, which reconcile no longer
   # joins for candidate matching (R-11.4) - it must land in clean as a
@@ -143,7 +143,7 @@ test_that("R-8.2: a mask-only name does not resolve (feature_mask join removed, 
 test_that("R-8.2: a typo feature queues one grouped review item covering all its rows", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   event <- mk_event(mk_rows(
     mk_row(source_ref = "r1", feature_raw = "T.S0l", lab_sample_id = "XX1234567004"),
@@ -159,7 +159,7 @@ test_that("R-8.2: a typo feature queues one grouped review item covering all its
 test_that("R-8.2: an ambiguous feature name queues review listing both candidate uuids", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # "T.AMBIG2" (fa-0005/fa-0006, both auto_assign) resolves to two distinct
   # features f-0004 AND f-0005 - the genuine ambiguity fixture.
@@ -183,7 +183,7 @@ test_that("R-8.2: an ambiguous feature name queues review listing both candidate
 test_that("R-8.2: no fuzzy matching - a Levenshtein-1 miss stays unknown_feature", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # "T.S011" is one insertion away from "T.S01" - must NOT auto-resolve
   event <- mk_event(mk_row(source_ref = "r1", feature_raw = "T.S011"))
@@ -200,7 +200,7 @@ test_that("R-8.2: no fuzzy matching - a Levenshtein-1 miss stays unknown_feature
 test_that("R-8.2: a NA feature_raw is unknown (never a phantom hit into clean) - A44", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # Regression: a missing feature_raw once produced a phantom single NA
   # candidate (x[NA] -> NA -> unique() collapses to length 1), which was
@@ -227,7 +227,7 @@ test_that("R-8.2: a NA feature_raw is unknown (never a phantom hit into clean) -
 test_that("PLAN-7b round-3 finding 7: a feature-side HELD row's review item carries subkind = 'held', distinguishable from a PENDING row with nothing to say (both used to emit subkind=NA and were indistinguishable in review_queue despite OPPOSITE commit dispositions)", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # 'feature_raw = "."' folds to nothing (A44) -> HELD, dropped from clean.
   # 'QQNOSITE' is a genuine unknown -> PENDING, commits dangling. Both used
@@ -258,7 +258,7 @@ test_that("PLAN-7b round-3 finding 7: a feature-side HELD row's review item carr
 test_that("R-8.3: org-scoped analyte name hit resolves", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # Fresh sample (T.S02, no seeded analysis) so the resolved uuid_lab/uuid_analyte
   # are inspectable in `clean` (FIXTURES.md: XX1234567002 = T.S02).
@@ -273,7 +273,7 @@ test_that("R-8.3: org-scoped analyte name hit resolves", {
 test_that("R-8.3: the same name under a different org does not cross-resolve", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # lm-0005 is "pH" under ACIRL; asking for "pH" under ALS must not match it
   event <- mk_event(mk_row(source_ref = "r1", analyte_raw = "pH", org = "ALS",
@@ -290,7 +290,7 @@ test_that("R-8.3: the same name under a different org does not cross-resolve", {
 test_that("R-8.3: CAS fallback finds the analyte but still queues (known_analyte_no_method)", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # No lab_method row for (Fluoride, Internal); CAS 16984-48-8 -> a-0002 exists
   event <- mk_event(mk_row(source_ref = "r1", analyte_raw = "Fluoride", org = "Internal",
@@ -312,7 +312,7 @@ test_that("R-8.3: CAS fallback finds the analyte but still queues (known_analyte
 test_that("R-8.3: a full analyte miss queues grouped by (analyte_raw, org)", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   event <- mk_event(mk_rows(
     mk_row(source_ref = "r1", analyte_raw = "Nonexistentite", org = "ALS", cas_number = NA_character_),
@@ -325,7 +325,7 @@ test_that("R-8.3: a full analyte miss queues grouped by (analyte_raw, org)", {
 })
 
 test_that("D1/D2 (PLAN-7b round-2): closing the analyte-side registry poison loop - a punctuation-only analyte_raw is HELD (never mints a dangling lab_method), and an EXISTING poisoned lab_method row (name='--') does not phantom-splice into an UNRELATED analyte's folded-match candidate set", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # D1 setup: a junk lab_method row whose name folds to NA (punctuation-only)
   # - exactly what D2 prevents COMMIT from ever minting again, seeded
@@ -379,7 +379,7 @@ test_that("D1/D2 (PLAN-7b round-2): closing the analyte-side registry poison loo
 })
 
 test_that("T1.1 (PLAN-7b round-3): .rc_lab_method_candidates() guards the FOLDED method key on ALL THREE conjuncts, not just the name conjunct D1 fixed - a punctuation-only method_raw (or a registry row whose OWN method folds to nothing) must never phantom-splice an all-NA row over the real candidates", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # --- conjunct A: incoming method_raw folds to NA ("-", a routine
   # lab-spreadsheet placeholder). lm-0002/lm-0004 are the seeded
@@ -427,7 +427,7 @@ test_that("T1.1 (PLAN-7b round-3): .rc_lab_method_candidates() guards the FOLDED
 })
 
 test_that("PLAN-7b round-3 finding 5: an analyte-side HELD row's review item actually carries subkind = 'held' (asserted by zero tests before this - mutation R-M1-GAP, which turns the literal into NA_character_, survived the whole suite)", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   event <- mk_event(mk_row(source_ref = "r1", analyte_raw = "--", cas_number = NA_character_,
                            lab_sample_id = "XX9999979009", sample_datetime_raw = "20 Jun 2025 09:00"))
@@ -439,7 +439,7 @@ test_that("PLAN-7b round-3 finding 5: an analyte-side HELD row's review item act
 })
 
 test_that("PLAN-7b round-3 finding 6: the analyte-side HELD group is keyed by ORG, like every other unknown_analyte group - holds from DIFFERENT orgs must not collapse into one review item that names only the first member's org", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   event <- mk_event(mk_rows(
     mk_row(source_ref = "r_als", org = "ALS", analyte_raw = "--", cas_number = NA_character_,
@@ -548,7 +548,7 @@ test_that("PLAN-7b round-3 finding 9: .rc_radix_sort_named() (extracted from rec
 test_that("R-8.4: mg/L to ug/L multiplies value and rl by 1000", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # T.S02 = a fresh sample (no seeded analysis) so the row lands in `clean`,
   # isolating the unit conversion from R-8.7 (FIXTURES.md: XX1234567002 = T.S02).
@@ -566,7 +566,7 @@ test_that("R-8.4: mg/L to ug/L multiplies value and rl by 1000", {
 test_that("R-8.4: pH (dimensionless) passes unit resolution", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   event <- mk_event(mk_row(source_ref = "r1", analyte_raw = "pH Value", org = "ALS",
                            method_raw = "EA005P: pH by PC Titrator", units_raw = "pH Unit",
@@ -582,7 +582,7 @@ test_that("R-8.4: pH (dimensionless) passes unit resolution", {
 test_that("R-8.4: an invalid unit string queues unknown_unit", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   event <- mk_event(mk_row(source_ref = "r1", units_raw = "banana/L"))
   out <- reconcile_event(event, con)
@@ -594,7 +594,7 @@ test_that("R-8.4: an invalid unit string queues unknown_unit", {
 test_that("R-8.4: an NS row lands in skipped, not review", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   event <- mk_event(mk_row(source_ref = "r1", value_raw = "NS", value_num = NA_real_,
                            value_chr = NA_character_, below_detection = NA, rl = NA_real_))
@@ -606,7 +606,7 @@ test_that("R-8.4: an NS row lands in skipped, not review", {
 test_that("R-8.4: a BDL row keeps quantified FALSE with a converted rl", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # <0.2 mg/L Fluoride at T.S02 - a fresh sample (no seeded an-0001 collision),
   # so it's inspectable directly in `clean` (isolated from R-8.7 logic).
@@ -625,7 +625,7 @@ test_that("R-8.4: a BDL row keeps quantified FALSE with a converted rl", {
 test_that("R-8.4: text-only results pass through unconverted with quantified NA", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   event <- mk_event(mk_row(source_ref = "r1", analyte_raw = "pH Value", org = "ALS",
                            method_raw = "EA005P: pH by PC Titrator", units_raw = NA_character_,
@@ -645,7 +645,7 @@ test_that("R-8.4: text-only results pass through unconverted with quantified NA"
 test_that("FD4/R-16.20: a text-vs-text value_conflict carries BOTH text values in the payload, not two nulls", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # An existing TEXT-valued measurement (tri-state: value NULL, value_chr set,
   # quantified NULL) on s-0001/T.S01, a fresh lab_method (lm-0001, pH Value,
@@ -689,7 +689,7 @@ test_that("FD4/R-16.20: a text-vs-text value_conflict carries BOTH text values i
 test_that("R-11.16: a real '>2000 mg/L' row produces quantified = FALSE and rl_high = 2000000 (converted to canonical ug/L)", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   event <- mk_event(mk_row(source_ref = "r1", lab_sample_id = "XX1234567099",
                            sample_datetime_raw = "15 Jan 2026 09:00",
@@ -705,7 +705,7 @@ test_that("R-11.16: a real '>2000 mg/L' row produces quantified = FALSE and rl_h
 test_that("R-11.16: a real plain-numeric row still produces quantified = TRUE", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   event <- mk_event(mk_row(source_ref = "r1", lab_sample_id = "XX1234567099",
                            sample_datetime_raw = "15 Jan 2026 09:00",
@@ -720,7 +720,7 @@ test_that("R-11.16: a real plain-numeric row still produces quantified = TRUE", 
 test_that("R-11.16: a real '<0.01' row keeps quantified = FALSE and rl_converted still set", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   event <- mk_event(mk_row(source_ref = "r1", lab_sample_id = "XX1234567099",
                            sample_datetime_raw = "15 Jan 2026 09:00",
@@ -736,7 +736,7 @@ test_that("R-11.16: a real '<0.01' row keeps quantified = FALSE and rl_converted
 test_that("R-11.16 end-to-end: commit_event() on a real '>2000 mg/L' clean row stores quantified = FALSE and rl_high = 2000000", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   event <- mk_event(mk_row(source_ref = "r1", lab_sample_id = "XX1234567099",
                            sample_datetime_raw = "15 Jan 2026 09:00",
@@ -757,7 +757,7 @@ test_that("R-11.16 end-to-end: commit_event() on a real '>2000 mg/L' clean row s
 test_that("R-8.5: an ESdat-format datetime yields both sample_date and sample_datetime", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # T.S02 = a fresh sample so the row lands in `clean` (FIXTURES.md:
   # XX1234567002 = T.S02); keeps the ESdat datetime under test.
@@ -773,7 +773,7 @@ test_that("R-8.5: an ESdat-format datetime yields both sample_date and sample_da
 test_that("R-8.5: a short-date ESdat datetime '07-May-24 11:30' resolves, not a parse_error", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # Real ESdat exports render some sample datetimes hyphen/2-digit-year; the
   # reconciler must resolve this dialect rather than queue a spurious
@@ -794,7 +794,7 @@ test_that("R-8.5: a short-date ESdat datetime '07-May-24 11:30' resolves, not a 
 test_that("R-8.5: a crosstab-format (date-only) datetime yields date only", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # T.S02 = a fresh sample so the row lands in `clean` (FIXTURES.md:
   # XX1234567002 = T.S02); keeps the crosstab date-only value under test.
@@ -812,7 +812,7 @@ test_that("R-8.5: a crosstab-format (date-only) datetime yields date only", {
 test_that("R-8.5: a garbage datetime queues a parse_error", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   event <- mk_event(mk_row(source_ref = "r1", sample_datetime_raw = "not a date"))
   out <- reconcile_event(event, con)
@@ -826,7 +826,7 @@ test_that("R-8.5: a garbage datetime queues a parse_error", {
 test_that("R-8.6: the duplicate-method pair keeps the lower-RL row", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # Both rows at T.S02 = a fresh sample, so the method-preference winner lands
   # in `clean` (FIXTURES.md: XX1234567002 = T.S02), isolating R-8.6 from R-8.7.
@@ -847,7 +847,7 @@ test_that("R-8.6: the duplicate-method pair keeps the lower-RL row", {
 test_that("R-8.6: a tied rl_low keeps the higher value", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   # Supplement the seed with a second ALS Fluoride method tied on rl_low
   # (FIXTURES.md only pins one duplicate-method pair, which isn't tied - see
   # dev/plans/PLAN-CHANGE-REQUESTS.md for context on why this is added here
@@ -871,7 +871,7 @@ test_that("R-8.6: a tied rl_low keeps the higher value", {
 test_that("PLAN-7b round-3 finding 10: .rc_method_preference()'s tie-break is a TOTAL order (source_ref), not presentation order - the D5/F.5 sibling fix this producer never received. A FULL tie on (rl_low, value_num) used to fall through to `order()`'s stable original-index order, so the winner flipped depending on which row was presented first", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   DBI::dbExecute(con, "INSERT INTO lab_method (uuid, uuid_analyte, name, method, organisation, rl_low) VALUES
     ('lm-0002c', 'a-0002', 'Fluoride', 'EK040P: Fluoride by PC Titrator (tie2)', 'ALS', 0.1)")
 
@@ -902,7 +902,7 @@ test_that("PLAN-7b round-3 finding 10: .rc_method_preference()'s tie-break is a 
 test_that("R-8.7: a fresh row is new/clean", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # T.S02 = a fresh sample with no seeded analysis (FIXTURES.md:
   # XX1234567002 = T.S02) -> genuinely new, supersedes NA.
@@ -918,7 +918,7 @@ test_that("R-8.7: a fresh row is new/clean", {
 test_that("R-8.7: a lab measurement is distinct from a field measurement of the same analyte (A45)", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # A45: uniqueness is (feature, datetime, analyte, METHOD). A field EC (ACIRL
   # method lm-0006) and a lab EC (ALS method lm-0003) both resolve to analyte
@@ -951,7 +951,7 @@ test_that("R-8.7: a lab measurement is distinct from a field measurement of the 
 test_that("R-8.7: an identical re-ingest row is already_present", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # exactly the FIXTURES.md pinned "<0.1 mg/L" row - converts to 100 ug/L,
   # matching seeded an-0001 (value 100, quantified FALSE)
@@ -965,7 +965,7 @@ test_that("R-8.7: an identical re-ingest row is already_present", {
 test_that("R-8.7: a value differing at 1e-12 relative is already_present (tolerance)", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # 0.1 + 1e-13 mg/L -> ~100 + 1e-10 ug/L, well within A14 tolerance vs 100
   event <- mk_event(mk_row(source_ref = "r1", value_raw = "<0.1000000000001",
@@ -979,7 +979,7 @@ test_that("R-8.7: a value differing at 1e-12 relative is already_present (tolera
 test_that("R-8.7: a value differing at 1e-3 relative is a conflict", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # 0.1001 mg/L -> 100.1 ug/L vs existing 100: 1e-3 relative, exceeds A14
   event <- mk_event(mk_row(source_ref = "r1", value_raw = "<0.1001",
@@ -1002,7 +1002,7 @@ test_that("R-8.7: a value differing at 1e-3 relative is a conflict", {
 test_that("R-11.18/A62: a same feature+date+lab+value measurement at a DISTINCT datetime is a new sampling (clean), not already_present", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # Seed s-0001/an-0001 is the "<0.1 mg/L" Fluoride row at T.S01 on 2025-05-24
   # at 11:45, value 100 (lm-0002). The default mk_row re-ingests it verbatim
@@ -1023,7 +1023,7 @@ test_that("R-11.18/A62: a same feature+date+lab+value measurement at a DISTINCT 
 test_that("R-11.18/A62: an incoming row with NO datetime at an existing feature+date+lab stays already_present (distinctness must be PROVABLE)", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # A missing incoming datetime is NOT provable distinctness -> reuse, never
   # fabricate a duplicate. Guards against a naive "any different-or-absent
@@ -1040,7 +1040,7 @@ test_that("R-11.18/A62: an incoming row with NO datetime at an existing feature+
 test_that("D11 (R-11.18/A62/PLAN-7b round-2): a candidate row with datetime IS NULL is still reused as already_present - the 'distinctness must be PROVABLE' conjunct treats a NULL candidate instant as UNPROVABLE, not as license to fabricate a second commit", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # T.S02/fa-0002: fresh feature, no seeded analysis (isolates this fixture
   # from s-0001/an-0001). A single existing candidate at feature+date+lab
@@ -1070,7 +1070,7 @@ test_that("D11 (R-11.18/A62/PLAN-7b round-2): a candidate row with datetime IS N
 test_that("D12 (PLAN-7b round-2): .rc_find_existing() picks the INSTANT-MATCHING candidate when several committed analyses share (feature, date, lab), not an arbitrary DB physical-row-order pick", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # Two analyses at f-0002/fa-0002, same DATE, same lab, DIFFERENT instants -
   # a shape D6's missing ORDER BY and D12's missing datetime-narrowing both
@@ -1094,7 +1094,7 @@ test_that("D12 (PLAN-7b round-2): .rc_find_existing() picks the INSTANT-MATCHING
 test_that("PLAN-7b round-3 finding 8: D6's `ORDER BY a.uuid` is actually EXERCISED - two candidates sharing (feature, date, lab) with datetime IS NULL and an NA incoming instant (D11's 'unprovable' shape, which never narrows) pick the LOWER uuid deterministically, not DB insertion/physical-row order", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # Insert the alphabetically LATER uuid FIRST - a physical-row-order pick
   # (no ORDER BY) would return it first; the ORDER BY must override
@@ -1136,7 +1136,7 @@ test_that("D3/R-15.33 (deferred to F.11, BLOCKED ON F.13 - PLAN-15:1965): a reus
   # lands, the condition becomes false, the skip is bypassed, and the block
   # below runs for real - a genuine PASS with no maintainer action needed.
   path <- seed_db(); con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # CONTROL (modern convention, `date` = local midnight): must reuse-match
   # TODAY and after F.11 alike - a real, unconditional assertion so a no-op
@@ -1172,7 +1172,7 @@ test_that("D3/R-15.33 (deferred to F.11, BLOCKED ON F.13 - PLAN-15:1965): a reus
 test_that("R-8.7: conflict with recorded revision 0 and incoming revision 1 becomes a supersede row", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # T.S01 Fluoride changed to 0.3 mg/L, incoming revision 1 > recorded 0
   # (seeded ingest_file legacy-hash-XX, work_order XX1234567, revision 0)
@@ -1187,7 +1187,7 @@ test_that("R-8.7: conflict with recorded revision 0 and incoming revision 1 beco
 test_that("R-8.7: conflict with no recorded revision queues for review", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # A brand-new work order/project with no ingest_file or asset history at
   # all -> recorded revision is NA -> A12 "no recorded revision -> review",
@@ -1215,7 +1215,7 @@ test_that("R-8.7: conflict with no recorded revision queues for review", {
 test_that("R-8.7: equal values but different quantified is a conflict", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # existing an-0001: value 100, quantified FALSE. Incoming: a genuine
   # detected 0.1 mg/L (quantified TRUE) that converts to the same 100 ug/L.
@@ -1233,7 +1233,7 @@ test_that("R-8.7: equal values but different quantified is a conflict", {
 test_that("R-8.8: clean/review/skipped are disjoint and complete over a mixed event", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   event <- mk_event(mk_rows(
     mk_row(source_ref = "qc", sample_type = "LCS"),                                    # skipped: qc
@@ -1280,7 +1280,7 @@ test_that("R-8.8: clean/review/skipped are disjoint and complete over a mixed ev
 test_that("R-8.7/R-8.8: reconcile_event() is pure - DB row counts are unchanged after a run", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   before <- count_core_rows(con)
   event <- mk_event(mk_rows(
@@ -1432,7 +1432,7 @@ test_that("R-11.3: live registry property - .rc_method_key is injective over fea
 # ---- R-11.4: alias matching + date_end narrowing (.rc_feature_candidates) --
 
 test_that("R-11.4: a direct feature name resolves via its self-alias (one candidate)", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   registry <- .rc_load_registry(con)
   cand <- .rc_feature_candidates("T.S01", as.Date("2025-05-20"), registry)
   expect_equal(nrow(cand), 1)
@@ -1440,7 +1440,7 @@ test_that("R-11.4: a direct feature name resolves via its self-alias (one candid
 })
 
 test_that("R-11.4: an alt-label alias (bs03alt) resolves to the SAME feature as the self-alias - a hit, not an ambiguity", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   registry <- .rc_load_registry(con)
   cand <- .rc_feature_candidates("bs03alt", as.Date("2025-05-20"), registry)
   expect_equal(length(unique(cand$uuid_feature)), 1)
@@ -1448,14 +1448,14 @@ test_that("R-11.4: an alt-label alias (bs03alt) resolves to the SAME feature as 
 })
 
 test_that("R-11.4: two live features sharing one alias key (T.AMBIG2) both survive as candidates (pre-narrowing ambiguity)", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   registry <- .rc_load_registry(con)
   cand <- .rc_feature_candidates("T.AMBIG2", as.Date("2025-05-20"), registry)
   expect_setequal(unique(cand$uuid_feature), c("f-0004", "f-0005"))
 })
 
 test_that("R-11.4: a reused code (T.REUSED) narrows by date_end to the single live feature after the defunct one's end date", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   registry <- .rc_load_registry(con)
   cand <- .rc_feature_candidates("T.REUSED", as.Date("2025-05-20"), registry) # after f-0006's date_end 2020-06-30
   expect_equal(length(unique(cand$uuid_feature)), 1)
@@ -1463,21 +1463,21 @@ test_that("R-11.4: a reused code (T.REUSED) narrows by date_end to the single li
 })
 
 test_that("R-11.4: a reused code (T.REUSED) at a date before the defunct one's end date leaves BOTH candidates live (still ambiguous)", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   registry <- .rc_load_registry(con)
   cand <- .rc_feature_candidates("T.REUSED", as.Date("2019-01-01"), registry) # before f-0006's date_end
   expect_setequal(unique(cand$uuid_feature), c("f-0006", "f-0007"))
 })
 
 test_that("R-11.4: a NA feature_raw yields zero candidates (A44 key guard)", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   registry <- .rc_load_registry(con)
   cand <- .rc_feature_candidates(NA_character_, as.Date("2025-05-20"), registry)
   expect_equal(nrow(cand), 0)
 })
 
 test_that("R-11.4: a dangling alias row (uuid_feature NA) is dropped from the candidate set, never a phantom candidate (A44 registry-row guard)", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   DBI::dbExecute(con, "INSERT INTO feature_alias
     (uuid, uuid_feature, name, alias_key, kind, auto_assign, first_seen, last_seen) VALUES
     ('fa-dangling-r114', NULL, 'T.DANGLE114', 't.dangle114', 'pending', TRUE,
@@ -1488,7 +1488,7 @@ test_that("R-11.4: a dangling alias row (uuid_feature NA) is dropped from the ca
 })
 
 test_that("R-11.4: an auto_assign=FALSE alias (T.BORE, suggestion-only) never enters the candidate set", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   registry <- .rc_load_registry(con)
   cand <- .rc_feature_candidates("T.BORE", as.Date("2025-05-20"), registry)
   expect_equal(nrow(cand), 0)
@@ -1499,7 +1499,7 @@ test_that("R-11.4: an auto_assign=FALSE alias (T.BORE, suggestion-only) never en
 test_that("PLAN-15 A: a dotted feature name resolves via the migration-format alias_key (T.S01 -> t.s01)", {
   # Guards the 62% failure: fixture alias_key is now punctuation-preserving
   # ('t.s01'), and `.rc_feature_candidates` looks up with `.rc_feature_key`.
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   registry <- .rc_load_registry(con)
   expect_identical(registry$feature_alias$alias_key[registry$feature_alias$uuid == "fa-0001"], "t.s01")
   cand <- .rc_feature_candidates("T.S01", as.Date("2025-05-20"), registry)
@@ -1508,7 +1508,7 @@ test_that("PLAN-15 A: a dotted feature name resolves via the migration-format al
 })
 
 test_that("PLAN-15 A: an all-auto_assign=FALSE ambiguous key (T.DUAL) does NOT auto-resolve but SURFACES both candidates in review", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   registry <- .rc_load_registry(con)
   # auto path: nothing (both arms auto_assign=FALSE)
   expect_equal(nrow(.rc_feature_candidates("T.DUAL", as.Date("2025-05-20"), registry)), 0)
@@ -1534,7 +1534,7 @@ test_that("PLAN-15 A: an all-auto_assign=FALSE ambiguous key (T.DUAL) does NOT a
 })
 
 test_that("PLAN-15 A: the committed alias_key on a pending row is punctuation-preserving (matches migration format)", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   event <- mk_event(mk_row(source_ref = "r1", feature_raw = "B.NEW-POINT7"))
   out <- reconcile_event(event, con)
   row <- out$clean[out$clean$source_ref == "r1", ]
@@ -1544,7 +1544,7 @@ test_that("PLAN-15 A: the committed alias_key on a pending row is punctuation-pr
 # ---- R-11.5: commit-everything conveyor (features) -------------------------
 
 test_that("R-11.5: a feature-unknown row reaches `clean` with feature_pending TRUE (not dropped to review-only)", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   event <- mk_event(mk_row(source_ref = "r1", feature_raw = "T.NEVER-SEEN-CODE"))
   out <- reconcile_event(event, con)
   row <- out$clean[out$clean$source_ref == "r1", ]
@@ -1556,7 +1556,7 @@ test_that("R-11.5: a feature-unknown row reaches `clean` with feature_pending TR
 })
 
 test_that("R-11.5: an ambiguous feature also reaches `clean` dangling, carrying its review item too", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   event <- mk_event(mk_row(source_ref = "r1", feature_raw = "T.AMBIG2"))
   out <- reconcile_event(event, con)
   row <- out$clean[out$clean$source_ref == "r1", ]
@@ -1566,7 +1566,7 @@ test_that("R-11.5: an ambiguous feature also reaches `clean` dangling, carrying 
 })
 
 test_that("R-11.5: counts still reconcile when a dangling row is counted in clean AND has a review item (no double-drop)", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   event <- mk_event(mk_row(source_ref = "r1", feature_raw = "T.NEVER-SEEN-CODE-2"))
   out <- reconcile_event(event, con)
   expect_true("r1" %in% out$clean$source_ref)
@@ -1579,7 +1579,7 @@ test_that("R-11.5: counts still reconcile when a dangling row is counted in clea
 })
 
 test_that("R-11.5/D6: a feature-pending row that ALSO fails unit resolution is held, not committed", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   event <- mk_event(mk_row(source_ref = "r1", feature_raw = "T.NEVER-SEEN-CODE-3", units_raw = "banana/L"))
   out <- reconcile_event(event, con)
   expect_false("r1" %in% out$clean$source_ref)
@@ -1589,7 +1589,7 @@ test_that("R-11.5/D6: a feature-pending row that ALSO fails unit resolution is h
 # ---- R-11.5a / R-11.7: existing-pending lookup + dangling dedup, different bytes --
 
 test_that("R-11.5a/R-11.7: a dangling FEATURE re-ingested from a different file (different bytes) resolves to the existing pending alias and matches its existing sample as already_present, not duplicated", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   # s-0003/an-0003 (helper-db.R) already carries this measurement via the
   # EXISTING pending alias fa-0010 ('T.S09'). Different bytes: a different
   # source_hash and reformatted value_raw string, same measurement.
@@ -1615,7 +1615,7 @@ test_that("R-11.5a/R-11.7: a dangling FEATURE re-ingested from a different file 
 })
 
 test_that("R-11.5a/R-11.7: a dangling ANALYTE re-ingested from a different file (different bytes, different raw casing) matches its existing sample as already_present", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   # s-0004/an-0004 already carries this measurement via the EXISTING dangling
   # method lm-0009 ('Sulphate','EA045: Sulphate by IC','ALS'). Feature side
   # already resolved (fa-0001/T.S01). Different bytes AND different casing
@@ -1637,7 +1637,7 @@ test_that("R-11.5a/R-11.7: a dangling ANALYTE re-ingested from a different file 
 })
 
 test_that("R-11.5a: a genuinely first-sighted unknown feature finds no existing pending alias (stays NA, feature_pending TRUE) - not a bug", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   event <- mk_event(mk_row(source_ref = "r1", feature_raw = "T.BRAND-NEW-CODE-NEVER-SEEDED"))
   out <- reconcile_event(event, con)
   row <- out$clean[out$clean$source_ref == "r1", ]
@@ -1668,7 +1668,7 @@ test_that("R-11.5a: reconcile issues no writes while resolving pending rows agai
 # ---- R-11.5b: .rc_method_preference re-keying (the silent one) -------------
 
 test_that("R-11.5b: two rows for DIFFERENT features, same date, same analyte, are NEVER method-duplicates (pinned regression)", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   # Two genuinely different, both-unknown features (different alias_key), same
   # sample date, same analyte via the R-8.6 duplicate-method pair (lm-0002 vs
   # lm-0004, both Fluoride/ALS but DIFFERENT uuid_lab). The different labs are
@@ -1699,7 +1699,7 @@ test_that("R-11.5b: two rows for DIFFERENT features, same date, same analyte, ar
 })
 
 test_that("R-11.5b: two analyte-pending rows never dedup against each other (excluded from method-preference entirely)", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   event <- mk_event(mk_rows(
     mk_row(source_ref = "r1", analyte_raw = "Nonexistentite2", org = "ALS", cas_number = NA_character_,
            sample_datetime_raw = "20 May 2025 09:00", units_raw = "mg/L",
@@ -1716,7 +1716,7 @@ test_that("R-11.5b: two analyte-pending rows never dedup against each other (exc
 # ---- R-11.6: dangling analytes ----------------------------------------------
 
 test_that("R-11.6: an unknown-analyte row reaches `clean` dangling (analyte_pending TRUE, value unconverted, units carried by the method)", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   event <- mk_event(mk_row(source_ref = "r1", analyte_raw = "Nonexistentite3", org = "ALS",
                            cas_number = NA_character_, units_raw = "banana/L",
                            value_raw = "42", value_num = 42, below_detection = FALSE, rl = 1))
@@ -1730,7 +1730,7 @@ test_that("R-11.6: an unknown-analyte row reaches `clean` dangling (analyte_pend
 })
 
 test_that("R-11.6: an analyte-pending row is NOT skipped for an unconvertible unit (that check applies to resolved rows only)", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   event <- mk_event(mk_row(source_ref = "r1", analyte_raw = "Nonexistentite4", org = "ALS",
                            cas_number = NA_character_, units_raw = "completely-bogus-unit",
                            value_raw = "42", value_num = 42, below_detection = FALSE, rl = 1))
@@ -1740,7 +1740,7 @@ test_that("R-11.6: an analyte-pending row is NOT skipped for an unconvertible un
 })
 
 test_that("R-11.6: a resolved row is still converted exactly as today (R-8.4 unaffected)", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   event <- mk_event(mk_row(source_ref = "r1", lab_sample_id = "XX1234567002", feature_raw = "T.S02",
                            value_raw = "2.3", value_num = 2.3, below_detection = FALSE,
                            rl = 0.1, units_raw = "mg/L"))
@@ -1752,7 +1752,7 @@ test_that("R-11.6: a resolved row is still converted exactly as today (R-8.4 una
 })
 
 test_that("R-11.6/A66: a CAS-hit row reaches `clean` dangling AND its review item names the CAS-matched analyte as a suggestion (pinned both ways)", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   event <- mk_event(mk_row(source_ref = "r1", analyte_raw = "Fluoride", org = "Internal",
                            cas_number = "16984-48-8", method_raw = NA_character_,
                            units_raw = "mg/L", value_raw = "0.5", value_num = 0.5,
@@ -1771,7 +1771,7 @@ test_that("R-11.6/A66: a CAS-hit row reaches `clean` dangling AND its review ite
 # ---- R-11.7: three-way match with dangling rows -----------------------------
 
 test_that("R-11.7: A45's field-vs-lab EC regression stays green under the amended .rc_find_existing (no lm.uuid_analyte clause)", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   DBI::dbExecute(con, "INSERT INTO feature_alias
     (uuid, uuid_feature, name, alias_key, kind, auto_assign, first_seen, last_seen) VALUES
     ('fa-field-r117', 'f-0001', 'T.S01-FIELD', 't.s01-field', 'historical_code', TRUE,
@@ -1796,7 +1796,7 @@ test_that("R-11.7: A45's field-vs-lab EC regression stays green under the amende
 })
 
 test_that("R-11.7: a resolved sample is reused across two different incoming labels for one feature (self-alias then bs03alt both match the same sample)", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   event <- mk_event(mk_row(source_ref = "r1", feature_raw = "bs03alt", lab_sample_id = "XX9999999996",
                            analyte_raw = "pH Value", org = "ALS", method_raw = "EA005P: pH by PC Titrator",
                            cas_number = NA_character_, units_raw = "pH Unit",
@@ -1814,7 +1814,7 @@ test_that("R-11.7: a resolved sample is reused across two different incoming lab
 # ---- R-11.9: review items - grouping, source_hash provenance, no fabrication --
 
 test_that("R-11.9: a grouped review item carries source_hash - the first of the group (seam S-4 into .ct_commit_review)", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   event <- mk_event(mk_rows(
     mk_row(source_ref = "r1", source_hash = "hash-group-A", feature_raw = "T.S0l", lab_sample_id = "XX1234567004"),
     mk_row(source_ref = "r2", source_hash = "hash-group-B", feature_raw = "T.S0l", lab_sample_id = "XX1234567004", analyte_raw = "pH Value")
@@ -1826,7 +1826,7 @@ test_that("R-11.9: a grouped review item carries source_hash - the first of the 
 })
 
 test_that("R-11.9: an already_present skip carries the incoming row's own source_hash, not NA (F3/A-3 fix, seam S-4/A1)", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   event <- mk_event(mk_row(source_ref = "r1", source_hash = "hash-present-row"))
   out <- reconcile_event(event, con)
   hit <- out$skipped[out$skipped$source_ref == "r1", ]
@@ -1837,7 +1837,7 @@ test_that("R-11.9: an already_present skip carries the incoming row's own source
 })
 
 test_that("R-11.9: a genuinely novel unknown-feature string yields an item with NO suggestions", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   event <- mk_event(mk_row(source_ref = "r1", feature_raw = "T.TOTALLY-NOVEL-XYZ"))
   out <- reconcile_event(event, con)
   hit <- out$review[out$review$source_ref == "r1" & out$review$kind == "unknown_feature", ]
@@ -1848,7 +1848,7 @@ test_that("R-11.9: a genuinely novel unknown-feature string yields an item with 
 })
 
 test_that("R-11.9: grouping is unchanged - one item per normalised feature_raw, the A44 NA sentinel still groups", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   event <- mk_event(mk_rows(
     mk_row(source_ref = "r1", feature_raw = NA_character_, lab_sample_id = "XX1234567005"),
     mk_row(source_ref = "r2", feature_raw = NA_character_, lab_sample_id = "XX1234567006")
@@ -1865,7 +1865,7 @@ test_that("A44: a genuinely-missing feature_raw and a row whose feature code is 
   # merging a row with no feature at all into the same review item as a row
   # whose feature code genuinely IS "NA" - hiding the literal code from the
   # operator and blanking `diagnostics$feature_raw`.
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   event <- mk_event(mk_rows(
     mk_row(source_ref = "r-missing", feature_raw = NA_character_, lab_sample_id = "XX1234567005"),
     mk_row(source_ref = "r-litNA", feature_raw = "NA", lab_sample_id = "XX1234567006")
@@ -1887,7 +1887,7 @@ test_that("A44: a genuinely-missing feature_raw and a row whose feature code is 
 })
 
 test_that("A44: case-variant literal feature codes 'na'/'Na' reach the same collision-prone key as 'NA' and still stay split from a genuinely-missing feature", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   event <- mk_event(mk_rows(
     mk_row(source_ref = "r-missing2", feature_raw = NA_character_, lab_sample_id = "XX1234567007"),
     mk_row(source_ref = "r-na-lower", feature_raw = "na", lab_sample_id = "XX1234567008"),
@@ -1907,7 +1907,7 @@ test_that("A44: case-variant literal feature codes 'na'/'Na' reach the same coll
 })
 
 test_that("R-11.9: an unknown_analyte item names the lab method and the CAS-suggested analyte", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   event <- mk_event(mk_row(source_ref = "r1", analyte_raw = "Fluoride", org = "Internal",
                            cas_number = "16984-48-8", method_raw = NA_character_))
   out <- reconcile_event(event, con)
@@ -1960,7 +1960,7 @@ test_that("R-11.9: an unknown_analyte item names the lab method and the CAS-sugg
 }
 
 test_that("R-11.14 (mandatory seam test): real assemble_events() output carrying a flagged row -> real reconcile_event() lands it in review, NOT clean (A56)", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   parsed <- list(
     "h-chem" = .rc_mk_parsed_entry(
@@ -2006,7 +2006,7 @@ test_that("R-11.14 (mandatory seam test): real assemble_events() output carrying
 })
 
 test_that("R-11.14: a foreign_work_order-flagged non-NCP row (A22/plan-07 R-7.4) lands in review, not committed", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   parsed <- list(
     "h-multi" = .rc_mk_parsed_entry(
@@ -2037,7 +2037,7 @@ test_that("R-11.14: a foreign_work_order-flagged non-NCP row (A22/plan-07 R-7.4)
 })
 
 test_that("R-11.14: a sample_datetime_mismatch-flagged row is held, not committed with an arbitrary date", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   parsed <- list(
     "h-chem2" = .rc_mk_parsed_entry(
@@ -2087,7 +2087,7 @@ test_that("R-11.14: a sample_datetime_mismatch-flagged row is held, not committe
 # renamed.
 
 test_that("PLAN-16 FF4: STAGE-0 foreign_work_order item promotes subkind to the typed column and the JSON payload no longer duplicates kind/subkind", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   parsed <- list(
     "h-multi-ff4" = .rc_mk_parsed_entry(
@@ -2116,7 +2116,7 @@ test_that("PLAN-16 FF4: STAGE-0 foreign_work_order item promotes subkind to the 
 })
 
 test_that("PLAN-16 FF4: STAGE-0 sample_datetime_mismatch item promotes subkind to the typed column, datetime_candidates survive, kind/subkind dropped from JSON", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   parsed <- list(
     "h-chem2-ff4" = .rc_mk_parsed_entry(
@@ -2158,7 +2158,7 @@ test_that("PLAN-16 FF4: STAGE-0 sample_datetime_mismatch item promotes subkind t
 })
 
 test_that("PLAN-16 FF5: committed review_queue.work_order (home) and the payload's foreign work order are different facts under different key names, both present", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   parsed <- list(
     "h-multi-ff5" = .rc_mk_parsed_entry(
@@ -2197,7 +2197,7 @@ test_that("PLAN-16 FF5: committed review_queue.work_order (home) and the payload
 })
 
 test_that("PLAN-7b round-3 G-A site 2: STAGE-0 reads review_payload's subkind via EXACT match only - R's `$` prefix-matches on lists, so a sibling key like `subkind_detail` (no exact `subkind` key) must NOT be misread as subkind and re-emitted a second time into the JSON diagnostics", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   parsed <- list(
     "h-chem-ga" = .rc_mk_parsed_entry(
@@ -2244,7 +2244,7 @@ test_that("PLAN-7b round-3 G-A site 2: STAGE-0 reads review_payload's subkind vi
 # ---- R-11.19: exact raw-name match first (A65 live defect) -----------------
 
 test_that("R-11.19: 'Standing Water Level' resolves to the row spelled exactly that way (lm-0010)", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   event <- mk_event(mk_row(source_ref = "r1", analyte_raw = "Standing Water Level", org = "ACIRL",
                            method_raw = "field", cas_number = NA_character_, units_raw = "m",
                            value_raw = "1.5", value_num = 1.5, below_detection = FALSE, rl = 0.01,
@@ -2256,7 +2256,7 @@ test_that("R-11.19: 'Standing Water Level' resolves to the row spelled exactly t
 })
 
 test_that("R-11.19: 'Standing water level' (lowercase w) resolves to the OTHER row (lm-0011) - not always the same pick", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   event <- mk_event(mk_row(source_ref = "r1", analyte_raw = "Standing water level", org = "ACIRL",
                            method_raw = "field", cas_number = NA_character_, units_raw = "m",
                            value_raw = "1.7", value_num = 1.7, below_detection = FALSE, rl = 0.01,
@@ -2268,7 +2268,7 @@ test_that("R-11.19: 'Standing water level' (lowercase w) resolves to the OTHER r
 })
 
 test_that("R-11.19: a third, unseen spelling folds to a hit (one analyte) and picks the SAME uuid_lab on a re-run (idempotency)", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   mk_ev <- function(ref) mk_event(mk_row(source_ref = ref, analyte_raw = "STANDING WATER LEVEL", org = "ACIRL",
                                          method_raw = "field", cas_number = NA_character_, units_raw = "m",
                                          value_raw = "1.9", value_num = 1.9, below_detection = FALSE, rl = 0.01,
@@ -2284,7 +2284,7 @@ test_that("R-11.19: a third, unseen spelling folds to a hit (one analyte) and pi
 })
 
 test_that("R-11.19: two candidates spanning DIFFERENT analytes still go to review (not an auto-resolvable hit)", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   # supplement: a folded-collision pair pointing at DIFFERENT analytes -
   # genuinely ambiguous, unlike lm-0010/lm-0011 which share one analyte.
   DBI::dbExecute(con, "INSERT INTO lab_method (uuid, uuid_analyte, name, method, organisation) VALUES
@@ -2320,7 +2320,7 @@ test_that("R-11.19: two candidates spanning DIFFERENT analytes still go to revie
 # Phase 6 must confirm or rename it against the real implementation.
 
 test_that("R-12.13: two identical-key same-method rows in one batch commit as ONE analysis, the other routed to review (not collapsed, not both committed)", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   # T.S02/f-0002 has no seeded analysis, so the three-way sees BOTH rows as
   # "new" absent the R-12.13 guard - the exact bug this criterion fixes.
   event <- mk_event(mk_rows(
@@ -2345,7 +2345,7 @@ test_that("R-12.13: two identical-key same-method rows in one batch commit as ON
 })
 
 test_that("R-12.13: distinct-key rows in the same batch are unaffected - both commit", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   # Same feature/analyte/method but DIFFERENT sample dates - genuinely two
   # distinct measurements, must not trip the within-batch guard.
   event <- mk_event(mk_rows(
@@ -2363,7 +2363,7 @@ test_that("R-12.13: distinct-key rows in the same batch are unaffected - both co
 })
 
 test_that("R-12.13: interacts correctly with R-8.6 - cross-method dedup runs FIRST, then the within-batch guard catches the remaining same-method dupe", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   # r1/r3: same key AND same method (lm-0002) - the R-12.13 case.
   # r2: same key but a DIFFERENT method (lm-0004, higher rl_low) - loses to r1
   # under R-8.6's method preference BEFORE R-12.13 ever sees it.
@@ -2393,7 +2393,7 @@ test_that("R-12.13: interacts correctly with R-8.6 - cross-method dedup runs FIR
 })
 
 test_that("R-12.13: the guard is keyed on uuid_feature_alias, NOT uuid_feature - two DIFFERENT (both-resolved) aliases of the same feature are not flagged as duplicates", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   # fa-0003 (self-alias 'T.MW01') and fa-0004 ('bs03alt') both resolve to the
   # SAME uuid_feature f-0003 (FIXTURES.md/helper-db.R), but are two distinct
   # feature_alias rows. Same analyte/method/date on both incoming rows: if the
@@ -2413,7 +2413,7 @@ test_that("R-12.13: the guard is keyed on uuid_feature_alias, NOT uuid_feature -
 })
 
 test_that("R-12.13: NA-safe key - two rows with an unresolved (NA) uuid_feature_alias are never matched to each other as batch dupes (A44/[#5])", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   # Two genuinely distinct lab rows for the SAME never-seen feature code, same
   # analyte/method/date: both carry uuid_feature_alias = NA (feature_pending,
   # R-11.5). A naive duplicated()-on-NA would spuriously pair them; the guard
@@ -2439,7 +2439,7 @@ test_that("R-12.13: NA-safe key - two rows with an unresolved (NA) uuid_feature_
 # therefore identifiable both ways, not just by the row it kept.
 
 test_that("PLAN-16 FF7: a batch_duplicate item's typed source_ref column AND its JSON payload identify the DROPPED row, while kept_source_ref still names the winner", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   event <- mk_event(mk_rows(
     mk_row(source_ref = "BD_WINNER", lab_sample_id = "XX1234567002", feature_raw = "T.S02",
            value_raw = "2.3", value_num = 2.3, below_detection = FALSE, rl = 0.1),
@@ -2472,7 +2472,7 @@ test_that("PLAN-16 FF7: a batch_duplicate item's typed source_ref column AND its
 # =============================================================================
 
 test_that("PLAN-8b: in-batch - same point, same date, DIFFERENT datetime - both are distinct sampling events and commit, neither flagged batch_duplicate", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   event <- mk_event(mk_rows(
     mk_row(source_ref = "morning", lab_sample_id = "XX1234567002", feature_raw = "T.S02",
            sample_datetime_raw = "20 May 2025 08:00",
@@ -2489,7 +2489,7 @@ test_that("PLAN-8b: in-batch - same point, same date, DIFFERENT datetime - both 
 })
 
 test_that("PLAN-8b: in-batch - same point, SAME datetime - the second is still the same sampling event and is flagged batch_duplicate", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   event <- mk_event(mk_rows(
     mk_row(source_ref = "r1", lab_sample_id = "XX1234567002", feature_raw = "T.S02",
            sample_datetime_raw = "20 May 2025 08:00",
@@ -2508,7 +2508,7 @@ test_that("PLAN-8b: in-batch - same point, SAME datetime - the second is still t
 })
 
 test_that("PLAN-8b: in-batch - DIFFERENT point, same datetime - unaffected, both commit", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   event <- mk_event(mk_rows(
     mk_row(source_ref = "r1", feature_raw = "T.MW01", lab_sample_id = "XX9999999991",
            sample_datetime_raw = "20 May 2025 08:00"),
@@ -2523,7 +2523,7 @@ test_that("PLAN-8b: in-batch - DIFFERENT point, same datetime - unaffected, both
 })
 
 test_that("PLAN-8b: in-batch - same point, same date, BOTH date-only (no time reported) - treated as the SAME event (conservative: a bare date is not proof of two events)", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   event <- mk_event(mk_rows(
     mk_row(source_ref = "r1", lab_sample_id = "XX1234567002", feature_raw = "T.S02",
            sample_datetime_raw = "20/05/2025",
@@ -2540,7 +2540,7 @@ test_that("PLAN-8b: in-batch - same point, same date, BOTH date-only (no time re
 })
 
 test_that("PLAN-8b: in-batch - one date-only row and one timed row, same date - AMBIGUOUS, conservatively flagged batch_duplicate rather than silently committing both", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   event <- mk_event(mk_rows(
     mk_row(source_ref = "timed", lab_sample_id = "XX1234567002", feature_raw = "T.S02",
            sample_datetime_raw = "20 May 2025 08:00",
@@ -2557,7 +2557,7 @@ test_that("PLAN-8b: in-batch - one date-only row and one timed row, same date - 
 })
 
 test_that("PLAN-8b: in-batch - THREE rows, same key: two genuinely distinct datetimes plus a duplicate of one of them, in a single batch", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   event <- mk_event(mk_rows(
     mk_row(source_ref = "r1", lab_sample_id = "XX1234567002", feature_raw = "T.S02",
            sample_datetime_raw = "20 May 2025 08:00",
@@ -2582,7 +2582,7 @@ test_that("PLAN-8b: in-batch - THREE rows, same key: two genuinely distinct date
 })
 
 test_that("PLAN-8b: cross-batch - different point, same datetime, does not falsely match an existing sample (already_present) at another feature", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   # T.S02/fa-0002 has no seeded analysis; s-0001's datetime (T.S01) is
   # 24 May 2025 11:45 Sydney. Same instant, different feature - must commit
   # clean, never match across features.
@@ -2595,7 +2595,7 @@ test_that("PLAN-8b: cross-batch - different point, same datetime, does not false
 })
 
 test_that("PLAN-8b: cross-batch - same point, both date-only (no time on the incoming row OR the committed candidate), same date - treated as the SAME event (already_present)", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   # T.S02/fa-0002: fresh feature, seed a committed candidate with a NULL
   # datetime (a historically date-only source row), same date/value/method as
   # the incoming date-only row.
@@ -2643,7 +2643,7 @@ test_that("PLAN-8b: cross-batch - same point, both date-only (no time on the inc
 # ---- B.1: site registry -----------------------------------------------------
 
 test_that("B.1: .rc_site_registry() reads the site set from the feature.site COLUMN (never a feature.name prefix parse), longest nchar first", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   registry <- .rc_load_registry(con)
   sites <- .rc_site_registry(registry)
 
@@ -2666,7 +2666,7 @@ test_that("B.1: .rc_site_registry() reads the site set from the feature.site COL
 })
 
 test_that("B.1/B.3: a feature whose name prefix != its site is EXCLUDED from the structural index - the raw 'Q S01' (f-0013 'Q.S01', site 'Z') never resolves", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   # The B.1 unit test above cannot reach this: it dies on the missing
   # `.rc_site_registry` symbol. This is the same rule at RESOLUTION level,
   # which is what actually protects data. f-0013 carries a self-alias
@@ -2694,7 +2694,7 @@ test_that("B.1/B.3: a feature whose name prefix != its site is EXCLUDED from the
 # ---- B.2: boundaries and parsing --------------------------------------------
 
 test_that("R-15.4/R-15.24/R-15.25/B.2: a DIRECT (no dot/space) boundary NEVER auto-resolves - falsified against the F2 collision oracle (TS1 curated -> TH.S01, the OPPOSITE site from a naive TS01->T.S01 parse)", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   registry <- .rc_load_registry(con)
   event <- mk_event(mk_rows(
     mk_row(source_ref = "direct", feature_raw = "TS01", lab_sample_id = "XX9999997001",
@@ -2751,7 +2751,7 @@ test_that("R-15.4/R-15.24/R-15.25/B.2: a DIRECT (no dot/space) boundary NEVER au
 })
 
 test_that("B.2: boundary set is '.'/' ' ONLY - '_' inside a point is neither a split point nor stripped, and a residual with a second separator is unparseable", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   event <- mk_event(mk_rows(
     # underscore is not a boundary AND is not stripped during
     # canonicalisation - "T.MW_01" must NOT resolve to T.MW01 (f-0003) even
@@ -2805,7 +2805,7 @@ test_that("B.3: canonical point worked set is pinned exactly (uppercase + strip 
 })
 
 test_that("B.3: canonical (site, point) is injective over the whole feature table (registry-driven invariant, no hard-coded count)", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   registry <- .rc_load_registry(con)
   feat <- registry$feature
 
@@ -2840,7 +2840,7 @@ test_that("B.3: canonical (site, point) is injective over the whole feature tabl
 })
 
 test_that("B.3: digit width is never assumed - a 1-digit raw reaches a 3-wide point (T.G001), a 2-wide point (TH.G01) and a 2-char point (T.S01) alike", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   # WHAT THIS CATCHES (the old docstring's arithmetic was wrong and is
   # corrected here): a SYMMETRIC fixed-width zero-pad applied to BOTH the raw
   # and the registry side is algebraically equivalent to stripping leading
@@ -2879,7 +2879,7 @@ test_that("B.3: digit width is never assumed - a 1-digit raw reaches a 3-wide po
 # ---- B.4: when Layer 2 runs (gating) ----------------------------------------
 
 test_that("B.4: a key reaching >=1 alias row (all auto_assign=FALSE) is gated from Layer 2 EVEN WHEN its structural parse is a unique hit (mirrors the real b.s01 -> B.S01/B.TS41 shape)", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   # test-local ambiguity fixture: 'T.S77' reaches TWO auto_assign=FALSE rows
   # (self vs a fictitious historical_code pointing at f-0002). A structural
   # parse of 'T.S77' IS a unique hit (site T, point S77, matching the new
@@ -2918,7 +2918,7 @@ test_that("B.4: a key reaching >=1 alias row (all auto_assign=FALSE) is gated fr
 })
 
 test_that("B.4: an EXISTING dangling alias for a structurally-parseable key (F6) stays unresolved, carries a structural SUGGESTION, and re-ingesting the identical measurement does not double-commit (idempotency)", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # F6 fixture: fa-0023 'T S08' (space form, key 't s08') is a pre-existing
   # DANGLING alias; T.S08 (f-0012) exists in the registry and structurally
@@ -2989,7 +2989,7 @@ test_that("B.4: an EXISTING dangling alias for a structurally-parseable key (F6)
 # ---- B.5: liveness -----------------------------------------------------------
 
 test_that("B.5: an UNCONDITIONAL live-at-sample_date filter rejects a defunct structural hit (f-0006, date_end 2020-06-30) rather than resolving to it", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   event <- mk_event(mk_rows(
     # "T S006" is a fresh, un-aliased key that structurally matches f-0006's
     # canonical point (S06 -> S6) - a unique hit that is DEFUNCT at the 2025
@@ -3017,7 +3017,7 @@ test_that("B.5: an UNCONDITIONAL live-at-sample_date filter rejects a defunct st
 # ---- B.6: the alias side of a structural hit --------------------------------
 
 test_that("B.6: a Layer-2 structural hit carries the target's self-alias uuid; a target with NO self-alias goes to review instead of committing with a NA alias", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   # test-local target with NO self-alias, to exercise the "review, never a
   # NA alias" fallback (B.6).
   DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix, lon, lat) VALUES
@@ -3078,7 +3078,7 @@ test_that("B.6: a Layer-2 structural hit carries the target's self-alias uuid; a
 })
 
 test_that("B.6: two identical structurally-resolved rows in one batch are subject to the R-12.13 within-batch duplicate guard", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   event <- mk_event(mk_rows(
     mk_row(source_ref = "r1", feature_raw = "T S01", lab_sample_id = "XX9999991001",
            sample_datetime_raw = "07 Jun 2025 09:00"),
@@ -3100,7 +3100,7 @@ test_that("B.6: two identical structurally-resolved rows in one batch are subjec
 # ---- B.7: acceptance criteria (every negative paired with a positive) ------
 
 test_that("R-15.1/R-15.2/R-15.3/B.7: a structural miss (site recognised, no matching point) carries a subkind=structural suggestion in review, and neither a feature nor a structural alias is fabricated across reconcile+commit", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   before <- DBI::dbGetQuery(con, "SELECT count(*) AS n FROM feature")$n
   fa_before <- DBI::dbGetQuery(con, "SELECT count(*) AS n FROM feature_alias")$n
 
@@ -3152,7 +3152,7 @@ test_that("R-15.1/R-15.2/R-15.3/B.7: a structural miss (site recognised, no matc
 })
 
 test_that("B.6: an event whose ONLY row is structurally resolved adds no feature_alias row at all at commit (no kind='structural' curation accreted)", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   fa_before <- DBI::dbGetQuery(con, "SELECT count(*) AS n FROM feature_alias")$n
 
   # 'T S01' reaches ZERO alias rows (the curated key is 't.s01', dotted), so
@@ -3183,7 +3183,7 @@ test_that("B.6: an event whose ONLY row is structurally resolved adds no feature
 # ---- C.1: what "the event/WO" means -----------------------------------------
 
 test_that("C.1: Layer 3 is SKIPPED entirely when event$orphan is TRUE (an unattributed bag of files has no meaningful single site)", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   rows <- mk_rows(
     mk_row(source_ref = "root", feature_raw = "TH.S01", lab_sample_id = "XX9999989001",
            sample_datetime_raw = "09 Jun 2025 09:00"),
@@ -3204,7 +3204,7 @@ test_that("C.1: Layer 3 is SKIPPED entirely when event$orphan is TRUE (an unattr
 })
 
 test_that("C.1: Layer 3 is SKIPPED entirely when work_order is NA", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   rows <- mk_rows(
     mk_row(source_ref = "root", feature_raw = "TH.S01", lab_sample_id = "XX9999988001",
            sample_datetime_raw = "10 Jun 2025 09:00"),
@@ -3224,7 +3224,7 @@ test_that("C.1: Layer 3 is SKIPPED entirely when work_order is NA", {
 })
 
 test_that("C.1: the site set is computed over the CURRENT EVENT ONLY, never re-queried from already-committed DB rows for the same work_order (a WO split across two runs must not leak site history)", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   wo <- "YY9876543"   # PLAN-15 F5 second work order/project (p-0003)
 
   event_a <- mk_event(mk_rows(
@@ -3256,7 +3256,7 @@ test_that("C.1: the site set is computed over the CURRENT EVENT ONLY, never re-q
 # ---- C.2: which rows Layer 3 may retry --------------------------------------
 
 test_that("C.2: Layer 3 never retries a row that yielded a recognised site prefix (even with a missed point), and never retries a candidate whose separator survived an unrecognised prefix", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix, lon, lat) VALUES
     ('f-local-th-s77', 'TH.S77', 'TH', 'surface', 'water', 150.7778, -33.7778)")
   DBI::dbExecute(con, "INSERT INTO feature_alias
@@ -3299,7 +3299,7 @@ test_that("C.2: Layer 3 never retries a row that yielded a recognised site prefi
 })
 
 test_that("C.2/C.1 MISS path: when the assumed site yields NO hit the row stays in review and the review payload SUGGESTS that site (never a fabricated or a nearest-other-site match)", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   # Fixture F4, until now unused: T.MW01 (f-0003) exists and TH.MW01 does
   # NOT. In an all-TH event the raw 'MW01' is retried assuming TH, misses,
   # and per C.1 "else keep as review with S as the suggested site".
@@ -3346,7 +3346,7 @@ test_that("C.2/C.1 MISS path: when the assumed site yields NO hit the row stays 
 # ---- C.3: the iff gate, operationally ---------------------------------------
 
 test_that("C.3: a resolved feature with NA/blank site makes the whole event INELIGIBLE for Layer 3 (fail closed), even though the visible non-NA sites are single", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix, lon, lat) VALUES
     ('f-local-nosite', 'V.VIRT01', NULL, 'surface', 'water', 150.5555, -33.5555)")
   DBI::dbExecute(con, "INSERT INTO feature_alias
@@ -3385,7 +3385,7 @@ test_that("C.3: a resolved feature with NA/blank site makes the whole event INEL
 })
 
 test_that("D15/C.3: a resolved feature with a BLANK (empty-string, not NA) site ALSO makes the event INELIGIBLE for Layer 3 (fail closed) - the other half of C.3's 'NA or blank site' rule; the sibling test above covers only the NA half", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix, lon, lat) VALUES
     ('f-local-blanksite', 'V.VIRT02', '', 'surface', 'water', 150.5556, -33.5556)")
   DBI::dbExecute(con, "INSERT INTO feature_alias
@@ -3421,7 +3421,7 @@ test_that("D15/C.3: a resolved feature with a BLANK (empty-string, not NA) site 
 })
 
 test_that("C.3: curation always wins - a row gated by an existing feature_alias entry (B.4) is never resolved by WO site-inference either", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   # THE discriminating row is "gated_no_site". The previous form used
   # 'T S08' (gated by fa-0023), but that raw yields a RECOGNISED site prefix,
   # so C.2's "Layer 3 never retries a recognised-site row" already blocks it
@@ -3469,7 +3469,7 @@ test_that("C.3: curation always wins - a row gated by an existing feature_alias 
 })
 
 test_that("C.3: an event with ZERO resolved rows is skipped by Layer 3 - a merely PARSED (but unresolved) site prefix is not a site set", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   # C.3 pins Resolved = !is.na(uuid_feature) after Layers 1-2, and C.1's iff
   # gate skips the event when that set is empty. The hazard this catches is an
   # implementation that builds the site set from RECOGNISED PARSES instead:
@@ -3510,7 +3510,7 @@ test_that("C.3: an event with ZERO resolved rows is skipped by Layer 3 - a merel
 # `iff exactly one site` gate over a zero-length vector (the classic
 # `length(unique(x)) == 1` trap over an empty candidate set).
 test_that("C.3: an EMPTY event (zero rows reach the resolver) is handled without error - clean/review/skipped all zero-row", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   empty_event <- mk_event(mk_row(source_ref = "unused")[0, ])
   expect_equal(nrow(empty_event$results), 0) # precondition: genuinely zero rows
@@ -3533,7 +3533,7 @@ test_that("C.3: an EMPTY event (zero rows reach the resolver) is handled without
 # Measured (not a live defect): it currently behaves correctly. Written as
 # a REGRESSION GUARD, same class as the empty-event test immediately above.
 test_that("Work C: a SINGLE-row event whose one row resolves at NEITHER Layer 1 nor Layer 2 does not vacuously satisfy Layer 3's 'exactly one site' gate - stays pending, never auto-assigned", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # 'MW02A' matches no feature_alias row and carries no recognised site
   # prefix (T/TH/Z) - unresolved at both Layer 1 and Layer 2. The hazard is
@@ -3554,7 +3554,7 @@ test_that("Work C: a SINGLE-row event whose one row resolves at NEITHER Layer 1 
 # ---- C.4: provenance ---------------------------------------------------------
 
 test_that("C.4: a plain Layer-2 structural resolution writes a 'structural_parse:' change_log provenance row at COMMIT (reconcile stays read-only)", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   before <- DBI::dbGetQuery(con, "SELECT count(*) AS n FROM change_log")$n
 
   event <- mk_event(mk_row(source_ref = "r1", feature_raw = "T S07",
@@ -3594,7 +3594,7 @@ test_that("C.4: a plain Layer-2 structural resolution writes a 'structural_parse
 })
 
 test_that("C.4: a Layer-3 WO-inferred resolution writes a 'wo_site_inferred: <raw> -> <feature.name> (sites={...})' change_log provenance row at COMMIT", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   event <- mk_event(mk_rows(
     mk_row(source_ref = "root", feature_raw = "TH.S01",
            lab_sample_id = "XX9999983001", sample_datetime_raw = "15 Jun 2025 09:00"),
@@ -3619,7 +3619,7 @@ test_that("C.4: a Layer-3 WO-inferred resolution writes a 'wo_site_inferred: <ra
 # ---- C.5: acceptance criteria (positive control across two events) ---------
 
 test_that("R-15.5/C.5: the SAME unresolved raw resolves in a single-site event and stays in review in a mixed-site event (positive control across two events, one test)", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   single_site_event <- mk_event(mk_rows(
     mk_row(source_ref = "root", feature_raw = "TH.S01",
@@ -3647,7 +3647,7 @@ test_that("R-15.5/C.5: the SAME unresolved raw resolves in a single-site event a
 })
 
 test_that("R-15.6/C.5: one curated cross-site alias suppresses Layer 3 for the WHOLE event, even inside an otherwise-all-T WO (ruling: it does)", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   all_t_event <- mk_event(mk_rows(
     mk_row(source_ref = "root", feature_raw = "T.S01",
@@ -3729,7 +3729,7 @@ test_that("A14/R-8.7: a re-ingested TEXT result matches as already_present and d
 # documents and this project has already been bitten by (footguns: General).
 
 test_that("R-15.7: an expired date_end alias does not resolve a later-dated row, paired in the same test with the identical row dated inside the bound, which DOES resolve", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   DBI::dbExecute(con, "INSERT INTO feature_alias
     (uuid, uuid_feature, name, alias_key, kind, auto_assign, first_seen, last_seen, date_start, date_end) VALUES
     ('fa-e07', 'f-0002', 'T.EXPIRED07', 't.expired07', 'historical_code', TRUE,
@@ -3749,7 +3749,7 @@ test_that("R-15.7: an expired date_end alias does not resolve a later-dated row,
 })
 
 test_that("R-15.8: a date_start bound blocks a row dated before the start date, paired in the same test with the identical row dated after the start, which DOES resolve", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   DBI::dbExecute(con, "INSERT INTO feature_alias
     (uuid, uuid_feature, name, alias_key, kind, auto_assign, first_seen, last_seen, date_start, date_end) VALUES
     ('fa-e08', 'f-0002', 'T.STARTED08', 't.started08', 'historical_code', TRUE,
@@ -3767,7 +3767,7 @@ test_that("R-15.8: a date_start bound blocks a row dated before the start date, 
 })
 
 test_that("R-15.9: a bounded two-arm key resolves via self-precedence to its own feature inside the historical arm's bound (R1/R2), with exactly one self_precedence_note, paired with the trivial resolve outside the bound", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   # T.S01's self-alias (fa-0001, unbounded, kind='self') shares its alias_key
   # with a NEW curated historical arm pointing at a DIFFERENT feature
   # (f-0002) - E.0's "an alias key IS another feature's real name" shape.
@@ -3826,7 +3826,7 @@ test_that("R-15.9: a bounded two-arm key resolves via self-precedence to its own
 })
 
 test_that("R-15.11: a key with one alias-live arm pointing at a DEFUNCT feature goes to review, not to the defunct feature - alias-side and feature-side liveness are separate filters, both apply", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   # Bound the LIVE arm (fa-0008 'T.REUSED' -> f-0007) so it expires before
   # the row's date. That leaves fa-0007 (-> f-0006, FEATURE-side defunct,
   # date_end 2020-06-30) as the ONLY alias-live arm at 2025-05-20.
@@ -3844,7 +3844,7 @@ test_that("R-15.11: a key with one alias-live arm pointing at a DEFUNCT feature 
 })
 
 test_that("R-15.12: a dangling pending alias whose bounds would exclude the row is still found by the natural-key lookup (bounds are exempt), and re-ingesting the same measurement commits it ONCE", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   # A dangling ('pending') alias carrying a bound that EXCLUDES the row's
   # 2025 sample date (2020-01-01..2020-06-30). The R-11.5a natural-key lookup
   # (.rc_resolve_existing_pending, reconcile.R:764) must ignore this entirely
@@ -3886,7 +3886,7 @@ test_that("R-15.12: a dangling pending alias whose bounds would exclude the row 
 })
 
 test_that("R-15.13: NULL/NULL alias bounds behave exactly as today (regression guard) - T.AMBIG2 ambiguity, T.REUSED narrowing, bs03alt hit, and a direct alias resolving at dates far either side of any curated bound", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   registry <- .rc_load_registry(con)
 
   cand_ambig <- .rc_feature_candidates("T.AMBIG2", as.Date("2025-05-20"), registry)
@@ -3954,7 +3954,7 @@ seed_pre003_con <- function(dir = NULL) {
 
 test_that("R-15.14: the resolver against a pre-003 DB (date_start/date_end columns ABSENT, not a column of NA) behaves exactly as today and does not error (regression guard)", {
   con <- seed_pre003_con()
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   registry <- .rc_load_registry(con)
 
   # Criterion #4: absent columns, never a column of NA.
@@ -3967,7 +3967,7 @@ test_that("R-15.14: the resolver against a pre-003 DB (date_start/date_end colum
 })
 
 test_that("R-15.21: sample_date NA yields unchanged behaviour on .rc_feature_candidates - no narrowing at either alias-side or feature-side liveness", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   DBI::dbExecute(con, "INSERT INTO feature_alias
     (uuid, uuid_feature, name, alias_key, kind, auto_assign, first_seen, last_seen, date_start, date_end) VALUES
     ('fa-e21a', 'f-0004', 'T.NA21', 't.na21', 'historical_code', TRUE,
@@ -3990,7 +3990,7 @@ test_that("R-15.21: sample_date NA yields unchanged behaviour on .rc_feature_can
 })
 
 test_that("PLAN-15 E.2 shape: a contradictory alias bound (date_start > date_end) empties the candidate set at every date, rather than resolving arbitrarily", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   DBI::dbExecute(con, "INSERT INTO feature_alias
     (uuid, uuid_feature, name, alias_key, kind, auto_assign, first_seen, last_seen, date_start, date_end) VALUES
     ('fa-e-contra', 'f-0003', 'T.CONTRA', 't.contra', 'historical_code', TRUE,
@@ -4034,7 +4034,7 @@ test_that("PLAN-15 E.2 shape: a contradictory alias bound (date_start > date_end
 
 test_that("R-15.22: .rc_feature_key reproduces the REAL sys.sourced .mig001_normalize over the stored alias_key domain (idempotence on migration-001's own output) and on the ASCII discriminating inputs the two functions genuinely agree on - NOT a locally re-declared oracle", {
   mig <- .mig001_load()
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   fa <- DBI::dbGetQuery(con, "SELECT name, alias_key FROM feature_alias")
   expect_true(nrow(fa) > 0)
 
@@ -4076,7 +4076,7 @@ test_that("R-15.23: .rc_feature_key and the REAL .mig001_normalize DIVERGE on a 
 # ---- F.5: review payload order-independence (R-15.26) ---------------------
 
 test_that("R-15.26: the review payload's candidate list is the UNION of the WHOLE group (not just cand_list[[g[[1]]]]'s first row), and is BYTE-IDENTICAL whichever order the two rows are presented in", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   # test-local pair sharing ONE alias_key ('ordkeynosite' - deliberately no
   # recognised site prefix, so no structural token can interfere with this
   # test's own signal): f-ord-a is defunct after 2024-12-31, f-ord-b is
@@ -4133,7 +4133,7 @@ test_that("R-15.26: the review payload's candidate list is the UNION of the WHOL
 # ---- F.6: single-candidate suggestions are no longer discarded (R-15.27) --
 
 test_that("R-15.27: ZERO suggestion candidates emits a bare unknown_feature payload - no subkind= clause at all", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   event <- mk_event(mk_rows(
     # 'QQQNOTHING' matches no feature_alias row and no site prefix (T/TH/Z).
     mk_row(source_ref = "zero_cand", feature_raw = "QQQNOTHING",
@@ -4147,7 +4147,7 @@ test_that("R-15.27: ZERO suggestion candidates emits a bare unknown_feature payl
 })
 
 test_that("R-15.27: exactly ONE suggestion candidate (fixture T.BORE -> f-0003 via fa-0009, auto_assign=FALSE) emits subkind=suggestion,candidates=f-0003 - the lone candidate is no longer discarded by the length(sugg)>1 gate", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   event <- mk_event(mk_rows(
     mk_row(source_ref = "one_cand", feature_raw = "T.BORE",
            lab_sample_id = "XX9999970002", sample_datetime_raw = "10 Jun 2025 09:00")
@@ -4183,7 +4183,7 @@ test_that("R-15.27: exactly ONE suggestion candidate (fixture T.BORE -> f-0003 v
 })
 
 test_that("R-15.27: TWO OR MORE suggestion candidates (fixture T.DUAL -> f-0004/f-0005) still emit subkind=ambiguous, never subkind=suggestion - the >=2 branch of the same total order (regression guard)", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   event <- mk_event(mk_rows(
     mk_row(source_ref = "two_cand", feature_raw = "T.DUAL",
            lab_sample_id = "XX9999970003", sample_datetime_raw = "10 Jun 2025 09:00")
@@ -4199,7 +4199,7 @@ test_that("R-15.27: TWO OR MORE suggestion candidates (fixture T.DUAL -> f-0004/
 # ---- E.3: expired-only alias goes to review, not structural (R-15.15) -----
 
 test_that("R-15.15: a key whose ONLY alias is EXPIRED lands in review with subkind=expired_alias and is NOT structurally resolved, paired with an identical-SHAPE raw carrying NO alias row at all which DOES structurally resolve (proves Layer 2 is gated, not disabled)", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   # 'T S07' (space form) structurally parses to f-0007 (T.S07), which itself
   # already carries a self-alias - so an UNGATED Layer 2 would resolve this
   # cleanly. The ONLY alias reaching key 't s07' is the one inserted here,
@@ -4251,7 +4251,7 @@ test_that("R-15.15: a key whose ONLY alias is EXPIRED lands in review with subki
 })
 
 test_that("R-15.16: payload emission at the expired-candidate count boundary - exactly ONE expired candidate, ZERO live arms, still emits subkind=expired_alias (guards the length(sugg)>1 gate); TWO live + ONE expired emits subkind=ambiguous with candidates= restricted to the two LIVE ones plus an expired= clause naming the third", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # Case 1: a single EXPIRED-only candidate, ZERO live arms (no structural
   # interference - 'QQQEXP16A' matches no site prefix).
@@ -4356,7 +4356,7 @@ test_that("R-15.16: payload emission at the expired-candidate count boundary - e
 })
 
 test_that("R-15.46: a key holding exactly ONE live arm (auto_assign=FALSE) AND at least one EXPIRED arm, reconciled inside the live arm's bounds and outside the expired one's, emits subkind=suggestion (never subkind=expired_alias) AND carries an expired= clause naming the expired candidate - paired in the same test with a control on an otherwise-identical key whose live arm is removed, which DOES emit subkind=expired_alias (PLAN-15's 'LIVE CANDIDATE WAS OVERLOADED' ruling, 2026-07-24, round-3 PCR-1: 'live arm' throughout the precedence table means date-bounds-admit-the-sample-date, auto_assign-BLIND - expired_alias fires only at ZERO live arms, suggestion at EXACTLY ONE live auto_assign=FALSE arm; expiry is context, never the subkind, whenever any live arm exists)", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # Key A ('qqq1546'): one live, auto_assign=FALSE, UNBOUNDED arm (always
   # date-admits) PLUS one EXPIRED arm sharing the same key.
@@ -4461,7 +4461,7 @@ test_that("R-15.46: a key holding exactly ONE live arm (auto_assign=FALSE) AND a
 # convention for un-numbered plan-block criteria (cf. "B.4:", "PLAN-15 A:").
 
 test_that("R-15.45 (E.7): a key reaching a live SELF arm plus one live NON-self arm resolves via the self arm, commits a real sample/analysis row (assert row COUNTS, not merely the absence of a review item), and records exactly ONE non-blocking review row naming the shadowed feature and carrying an EXPLICIT boolean blocking flag - paired in the same test with a SECOND self-precedence case on a NEW, LOCALLY-BUILT key (t.e7dual2, all three arms auto_assign=TRUE) where the self arm faces TWO live non-self opponents at once, AND the plan-mandated negative control (a key reaching two live NON-self arms and no self arm still goes to review and does NOT commit) - (Phase-5 audit round 3 B1+B2: round-2's C4(b) planted the second self-precedence case on T.DUAL itself, whose fa-0015/fa-0016 non-self arms are auto_assign=FALSE in the shared seed [helper-db.R:329-336], so .rc_feature_candidates() [R/reconcile.R:171, which filters to auto_assign=TRUE FIRST] returned exactly ONE row for T.DUAL - an ordinary clean Layer-1 hit that `next`s before candidate collection, so the fixture could never produce the self_precedence_note the test asserted, AND it consumed R-15.45's own plan-mandated negative control by leaving no key in the test with two live non-self arms and no self arm. FIX: the second self-precedence case now lives on a NEW key built with auto_assign=TRUE on all three arms; T.DUAL is left completely untouched and used below exactly as the negative control)", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   # f-0002's OWN self-alias (fa-0002, unbounded) shares its key 't.s02' with
   # a NEW curated historical arm pointing at a DIFFERENT feature (f-0003),
   # bounded 2015-01-01..2019-12-31 - the "an alias key IS another feature's
@@ -4663,7 +4663,7 @@ test_that("R-15.45 (E.7): a key reaching a live SELF arm plus one live NON-self 
 })
 
 test_that("D16 (E.7/PLAN-7b round-2): .rc_self_precedence() returns NULL when MORE THAN ONE surviving arm is kind='self' - two features claiming one name by their own names is a registry defect, not something to resolve arbitrarily", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   registry <- .rc_load_registry(con)
 
   # fa-0001 (self -> f-0001) and fa-0002 (self -> f-0002): TWO distinct
@@ -4769,7 +4769,7 @@ test_that("cold-audit defect 2: dplyr::bind_rows() over one df with a real `cand
 # feature), not emitted per ANALYSIS ROW (this file's grain) ------------------
 
 test_that("PLAN-7b item 1: a multi-analyte panel resolving via self-precedence over the SAME (alias_key, resolved feature) emits exactly ONE self_precedence_note, not one per analysis row - E.7's own stated purpose ('stops turning into a review-queue flood')", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   # Same self-precedence shape as R-15.45: f-0002's self-alias (fa-0002)
   # shares key 't.s02' with a curated historical arm on f-0003.
   DBI::dbExecute(con, "INSERT INTO feature_alias
@@ -4805,7 +4805,7 @@ test_that("PLAN-7b item 1: a multi-analyte panel resolving via self-precedence o
 # arm, regardless of DB physical row order ------------------------------------
 
 test_that("PLAN-7b item 2 (kills M5): when several ARMS resolve to the SAME feature, the arm written to sample.uuid_feature_alias is the `kind == 'self'` one - not whichever arm the DB happens to return first - proved in BOTH insert orders", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix, lon, lat) VALUES
     ('f-tb-a', 'T.TBCASEA', 'T', 'surface', 'water', 150.7001, -33.7001),
@@ -4859,7 +4859,7 @@ test_that("PLAN-7b item 2 (kills M5): when several ARMS resolve to the SAME feat
 # same-key re-siting the shared C.2 fixture's dotted/spaced raws cannot reach -
 
 test_that("PLAN-7b item 3 (kills M1): Layer 3 never retries a row Layer 2 already recognised SOME site for through a DIRECT (separator-less) boundary, even when that recognition did not itself produce a hit - without the guard, the WHOLE canonicalised raw is reinterpreted as a point of the work order's single site and silently merges onto an unrelated feature (the live B.K01/L.B01 shape)", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix, lon, lat) VALUES
     ('f-cx-anchor', 'X.ANCHOR', 'X', 'surface', 'water', 150.8001, -33.8001),
@@ -4900,7 +4900,7 @@ test_that("PLAN-7b item 3 (kills M1): Layer 3 never retries a row Layer 2 alread
 # ---- item 4 (kills M2/M3/M4): exact date-boundary assertions ---------------
 
 test_that("PLAN-7b item 4 (kills M2): an alias-side date_end bound RESOLVES exactly ON the boundary date (E.2 'date_end INCLUSIVE'), not merely strictly before it", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   DBI::dbExecute(con, "INSERT INTO feature_alias
     (uuid, uuid_feature, name, alias_key, kind, auto_assign, first_seen, last_seen, date_start, date_end) VALUES
     ('fa-e07b', 'f-0002', 'T.EXPIRED07B', 't.expired07b', 'historical_code', TRUE,
@@ -4917,7 +4917,7 @@ test_that("PLAN-7b item 4 (kills M2): an alias-side date_end bound RESOLVES exac
 })
 
 test_that("PLAN-7b item 4: an alias-side date_start bound RESOLVES exactly ON the boundary date", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   DBI::dbExecute(con, "INSERT INTO feature_alias
     (uuid, uuid_feature, name, alias_key, kind, auto_assign, first_seen, last_seen, date_start, date_end) VALUES
     ('fa-e08b', 'f-0002', 'T.STARTED08B', 't.started08b', 'historical_code', TRUE,
@@ -4934,7 +4934,7 @@ test_that("PLAN-7b item 4: an alias-side date_start bound RESOLVES exactly ON th
 })
 
 test_that("PLAN-7b item 4 (kills M4): .rc_feature_candidates() (via .rc_narrow_live_feature()) keeps a defunct FEATURE candidate exactly ON its own date_end - the reused code T.REUSED stays AMBIGUOUS (both f-0006/f-0007) at the exact boundary, not narrowed to f-0007 alone", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   registry <- .rc_load_registry(con)
 
   # f-0006's date_end is 2020-06-30 (helper-db.R).
@@ -4948,7 +4948,7 @@ test_that("PLAN-7b item 4 (kills M4): .rc_feature_candidates() (via .rc_narrow_l
 })
 
 test_that("PLAN-7b item 4 (kills M3): .rc_structural_hit() RESOLVES a structural hit exactly ON the feature's own date_end - E.2's 'date_end inclusive' rule applied to the FEATURE side, not only the alias side", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   registry <- .rc_load_registry(con)
   index <- .rc_structural_index(registry)
 
@@ -5003,7 +5003,7 @@ seed_no_feature_date_end_con <- function(dir = NULL) {
 
 test_that("PLAN-7b item 5: .rc_structural_hit() does not abort when feature.date_end is an ABSENT column (mirrors .rc_narrow_live_feature()'s existing 'no date_end column at all = unbounded' guard)", {
   con <- seed_no_feature_date_end_con()
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   registry <- .rc_load_registry(con)
   expect_null(registry$feature$date_end)
 
@@ -5014,7 +5014,7 @@ test_that("PLAN-7b item 5: .rc_structural_hit() does not abort when feature.date
 
 test_that("D9/R-15.14 extension (PLAN-7b round-2): .rc_narrow_live_feature()'s OWN 'no feature.date_end column at all = unbounded' guard (:417) does not empty the candidate set - the same absent-column fixture item 5 uses above for its .rc_structural_hit() twin, read through .rc_feature_candidates() (which routes straight through .rc_narrow_live_feature())", {
   con <- seed_no_feature_date_end_con()
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   registry <- .rc_load_registry(con)
   expect_null(registry$feature$date_end)
 
@@ -5071,7 +5071,7 @@ test_that("PLAN-7b item 6(b): .rc_narrow_live() routes feature$date_end through 
 # the R session's LC_COLLATE ---------------------------------------------------
 
 test_that("PLAN-7b item 7: .rc_feature_review()'s GROUP order is pinned to radix (byte-order) collation, not the R session's LC_COLLATE - two keys differing only in punctuation ('t_01' vs 't.01') that collate in OPPOSITE order under C vs en_US.UTF-8 on this platform still emit in the SAME (radix) order under both", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   event <- mk_event(mk_rows(
     mk_row(source_ref = "r_underscore", feature_raw = "T_01",
@@ -5107,7 +5107,7 @@ test_that("PLAN-7b item 7: .rc_feature_review()'s GROUP order is pinned to radix
 # row diagnostic this file queues, not merely the self_precedence_note case --
 
 test_that("PLAN-7b item 8 REVERSED (Robin, 2026-07-26): `blocking` stays SCOPED to the unknown_feature subkind precedence table (.rc_feature_review()/.rc_self_precedence_notes()) and is ABSENT (not merely FALSE) from every other kind's diagnostics - batch_duplicate, unknown_unit, unknown_analyte (both branches), parse_error, value_conflict, and STAGE-0. A first attempt made it universal; that broke test-review-queue-payload.R's R-16.19/R-16.20 cross-producer key-parity invariant against .fa_merge_samples() (R/feature-alias.R, a file this assignment does not own) because that sibling producer has no `blocking` key to match. Reverted to code; the docstring's claim was narrowed instead (see the comment block above `.rc_feature_review()`) - this test locks the narrowed contract, not the reverted-and-forgotten one", {
-  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   diag_of <- function(review_row) jsonlite::fromJSON(review_row$payload[[1]])
 

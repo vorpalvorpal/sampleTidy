@@ -136,7 +136,7 @@ mk_event <- function(results, work_order = "XX1234567", orphan = FALSE) {
 test_that("R-9.2: committing new clean rows creates exactly matching sample/analysis counts", {
   setup <- commit_test_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   files <- tibble::tibble(hash = setup$hash, filename = basename(setup$path),
                           adapter = "esdat/1", rank = 3L, kept = TRUE)
@@ -175,7 +175,7 @@ test_that("R-9.2: committing new clean rows creates exactly matching sample/anal
 test_that("R-9.2: a second commit_event() call on already-terminal files aborts", {
   setup <- commit_test_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   files <- tibble::tibble(hash = setup$hash, filename = basename(setup$path),
                           adapter = "esdat/1", rank = 3L, kept = TRUE)
@@ -225,7 +225,7 @@ test_that("R-9.2: mid-commit failure leaves zero new rows anywhere (atomicity)",
 test_that("R-9.2: supersede updates the analysis in place with no duplicate row", {
   setup <- commit_test_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   files <- tibble::tibble(hash = setup$hash, filename = basename(setup$path),
                           adapter = "esdat/1", rank = 3L, kept = TRUE)
@@ -258,7 +258,7 @@ test_that("R-9.2: supersede updates the analysis in place with no duplicate row"
 test_that("R-9.2: provenance chain - every committed analysis has a change_log insert row whose source_hash matches an archived asset", {
   setup <- commit_test_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   files <- tibble::tibble(hash = setup$hash, filename = basename(setup$path),
                           adapter = "esdat/1", rank = 3L, kept = TRUE)
@@ -284,7 +284,7 @@ test_that("R-9.2: provenance chain - every committed analysis has a change_log i
 test_that("R-9.2: superseded-rendering files (state ignored) also get asset rows and archive copies", {
   setup <- commit_test_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # a second, lesser-rendering file for the same event, superseded at
   # assembly time (R-7.2) - still archived per A13
@@ -323,7 +323,7 @@ test_that("R-9.2: already_present rows get no new analysis but a provenance chan
   # dev/plans/PLAN-CHANGE-REQUESTS.md).
   setup <- commit_test_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   files <- tibble::tibble(hash = setup$hash, filename = basename(setup$path),
                           adapter = "esdat/1", rank = 3L, kept = TRUE)
@@ -421,7 +421,7 @@ dangling_lab_method_rows <- function(con, organisation) {
 test_that("R-11.8: a file with a resolved row and an unknown-feature row commits BOTH; the dangling row is invisible to a feature-joined view; ingest_file archives legitimately (C20 corollary)", {
   setup <- commit_test_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   files <- tibble::tibble(hash = setup$hash, filename = basename(setup$path),
                           adapter = "esdat/1", rank = 3L, kept = TRUE)
@@ -471,7 +471,7 @@ test_that("R-11.8: a file with a resolved row and an unknown-feature row commits
 test_that("R-11.8(a,c): two commits of the same still-unknown feature reuse ONE dangling feature_alias, and n_seen counts one per referencing sample (idempotent find-or-create)", {
   setup <- commit_test_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   key <- .rc_feature_key("T.DEDUPE-FEAT")
 
   files1 <- tibble::tibble(hash = setup$hash, filename = basename(setup$path),
@@ -510,7 +510,7 @@ test_that("R-11.8(a,c): two commits of the same still-unknown feature reuse ONE 
 test_that("R-11.8(a,c)/M4: a RESOLVED feature_alias sharing the alias_key is left untouched; committing a pending row creates a NEW distinct pending alias (find-or-create excludes resolved aliases)", {
   setup <- commit_test_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   key <- .rc_feature_key("T.SHARED-KEY-M4")
 
   # Pre-seed a RESOLVED alias (uuid_feature NOT NULL) sharing alias_key = key.
@@ -547,7 +547,7 @@ test_that("R-11.8(a,c)/M4: a RESOLVED feature_alias sharing the alias_key is lef
 test_that("R-11.8(e)/M5: two rows in the SAME commit event, same analyte, differing ONLY in method raw casing, reuse ONE dangling lab_method (intra-event dedup uses .rc_method_key, not the raw string)", {
   setup <- commit_test_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # Both rows land in the SAME commit_event() call (a single event), so this
   # exercises the intra-event dedup key at commit.R:178
@@ -586,7 +586,7 @@ test_that("R-11.8(e)/M5: two rows in the SAME commit event, same analyte, differ
 test_that("R-11.8(e): two commits of the same unknown analyte, differing ONLY in raw casing, reuse ONE dangling lab_method (dedup uses .rc_method_key, not raw string)", {
   setup <- commit_test_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   files1 <- tibble::tibble(hash = setup$hash, filename = basename(setup$path),
                            adapter = "esdat/1", rank = 3L, kept = TRUE)
@@ -619,7 +619,7 @@ test_that("R-11.8(e): two commits of the same unknown analyte, differing ONLY in
 test_that("R-11.8/A63 (D7 reversed): a pending-analyte row's reported units land on lab_method.units, nowhere on analysis; conversion_constant stays NA", {
   setup <- commit_test_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   files <- tibble::tibble(hash = setup$hash, filename = basename(setup$path),
                           adapter = "esdat/1", rank = 3L, kept = TRUE)
@@ -644,7 +644,7 @@ test_that("R-11.8/A63 (D7 reversed): a pending-analyte row's reported units land
 test_that("R-11.8(f): a committing row's units_raw drift from an existing dangling lab_method's recorded units is RECORDED as a change_log provenance row, reuses the SAME uuid_lab, and leaves lab_method.units unchanged", {
   setup <- commit_test_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   files1 <- tibble::tibble(hash = setup$hash, filename = basename(setup$path),
                            adapter = "esdat/1", rank = 3L, kept = TRUE)
@@ -700,7 +700,7 @@ test_that("R-11.8(f): a committing row's units_raw drift from an existing dangli
 test_that("R-11.9 (commit-side, D8): review payload carries a resolvable alias_uuid after commit (rewritten by the R-11.8 materialise step, seam S-8)", {
   setup <- commit_test_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   key <- .rc_feature_key("T.NEEDS-REVIEW-ALIAS")
 
   files <- tibble::tibble(hash = setup$hash, filename = basename(setup$path),
@@ -734,7 +734,7 @@ test_that("R-11.9 (commit-side, D8): review payload carries a resolvable alias_u
 test_that("round-2 audit FF3: .ct_rewrite_review_payloads() links uuid_alias for a GROUPED review item (comma-joined source_ref, >=2 rows) as well as a single-row item, real reconcile_event() -> commit_event() end to end", {
   setup <- commit_test_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   key_grouped <- .rc_feature_key("T.GROUPED-FF3")
   key_single <- .rc_feature_key("T.SINGLE-FF3")
@@ -801,7 +801,7 @@ test_that("round-2 audit FF3: .ct_rewrite_review_payloads() links uuid_alias for
 test_that("W-8b-f2: a two-file grouped unknown_feature review item still links uuid_alias when its FIRST member's row is dropped (seam S-4: .rc_feature_review() records only the first group member's source_hash, so the hash-keyed lookup misses for every ref and must fall back to the unique-or-nothing ref-only match)", {
   setup <- commit_test_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   second <- add_second_reconciled_file(setup, "PROJ_A.ESDAT_XX1234567_0.Chemistry2b.CSV")
 
   key <- .rc_feature_key("ZZ.X9-W8BF2")
@@ -858,7 +858,7 @@ test_that("W-8b-f2 (guard, holds before AND after the fix - do not repin): the r
   # be re-introducing the hazard, not fixing a bug.
   setup <- commit_test_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   key_a <- .rc_feature_key("AA.GUARD-W8BF2")
   key_b <- .rc_feature_key("BB.GUARD-W8BF2")
@@ -916,7 +916,7 @@ test_that("Phase-7b item 6: two review items sharing ONE source_ref, each carryi
   # and which had no test exercising the hash key actually doing its job.
   setup <- commit_test_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   key_a <- .rc_feature_key("AA.ITEM6-HASH")
   key_b <- .rc_feature_key("BB.ITEM6-HASH")
@@ -979,7 +979,7 @@ test_that("Phase-7b item 6: two review items sharing ONE source_ref, each carryi
 test_that("PLAN-16 Q2: a real reconcile_event() -> commit_event() stores source_ref and n_rows in the committed payload's diagnostics - as a JSON ARRAY plus n_rows=2 for a GROUPED item and a scalar plus n_rows=1 for a single-row item", {
   setup <- commit_test_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # Same shape as the FF3 fixture above: two rows sharing one unresolved
   # feature_raw (-> ONE grouped review item over two source rows) plus one row
@@ -1060,7 +1060,7 @@ test_that("PLAN-16 Q2: a real reconcile_event() -> commit_event() stores source_
 test_that("R-11.16: a '>2000' row commits quantified = FALSE (from parse_value, never re-derived from below_detection) and a non-NA rl_high = 2000 (F4)", {
   setup <- commit_test_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   files <- tibble::tibble(hash = setup$hash, filename = basename(setup$path),
                           adapter = "esdat/1", rank = 3L, kept = TRUE)
@@ -1083,7 +1083,7 @@ test_that("R-11.16: a '>2000' row commits quantified = FALSE (from parse_value, 
 test_that("R-11.16: a literal 'BDL' row commits quantified = FALSE independent of below_detection", {
   setup <- commit_test_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   files <- tibble::tibble(hash = setup$hash, filename = basename(setup$path),
                           adapter = "esdat/1", rank = 3L, kept = TRUE)
@@ -1103,7 +1103,7 @@ test_that("R-11.16: a literal 'BDL' row commits quantified = FALSE independent o
 test_that("R-11.16: a '<0.01' row keeps rl_low = 0.01 (existing pin) and commits quantified = FALSE", {
   setup <- commit_test_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   files <- tibble::tibble(hash = setup$hash, filename = basename(setup$path),
                           adapter = "esdat/1", rank = 3L, kept = TRUE)
@@ -1124,7 +1124,7 @@ test_that("R-11.16: a '<0.01' row keeps rl_low = 0.01 (existing pin) and commits
 test_that("R-11.16: a plain-numeric row commits quantified = TRUE regardless of below_detection", {
   setup <- commit_test_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   files <- tibble::tibble(hash = setup$hash, filename = basename(setup$path),
                           adapter = "esdat/1", rank = 3L, kept = TRUE)
@@ -1148,7 +1148,7 @@ test_that("R-11.16: a plain-numeric row commits quantified = TRUE regardless of 
 test_that("R-11.18/A62: two non-NA differing datetimes at one feature+date create TWO sample rows and two analyses (distinct samplings)", {
   setup <- commit_test_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   files <- tibble::tibble(hash = setup$hash, filename = basename(setup$path),
                           adapter = "esdat/1", rank = 3L, kept = TRUE)
@@ -1177,7 +1177,7 @@ test_that("R-11.18/A62: two non-NA differing datetimes at one feature+date creat
 test_that("R-11.18/A62: an incoming NA datetime reuses an existing date-only sample (no new sample)", {
   setup <- commit_test_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   DBI::dbExecute(con, "INSERT INTO \"sample\" (uuid, uuid_feature_alias, uuid_project, date, datetime, organisation)
     VALUES ('s-r1118-a', 'fa-0001', 'p-0001', TIMESTAMP '2025-07-16 00:00:00', NULL, 'ALS')")
 
@@ -1198,7 +1198,7 @@ test_that("R-11.18/A62: an incoming NA datetime reuses an existing date-only sam
 test_that("R-11.18/A62: a non-NA incoming datetime still reuses an existing NA-datetime candidate (uncertain identity - no fabricated duplicate)", {
   setup <- commit_test_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   DBI::dbExecute(con, "INSERT INTO \"sample\" (uuid, uuid_feature_alias, uuid_project, date, datetime, organisation)
     VALUES ('s-r1118-b', 'fa-0001', 'p-0001', TIMESTAMP '2025-07-17 00:00:00', NULL, 'ALS')")
 
@@ -1220,7 +1220,7 @@ test_that("R-11.18/A62: a non-NA incoming datetime still reuses an existing NA-d
 test_that("R-11.18/A62: an incoming datetime equal to an existing sample's datetime reuses that sample", {
   setup <- commit_test_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   DBI::dbExecute(con, "INSERT INTO \"sample\" (uuid, uuid_feature_alias, uuid_project, date, datetime, organisation)
     VALUES ('s-r1118-c', 'fa-0001', 'p-0001', TIMESTAMP '2025-07-18 00:00:00', TIMESTAMP '2025-07-18 09:00:00', 'ALS')")
 
@@ -1244,7 +1244,7 @@ test_that("R-11.18/A62: an incoming datetime equal to an existing sample's datet
 test_that("R-8.7/A63: a re-ingested reading under a conversion_constant method is already_present, not a false value_conflict", {
   setup <- commit_test_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # Step 1: store a Fluoride-as-F reading of 3 mg/L via REAL commit under
   # lm-0012 (conversion_constant = 2.0). `value_converted` must be the
@@ -1300,7 +1300,7 @@ test_that("R-8.7/A63: a re-ingested reading under a conversion_constant method i
 test_that("R-16.14: .ct_skip_existing_uuid() returns the analysis uuid a REAL reconcile_event() already_present skip carries, and drives a real commit_event() provenance row from it", {
   setup <- commit_test_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # Step 1: store a Fluoride-as-F reading via a REAL commit_event() (same
   # fixture as the R-8.7/A63 block above) so a KNOWN analysis.uuid exists.
@@ -1364,7 +1364,7 @@ test_that("R-16.14: a skip tibble missing the existing_uuid column (e.g. .rc_qc_
 
   setup <- commit_test_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   files <- tibble::tibble(hash = setup$hash, filename = basename(setup$path),
                           adapter = "esdat/1", rank = 3L, kept = TRUE)
   # A skip tibble shaped like .rc_qc_filter()'s (no existing_uuid column) but
@@ -1391,7 +1391,7 @@ test_that("R-16.14: a skip tibble missing the existing_uuid column (e.g. .rc_qc_
 test_that("PLAN-16 FB8: subkind, uuid_existing and uuid_alias all survive a real commit_event() -> .ct_commit_review() write, not just uuid_alias", {
   setup <- commit_test_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   files <- tibble::tibble(hash = setup$hash, filename = basename(setup$path),
                           adapter = "esdat/1", rank = 3L, kept = TRUE)
@@ -1417,7 +1417,7 @@ test_that("PLAN-16 FB8: subkind, uuid_existing and uuid_alias all survive a real
 test_that("cold-audit defect 1: a review tibble with no `payload` column at all commits with the valid JSON empty-object default, not NULL/an error (.ct_commit_review() unguarded `row$payload <- review$payload[[i]]` bypassed the col_or_na() guard every sibling column uses)", {
   setup <- commit_test_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   files <- tibble::tibble(hash = setup$hash, filename = basename(setup$path),
                           adapter = "esdat/1", rank = 3L, kept = TRUE)
@@ -1444,7 +1444,7 @@ test_that("cold-audit defect 1: a review tibble with no `payload` column at all 
 test_that("PLAN-16 round-3 R-16.23: .ct_commit_review() persists a real .rc_review_row() producer's `candidates` as review_queue_candidate rows - not discarded a second time - with uuid_review rewritten to the PARENT ROW'S ACTUAL INSERTED uuid (not the constructor's own uuid_row), read back in rank order via the exported review_queue_candidates() reader", {
   setup <- commit_test_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # Real resolution against the real seeded registry - T.AMBIG2 -> f-0004/
   # f-0005, the same fixture the sibling worker drove in
@@ -1508,7 +1508,7 @@ test_that("PLAN-16 round-3 R-16.23: .ct_commit_review() persists a real .rc_revi
 test_that("PLAN-16 round-3 R-16.23: a review tibble with no `candidates` column at all (every pre-existing hand-built test fixture / not-yet-routed producer) still commits cleanly and writes zero review_queue_candidate rows - the fix must not require every caller to carry the column", {
   setup <- commit_test_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   files <- tibble::tibble(hash = setup$hash, filename = basename(setup$path),
                           adapter = "esdat/1", rank = 3L, kept = TRUE)
@@ -1532,7 +1532,7 @@ test_that("R-11.16: a qualitative text row commits quantified = NA, not FALSE (t
   # was never performed.
   setup <- commit_test_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   files <- tibble::tibble(hash = setup$hash, filename = basename(setup$path),
                           adapter = "esdat/1", rank = 3L, kept = TRUE)
@@ -1563,7 +1563,7 @@ test_that("R-11.16: a qualitative text row commits quantified = NA, not FALSE (t
 test_that("R-15.17: a new pending alias's date_start is min(sample_date) over the WHOLE group, identical regardless of row/file order; date_end stays NULL", {
   setup <- commit_test_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   key <- .rc_feature_key("T.ORDER-INDEP")
   event <- mk_commit_event(tibble::tibble(hash = setup$hash, filename = basename(setup$path),
                                            adapter = "esdat/1", rank = 3L, kept = TRUE))
@@ -1613,7 +1613,7 @@ test_that("R-15.17: a new pending alias's date_start is min(sample_date) over th
 test_that("R-15.17: re-ingesting into an EXISTING dangling alias updates n_seen/last_seen only - date_start/date_end are left untouched even by an earlier-dated incoming row", {
   setup <- commit_test_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   key <- .rc_feature_key("T.EXISTING-DANGLING-BOUNDS")
 
   DBI::dbExecute(con, "INSERT INTO feature_alias
@@ -1660,7 +1660,7 @@ test_that("R-15.31/R-15.32: the work-order re-ingest guard blocks a differently-
   setup <- commit_test_setup(filename = "PROJ_A.ESDAT_XX9990001_0.Chemistry2e.CSV",
                               work_order = "XX9990001", revision = 0L)
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # ---- seed: WO XX9990001 already has sample/analysis rows.
   files0 <- tibble::tibble(hash = setup$hash, filename = basename(setup$path),
@@ -1752,7 +1752,7 @@ test_that("R-15.32 (ACIRL false-merge guard): a first-time work order whose file
   setup <- commit_test_setup(filename = "2400-7538-02_ALS_Chemistry.CSV",
                               work_order = "2400-7538-02", revision = 0L)
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # WO A = "2400-7538-02" is already loaded (has sample rows).
   files_a <- tibble::tibble(hash = setup$hash, filename = basename(setup$path),
@@ -1794,7 +1794,7 @@ test_that("R-15.32 (ACIRL false-split guard): a re-download of a loaded work ord
   setup <- commit_test_setup(filename = "2400-7538 01-01_ALS_Chemistry.CSV",
                               work_order = "2400-7538 01-01", revision = 0L)
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   files0 <- tibble::tibble(hash = setup$hash, filename = basename(setup$path),
                            adapter = "esdat/1", rank = 3L, kept = TRUE)
@@ -1854,7 +1854,7 @@ test_that("R-15.32 (legacy work order): a re-download of a work order whose proj
   # restored - it is the only block in this file that pins the widening.
   setup <- commit_test_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   legacy_registered <- DBI::dbGetQuery(con,
     "SELECT count(*) AS n FROM change_log
@@ -1909,7 +1909,7 @@ test_that("R-15.32 (legacy work order): a re-download of a work order whose proj
 test_that("Phase-7b item 1: a row that is BOTH feature- and analyte-pending stamps ONLY the unknown_feature item's uuid_target with the alias uuid; the unknown_analyte item sharing the SAME source_ref is left NA", {
   setup <- commit_test_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   files <- tibble::tibble(hash = setup$hash, filename = basename(setup$path),
                           adapter = "esdat/1", rank = 3L, kept = TRUE)
@@ -1958,7 +1958,7 @@ test_that("Phase-7b item 2: commit_event() returns a guard verdict - blocked = F
   setup <- commit_test_setup(filename = "PROJ_A.ESDAT_XX9990002_0.Chemistry2e.CSV",
                               work_order = "XX9990002", revision = 0L)
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   files0 <- tibble::tibble(hash = setup$hash, filename = basename(setup$path),
                            adapter = "esdat/1", rank = 3L, kept = TRUE)
@@ -2001,7 +2001,7 @@ test_that("Phase-7b item 3: a SECOND commit_event() on an already-blocked (needs
   setup <- commit_test_setup(filename = "PROJ_A.ESDAT_XX9990003_0.Chemistry2e.CSV",
                               work_order = "XX9990003", revision = 0L)
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   files0 <- tibble::tibble(hash = setup$hash, filename = basename(setup$path),
                            adapter = "esdat/1", rank = 3L, kept = TRUE)
@@ -2072,7 +2072,7 @@ test_that("Phase-7b item 3: a SECOND commit_event() on an already-blocked (needs
 test_that("commit-1: a blocked event that ALSO carries an ordinary reconcile review item (e.g. unknown_feature) does not re-insert that item on every retry - only the guard's own find-or-create was deduped, not co-resident review rows", {
   setup <- commit_test_setup(filename = "C1_A0.CSV", work_order = "XY9990070", revision = 0L)
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   files0 <- tibble::tibble(hash = setup$hash, filename = basename(setup$path),
                            adapter = "esdat/1", rank = 3L, kept = TRUE)
@@ -2117,7 +2117,7 @@ test_that("commit-1: a blocked event that ALSO carries an ordinary reconcile rev
 test_that("commit-8: a work_order_reingest guard row's uuid_target is stamped with the blocked work order's project uuid, so review_queue_close() can actually close it - pre-fix, no code path could ever set status = 'resolved' on it", {
   setup <- commit_test_setup(filename = "C8_A0.CSV", work_order = "XY9990080", revision = 0L)
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   files0 <- tibble::tibble(hash = setup$hash, filename = basename(setup$path),
                            adapter = "esdat/1", rank = 3L, kept = TRUE)
@@ -2154,7 +2154,7 @@ test_that("commit-8: a work_order_reingest guard row's uuid_target is stamped wi
 test_that("Phase-7b item 8: a multi-work-order event's guard row counts n_rows_blocked against ONLY the work order it fired for, not every unmatched row across the whole event", {
   setup <- commit_test_setup(filename = "P8_A0.CSV", work_order = "XX9990020", revision = 0L)
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # Seed TWO work orders, each with one existing sample.
   files_a0 <- tibble::tibble(hash = setup$hash, filename = basename(setup$path),
@@ -2226,7 +2226,7 @@ test_that("Phase-7b item 8: a multi-work-order event's guard row counts n_rows_b
 test_that("T1.4: a re-download of an already-loaded work order still blocks under F.10 when the clean row's OWN work_order is NA (a real crosstab/assemble shape, mirroring R/assemble.R:325's 'own, not foreign' NA classification)", {
   setup <- commit_test_setup(filename = "T14_A0.CSV", work_order = "XX9990060", revision = 0L)
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   files_a0 <- tibble::tibble(hash = setup$hash, filename = basename(setup$path),
                              adapter = "esdat/1", rank = 3L, kept = TRUE)
@@ -2259,7 +2259,7 @@ test_that("T1.4: a re-download of an already-loaded work order still blocks unde
 test_that("T1.4: in a genuinely multi-WO event, an NA-work_order clean row is absorbed only by the event's own (home) work order, never by a different work order it was not recorded against", {
   setup <- commit_test_setup(filename = "T14B_A0.CSV", work_order = "XX9990063", revision = 0L)
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # Seed TWO work orders, each already carrying one sample - mirrors the
   # Phase-7b item 8 multi-WO test above.
@@ -2318,7 +2318,7 @@ test_that("Phase-7b round-2 item 1: a same-revision re-download of WO A bundled 
   setup <- commit_test_setup(filename = "PROJ_A.ESDAT_XX9990040_0.Chemistry2e.CSV",
                               work_order = "XX9990040", revision = 0L)
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # ---- seed WO A (XX9990040) at revision 0.
   files_a0 <- tibble::tibble(hash = setup$hash, filename = basename(setup$path),
@@ -2394,7 +2394,7 @@ test_that("Phase-7b round-2 (max/min gap): TWO files of one event carrying DIFFE
   setup <- commit_test_setup(filename = "PROJ_A.ESDAT_XX9990030_1.Chemistry2e.CSV",
                               work_order = "XX9990030", revision = 1L)
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # seed: WO XX9990030 already loaded at revision 1.
   files0 <- tibble::tibble(hash = setup$hash, filename = basename(setup$path),
@@ -2447,7 +2447,7 @@ test_that("Phase-7b round-2 (max/min gap): TWO files of one event carrying DIFFE
 test_that("Phase-7b round-2 item 10: a multi-WO event where BOTH work orders block gets a review row for EACH, not just the first - and each row's typed work_order column names its OWN work order (round-2 item 2)", {
   setup <- commit_test_setup(filename = "P10_A0.CSV", work_order = "XX9990050", revision = 0L)
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # Seed TWO work orders, each with its OWN sample under its OWN project
   # (distinct features so round-2 item 14's cross-WO sample reuse cannot
@@ -2524,7 +2524,7 @@ test_that("Phase-7b round-2 item 10: a multi-WO event where BOTH work orders blo
 test_that("Phase-7b round-2 item 11: .ct_find_or_create_sample() refuses a non-Date sample_date rather than silently storing a non-midnight datetime", {
   setup <- commit_test_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   before_sample <- count_rows(con, "sample")
 
@@ -2548,7 +2548,7 @@ test_that("Phase-7b round-2 item 11: .ct_find_or_create_sample() refuses a non-D
 test_that("Phase-7b round-2 item 13: a second .ct_set_file_states() call with a DIFFERENT reason updates ingest_file.state_reason instead of leaving it stuck on the first block's reason", {
   setup <- commit_test_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   files <- tibble::tibble(hash = setup$hash, filename = basename(setup$path),
                           adapter = "esdat/1", rank = 3L, kept = TRUE)
@@ -2581,7 +2581,7 @@ test_that(".ct_ensure_project(): two calls with a NA (orphan) work_order return 
   dir <- withr::local_tempdir()
   db_path <- seed_db(dir = dir)
   con <- seed_con(db_path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   null_name_count <- function() {
     DBI::dbGetQuery(con, "SELECT count(*) AS n FROM project WHERE name IS NULL")$n
@@ -2606,7 +2606,7 @@ test_that("commit_event(): two DIFFERENT orphan work orders (no work order recor
   db_path <- seed_db(dir = dir)
   con <- seed_con(db_path)
   ensure_test_asset_table(con)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   archive_dir <- withr::local_tempdir()
   withr::local_options(list("sampletidy.archive_dir" = archive_dir))

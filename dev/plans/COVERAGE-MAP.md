@@ -448,9 +448,15 @@ invoked the bareness check at all, which is exactly how that hole survived
 being written. Rule 2 exists because auditing the lint, not running it, is what
 found the second leak class: eleven blocks in `test-ingest.R` wiped
 `ingest_test_setup()`'s cleanups (measured: 3 options left set globally and 47
-temp dirs leaked per file run; 0 and 0 after). 400 pre-existing instances remain
-across 14 other files, recorded in `.ST_RULE2_BASELINE` as a ratchet - see the
-note there for why they are a separate task.
+temp dirs leaked per file run; 0 and 0 after). A further 400 instances across 14
+other files were recorded in `.ST_RULE2_BASELINE` as a ratchet rather than swept
+on the spot, because converting them changes real behaviour - the leaked options
+and temp dirs start actually being cleaned up, and any test that had come to
+depend on the leak would begin failing. **Swept 2026-07-29**, smallest file
+first, each tier run before the next; no fallout materialised. The baseline is
+now `integer(0)`: every file must have zero, and any entry added back is a
+regression being tolerated. Suite-wide after the sweep: no `sampletidy.*` option
+leaks out of a full run, and `test-ingest.R` leaves no temp directory behind.
 
 ### Traceability lint (`tests/testthat/test-coverage-map-lint.R`) - added 2026-07-28
 Not a criterion of any plan - a guard on THIS document. Every test name quoted

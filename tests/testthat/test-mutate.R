@@ -24,7 +24,7 @@ count_change_log <- function(con) {
 test_that("R-9.1: db_append() of 2 rows writes 2 change_log rows with one shared `at` and the actor recorded", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   before <- count_change_log(con)
   # lon/lat added (R-11.17): the live `feature` table declares them DOUBLE NOT
@@ -62,7 +62,7 @@ test_that("R-9.1: db_append() of 2 rows writes 2 change_log rows with one shared
 test_that("R-9.1: db_update() changing 2 fields writes 2 change_log rows with correct old/new", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   before <- count_change_log(con)
   db_update(con, "sample", "s-0001",
@@ -89,7 +89,7 @@ test_that("R-9.1: db_update() changing 2 fields writes 2 change_log rows with co
 test_that("R-9.1: a failing update (bad column) rolls back the change_log too (atomicity)", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   before <- count_change_log(con)
   err <- tryCatch(
@@ -106,7 +106,7 @@ test_that("R-9.1: a failing update (bad column) rolls back the change_log too (a
 test_that("R-9.1: db_delete() removes the row and writes a change_log delete entry", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # lon/lat added (R-11.17 reconciliation - see the db_append test above).
   DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix, lon, lat) VALUES
@@ -126,7 +126,7 @@ test_that("R-9.1: db_delete() removes the row and writes a change_log delete ent
 test_that("PLAN-14 R-14.1/M6a: db_delete() with a composite `key` ANDs every column - it does not over-delete on an OR", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # `analyte_mask` (already on `.st_mutate_allowlist`) has no `uuid` column -
   # it is keyed on (uuid_analyte, variant) - so this is the only allowlisted
@@ -155,7 +155,7 @@ test_that("PLAN-14 R-14.1/M6a: db_delete() with a composite `key` ANDs every col
 test_that("PLAN-14 R-14.1/A32: db_update()/db_delete() abort when a composite `key` matches MORE than one row, leaving both rows and change_log untouched", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # `feature_mask` (already on `.st_mutate_allowlist`) has no `uuid` column
   # and no uniqueness constraint on (uuid_feature, variant) - so two rows can
@@ -492,7 +492,7 @@ test_that("R-9.1: add_feature() inserts a row and a change_log entry", {
   path <- seed_db()
   withr::local_options(list("sampletidy.live_db" = path))
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   before <- count_change_log(con)
 
   # lon/lat added (R-11.17 reconciliation): the fixed add_feature() signature
@@ -513,7 +513,7 @@ test_that("R-9.1: add_analyte() inserts a row and a change_log entry", {
   path <- seed_db()
   withr::local_options(list("sampletidy.live_db" = path))
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   before <- count_change_log(con)
 
   add_analyte(name = "Sulfate", units = "mg/L", type = "anion", CAS = "14808-79-8",
@@ -529,7 +529,7 @@ test_that("R-9.1: add_project() inserts a row and a change_log entry", {
   path <- seed_db()
   withr::local_options(list("sampletidy.live_db" = path))
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   before <- count_change_log(con)
 
   add_project(name = "ZZ0000099", type = "Work order", actor = "tester", reason = "new work order")
@@ -544,7 +544,7 @@ test_that("R-9.1: correct_value() updates the analysis and logs the old value", 
   path <- seed_db()
   withr::local_options(list("sampletidy.live_db" = path))
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   before <- count_change_log(con)
 
   correct_value(uuid_analysis = "an-0001", new_value = 150, reason = "lab reissue", actor = "tester")
@@ -563,7 +563,7 @@ test_that("Phase-8b F13: correct_value() recomputes `quantified` from the new va
   path <- seed_db()
   withr::local_options(list("sampletidy.live_db" = path))
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # below-detection shape: value == rl_low, quantified = FALSE (parse_value()'s
   # own convention for a "<" reading), value_chr NA.
@@ -591,7 +591,7 @@ test_that("Phase-8b F13: correct_value() leaves `quantified` FALSE (and logs no 
   path <- seed_db()
   withr::local_options(list("sampletidy.live_db" = path))
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   db_append(con, "analysis",
             tibble::tibble(uuid = "bdl-2", uuid_sample = "s-0001", uuid_lab = "lm-0002",
@@ -612,7 +612,7 @@ test_that("Phase-8b F13: correct_value() REFUSES a text-observation row (value_c
   path <- seed_db()
   withr::local_options(list("sampletidy.live_db" = path))
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   db_append(con, "analysis",
             tibble::tibble(uuid = "txt-1", uuid_sample = "s-0001", uuid_lab = "lm-0002",
@@ -638,7 +638,7 @@ test_that("Phase-8b F13: correct_value() REFUSES a text-observation row (value_c
 test_that("R-9.1: review_queue() filters by status", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   DBI::dbExecute(con, "INSERT INTO review_queue (uuid, created_at, kind, work_order, status) VALUES
     ('rq-0001', CURRENT_TIMESTAMP, 'unknown_feature', 'XX1234567', 'open'),
@@ -656,7 +656,7 @@ test_that("R-9.1: review_queue() filters by status", {
 test_that("R-9.1: review_queue() has stable columns on a zero-row result", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   empty <- review_queue(con, status = "open")
   expect_equal(nrow(empty), 0)
@@ -667,7 +667,7 @@ test_that("R-9.1: review_queue() has stable columns on a zero-row result", {
 test_that("Phase-7b round-2 item 5b: review_queue() also returns the typed uuid_incoming column (schema ladder version 7) alongside uuid_existing - it was written but not read back", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   DBI::dbExecute(con, "INSERT INTO review_queue
     (uuid, created_at, kind, subkind, status, uuid_existing, uuid_incoming) VALUES
@@ -694,7 +694,7 @@ test_that("R-11.17: add_feature() with lon/lat inserts against the live-shaped D
   path <- seed_db()
   withr::local_options(list("sampletidy.live_db" = path))
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   add_feature(name = "T.NEWCOORD", site = "SiteA", lon = 150.1234, lat = -33.5678,
               virtual = TRUE, actor = "tester", reason = "new monitoring point")
@@ -712,7 +712,7 @@ test_that("R-11.17: add_feature() omitting lon/lat aborts as sampletidy_error at
   path <- seed_db()
   withr::local_options(list("sampletidy.live_db" = path))
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   before <- count_change_log(con)
 
   err <- tryCatch(
@@ -747,7 +747,7 @@ test_that("Phase-8b C4: add_feature() with an empty/whitespace-only name aborts 
   path <- seed_db()
   withr::local_options(list("sampletidy.live_db" = path))
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   before <- count_change_log(con)
 
   err_empty <- tryCatch(
@@ -845,7 +845,7 @@ test_that("R-11.17: .st_test_core_ddl's feature DDL declares `virtual` (A58/A67 
 test_that("R-11.20: db_append() to `feature_alias` succeeds and writes a change_log row (D1 fix)", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   before <- count_change_log(con)
 
   new_alias <- tibble::tibble(
@@ -868,7 +868,7 @@ test_that("R-11.20: db_append() to `feature_alias` succeeds and writes a change_
 test_that("R-11.20: db_append() to a still-non-allowlisted table (e.g. 'guideline') is still refused with sampletidy_error (allowlist regression)", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   before <- count_change_log(con)
 
   df <- tibble::tibble(uuid = "g-0001", name = "some guideline")
@@ -914,7 +914,7 @@ test_that("R-11.20: the pre-existing .st_mutate_allowlist entries are unchanged 
 test_that("R-12.6: db_update() skips the change_log row for a field whose new value equals its current value, logging only the field that actually changed", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   before <- count_change_log(con)
   # s-0001's seeded organisation is already 'ALS' (helper-db.R) - unchanged;
@@ -942,7 +942,7 @@ test_that("R-12.6: db_update() skips the change_log row for a field whose new va
 test_that("R-12.6: db_update() where every field in `changes` is unchanged writes zero change_log rows (degenerate all-unchanged shape)", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   before <- count_change_log(con)
   db_update(con, "sample", "s-0001",
@@ -961,7 +961,7 @@ test_that("R-12.6: db_update() where every field in `changes` is unchanged write
 test_that("R-12.6: db_delete() on a nonexistent uuid aborts sampletidy_error and writes no delete change_log row (A72, pinned Phase-3 D2)", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   before <- count_change_log(con)
   err <- tryCatch(
@@ -996,7 +996,7 @@ test_that("PLAN-11/A32: db_update() logs TIMESTAMP change_log old/new in a singl
 
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # fa-0001's seeded last_seen is TIMESTAMP '2025-01-01 00:00:00' (helper-db.R).
   # 2025-01-01 20:00:00 AEDT (Australia/Sydney, UTC+11 in Jan) = 2025-01-01
@@ -1048,7 +1048,7 @@ test_that("Phase-8b F14: db_update() detects a POSIXct change that differs only 
 
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # A genuinely sub-second fixture (0.1s) - `options(digits.secs)` is a print
   # option only, so it doesn't protect this from getting silently rounded to
@@ -1101,7 +1101,7 @@ test_that("Phase-8b F14: db_update() detects a POSIXct change that differs only 
 test_that("Phase-8b F14: db_update() still skips a no-op re-submit of the SAME sub-second instant (no spurious change_log row)", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   t0 <- as.POSIXct("2025-03-01 10:00:00.100", tz = "UTC")
   db_append(con, "sample",
@@ -1135,7 +1135,7 @@ test_that("R-15.30: add_feature() creates a self alias in the same transaction t
   path <- seed_db()
   withr::local_options(list("sampletidy.live_db" = path))
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   before <- count_change_log(con)
 
   new_uuid <- add_feature(
@@ -1263,7 +1263,7 @@ test_that("Phase-7b round-2 item 10: add_feature() aborts when the name's .rc_fe
   path <- seed_db()
   withr::local_options(list("sampletidy.live_db" = path))
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   add_feature(name = "T.DUPNAME9010", site = "T", lon = 150.9010, lat = -33.9010,
               actor = "tester", reason = "first")
@@ -1310,7 +1310,7 @@ test_that("Phase-7b round-3 T1.5/A1: add_feature() SUCCEEDS over a dangling pend
   path <- seed_db()
   withr::local_options(list("sampletidy.live_db" = path))
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   nm <- "T.BRANDNEW9012"
   key <- .rc_feature_key(nm)
@@ -1350,7 +1350,7 @@ test_that("Phase-7b round-2 item 11: add_feature()'s self alias is NOT stamped c
   path <- seed_db()
   withr::local_options(list("sampletidy.live_db" = path))
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   new_uuid <- add_feature(
     name = "T.NOCONFIRM9011", site = "T", lon = 150.9021, lat = -33.9021,
@@ -1385,7 +1385,7 @@ test_that("Phase-7b round-2 item 11: add_feature()'s self alias is NOT stamped c
 test_that("W-F: db_append() surfaces the real NOT NULL constraint text, not the masked rapi_unregister_df cleanup error", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   DBI::dbExecute(con, "INSERT INTO review_queue (uuid, created_at, kind, status) VALUES
     ('rq-wf-1', CURRENT_TIMESTAMP, 'unknown_feature', 'open')")
@@ -1429,7 +1429,7 @@ test_that("W-F: db_append() surfaces the real NOT NULL constraint text, not the 
 test_that("W-F: db_append() surfaces the real FOREIGN KEY constraint text, not the masked rapi_unregister_df cleanup error", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   before_cand <- DBI::dbGetQuery(con, "SELECT count(*) AS n FROM review_queue_candidate")$n
   before_log <- count_change_log(con)
@@ -1456,7 +1456,7 @@ test_that("W-F: db_append() surfaces the real FOREIGN KEY constraint text, not t
 test_that("W-F: db_append() success path is unaffected by the .st_append_rows() rewrite - rows and change_log provenance still land", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   DBI::dbExecute(con, "INSERT INTO review_queue (uuid, created_at, kind, status) VALUES
     ('rq-wf-3', CURRENT_TIMESTAMP, 'unknown_feature', 'open')")
@@ -1480,7 +1480,7 @@ test_that("W-F: db_append() success path is unaffected by the .st_append_rows() 
 test_that("W-F: db_update() does NOT share the dbAppendTable masking hazard - a constraint violation already surfaces the real text (no code change needed here)", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix, lon, lat) VALUES
     ('f-wf-1', 'T.WF1', 'TestSite', 'surface', 'water', 150.0, -33.0)")

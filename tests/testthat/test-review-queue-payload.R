@@ -198,7 +198,7 @@ P16_REAL_ANALYTE <- "2,2',3,3',4,4'-Hexachlorobiphenyl"
 test_that("R-16.10 property (1/18 - .rc_feature_review, bare/unmatched subkind): feature_raw carrying every hostile byte round-trips through reconcile_event()", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   event <- mk_event(mk_row(source_ref = "r1", feature_raw = P16_HAZARD,
                            lab_sample_id = "XX9999991001",
@@ -212,7 +212,7 @@ test_that("R-16.10 property (1/18 - .rc_feature_review, bare/unmatched subkind):
 test_that("R-16.10 property (1b/18 - .rc_feature_review, STRUCTURAL branch specifically): finding 4 - #1's own header names THIS branch as the round-2 mutant F5 gap, but #1's fixture (bare feature_raw) drives the bare/unmatched branch instead; drive the structural branch itself with a recognised site prefix so diagnostics$point actually carries the hostile bytes", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # 'T' is a recognised site (R-16.11's own fixture); the same hazard string,
   # prefixed with a recognised site token, reaches the STRUCTURAL branch
@@ -231,7 +231,7 @@ test_that("R-16.10 property (1b/18 - .rc_feature_review, STRUCTURAL branch speci
 test_that("R-16.10 property (2/18 - .rc_analyte_review CAS-suggested branch): analyte_raw carrying every hostile byte round-trips, subkind='known_analyte_no_method'", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # No lab_method row for (hazard text, Internal); CAS 16984-48-8 -> a-0002
   # exists (verbatim setup from test-reconcile.R's own R-8.3 CAS-fallback
@@ -249,7 +249,7 @@ test_that("R-16.10 property (2/18 - .rc_analyte_review CAS-suggested branch): an
 test_that("R-16.10 property (3/18 - .rc_analyte_review miss/ambiguous branch): the REAL live-registry analyte name \"2,2',3,3',4,4'-Hexachlorobiphenyl\" round-trips", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   event <- mk_event(mk_row(source_ref = "r1", analyte_raw = P16_REAL_ANALYTE, org = "ALS",
                            cas_number = NA_character_))
@@ -263,7 +263,7 @@ test_that("R-16.10 property (3/18 - .rc_analyte_review miss/ambiguous branch): t
 test_that("R-16.10 property (4/18 - .rc_resolve_units_values, unknown_unit): units_raw carrying every hostile byte round-trips", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   event <- mk_event(mk_row(source_ref = "r1", units_raw = P16_HAZARD))
   out <- reconcile_event(event, con)
@@ -275,7 +275,7 @@ test_that("R-16.10 property (4/18 - .rc_resolve_units_values, unknown_unit): uni
 test_that("R-16.10 property (5/18 - .rc_resolve_datetime, parse_error): sample_datetime_raw carrying every hostile byte round-trips", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   event <- mk_event(mk_row(source_ref = "r1", sample_datetime_raw = P16_HAZARD))
   out <- reconcile_event(event, con)
@@ -298,7 +298,7 @@ test_that("R-16.10 property (6/18 - .rc_method_preference, method_duplicate): NO
   # to confirm that "{}" claim rather than asserting it from the sidelines.
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   event <- mk_event(mk_rows(
     mk_row(source_ref = "r1", lab_sample_id = "XX1234567002", feature_raw = "T.S02",
@@ -317,7 +317,7 @@ test_that("R-16.10 property (6/18 - .rc_method_preference, method_duplicate): NO
 test_that("R-16.10 property (7/18 - .rc_three_way, already_present skip): a text value carrying every hostile byte round-trips as BOTH value_chr_existing and value_chr_incoming", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # A fresh sample/analysis (own work order, not any FIXTURES.md-pinned one)
   # with a TEXT-valued (quantified=NULL) existing result carrying P16_HAZARD.
@@ -348,7 +348,7 @@ test_that("R-16.10 property (7/18 - .rc_three_way, already_present skip): a text
 test_that("R-16.10 property (8/18 - .rc_three_way, value_conflict subkind='measurement'): TWO DISTINCT hostile-byte text values (existing vs incoming) both round-trip", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   DBI::dbExecute(con, "INSERT INTO project (uuid, name, type) VALUES ('p-9801', 'GH9801234', 'Work order')")
   DBI::dbExecute(con, "INSERT INTO \"sample\" (uuid, uuid_feature_alias, uuid_project, date, organisation) VALUES
@@ -378,7 +378,7 @@ test_that("R-16.10 property (8/18 - .rc_three_way, value_conflict subkind='measu
 test_that("R-16.10 property (9/18 - .rc_batch_duplicate): the winner's source_ref, carrying every hostile byte, round-trips as kept_source_ref", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   event <- mk_event(mk_rows(
     mk_row(source_ref = P16_HAZARD, lab_sample_id = "XX1234567002", feature_raw = "T.S02",
@@ -395,7 +395,7 @@ test_that("R-16.10 property (9/18 - .rc_batch_duplicate): the winner's source_re
 test_that("R-16.10 property (11/18 - .fa_merge_samples, subkind='alias_merge'): TWO DISTINCT hostile-byte text values (existing vs incoming) round-trip through confirm_feature_aliases()'s real merge path", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   DBI::dbExecute(con, "INSERT INTO feature_alias
     (uuid, uuid_feature, name, alias_key, kind, n_seen, auto_assign,
@@ -435,7 +435,7 @@ test_that("R-16.10 property (11/18 - .fa_merge_samples, subkind='alias_merge'): 
 test_that("R-16.10 property (12/18 - .am_confirm_one_method, units_drift): TWO DISTINCT hostile-byte historical unit strings both round-trip via confirm_analyte_methods()'s real change_log drift scan", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # lm-0008 is dangling (uuid_analyte NULL, R-11.11 fixture). Two distinct
   # historical `units` values on its change_log -> drift detected.
@@ -461,7 +461,7 @@ test_that("R-16.10 property (12/18 - .am_confirm_one_method, units_drift): TWO D
 test_that("R-16.10 property (13/18 - .am_confirm_one_method, unknown_unit): a hostile-byte units_from string round-trips via confirm_analyte_methods()'s real conversion-failure path", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # lm-0009 is dangling (uuid_analyte NULL, R-11.11 fixture); its recorded
   # `units` is overwritten with the hostile string DIRECTLY - fixture setup
@@ -519,7 +519,7 @@ test_that("R-16.10 property (14/18 - router.R adapter_tie): a hostile-byte adapt
 test_that("R-16.10 property (15/18 - .rc_self_precedence_notes, subkind='self_precedence_note'): feature_raw carrying every hostile byte round-trips - a REAL producer this enumeration omitted entirely (grep: 'self_precedence_note' occurred 0 times in this file before this test)", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # A fresh (site, point) self+historical arm pair sharing ONE alias_key
   # that folds from a hostile-byte feature_raw (R1: the self arm wins over
@@ -553,7 +553,7 @@ test_that("R-16.10 property (15/18 - .rc_self_precedence_notes, subkind='self_pr
 test_that("R-16.10 property (16/18 - .rc_analyte_review, subkind='held'): analyte_raw carrying the hostile PUNCTUATION subset round-trips - a REAL producer this enumeration omitted entirely, added THIS round (grep: 'held' as a subkind oracle occurred 0 times in this file before this test)", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # HELD requires analyte_raw to fold to NOTHING (.rc_method_key strips every
   # non-alnum character; a held row can therefore never carry the FULL
@@ -575,7 +575,7 @@ test_that("R-16.10 property (16/18 - .rc_analyte_review, subkind='held'): analyt
 test_that("R-16.10 property (17/18 - .ct_reingest_guard, kind='work_order_reingest'): NOT DRIVEN WITH HOSTILE-BYTE FREE TEXT IN A DIAGNOSTICS FIELD - `diagnostics$work_order` carries the SAME string as the typed `work_order` column (an identifier, driven through the real production path so the round-trip claim is verified, not merely asserted from the sidelines)", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   wo_hazard <- P16_HAZARD
   DBI::dbExecute(con, "INSERT INTO project (uuid, name, type) VALUES ('p-p16wo', ?, 'Work order')",
@@ -604,7 +604,7 @@ test_that("R-16.10 property (17/18 - .ct_reingest_guard, kind='work_order_reinge
 test_that("R-16.10 property (18/18 - .fa_confirm_one_alias, kind='sample_collision'): NOT DRIVEN WITH HOSTILE BYTES - vacuous like #6, confirmed empirically: this producer's diagnostics carry only internally-generated uuids and a derived date, never the alias's own (potentially hostile) name/alias_key text", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # The alias NAME itself carries hostile bytes, to prove empirically (not
   # merely assert) that they do NOT reach the payload - the same-alias,
@@ -637,7 +637,7 @@ test_that("R-16.10 property (18/18 - .fa_confirm_one_alias, kind='sample_collisi
 test_that("R-16.10 (10/18 - reconcile_event()'s STAGE-0 fold-in of assembly's inline review flags): an analyte/value pair carrying comma, apostrophe, pipe, equals, DOUBLE QUOTE, BACKSLASH, tab, newline and a non-ASCII character round-trips byte-identical through JSON diagnostics, with the RAW STORED TEXT (not just the fromJSON()-parsed value) carrying correct JSON escaping (the criterion the plan exists for - RED against today's k=v payload, and RED again against a serialiser that silently strips the two characters JSON must escape)", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # Comma/apostrophe (original hazard) PLUS the two characters JSON escaping
   # actually has to do work on (" and \\), plus a non-ASCII char - all kept,
@@ -723,7 +723,7 @@ test_that("R-16.10 (shared serialiser, not one of the 18 producer sites): .rq_sk
 test_that("R-16.11: a structural (subkind='structural') review exposes site and point as separate retrievable diagnostics, never glued as an embedded k=v fragment", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # Reuses the proven R-15.1/R-15.2/R-15.3/B.7 fixture verbatim: site 'T'
   # recognised, point 'S88' unmatched -> subkind=structural, site=T, point=S88.
@@ -759,7 +759,7 @@ test_that("R-16.11: a structural (subkind='structural') review exposes site and 
 test_that("R-16.14/R-16.17: already_present's existing_uuid is a real, always-populated column on the SKIP tibble reconcile_event() returns, matching the uuid the retired regex fallback recovers for the same bare-uuid input", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # Exactly the FIXTURES.md pinned "<0.1 mg/L" row - converts to 100 ug/L,
   # matching seeded an-0001 (value 100, quantified FALSE): already_present.
@@ -791,7 +791,7 @@ test_that("R-16.14/R-16.17: already_present's existing_uuid is a real, always-po
 test_that("R-16.17 (unknown_unit): units_raw/analyte/value_raw are separate retrievable diagnostics, not glued k=v text", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   event <- mk_event(mk_row(source_ref = "r1", units_raw = "banana/L"))
   out <- reconcile_event(event, con)
@@ -807,7 +807,7 @@ test_that("R-16.17 (unknown_unit): units_raw/analyte/value_raw are separate retr
 test_that("R-16.17 (parse_error): subkind='datetime' is a real column and sample_datetime_raw is a separate retrievable diagnostic", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   event <- mk_event(mk_row(source_ref = "r1", sample_datetime_raw = "not a date"))
   out <- reconcile_event(event, con)
@@ -824,7 +824,7 @@ test_that("R-16.17 (parse_error): subkind='datetime' is a real column and sample
 test_that("R-16.17 (batch_duplicate): kept_source_ref is a separate retrievable diagnostic, not glued to the loser's own source_ref", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # Reuses the proven R-12.13 within-batch guard fixture verbatim: two
   # identical-key rows, one wins clean, the other -> review batch_duplicate.
@@ -852,7 +852,7 @@ test_that("R-16.17 (batch_duplicate): kept_source_ref is a separate retrievable 
 test_that("R-16.17 (method_duplicate): kept_uuid_lab is a real column on the SKIP tibble reconcile_event() returns", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # Reuses the proven R-8.6 method-preference fixture verbatim: r1 (lm-0002,
   # rl_low 0.1) wins, r2 (lm-0004, rl_low 0.5) loses -> method_duplicate.
@@ -909,7 +909,7 @@ test_that("R-16.18: .rq_row() has no free-text payload argument and rejects a pr
 test_that("R-16.19/R-16.20: both value_conflict producers (.rc subkind='measurement', .fa_merge_samples subkind='alias_merge') populate uuid_existing, and their diagnostics key sets match exactly on the shared subset", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # ---- producer 1: .rc (R/reconcile.R .rc_three_way), subkind='measurement' ----
   # Verbatim copy of the proven "R-8.7: conflict with no recorded revision
@@ -1054,7 +1054,7 @@ test_that("R-16.19/R-16.20: both value_conflict producers (.rc subkind='measurem
 test_that("FB1: a diagnostic near 1e-4 round-trips through the REAL driver byte-identically (jsonlite's default digits = 4 would round it to 0.0001)", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   uuid_written <- review_queue_add(
     con, kind = "value_conflict",
@@ -1073,7 +1073,7 @@ test_that("FB1: a diagnostic near 1e-4 round-trips through the REAL driver byte-
 test_that("FB2: NA_real_/NA_integer_ diagnostics serialise to JSON null and read back as NA (not the string \"NA\")", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   uuid_written <- review_queue_add(
     con, kind = "value_conflict",
@@ -1105,7 +1105,7 @@ test_that("FB2: NA_real_/NA_integer_ diagnostics serialise to JSON null and read
 test_that("FB3: an empty diagnostics list stores the JSON OBJECT \"{}\", never toJSON()'s default JSON ARRAY \"[]\"", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   uuid_written <- review_queue_add(con, kind = "unknown_feature", subkind = "structural")
 
@@ -1128,7 +1128,7 @@ test_that("FA7: .rq_row()/.rq_skip() reject an UNNAMED diagnostics list (a hand-
 test_that("FB4a (pre-write rejection, Phase-7b round-3): .rq_row()'s candidates validation (W1's landed change) rejects an NA element and, separately, an empty-string element BEFORE any DB write - review_queue and review_queue_candidate counts are unchanged either way", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   before_review <- DBI::dbGetQuery(con, "SELECT COUNT(*) AS n FROM review_queue")$n
   before_cand <- DBI::dbGetQuery(con, "SELECT COUNT(*) AS n FROM review_queue_candidate")$n
@@ -1151,7 +1151,7 @@ test_that("FB4a (pre-write rejection, Phase-7b round-3): .rq_row()'s candidates 
 test_that("FB4b (transactional atomicity - FB4's original subject, mechanism updated for W1's stricter constructor): a failing SECOND review_queue_add() call that reaches the real DB insert leaves NO extra review_queue or review_queue_candidate rows behind", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # W1's .rq_row() validation (checkmate::assert_character(any.missing=FALSE,
   # min.chars=1L), landed on BOTH `candidates` and `expired$uuid_feature` -
@@ -1209,7 +1209,7 @@ test_that("FB4b (transactional atomicity - FB4's original subject, mechanism upd
 test_that("FD14/FE4: review_queue()'s public reader returns subkind/uuid_existing/uuid_alias with the correct type and value, for a row written by review_queue_add()", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   uuid_written <- review_queue_add(
     con, kind = "value_conflict", subkind = "measurement",
@@ -1239,7 +1239,7 @@ test_that("FD14/FE4: review_queue()'s public reader returns subkind/uuid_existin
 test_that(".RQ_PLURAL_DIAGNOSTIC_KEYS: every registered plural diagnostics key serialises as a JSON ARRAY at length 1, asserted on the raw stored payload TEXT", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   expect_true(all(c("candidates", "source_ref", "adapters", "units") %in% .RQ_PLURAL_DIAGNOSTIC_KEYS))
 

@@ -106,7 +106,7 @@ mk_event <- function(results, work_order = "XX1234567", orphan = FALSE) {
 run_scenario <- function(event) {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   reconcile_event(event, con)
 }
 
@@ -178,7 +178,7 @@ test_that("FG-3: reconcile_event()'s own `review` tibble carries the candidates 
 test_that("R-16.22/R-16.23: review_queue_candidates() reads back, in rank order, the SAME feature uuids a real production write persisted - .rc_feature_candidates() (real reconcile resolution against the real seeded registry) -> review_queue_add()'s own candidates= argument (the real, already-shipped write path, unedited) -> review_queue_candidate -> review_queue_candidates() (this criterion's new reader)", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   registry <- .rc_load_registry(con)
   cand <- .rc_feature_candidates("T.AMBIG2", as.Date(NA), registry)
@@ -205,7 +205,7 @@ test_that("R-16.22/R-16.23: review_queue_candidates() reads back, in rank order,
 test_that("review_queue_candidates(): an unknown uuid_review returns zero rows, not an error", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   got <- review_queue_candidates(con, "nonexistent-uuid")
   expect_equal(nrow(got), 0)
   expect_named(got, c("rank", "uuid_feature", "kind", "date_start", "date_end"))
@@ -224,7 +224,7 @@ test_that("review_queue_candidates(): an unknown uuid_review returns zero rows, 
 test_that("Phase-7b item 5: review_queue() surfaces uuid_target, the key review_queue_close() requires to find rows to close", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   uuid_review <- review_queue_add(
     con, kind = "unknown_feature", subkind = "ambiguous",
@@ -245,7 +245,7 @@ test_that("Phase-7b item 5: review_queue() surfaces uuid_target, the key review_
 test_that("R-16.24: a review item with neither carrier (no child rows, default '{}' payload) returns zero rows (not an error, not a guess)", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   uuid_review <- review_queue_add(con, kind = "adapter_tie", work_order = "XX1234567")
   got <- review_queue_candidates(con, uuid_review)
   expect_equal(nrow(got), 0)
@@ -254,7 +254,7 @@ test_that("R-16.24: a review item with neither carrier (no child rows, default '
 test_that("R-16.24: a HISTORICAL JSON-carrier row is read back correctly via the fallback path, in the STORED order (not sorted), and the discriminator proves it actually fell back (zero review_queue_candidate rows exist for it)", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # REPOINTED 2026-07-26, AND THIS IS A DELIBERATE REDUCTION IN COVERAGE.
   #
@@ -305,7 +305,7 @@ test_that("R-16.24: a HISTORICAL JSON-carrier row is read back correctly via the
 test_that("R-16.24: a review item carrying candidates in BOTH the child table AND the JSON payload aborts rather than silently pick one carrier", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   uuid_review <- review_queue_add(
     con, kind = "unknown_feature", subkind = "ambiguous", work_order = "XX1234567",
@@ -323,7 +323,7 @@ test_that("R-16.24: a review item carrying candidates in BOTH the child table AN
 test_that("cold-audit fix 1: diag[[\"candidates\"]] is exact-match (never $, which prefix-matches) - a stray candidatesConsidered-only payload key is NOT read as the candidates carrier", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   uuid_review <- review_queue_add(
     con, kind = "adapter_tie", work_order = "XX1234567",
     diagnostics = list(candidatesConsidered = c("f-0004", "f-0005"))
@@ -335,7 +335,7 @@ test_that("cold-audit fix 1: diag[[\"candidates\"]] is exact-match (never $, whi
 test_that("cold-audit fix 1 (both-carriers false-positive guard): a stray candidatesConsidered JSON key alongside REAL child-table candidates does not trip the both-carriers abort", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   uuid_review <- review_queue_add(
     con, kind = "unknown_feature", subkind = "ambiguous", work_order = "XX1234567",
     candidates = c("f-0004", "f-0005"),
@@ -348,7 +348,7 @@ test_that("cold-audit fix 1 (both-carriers false-positive guard): a stray candid
 test_that("cold-audit fix 2: a JSON array of OBJECTS (decodes to a data.frame) is refused with a typed error, not silently deparsed via as.character() into garbage uuid_feature strings", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   payload <- '{"candidates":[{"uuid_feature":"f-0004"},{"uuid_feature":"f-0005"}]}'
   uuid_review <- review_queue_add(
     con, kind = "unknown_feature", subkind = "ambiguous", work_order = "XX1234567",
@@ -360,7 +360,7 @@ test_that("cold-audit fix 2: a JSON array of OBJECTS (decodes to a data.frame) i
 test_that("cold-audit fix 3: a PRESENT but corrupt/truncated JSON payload aborts rather than silently reading back as zero candidates", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   payload <- '{"candidates":["f-0004","f-0005"'
   uuid_review <- review_queue_add(
     con, kind = "unknown_feature", subkind = "ambiguous", work_order = "XX1234567",
@@ -372,7 +372,7 @@ test_that("cold-audit fix 3: a PRESENT but corrupt/truncated JSON payload aborts
 test_that("cold-audit fix 4: a payload decoding to a JSON scalar aborts with a typed sampletidy_error, not base R's '$ operator is invalid for atomic vectors'", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   uuid_review <- review_queue_add(
     con, kind = "unknown_feature", subkind = "ambiguous", work_order = "XX1234567",
     payload = "123"
