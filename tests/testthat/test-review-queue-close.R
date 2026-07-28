@@ -108,7 +108,7 @@ rq_dangling_alias <- function(con, alias_key) {
 test_that("R-15.38: ensure_schema() on a pre-version-5 database adds uuid_target to review_queue; a pre-existing row reads NA on it; a second ensure_schema() call is a no-op (version 5 recorded exactly once)", {
   db_path <- seed_db()
   con <- seed_con(db_path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # Force a genuinely pre-version-5 database - otherwise seed_db()'s own
   # ensure_schema() applies the migration during setup and this test can never
@@ -189,7 +189,7 @@ test_that("R-15.38: ensure_schema() on a pre-version-5 database adds uuid_target
 test_that("R-15.39: committing an event with a pending feature writes a review_queue row whose uuid_target equals the feature_alias.uuid created by that SAME commit - not merely non-NA; a review row that is not a pending-feature row has uuid_target NA", {
   setup <- rq_commit_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   key <- .rc_feature_key("T.RQ-PENDING")
 
   files <- tibble::tibble(hash = setup$hash, filename = basename(setup$src_path),
@@ -250,7 +250,7 @@ test_that("R-15.39: committing an event with a pending feature writes a review_q
 test_that("R-15.40: review_queue_close() closes exactly the matching open row(s) (status -> 'resolved', resolution/resolved_by/resolved_at populated); a SECOND open row with the SAME uuid_target is ALSO closed (n == 2, pinning the docstring's PLURAL claim, item G); a THIRD open row with a DIFFERENT uuid_target is untouched; a second identical call closes zero rows", {
   db_path <- seed_db()
   con <- seed_con(db_path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   target_uuid <- "fa-target-0001"
   other_uuid <- "fa-other-0002"
@@ -323,7 +323,7 @@ test_that("R-15.40: review_queue_close() closes exactly the matching open row(s)
 test_that("Phase 7b item A: review_queue_close(kind =) closes only the matching kind, leaving a DIFFERENT-kind open row on the SAME uuid_target untouched; the plural close still works WITHIN a kind", {
   db_path <- seed_db()
   con <- seed_con(db_path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   target_uuid <- "fa-kindtest-0001"
 
@@ -354,7 +354,7 @@ test_that("Phase 7b item A: review_queue_close(kind =) closes only the matching 
 test_that("Phase 7b item A control: review_queue_close() with an EXPLICIT kind = NULL still closes across all kinds - the escape hatch stays available, but only to a caller that asks for it in so many words", {
   db_path <- seed_db()
   con <- seed_con(db_path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   target_uuid <- "fa-allkinds-0001"
   uuid_x <- review_queue_add(con, kind = "unknown_feature", work_order = "XX1234567",
@@ -473,7 +473,7 @@ test_that("Phase 7b (S6): review_queue_close() writes change_log.actor = resolve
 test_that("R-15.41: review_queue_close() with a NA/missing target, or a target matching no row, closes zero rows and does not error; a row with uuid_target IS NULL is never closed by any call", {
   db_path <- seed_db()
   con <- seed_con(db_path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # A row with NO uuid_target - review_queue_add()'s default (D1's meaning
   # for a non-pending-feature kind, or a pre-migration row).
@@ -537,7 +537,7 @@ test_that("R-15.41: review_queue_close() with a NA/missing target, or a target m
 test_that("R-15.42: end-to-end (F.15 acceptance) - open a review item via commit, confirm its alias via confirm_feature_aliases(), the item is no longer 'open', and an unrelated open item is untouched", {
   setup <- rq_commit_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   key <- .rc_feature_key("T.RQ-E2E")
 
   files <- tibble::tibble(hash = setup$hash, filename = basename(setup$src_path),
@@ -592,7 +592,7 @@ test_that("R-15.43 (PROVISIONAL ORACLE: R-15.43 - see note below): a confirm_fea
   # otherwise commit.
   setup <- rq_commit_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   key <- .rc_feature_key("T.RQ-ABORT")
 
   files <- tibble::tibble(hash = setup$hash, filename = basename(setup$src_path),
@@ -652,7 +652,7 @@ test_that("R-15.43 (transactional arm): when a MULTI-alias confirmation aborts o
   # is a real limit of this arm, recorded rather than papered over.
   setup <- rq_commit_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   key_a <- .rc_feature_key("T.RQ-TXN-A")
   key_b <- .rc_feature_key("T.RQ-TXN-B")
 

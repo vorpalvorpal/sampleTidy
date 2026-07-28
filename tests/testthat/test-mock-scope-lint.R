@@ -204,34 +204,24 @@ test_that("no on.exit() discards a local_mocked_bindings() restore handler regis
   )
 })
 
-# Pre-existing offenders for rule 2, by file, measured 2026-07-28 when the rule
-# was written. This is a RATCHET, not an amnesty: a file not listed here must
-# have zero, a listed file may never grow, and a file that shrinks fails too,
-# demanding the number be lowered. The backlog is 400 sites across 14 files and
-# converting them changes real behaviour (leaked options and temp dirs start
-# being cleaned up, which any test silently relying on the leak would notice),
-# so it is its own task with its own full-suite verification - not something to
-# smuggle into an unrelated fix.
+# The rule-2 ratchet. EMPTY, and that is the finished state: every file must
+# have zero offenders. Any entry added here is a regression being tolerated, so
+# add one only with a reason and a plan to remove it.
 #
-# `test-ingest.R` is deliberately ABSENT: its eleven instances were the ones
-# that motivated this rule and they are fixed (verified: 3 leaked options and
-# 47 leaked temp dirs before, 0 and 0 after).
-.ST_RULE2_BASELINE <- c(
-  "test-reconcile.R" = 168L,
-  "test-commit.R" = 56L,
-  "test-feature-alias.R" = 55L,
-  "test-mutate.R" = 35L,
-  "test-review-queue-payload.R" = 32L,
-  "test-review-queue-candidate.R" = 12L,
-  "test-archive.R" = 11L,
-  "test-review-queue-close.R" = 9L,
-  "test-feature-alias-guards.R" = 8L,
-  "test-e2e-pipeline.R" = 8L,
-  "test-review-queue-commit.R" = 2L,
-  "test-pending.R" = 2L,
-  "test-values.R" = 1L,
-  "test-db-schema.R" = 1L
-)
+# History, because an empty list looks like a rule that never found anything.
+# When this rule was written on 2026-07-28 it found **411 sites across 15
+# files**: the eleven in `test-ingest.R` that motivated it, plus a backlog of
+# 400 across 14 more. The backlog was recorded here rather than swept
+# immediately, because converting it changes real behaviour - the leaked
+# options and temp dirs start actually being cleaned up, and any test that had
+# silently come to depend on the leak would begin failing. Swept in tiers on
+# 2026-07-29, smallest file first, running each tier before starting the next.
+# No fallout materialised in any of the 15 files.
+#
+# Measured on `test-ingest.R` before its fix: 3 `sampletidy.*` options left set
+# GLOBALLY and 47 temp directories surviving one run of that one file. After:
+# 0 and 0.
+.ST_RULE2_BASELINE <- integer(0)
 
 test_that("no on.exit() discards the withr cleanups a setup helper bound to the calling test's frame", {
   files <- .st_lint_source_files()
@@ -276,7 +266,12 @@ test_that("no on.exit() discards the withr cleanups a setup helper bound to the 
 
   # Compare against the ratchet on the union of both key sets, so a brand-new
   # offending file and a fully-cleaned baseline file are both caught.
-  all_files <- union(names(counts), names(.ST_RULE2_BASELINE))
+  # as.character() because `names()` of an EMPTY named vector is NULL, and
+  # `union(NULL, NULL)` is NULL rather than character(0) - so in the fully-clean
+  # state (the one this rule is trying to reach) both verdicts below came back
+  # NULL and failed against character(0). The success case was the last one to
+  # be exercised, which is exactly when that shows up.
+  all_files <- as.character(union(names(counts), names(.ST_RULE2_BASELINE)))
   # `[[` on a named ATOMIC vector throws "subscript out of bounds" for a name
   # it does not hold - it does not return NULL the way a list does. Looking a
   # count up that way would therefore ERROR on exactly the two cases this

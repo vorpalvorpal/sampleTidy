@@ -126,7 +126,7 @@ mk_collision_fixture <- function(con) {
 test_that("R-11.10: an unconfirmed dangling sample is invisible to the feature-joined join, resurfaces after confirmation, kind pending->transcription_error, auto_assign flips TRUE (before/after pin)", {
   setup <- fa_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # Before: fa-0010 dangling, its sample/analysis (s-0003/an-0003) invisible.
   before_alias <- feature_alias_row(con, "fa-0010")
@@ -149,7 +149,7 @@ test_that("R-11.10: an unconfirmed dangling sample is invisible to the feature-j
 test_that("R-11.10: confirming the same alias to the same feature twice is idempotent (no duplicate alias row, no row-count change on the second call)", {
   setup <- fa_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   confirm_feature_aliases("fa-0010", "f-0002", confirmed_by = "alice")
   before <- all_counts(con)
@@ -164,7 +164,7 @@ test_that("R-11.10: confirming the same alias to the same feature twice is idemp
 test_that("R-11.10 (C15): a non-'pending' kind (descriptive) is left untouched by confirmation; auto_assign still flips TRUE and confirmed_by is still recorded", {
   setup <- fa_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # fa-0009: kind = 'descriptive', already resolved to f-0003, auto_assign FALSE.
   before <- feature_alias_row(con, "fa-0009")
@@ -182,7 +182,7 @@ test_that("R-11.10 (C15): a non-'pending' kind (descriptive) is left untouched b
 test_that("R-11.10 (C15): a non-'pending' kind (historical_code) is likewise left untouched by confirmation", {
   setup <- fa_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   confirm_feature_aliases("fa-0008", "f-0007", confirmed_by = "alice")
 
@@ -193,7 +193,7 @@ test_that("R-11.10 (C15): a non-'pending' kind (historical_code) is likewise lef
 test_that("R-11.10: confirming to a DIFFERENT feature than an existing confirmed_by row is an error, not a silent second row", {
   setup <- fa_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   confirm_feature_aliases("fa-0010", "f-0002", confirmed_by = "alice")
   before <- feature_alias_row(con, "fa-0010")
@@ -211,7 +211,7 @@ test_that("R-11.10: confirming to a DIFFERENT feature than an existing confirmed
 test_that("R-11.10: the ambiguity nuance - confirming one alias of a genuinely ambiguous key does not stop future ambiguity", {
   setup <- fa_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # fa-0005/fa-0006 both carry alias_key 't.ambig2' (the fixture's own literal
   # - see helper-db.R; this is `.rc_feature_key("T.AMBIG2")` = the migration's
@@ -242,7 +242,7 @@ test_that("R-11.10: the ambiguity nuance - confirming one alias of a genuinely a
 test_that("R-11.10 (D5): a collision with override = FALSE aborts, class sampletidy_error, naming the colliding (feature, date) and sample uuids, and writes NOTHING (throw-after-partial-write pin: every table's row count unchanged)", {
   setup <- fa_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   mk_collision_fixture(con)
 
   # fa-9001 -> f-0002 resolves cleanly first (no prior sample at f-0002 on
@@ -272,7 +272,7 @@ test_that("R-11.10 (D5): a collision with override = FALSE aborts, class samplet
 test_that("R-11.10 (D5, cold review C14): override = TRUE merges a collision - winner is the pre-existing sample (not reached via the confirmed alias); loser's differing organisation/person are discarded AND logged as a provenance change_log row; equal-value duplicate analysis is dropped (already_present semantics); different-value duplicate is RE-POINTED onto the winner (never orphaned) and opens value_conflict WITHOUT overwriting the winner's existing value; the emptied loser sample is deleted only after its analyses moved", {
   setup <- fa_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   mk_collision_fixture(con)
 
   confirm_feature_aliases("fa-9001", "f-0002", confirmed_by = "alice")
@@ -359,7 +359,7 @@ mk_self_collision_fixture <- function(con) {
 test_that("Phase-7b item 3 (D5, RULED BY ROBIN): two samples on the SAME dangling alias landing on one (feature, date) do NOT abort - the confirmation proceeds and a review item is opened, with no winner picked", {
   setup <- fa_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   mk_self_collision_fixture(con)
 
   before_review <- count_rows(con, "review_queue")
@@ -403,7 +403,7 @@ test_that("Phase-7b item 3 (D5, RULED BY ROBIN): two samples on the SAME danglin
 test_that("Phase-7b round-2 item 2: confirming the SAME alias to the SAME feature a second (and third, override = TRUE) time is idempotent even when that alias carries two same-date samples - a self-collision must never re-surface as a cross-alias collision against itself", {
   setup <- fa_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   mk_self_collision_fixture(con)
 
   n_sample_collisions <- function() {
@@ -455,7 +455,7 @@ test_that("Phase-7b round-2 item 2: confirming the SAME alias to the SAME featur
 test_that("R-11.10 (A55): confirmed_by is mandatory and must not default", {
   setup <- fa_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   expect_error(confirm_feature_aliases("fa-0010", "f-0002"))
 })
@@ -463,7 +463,7 @@ test_that("R-11.10 (A55): confirmed_by is mandatory and must not default", {
 test_that("R-11.10: a NULL/NA uuid_feature is rejected (feature must exist), not coerced into a spurious link (nullable-key safety)", {
   setup <- fa_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   expect_error(
     confirm_feature_aliases("fa-0010", NA_character_, confirmed_by = "alice"),
@@ -476,7 +476,7 @@ test_that("R-11.10: a NULL/NA uuid_feature is rejected (feature must exist), not
 test_that("R-11.10: a nonexistent uuid_alias errors before writing anything", {
   setup <- fa_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   before <- all_counts(con)
   expect_error(
@@ -491,7 +491,7 @@ test_that("R-11.10: a nonexistent uuid_alias errors before writing anything", {
 test_that("R-11.10: vectorised over uuid_alias/uuid_feature - one call confirms two independent pairs and returns invisible(tibble(uuid_alias, uuid_feature, n_samples, action))", {
   setup <- fa_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # a second, independent dangling alias with its own referencing sample.
   DBI::dbExecute(con, "INSERT INTO feature_alias
@@ -524,7 +524,7 @@ test_that("R-11.10: vectorised over uuid_alias/uuid_feature - one call confirms 
 test_that("R-11.10: an empty uuid_alias/uuid_feature vector is a no-op that writes nothing and returns a zero-row tibble (degenerate empty shape)", {
   setup <- fa_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   before <- all_counts(con)
   result <- confirm_feature_aliases(character(0), character(0), confirmed_by = "alice")
@@ -535,7 +535,7 @@ test_that("R-11.10: an empty uuid_alias/uuid_feature vector is a no-op that writ
 test_that("R-11.10: mismatched uuid_alias/uuid_feature vector lengths error (malformed bulk input, not silently recycled)", {
   setup <- fa_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   expect_error(
     confirm_feature_aliases(c("fa-0010", "fa-0009"), "f-0002", confirmed_by = "alice"),
@@ -550,7 +550,7 @@ test_that("R-11.10: mismatched uuid_alias/uuid_feature vector lengths error (mal
 test_that("R-11.11: a dangling analyte is invisible to the analyte-joined join, resurfaces after confirmation, and its value is converted from lab_method.units (pinned mu S/cm -> mS/cm, 965 -> 0.965, A44 EC conversion) - is idempotent on a second call", {
   setup <- fa_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   before_visible <- analyte_joined_analyses(con)
   expect_false("an-0002" %in% before_visible$analysis_uuid)
@@ -585,7 +585,7 @@ test_that("Phase-8b regression (F01/F03/H): three consecutive confirm_analyte_me
   # re-multiply on every re-run (500 -> 5e5 -> 5e8).
   setup <- fa_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   DBI::dbExecute(con, "INSERT INTO \"sample\"
     (uuid, uuid_feature_alias, uuid_project, date, datetime, organisation) VALUES
@@ -628,7 +628,7 @@ test_that("Phase-8b regression (F01/F03/H): three consecutive confirm_analyte_me
 test_that("Phase-8b regression (F02): a lab_method with NULL units is treated at least as conservatively as 'n/a'/'-' - value left alone, an unknown_unit review is opened, and n_converted is honestly 0 (not a false 1) - the value must not be silently republished as if it were canonical", {
   setup <- fa_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # lm-0008 ships with units = 'uS/cm'; NULL it out to reproduce the
   # ordinary-ESdat shape (an empty Result_Unit column - R/commit.R:722-727
@@ -716,7 +716,7 @@ test_that("Phase-8b regression (F01 e2e): an ordinary ESdat non-detect ingested 
 test_that("R-11.11: an unconvertible unit does not corrupt the value and opens an unknown_unit review item", {
   setup <- fa_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   DBI::dbExecute(con, "INSERT INTO lab_method
     (uuid, uuid_analyte, name, method, organisation, rl_low, units, conversion_constant) VALUES
@@ -749,7 +749,7 @@ test_that("R-11.11 (D7/A63): a method seen with two different units surfaces the
   # real implementation before trusting them.
   setup <- fa_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # lm-0009 is dangling, currently recorded units 'mg/L' (paired with
   # an-0004, value 12). Simulate a second commit having seen 'g/L' for the
@@ -788,7 +788,7 @@ test_that("R-11.11 (D7/A63): a method seen with two different units surfaces the
 test_that("R-11.11 (A63): a resolved (non-drifting) row is still converted exactly as today - all existing conversion behaviour stays green (conversion_constant, R-8.4-equivalent)", {
   setup <- fa_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # lm-0012 is ALREADY resolved (uuid_analyte = a-0002) with
   # conversion_constant 2.0 - not a confirm-API fixture on its own, but this
@@ -806,7 +806,7 @@ test_that("R-11.11 (A63): a resolved (non-drifting) row is still converted exact
 test_that("R-11.11: after confirmation, the same incoming analyte auto-resolves (uuid_analyte set, no longer dangling) - no fresh review item is opened by the confirming call itself", {
   setup <- fa_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   before_open <- count_rows(con, "review_queue")
   confirm_analyte_methods("lm-0008", "a-0003", confirmed_by = "alice")
@@ -820,7 +820,7 @@ test_that("R-11.11: after confirmation, the same incoming analyte auto-resolves 
 test_that("R-11.11 (A55): confirmed_by is mandatory and must not default", {
   setup <- fa_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   expect_error(confirm_analyte_methods("lm-0008", "a-0003"))
 })
@@ -828,7 +828,7 @@ test_that("R-11.11 (A55): confirmed_by is mandatory and must not default", {
 test_that("R-11.11: a NULL/NA uuid_analyte is rejected, not coerced into a spurious link (nullable-key safety)", {
   setup <- fa_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   expect_error(
     confirm_analyte_methods("lm-0008", NA_character_, confirmed_by = "alice"),
@@ -841,7 +841,7 @@ test_that("R-11.11: a NULL/NA uuid_analyte is rejected, not coerced into a spuri
 test_that("R-11.11: a nonexistent uuid_lab errors before writing anything", {
   setup <- fa_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   before <- all_counts(con)
   expect_error(
@@ -854,7 +854,7 @@ test_that("R-11.11: a nonexistent uuid_lab errors before writing anything", {
 test_that("R-11.11: an empty uuid_lab/uuid_analyte vector is a no-op that writes nothing and returns a zero-row tibble (degenerate empty shape)", {
   setup <- fa_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   before <- all_counts(con)
   result <- confirm_analyte_methods(character(0), character(0), confirmed_by = "alice")
@@ -865,7 +865,7 @@ test_that("R-11.11: an empty uuid_lab/uuid_analyte vector is a no-op that writes
 test_that("R-11.11: vectorised over uuid_lab/uuid_analyte - one call confirms two independent methods and returns invisible(tibble(uuid_lab, uuid_analyte, n_analyses, n_converted, action))", {
   setup <- fa_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   vis <- withVisible(confirm_analyte_methods(
     c("lm-0008", "lm-0009"), c("a-0003", "a-0002"), confirmed_by = "alice"
@@ -908,7 +908,7 @@ test_that("Phase-7b item 7: .fa_check_kind() on a typo'd kind aborts with class 
 test_that("Phase-7b item 7: the same typo'd kind, reached through the public confirm_feature_aliases() entry point, also aborts sampletidy_error - not just the internal helper in isolation", {
   setup <- fa_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   expect_error(
     confirm_feature_aliases("fa-0010", "f-0002", confirmed_by = "alice", kind = "histrical_code"),
@@ -924,7 +924,7 @@ test_that("Phase-7b item 7: the same typo'd kind, reached through the public con
 test_that("R-15.37: confirming an identity-mapped pending alias (alias_key == lower(feature.name)) flips the EXISTING self arm rather than minting a duplicate row, and the self arm carries confirmed_by; a genuine non-identity alias is NOT defaulted to transcription_error", {
   setup <- fa_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # fa-9601 is the feature's own pre-existing 'self' arm (alias_key ==
   # lower(f-9601.name)); fa-9602 is a SEPARATE pending row that arrived
@@ -1038,7 +1038,7 @@ test_that("R-15.37: confirming an identity-mapped pending alias (alias_key == lo
 test_that("Phase-7b round-2 item 4: an identity confirmation is recognised even when the feature's own name carries a non-breaking space .rc_feature_key() trims but plain tolower() does not - flips the existing self arm rather than minting a mislabelled duplicate", {
   setup <- fa_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   nbsp_name <- "Z.NBSPTEST01 " # trailing NBSP - .rc_feature_key() trims it, tolower() does not
   key <- .rc_feature_key(nbsp_name)
@@ -1077,7 +1077,7 @@ test_that("Phase-7b round-2 item 4: an identity confirmation is recognised even 
 test_that("Phase-7b round-2 item 4: .fa_identity_duplicates()/merge_identity_aliases() find and merge a pre-existing identity duplicate even when the feature's own name carries a non-breaking space (SQL lower() would miss it; the R-side .rc_feature_key() match does not)", {
   setup <- fa_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   nbsp_name <- "Z.NBSPTEST02 "
   key <- .rc_feature_key(nbsp_name)
@@ -1111,7 +1111,7 @@ test_that("Phase-7b round-2 item 4: .fa_identity_duplicates()/merge_identity_ali
 test_that("Phase-7b item 6: bounding a 'self' arm aborts - own-name reachability (R1) is unconditional and a bound cannot be silently attached to it", {
   setup <- fa_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix, lon, lat) VALUES
     ('f-9801', 'Z.SELFBOUND01', 'Z', 'surface', 'water', 150.9801, -33.9801)")
@@ -1193,7 +1193,7 @@ test_that("Phase-7b item 6: bounding a 'self' arm aborts - own-name reachability
 test_that("Phase-7b round-2 M1 coverage gap: an identity mapping BECOMING a feature's self arm for the FIRST TIME (no pre-existing self arm at all) with a bound aborts - R1's guard must fire on `is_identity` alone, not only via an already-resolved `self_arm`", {
   setup <- fa_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # f-9820 has NO self arm yet at all - fa-9820 is a still-pending identity
   # mapping (alias_key == .rc_feature_key(feature name)) that would become
@@ -1225,7 +1225,7 @@ test_that("Phase-7b round-2 M1 coverage gap: an identity mapping BECOMING a feat
 test_that("Phase-7b round-3 A2: the BOUNDS-ONLY R1 guard must also fire on a mislabelled arm that IS the feature's own name (identity), not only on kind == 'self' - own-name reachability must not go 1 -> 0", {
   setup <- fa_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # The ONLY arm carrying the feature's own name, mislabelled
   # 'transcription_error' (the pre-F.19 registry shape merge_identity_
@@ -1264,7 +1264,7 @@ test_that("Phase-7b round-3 A2: the BOUNDS-ONLY R1 guard must also fire on a mis
 test_that("Phase-7b round-2 M4 coverage gap: re-confirming a row that IS ALREADY its own feature's self arm (no kind, no bound - a plain idempotent re-confirm) never deletes it", {
   setup <- fa_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # fa-9830 IS f-9830's self arm already. `arms` (the query at
   # `.fa_confirm_one_alias()`'s identity check) finds ITSELF here. Under the
@@ -1293,7 +1293,7 @@ test_that("Phase-7b round-2 M4 coverage gap: re-confirming a row that IS ALREADY
 test_that("Phase-7b round-3 A11: an open sample_collision row on a redundant identity arm is re-keyed onto the surviving self arm before the F.19 post-pass deletes it, not left orphaned", {
   setup <- fa_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   DBI::dbExecute(con, "INSERT INTO feature (uuid,name,site,flow,matrix,lon,lat) VALUES
     ('f-9850','Z.ORPH9850','Z','surface','water',150.9850,-33.9850)")
@@ -1468,7 +1468,7 @@ fa_e8_setup <- function() {
 test_that("R-15.44 (E.8): merges a duplicate identity arm into its self arm, deletes the duplicate, repoints its sample, and leaves the feature's sample count unchanged across the merge", {
   setup <- fa_e8_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   before_n <- DBI::dbGetQuery(con,
     "SELECT count(*) AS n FROM \"sample\" s JOIN feature_alias fa ON fa.uuid = s.uuid_feature_alias
@@ -1548,7 +1548,7 @@ test_that("R-15.44 (E.8): dry_run = TRUE leaves both alias rows AND the sample p
   # implementation that deletes and repoints REGARDLESS of dry_run passed.
   setup <- fa_e8_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   before_rows <- DBI::dbGetQuery(con,
     "SELECT * FROM feature_alias WHERE alias_key = 'z.e8dup01' ORDER BY uuid")
@@ -1659,7 +1659,7 @@ fa_e8_dup_loser_setup <- function() {
 test_that("Phase-7b item 4: merge_identity_aliases() de-dups on uuid_loser before the loop, so a loser shared by two self arms does not abort mid-way after the first iteration's writes committed", {
   setup <- fa_e8_dup_loser_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   expect_no_error(
     result <- merge_identity_aliases(actor = "phase7b-item4-test")
@@ -1707,7 +1707,7 @@ test_that("Phase-7b item 4: merge_identity_aliases() de-dups on uuid_loser befor
 test_that("R-15.18 (E.4): confirm_feature_aliases() SETS date_start on an unbounded alias, round-tripped as a real DATE (never POSIXct) via the driver", {
   setup <- fa_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   DBI::dbExecute(con, "INSERT INTO feature_alias
     (uuid, uuid_feature, name, alias_key, kind, n_seen, auto_assign,
@@ -1731,7 +1731,7 @@ test_that("R-15.18 (E.4): confirm_feature_aliases() SETS date_start on an unboun
 test_that("R-15.18 (E.4): confirm_feature_aliases() CLEARS an existing date_end via the explicit clear sentinel (as.Date(NA)), distinct from the leave-alone default", {
   setup <- fa_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   DBI::dbExecute(con, "INSERT INTO feature_alias
     (uuid, uuid_feature, name, alias_key, kind, n_seen, auto_assign,
@@ -1756,7 +1756,7 @@ test_that("R-15.18 (E.4): confirm_feature_aliases() CLEARS an existing date_end 
 test_that("R-15.18 (E.4): confirm_feature_aliases() LEAVES an existing date_start bound untouched when explicitly passed the leave-alone default (NULL) - a re-confirm must not silently wipe a bound", {
   setup <- fa_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   DBI::dbExecute(con, "INSERT INTO feature_alias
     (uuid, uuid_feature, name, alias_key, kind, n_seen, auto_assign,
@@ -1781,7 +1781,7 @@ test_that("R-15.18 (E.4): confirm_feature_aliases() LEAVES an existing date_star
 test_that("R-15.18 (E.4): a bounds-only call works with uuid_feature OMITTED - widens an existing alias's date_start without re-picking a feature, leaving uuid_feature untouched", {
   setup <- fa_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   DBI::dbExecute(con, "INSERT INTO feature_alias
     (uuid, uuid_feature, name, alias_key, kind, n_seen, auto_assign,
@@ -1807,7 +1807,7 @@ test_that("R-15.18 (E.4): a bounds-only call works with uuid_feature OMITTED - w
 test_that("Phase-7b item 1: a bounds-only call on a row with auto_assign = FALSE (a curator veto on a non-'self' arm) does NOT flip auto_assign to TRUE or write confirmed_by - only the bound itself changes", {
   setup <- fa_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # fa-9506: a curated arm with the row already resolved (uuid_feature set)
   # but auto_assign FALSE and confirmed_by NULL - the per-row veto PLAN-15:574
@@ -1839,7 +1839,7 @@ test_that("Phase-7b item 1: a bounds-only call on a row with auto_assign = FALSE
 test_that("R-15.18 (E.4): confirm_feature_aliases() with BOTH date_start and date_end entirely OMITTED leaves BOTH bounds unchanged - the direct guard of the NULL-means-leave-alone half of the sentinel scheme (PCR-4)", {
   setup <- fa_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   DBI::dbExecute(con, "INSERT INTO feature_alias
     (uuid, uuid_feature, name, alias_key, kind, n_seen, auto_assign,
@@ -2005,7 +2005,7 @@ test_that("Phase-8b regression: a bulk confirm where a LATER item aborts does no
   # neither can be undone by a sibling item's failure.
   setup <- fa_fk_tear_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   before_value <- DBI::dbGetQuery(con, "SELECT value FROM analysis WHERE uuid = 'an-9501'")$value[[1]]
   expect_equal(before_value, 5)
@@ -2044,7 +2044,7 @@ test_that("Phase-8b regression: already_confirmed does not infer a conversion ha
   # a later run" instead of a fabricated one.
   setup <- fa_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   DBI::dbExecute(con, "INSERT INTO analyte (uuid, name, units, type, CAS) VALUES
     ('a-9601', 'Late Analyte', 'ug/L', 'metal', NULL)")
@@ -2116,7 +2116,7 @@ test_that("Phase-8b regression: already_confirmed recognizes a link set by the F
 test_that("R-15.34: confirm_analyte_methods() succeeds on a method WITH dependent analyses (real FK chain: analyte <- lab_method <- analysis) - lab_method.uuid_analyte moves AND every dependent analysis still points at the same lab_method", {
   setup <- fa_fk_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   before_lab <- DBI::dbGetQuery(con, "SELECT uuid_analyte FROM lab_method WHERE uuid = 'lm-9401'")
   expect_true(is.na(before_lab$uuid_analyte[[1]]))
@@ -2168,7 +2168,7 @@ test_that("R-11.10/R-11.11/E.8 (A55): the mandatory actor argument carries NO de
 test_that("Phase-8b C2: confirm_feature_aliases() rejects date_start AFTER date_end (an ordinary typo transposing the two arguments), with class sampletidy_error naming both values", {
   setup <- fa_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   err <- tryCatch(
     confirm_feature_aliases(
@@ -2185,7 +2185,7 @@ test_that("Phase-8b C2: confirm_feature_aliases() rejects date_start AFTER date_
 test_that("Phase-8b C2: after a rejected transposed-bounds call, the alias is EXACTLY as it was before - no partial write, no half-confirmed arm (the weaker 'it errors' test would miss a validation that writes then aborts)", {
   setup <- fa_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   before <- feature_alias_row(con, "fa-0010")
 
@@ -2213,7 +2213,7 @@ test_that("Phase-8b C2: after a rejected transposed-bounds call, the alias is EX
 test_that("Phase-8b C2: a bounds-only call (uuid_feature omitted) rejects transposed bounds too, and writes nothing - the check runs once, ahead of the bounds_only branch, so both call shapes are covered", {
   setup <- fa_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   DBI::dbExecute(con, "INSERT INTO feature_alias
     (uuid, uuid_feature, name, alias_key, kind, n_seen, auto_assign,
@@ -2238,7 +2238,7 @@ test_that("Phase-8b C2: a bounds-only call (uuid_feature omitted) rejects transp
 test_that("Phase-8b C2: equal date_start == date_end is a legitimate single-day window and is NOT rejected (deliberately distinct from the transposed case)", {
   setup <- fa_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   expect_no_error(
     confirm_feature_aliases(
@@ -2254,7 +2254,7 @@ test_that("Phase-8b C2: equal date_start == date_end is a legitimate single-day 
 test_that("Phase-8b C2: clearing one bound (as.Date(NA)) while setting the other to a real Date is NOT treated as transposed - an NA side is unbounded, not 'after' or 'before' anything", {
   setup <- fa_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   DBI::dbExecute(con, "INSERT INTO feature_alias
     (uuid, uuid_feature, name, alias_key, kind, n_seen, auto_assign,
@@ -2321,7 +2321,7 @@ test_that("Phase-8b C3: merge_identity_aliases() on a nonexistent db path raises
 test_that("Phase-8b C3: a genuine application-level sampletidy_error (e.g. a nonexistent alias uuid) is re-signalled UNCHANGED - not double-wrapped with a 'Database operation on ... failed' prefix that would bury the real message", {
   setup <- fa_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   err <- tryCatch(
     confirm_feature_aliases("does-not-exist", "f-0002", confirmed_by = "alice"),

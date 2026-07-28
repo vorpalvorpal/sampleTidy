@@ -32,7 +32,7 @@ archive_test_setup <- function() {
 test_that("R-9.3: the archive copy exists and is byte-identical to the source", {
   setup <- archive_test_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   src_dir <- withr::local_tempdir()
   src_path <- file.path(src_dir, "PROJ_A.ESDAT_XX1234567_0.Chemistry2e.CSV")
@@ -52,7 +52,7 @@ test_that("R-9.3: the archive copy exists and is byte-identical to the source", 
 test_that("R-9.3: the asset row fields are correct", {
   setup <- archive_test_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   src_dir <- withr::local_tempdir()
   src_path <- file.path(src_dir, "PROJ_A.ESDAT_XX1234567_0.Chemistry2e.CSV")
@@ -72,7 +72,7 @@ test_that("R-9.3: the asset row fields are correct", {
 test_that("R-9.3: a second call with the same hash creates no second copy or row", {
   setup <- archive_test_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   src_dir <- withr::local_tempdir()
   src_path <- file.path(src_dir, "PROJ_A.ESDAT_XX1234567_0.Chemistry2e.CSV")
@@ -91,7 +91,7 @@ test_that("R-9.3: a second call with the same hash creates no second copy or row
 test_that("R-9.3: the source file is untouched by archiving", {
   setup <- archive_test_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   src_dir <- withr::local_tempdir()
   src_path <- file.path(src_dir, "PROJ_A.ESDAT_XX1234567_0.Chemistry2e.CSV")
@@ -105,7 +105,7 @@ test_that("R-9.3: the source file is untouched by archiving", {
 test_that("R-9.3: the archived asset is visible for ingest_file.uuid_asset to reference", {
   setup <- archive_test_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   src_dir <- withr::local_tempdir()
   src_path <- file.path(src_dir, "PROJ_A.ESDAT_XX1234567_0.Chemistry2e.CSV")
@@ -131,7 +131,7 @@ test_that("R-9.3: the archived asset is visible for ingest_file.uuid_asset to re
 test_that("R-12.4: archive_file() into a non-existent archive_dir aborts sampletidy_error and writes no asset row", {
   setup <- archive_test_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # Point archive_dir at a path that is never created (no mkdir) - file.copy()
   # into it must fail, and that failure must be checked (R-12.4), not silently
@@ -157,7 +157,7 @@ test_that("R-12.4: archive_file() into a non-existent archive_dir aborts samplet
 test_that("R-12.17: archive_file() writes <archive_dir>/<uuid>/<original filename>, byte-identical to the source", {
   setup <- archive_test_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   src_dir <- withr::local_tempdir()
   src_path <- file.path(src_dir, "PROJ_A.ESDAT_XX1234567_0.Chemistry2e.CSV")
@@ -180,7 +180,7 @@ test_that("R-12.17: archive_file() writes <archive_dir>/<uuid>/<original filenam
 test_that("R-12.17: a pre-existing legacy extensionless <uuid> file in archive_dir is left untouched", {
   setup <- archive_test_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # A pre-existing (read-only-history) legacy artifact: one of the 33
   # extensionless files the real archive still has, per A70.
@@ -206,7 +206,7 @@ test_that("R-12.17: a pre-existing legacy extensionless <uuid> file in archive_d
 test_that("Phase-7b round-2 item 6: archive_file()'s `type` argument controls the newly-inserted asset row's type, defaulting to 'Chemical analysis' when omitted (unchanged behaviour for every pre-existing caller)", {
   setup <- archive_test_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   src_dir <- withr::local_tempdir()
 
@@ -245,7 +245,7 @@ test_that("Phase-7b round-2 item 6: archive_file()'s `type` argument controls th
 test_that("archive_file(): an orphan event's asset gets the shared anonymous project's uuid, not NA", {
   setup <- archive_test_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   null_name_count <- function() {
     DBI::dbGetQuery(con, "SELECT count(*) AS n FROM project WHERE name IS NULL")$n
@@ -273,7 +273,7 @@ test_that("archive_file(): an orphan event's asset gets the shared anonymous pro
 test_that("archive_file(): two DIFFERENT orphan events' assets share ONE anonymous project row, not one each", {
   setup <- archive_test_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   null_name_count <- function() {
     DBI::dbGetQuery(con, "SELECT count(*) AS n FROM project WHERE name IS NULL")$n

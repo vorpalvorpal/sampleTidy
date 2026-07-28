@@ -64,7 +64,7 @@ test_that("R-11.12: pending_features()/pending_analytes() have stable columns on
 test_that("R-11.12: pending backlog counts match the dangling rows exactly, including a zero-referenced row", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # A dangling alias/lab_method with NO referencing sample/analysis - proves
   # the reader does not silently drop a zero-count dangling row (e.g. via an
@@ -126,7 +126,7 @@ test_that("R-11.12: pending backlog counts match the dangling rows exactly, incl
 test_that("R-11.12: pending backlog counts reconcile with review_queue() open-item counts", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # Real writer (db-schema.R) + real reader (mutate.R) - a genuine seam, not a
   # hand-rolled stand-in for another module's output. One review item per

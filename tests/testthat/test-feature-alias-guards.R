@@ -148,7 +148,7 @@ test_that("Phase-8b pin (guard 1c): confirm_feature_aliases() rejects a TRANSPOS
 test_that("Phase-7 pin (guard 2a): confirm_analyte_methods() aborts on an interrupted-run torn change_log (kills a disabled .fa_torn_guard())", {
   setup <- fag_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   fag_seed_unpaired_detach(con, tbl = "lab_method", field = "uuid_analyte")
 
   expect_error(
@@ -160,7 +160,7 @@ test_that("Phase-7 pin (guard 2a): confirm_analyte_methods() aborts on an interr
 test_that("Phase-7 pin (guard 2b): confirm_feature_aliases() - the call shape the F.19 identity post-pass runs under - aborts on an interrupted-run torn change_log (kills a disabled .fa_torn_guard())", {
   setup <- fag_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   fag_seed_unpaired_detach(con, tbl = "sample", field = "uuid_feature_alias")
 
   # fa-0002 -> f-0002 is an identity mapping (alias_key == lower(feature.name)):
@@ -177,7 +177,7 @@ test_that("Phase-7 pin (guard 2b): confirm_feature_aliases() - the call shape th
 test_that("Phase-7 pin (guard 2c): merge_identity_aliases() aborts on an interrupted-run torn change_log (kills a disabled .fa_torn_guard())", {
   setup <- fag_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   fag_seed_unpaired_detach(con, tbl = "sample", field = "uuid_feature_alias")
 
   expect_error(
@@ -201,7 +201,7 @@ test_that("Phase-7 pin (guard 2c): merge_identity_aliases() aborts on an interru
 test_that("Phase-7 pin (guard 2d): confirm_feature_aliases() aborts when a redundant identity arm's samples were already re-pointed off it but the arm itself was never deleted (an interrupted repoint-then-delete run)", {
   setup <- fag_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # A dangling (uuid_feature IS NULL) non-self arm, plus a change_log row
   # recording a COMPLETED repoint of a sample OFF it - exactly the state a
@@ -232,7 +232,7 @@ test_that("Phase-7 pin (guard 2d): confirm_feature_aliases() aborts when a redun
 test_that("Phase-7 pin (guard 2d control): an ordinary UNCONFIRMED pending alias (uuid_feature IS NULL, no repoint trail at all) does NOT trip the new torn-delete check - the guard fires on the change_log trail, not merely on a dangling arm", {
   setup <- fag_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   expect_no_error(
     confirm_feature_aliases("fa-0010", "f-0002", confirmed_by = "alice", db = setup$path)
@@ -252,7 +252,7 @@ test_that("Phase-7b round-3 A5 regression guard: an E.8-shaped torn trail (a mer
   # catch a FUTURE "widen the predicate to also catch E.8" mistake.
   setup <- fag_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix, lon, lat) VALUES
     ('f-torn-e8', 'Z.TORNE8A5', 'Z', 'surface', 'water', 150.9860, -33.9860)")
@@ -313,7 +313,7 @@ test_that("Phase-7 pin (guard 3): confirm_feature_aliases() rejects an out-of-vo
 test_that("Phase-7 pin (guard 4a): confirm_feature_aliases() rejects kind on a bounds-only call (uuid_feature omitted) (kills a disabled kind-on-bounds-only check)", {
   setup <- fag_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   expect_error(
     confirm_feature_aliases(
@@ -327,7 +327,7 @@ test_that("Phase-7 pin (guard 4a): confirm_feature_aliases() rejects kind on a b
 test_that("Phase-7 pin (guard 4b): confirm_feature_aliases() rejects kind alongside an identity confirmation - an error, not a silent override (kills a disabled kind-on-identity check)", {
   setup <- fag_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # fa-0002's alias_key 't.s02' == lower(feature 'T.S02'.name): an identity
   # mapping onto its own feature - 'self' by construction (F.19).

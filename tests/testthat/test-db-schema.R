@@ -1299,7 +1299,7 @@ test_that("Phase 7b item D: ensure_schema() called inside an open db_transaction
 test_that("B-16.api: a child-row insert failing AFTER a valid parent insert rolls the parent back (true cross-statement atomicity)", {
   path <- seed_db()
   con <- seed_con(path)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # Fault injection at the schema, not the input: the parent statement stays
   # entirely valid, and only the child statement can fail. This is the one

@@ -253,7 +253,7 @@ test_that("F15 end-to-end: '<0.01 mg/L' through ingest_dir() opens a review item
   suppressMessages(ingest_dir(input_dir, db = db_path))
 
   con <- DBI::dbConnect(duckdb::duckdb(), db_path, read_only = TRUE)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   review <- DBI::dbGetQuery(
     con, "SELECT kind, subkind, payload FROM review_queue WHERE kind = 'parse_error'"

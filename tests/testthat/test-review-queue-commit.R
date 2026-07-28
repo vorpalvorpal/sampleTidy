@@ -107,7 +107,7 @@ dangling_alias_row <- function(con, alias_key) {
 test_that("R-16.15: two applications of .ct_rewrite_review_payloads() leave review_queue.uuid_alias identical to what one application produces (an UPDATE is idempotent; the old string-append was not)", {
   setup <- commit_test_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # This test pins the REWRITE STEP's own idempotence, not materialisation
   # (that is R-11.8's job, covered elsewhere) - clean claims an alias already
@@ -149,7 +149,7 @@ test_that("R-16.15: two applications of .ct_rewrite_review_payloads() leave revi
 test_that("R-16.21: after the commit-time alias rewrite, uuid_alias holds the uuid AND the JSON payload remainder carries no alias_uuid key (real seam: commit_event() drives .ct_rewrite_review_payloads() for real)", {
   setup <- commit_test_setup()
   con <- setup$con
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   key <- .rc_feature_key("T.NEEDS-REVIEW-ALIAS-16")
 
   files <- tibble::tibble(hash = setup$hash, filename = basename(setup$path),
