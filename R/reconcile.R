@@ -1731,6 +1731,27 @@
   list(kept = rows[keep, , drop = FALSE], skipped = skipped)
 }
 
+# ---- R-11.18/A62 & R-12.13: shared sampling-event identity -----------------
+
+#' TRUE only when two sampling-event instants PROVE the events are distinct:
+#' both known and unequal. Robin's ruling (2026-07): same point, same date,
+#' DIFFERENT datetime is rare but real - two genuine sampling events, neither
+#' a duplicate of the other; same point, same datetime is the same event.
+#' A missing datetime on either side (a date-only source row) proves nothing
+#' either way and is deliberately treated as NOT distinct - never fabricate a
+#' second event from ambiguous timing, and never silently merge two rows a
+#' human hasn't compared.
+#'
+#' Shared by `.rc_find_existing()` (incoming row vs a committed DB candidate,
+#' across ingests) and `.rc_batch_duplicate()` (incoming row vs a sibling row
+#' already accepted in this batch) so both duplicate paths answer the same
+#' question the same way.
+#' @keywords internal
+#' @noRd
+.rc_provably_distinct_datetime <- function(a, b) {
+  !is.na(a) & !is.na(b) & as.numeric(a) != as.numeric(b)
+}
+
 # ---- R-8.7/R-11.7: three-way outcome vs DB ---------------------------------
 
 #' Find an existing `analysis` row matching this measurement (R-11.7; A11/A45).
@@ -1800,9 +1821,7 @@
   # warning; equality of instants is tz-independent.
   inc_dt <- as.numeric(sample_datetime)
   cand_dt <- as.numeric(cand$s_datetime)
-  create_new <- !is.na(inc_dt) &&
-    all(!is.na(cand_dt)) &&
-    !any(cand_dt == inc_dt)
+  create_new <- all(.rc_provably_distinct_datetime(inc_dt, cand_dt))
   if (create_new) return(NULL)
 
   if (!is.na(inc_dt)) {
@@ -1987,6 +2006,17 @@
 #' pipeline records the question, never invents the answer by silently
 #' picking one of two uncompared rows a human has not seen).
 #'
+#' `(uuid_feature_alias, sample_date, uuid_analyte, uuid_lab)` groups rows to
+#' the same CALENDAR DAY, but same-day siblings are not automatically the
+#' same sampling event: within a group, a row only counts as a duplicate of
+#' an existing cluster representative when it is NOT provably a distinct
+#' event from it (`.rc_provably_distinct_datetime()` - same instant, or
+#' either side's time unknown); a row whose datetime is provably distinct
+#' from every representative seen so far starts its OWN cluster and commits
+#' alongside the rest (Robin's ruling: same date, different datetime, is two
+#' real events, not a duplicate). This mirrors `.rc_find_existing()`'s
+#' incoming-vs-committed test so the in-batch and cross-batch guards agree.
+#'
 #' @return `list(kept, review)`.
 #' @keywords internal
 #' @noRd
@@ -2005,15 +2035,25 @@
   for (k in unique(key[eligible])) {
     idx <- which(eligible & key == k)
     if (length(idx) <= 1) next
-    winner <- idx[[1]]
-    losers <- idx[-1]
-    keep[losers] <- FALSE
-    for (li in losers) {
+
+    # `reps` holds one representative row index per distinct sampling event
+    # found so far in this group, in batch order; the first row always opens
+    # the first cluster.
+    reps <- idx[[1]]
+    for (i in idx[-1]) {
+      rep_dt <- rows$sample_datetime[reps]
+      distinct_from_all <- all(.rc_provably_distinct_datetime(rows$sample_datetime[[i]], rep_dt))
+      if (distinct_from_all) {
+        reps <- c(reps, i)
+        next
+      }
+      winner <- reps[!.rc_provably_distinct_datetime(rows$sample_datetime[[i]], rep_dt)][[1]]
+      keep[[i]] <- FALSE
       # PLAN-16 R-16.17: kept_source_ref is a separate retrievable diagnostic,
       # not glued to the loser's own source_ref.
       review_list[[length(review_list) + 1]] <- .rc_review_row(
-        source_ref = rows$source_ref[[li]], kind = "batch_duplicate", n_rows = 1L,
-        source_hash = rows$source_hash[[li]],
+        source_ref = rows$source_ref[[i]], kind = "batch_duplicate", n_rows = 1L,
+        source_hash = rows$source_hash[[i]],
         diagnostics = list(kept_source_ref = rows$source_ref[[winner]])
       )
     }

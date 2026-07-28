@@ -2456,6 +2456,172 @@ test_that("PLAN-16 FF7: a batch_duplicate item's typed source_ref column AND its
 })
 
 # =============================================================================
+# Phase-8b remediation: duplicate identity keys on DATETIME, not DATE
+# (Robin's ruling, 2026-07): same point + same date + DIFFERENT datetime is
+# two real sampling events, never a duplicate; same point + same datetime IS
+# the same event. `.rc_batch_duplicate()` used to key on `sample_date` alone,
+# so two genuinely distinct same-day samplings in one batch were wrongly
+# flagged as `batch_duplicate`. `.rc_find_existing()` already got this right
+# for the cross-ingest case; both now share `.rc_provably_distinct_datetime()`.
+# Four cells, both paths: same point+same datetime; same point+same date,
+# different datetime; different point+same datetime; date-only (no time
+# reported on one or both sides).
+# =============================================================================
+
+test_that("PLAN-8b: in-batch - same point, same date, DIFFERENT datetime - both are distinct sampling events and commit, neither flagged batch_duplicate", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  event <- mk_event(mk_rows(
+    mk_row(source_ref = "morning", lab_sample_id = "XX1234567002", feature_raw = "T.S02",
+           sample_datetime_raw = "20 May 2025 08:00",
+           value_raw = "0.5", value_num = 0.5, below_detection = FALSE, rl = 0.1),
+    mk_row(source_ref = "evening", lab_sample_id = "XX1234567002", feature_raw = "T.S02",
+           sample_datetime_raw = "20 May 2025 16:00",
+           value_raw = "1.9", value_num = 1.9, below_detection = FALSE, rl = 0.1)
+  ))
+  out <- reconcile_event(event, con)
+
+  expect_true("morning" %in% out$clean$source_ref)
+  expect_true("evening" %in% out$clean$source_ref)
+  expect_false(any(out$review$kind == "batch_duplicate"))
+})
+
+test_that("PLAN-8b: in-batch - same point, SAME datetime - the second is still the same sampling event and is flagged batch_duplicate", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  event <- mk_event(mk_rows(
+    mk_row(source_ref = "r1", lab_sample_id = "XX1234567002", feature_raw = "T.S02",
+           sample_datetime_raw = "20 May 2025 08:00",
+           value_raw = "0.5", value_num = 0.5, below_detection = FALSE, rl = 0.1),
+    mk_row(source_ref = "r2", lab_sample_id = "XX1234567002", feature_raw = "T.S02",
+           sample_datetime_raw = "20 May 2025 08:00",
+           value_raw = "0.5", value_num = 0.5, below_detection = FALSE, rl = 0.1)
+  ))
+  out <- reconcile_event(event, con)
+
+  expect_equal(sum(c("r1", "r2") %in% out$clean$source_ref), 1)
+  loser <- setdiff(c("r1", "r2"), out$clean$source_ref)
+  hit <- out$review[out$review$source_ref == loser, ]
+  expect_equal(nrow(hit), 1)
+  expect_identical(hit$kind, "batch_duplicate")
+})
+
+test_that("PLAN-8b: in-batch - DIFFERENT point, same datetime - unaffected, both commit", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  event <- mk_event(mk_rows(
+    mk_row(source_ref = "r1", feature_raw = "T.MW01", lab_sample_id = "XX9999999991",
+           sample_datetime_raw = "20 May 2025 08:00"),
+    mk_row(source_ref = "r2", feature_raw = "T.S02", lab_sample_id = "XX9999999992",
+           sample_datetime_raw = "20 May 2025 08:00")
+  ))
+  out <- reconcile_event(event, con)
+  expect_true("r1" %in% out$clean$source_ref)
+  expect_true("r2" %in% out$clean$source_ref)
+  expect_false(any(out$review$kind == "batch_duplicate" &
+                     out$review$source_ref %in% c("r1", "r2")))
+})
+
+test_that("PLAN-8b: in-batch - same point, same date, BOTH date-only (no time reported) - treated as the SAME event (conservative: a bare date is not proof of two events)", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  event <- mk_event(mk_rows(
+    mk_row(source_ref = "r1", lab_sample_id = "XX1234567002", feature_raw = "T.S02",
+           sample_datetime_raw = "20/05/2025",
+           value_raw = "0.5", value_num = 0.5, below_detection = FALSE, rl = 0.1),
+    mk_row(source_ref = "r2", lab_sample_id = "XX1234567002", feature_raw = "T.S02",
+           sample_datetime_raw = "20/05/2025",
+           value_raw = "0.5", value_num = 0.5, below_detection = FALSE, rl = 0.1)
+  ))
+  out <- reconcile_event(event, con)
+
+  expect_equal(sum(c("r1", "r2") %in% out$clean$source_ref), 1)
+  loser <- setdiff(c("r1", "r2"), out$clean$source_ref)
+  expect_identical(out$review$kind[out$review$source_ref == loser], "batch_duplicate")
+})
+
+test_that("PLAN-8b: in-batch - one date-only row and one timed row, same date - AMBIGUOUS, conservatively flagged batch_duplicate rather than silently committing both", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  event <- mk_event(mk_rows(
+    mk_row(source_ref = "timed", lab_sample_id = "XX1234567002", feature_raw = "T.S02",
+           sample_datetime_raw = "20 May 2025 08:00",
+           value_raw = "0.5", value_num = 0.5, below_detection = FALSE, rl = 0.1),
+    mk_row(source_ref = "dateonly", lab_sample_id = "XX1234567002", feature_raw = "T.S02",
+           sample_datetime_raw = "20/05/2025",
+           value_raw = "0.5", value_num = 0.5, below_detection = FALSE, rl = 0.1)
+  ))
+  out <- reconcile_event(event, con)
+
+  expect_equal(sum(c("timed", "dateonly") %in% out$clean$source_ref), 1)
+  loser <- setdiff(c("timed", "dateonly"), out$clean$source_ref)
+  expect_identical(out$review$kind[out$review$source_ref == loser], "batch_duplicate")
+})
+
+test_that("PLAN-8b: in-batch - THREE rows, same key: two genuinely distinct datetimes plus a duplicate of one of them, in a single batch", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  event <- mk_event(mk_rows(
+    mk_row(source_ref = "r1", lab_sample_id = "XX1234567002", feature_raw = "T.S02",
+           sample_datetime_raw = "20 May 2025 08:00",
+           value_raw = "0.5", value_num = 0.5, below_detection = FALSE, rl = 0.1),
+    mk_row(source_ref = "r2", lab_sample_id = "XX1234567002", feature_raw = "T.S02",
+           sample_datetime_raw = "20 May 2025 16:00",
+           value_raw = "1.9", value_num = 1.9, below_detection = FALSE, rl = 0.1),
+    mk_row(source_ref = "r3", lab_sample_id = "XX1234567002", feature_raw = "T.S02",
+           sample_datetime_raw = "20 May 2025 08:00",
+           value_raw = "0.5", value_num = 0.5, below_detection = FALSE, rl = 0.1)
+  ))
+  out <- reconcile_event(event, con)
+
+  # r1 and r2 are two genuinely distinct sampling events - both commit.
+  expect_true("r1" %in% out$clean$source_ref)
+  expect_true("r2" %in% out$clean$source_ref)
+  # r3 shares r1's exact datetime - it is the duplicate, not r2.
+  expect_false("r3" %in% out$clean$source_ref)
+  hit <- out$review[out$review$source_ref == "r3", ]
+  expect_equal(nrow(hit), 1)
+  expect_identical(hit$kind, "batch_duplicate")
+})
+
+test_that("PLAN-8b: cross-batch - different point, same datetime, does not falsely match an existing sample (already_present) at another feature", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  # T.S02/fa-0002 has no seeded analysis; s-0001's datetime (T.S01) is
+  # 24 May 2025 11:45 Sydney. Same instant, different feature - must commit
+  # clean, never match across features.
+  event <- mk_event(mk_row(source_ref = "r1", feature_raw = "T.S02",
+                           lab_sample_id = "XX1234567002",
+                           sample_datetime_raw = "24 May 2025 11:45"))
+  out <- reconcile_event(event, con)
+  expect_true("r1" %in% out$clean$source_ref)
+  expect_false("r1" %in% out$skipped$source_ref)
+})
+
+test_that("PLAN-8b: cross-batch - same point, both date-only (no time on the incoming row OR the committed candidate), same date - treated as the SAME event (already_present)", {
+  path <- seed_db(); con <- seed_con(path); on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  # T.S02/fa-0002: fresh feature, seed a committed candidate with a NULL
+  # datetime (a historically date-only source row), same date/value/method as
+  # the incoming date-only row.
+  DBI::dbExecute(con, "INSERT INTO \"sample\" (uuid, uuid_feature_alias, uuid_project, date, datetime, organisation) VALUES
+    ('s-dateonly', 'fa-0002', 'p-0001', TIMESTAMP '2025-05-20 00:00:00', NULL, 'ALS')")
+  DBI::dbExecute(con, "INSERT INTO analysis (uuid, uuid_sample, uuid_lab, value, quantified, rl_low) VALUES
+    ('an-dateonly', 's-dateonly', 'lm-0002', 500, TRUE, 0.1)")
+
+  event <- mk_event(mk_row(source_ref = "r1", feature_raw = "T.S02",
+                           lab_sample_id = "XX1234567002",
+                           sample_datetime_raw = "20/05/2025",
+                           value_raw = "0.5", value_num = 0.5, below_detection = FALSE, rl = 0.1))
+  out <- reconcile_event(event, con)
+
+  hit <- out$skipped[out$skipped$source_ref == "r1", ]
+  expect_equal(nrow(hit), 1)
+  expect_identical(hit$reason, "already_present")
+  expect_identical(hit$existing_uuid, "an-dateonly")
+})
+
+# Cross-batch same-point-same-date-DIFFERENT-datetime (new event, not
+# already_present) and cross-batch same-point-SAME-datetime (already_present,
+# never double-committed) are already covered above by the pre-existing
+# R-11.18/A62 tests ("a same feature+date+lab+value measurement at a DISTINCT
+# datetime is a new sampling" / R-8.7 "an identical re-ingest row is
+# already_present") - both paths now share `.rc_provably_distinct_datetime()`
+# with `.rc_batch_duplicate()`, so this file does not re-test them here.
+
+# =============================================================================
 # PLAN-15 Work B - Layer-2 structural (site, point) resolver (PINNED SPEC)
 # PLAN-15 Work C - Layer-3 WO single-site disambiguation (PINNED SPEC)
 #
