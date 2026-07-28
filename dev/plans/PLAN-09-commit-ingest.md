@@ -234,18 +234,63 @@ Monthly Katoomba WMF.pdf`. So the ACIRL guard in `.ig_retain_siblings()` is
 excluded the file first. It is a belt on top of a brace, and its cost is that
 it also blocks any future widening of the gate.
 
-That leaves a **separate, live exposure this criterion does not address**: 137
-ACIRL PDFs are never retained at all, and — because the same token gate also
-narrows the warning (commit-5, round 3) — never *warned about* either. They
-route `quarantined`/`unclaimed` in silence. R-9.11's `quarantine_report()` is
-now the only thing that would surface them. Widening retention to cover them,
-and deciding what they attach to, is a **ruling for Robin**, recorded here
-rather than guessed at.
+That left a separate, live exposure: 137 ACIRL PDFs were never retained at
+all, and — because the same token gate also narrows the warning (commit-5,
+round 3) — never *warned about* either. **Ruled by Robin the same day; see
+R-9.12 below.**
 
-So this rule, as implemented, fixes the case it can demonstrably fix — a
-deliverable carrying **no work-order token at all** (a renamed attachment,
+So this rule covers the token-less name (a renamed attachment,
 `Certificate.pdf`, `scan001.pdf`) in a folder that unambiguously belongs to one
-work order.
+work order, and R-9.12 extends the same machinery to ACIRL.
+
+## R-9.12 ACIRL reports are retained and attached to the ALS work order
+
+**Ruled by Robin, 2026-07-28: "Retain and attach to ALS WO."**
+
+Grounded in the live DB rather than in an assumption about how the labs work.
+Of 124 ACIRL-shaped `asset` rows, **104 are already attached to an
+`ES#######` work-order project**, one report per work order:
+
+```
+2400-7286-01-04 18th January 2023 Special Wednesday Blaxland WMF.pdf -> ES2301817
+2400-7286-01-03 11th January 2023 Special Wednesday Blaxland WMF.pdf -> ES2301026
+2400-7286-02-02 February 2023 Special Wednesday Blaxland WMF.pdf     -> ES2306003
+```
+
+The legacy system already did exactly this. The package had stopped doing it,
+silently.
+
+Two things had to change together, and either alone is inert:
+
+1. **The selection gate.** It required a `_(coa|coc|qc|qci|xtab)` token, and
+   zero of the 272 real ACIRL files carry one. It now also admits the ACIRL
+   `\d{4}-\d{4}` shape. That is still a *positive* shape, so ordinary cruft
+   (`README.md`, `photo.jpg`, `notes.docx`) stays excluded and stays silent —
+   the round-3 commit-5 fix is preserved and separately pinned.
+2. **The ACIRL block in R-9.8's inference**, which would otherwise have refused
+   every file the widened gate admitted. Removed.
+
+**The ACIRL work-order trap is untouched.** We still never parse `2400-*` into
+a work order; `file_meta()$work_order_guess` is still NA for it. The attachment
+comes from the *folder*, which is a different and safer question, and it still
+requires the folder to resolve to exactly one work order.
+
+`asset.type` is `"Chemical analysis"` — the legacy majority (108 of 124; the
+other 16 are `"QA"`, with no discernible rule separating them, so the majority
+wins rather than a new invention).
+
+Criteria:
+- a real-shaped ACIRL report (`2400-7454-05 May 2025 Monthly Katoomba WMF.pdf`,
+  carrying **no** deliverable token) in a folder belonging to one ALS work
+  order is retained, attached to that work order, and typed
+  `"Chemical analysis"`;
+- the same report in a folder resolving to **two** work orders, or to none,
+  stays quarantined and warns — and mints no project row;
+- ordinary cruft is still neither retained nor warned about (the round-3
+  regression guard: widening the gate must not re-open that noise);
+- a `2400-*` name still yields no parsed work order (asserted as a
+  precondition, so the trap cannot be quietly relaxed under cover of this
+  change).
 
 Hence a third guard alongside the exactly-one rule: a file whose name carries
 an **ACIRL-shaped `\d{4}-\d{4}` token** is never inferred onto a folder-mate's

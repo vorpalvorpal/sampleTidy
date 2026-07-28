@@ -1274,19 +1274,34 @@ test_that("Phase-7b round-2 item 5: one unarchivable retained sibling is contain
   expect_identical(coa_state$state[[1]], "quarantined")   # stays put, not silently lost
 })
 
-test_that("Phase-7b round-2 item 7: a non-tabular sibling whose work order cannot be filename-guessed (the ACIRL 2400-* shape) still stays quarantined AND is named in a cli_warn - the residual exposure is not silent", {
+test_that("Phase-7b round-2 item 7 (RE-POINTED R-9.12): an ACIRL deliverable in an AMBIGUOUS folder stays quarantined AND is named in a cli_warn - the residual exposure is not silent", {
   setup <- ingest_test_setup()
   input_dir <- withr::local_tempdir()
   esdat_dir <- testthat::test_path("fixtures", "esdat")
-  wo_files <- list.files(esdat_dir, pattern = "ES2617126", full.names = TRUE)
-  for (f in wo_files) file.copy(f, file.path(input_dir, basename(f)))
 
-  # ACIRL work-order trap shape: no ES####### token anywhere in the filename,
-  # so file_meta()$work_order_guess is NA - refusing to filename-parse this
-  # is CORRECT (see commit.R's ACIRL work-order trap header) and must stay;
-  # this test is about the residual silence, not the refusal itself.
-  acirl_path <- file.path(input_dir, "2400-7538-02_QC.pdf")
-  writeBin(charToRaw("fake ACIRL QC PDF, no ES####### token in filename"), acirl_path)
+  # RE-POINTED 2026-07-28 (Robin's ruling, R-9.12). This test used to place a
+  # `2400-*` deliverable alongside ONE work order's files and assert it stayed
+  # quarantined. That is no longer the wanted behaviour: an ACIRL email carries
+  # the underlying ALS work order's files too, and the live DB shows the legacy
+  # system already filed 104 of 124 ACIRL assets against an `ES#######` project.
+  # A single-WO folder is now the RETAIN case (R-9.12), covered below.
+  #
+  # What survives, and is what this test was always really about, is the
+  # residual: a folder that does NOT resolve to exactly one work order gives
+  # inference nothing to work with, so the file stays quarantined - and must
+  # still SAY so rather than vanishing quietly. Two work orders here.
+  copied <- 0L
+  for (f in list.files(esdat_dir, full.names = TRUE)) {
+    if (grepl("ES2617126|XX1234567", basename(f))) {
+      file.copy(f, file.path(input_dir, basename(f)))
+      copied <- copied + 1L
+    }
+  }
+  expect_true(copied > 3,
+              info = "precondition: the folder must hold TWO work orders, else there is no ambiguity to test")
+
+  acirl_path <- file.path(input_dir, "2400-7538-02 January 2026 Quarterly Katoomba WMF.pdf")
+  writeBin(charToRaw("fake ACIRL report, no ES####### token in filename"), acirl_path)
   acirl_hash <- hash_file(acirl_path)
 
   expect_warning(
@@ -1296,7 +1311,7 @@ test_that("Phase-7b round-2 item 7: a non-tabular sibling whose work order canno
   )
 
   con <- DBI::dbConnect(duckdb::duckdb(), setup$db_path, read_only = TRUE)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   asset_row <- DBI::dbGetQuery(con, "SELECT * FROM asset WHERE hash = ?", params = list(acirl_hash))
   expect_equal(nrow(asset_row), 0)
 
@@ -1304,6 +1319,132 @@ test_that("Phase-7b round-2 item 7: a non-tabular sibling whose work order canno
   acirl_state <- acirl_state[!is.na(acirl_state$hash) & acirl_state$hash == acirl_hash, ]
   expect_equal(nrow(acirl_state), 1)
   expect_identical(acirl_state$state[[1]], "quarantined")
+})
+
+# ---- R-9.12: ACIRL reports retained and attached to the ALS work order ----
+#
+# Robin's ruling, 2026-07-28: "Retain and attach to ALS WO."
+#
+# Grounded in the live DB rather than in a guess about how the labs work: of
+# 124 ACIRL-shaped `asset` rows, **104 are already attached to an `ES#######`
+# work-order project**, one report per work order (`2400-7286-01-04` ->
+# ES2301817, `2400-7286-01-03` -> ES2301026, ...). The legacy system did
+# exactly this; the package had simply stopped doing it.
+#
+# Two things had to change together, and each alone is inert:
+#   * the SELECTION gate, which required a `_(coa|coc|qc|qci|xtab)` token -
+#     zero of the 272 real ACIRL files carry one, so they were never even
+#     candidates (and, since the same gate narrows the warning, never reported);
+#   * the ACIRL block in folder inference, which would then have refused them.
+
+test_that("R-9.12: a real-shaped ACIRL report in a folder belonging to one ALS work order is retained and attached to it", {
+  setup <- ingest_test_setup()
+  input_dir <- withr::local_tempdir()
+  esdat_dir <- testthat::test_path("fixtures", "esdat")
+  for (f in list.files(esdat_dir, pattern = "ES2617126", full.names = TRUE)) {
+    file.copy(f, file.path(input_dir, basename(f)))
+  }
+
+  # A REAL corpus filename shape, not a synthetic `2400-*_QC.pdf`: real ACIRL
+  # names are descriptive and carry no COA/COC/QC/QCI/XTAB token at all, which
+  # is precisely why the old gate excluded all 272 of them.
+  acirl <- file.path(input_dir, "2400-7454-05 May 2025 Monthly Katoomba WMF.pdf")
+  writeBin(charToRaw(paste("fake ACIRL monthly report", paste(1:20, collapse = " "))), acirl)
+  acirl_hash <- hash_file(acirl)
+
+  expect_true(is.na(file_meta(acirl)$work_order_guess),
+              info = "precondition: a 2400-* name must still yield NO parsed work order - the ACIRL trap is unchanged")
+  expect_false(grepl("(?i)_(coa|coc|qc|qci|xtab)", basename(acirl), perl = TRUE),
+               info = "precondition: the fixture must carry no deliverable token, or it would pass the OLD gate and prove nothing")
+
+  ingest_dir(input_dir, db = setup$db_path)
+
+  con <- DBI::dbConnect(duckdb::duckdb(), setup$db_path, read_only = TRUE)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  linked <- DBI::dbGetQuery(
+    con,
+    "SELECT a.hash, a.type FROM asset a JOIN project p ON a.uuid_project = p.uuid
+     WHERE p.name = 'ES2617126' AND a.hash = ?",
+    params = list(acirl_hash)
+  )
+  expect_equal(nrow(linked), 1,
+               info = "R-9.12: the ACIRL report must be attached to the folder's ALS work order")
+  if (nrow(linked) == 1) {
+    # The legacy majority: 108 of 124 ACIRL asset rows are "Chemical analysis".
+    expect_identical(linked$type[[1]], "Chemical analysis")
+  }
+
+  states <- ingest_file_states(setup$db_path)
+  st <- states[!is.na(states$hash) & states$hash == acirl_hash, ]
+  expect_identical(st$state[[1]], "archived")
+})
+
+test_that("R-9.12: an ACIRL report whose folder resolves to NO committed work order stays quarantined and warns - inference never invents a target", {
+  setup <- ingest_test_setup()
+  input_dir <- withr::local_tempdir()
+
+  # An ACIRL report on its own, with no ALS siblings at all. Nothing commits,
+  # so there is no project to attach to. The file must be kept where a human
+  # can find it, not filed against a work order we never saw data for.
+  acirl <- file.path(input_dir, "2400-7454-05 May 2025 Monthly Katoomba WMF.pdf")
+  writeBin(charToRaw(paste("fake ACIRL monthly report", paste(1:20, collapse = " "))), acirl)
+  acirl_hash <- hash_file(acirl)
+
+  con0 <- DBI::dbConnect(duckdb::duckdb(), setup$db_path, read_only = TRUE)
+  project_count_before <- DBI::dbGetQuery(con0, "SELECT count(*) AS n FROM project")$n
+  DBI::dbDisconnect(con0, shutdown = TRUE)
+
+  expect_warning(
+    ingest_dir(input_dir, db = setup$db_path),
+    regexp = "work order could not be recovered",
+    fixed = TRUE
+  )
+
+  con <- DBI::dbConnect(duckdb::duckdb(), setup$db_path, read_only = TRUE)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+  expect_equal(nrow(DBI::dbGetQuery(con, "SELECT 1 FROM asset WHERE hash = ?", params = list(acirl_hash))), 0)
+  expect_equal(DBI::dbGetQuery(con, "SELECT count(*) AS n FROM project")$n, project_count_before,
+               info = "R-9.12: a lone ACIRL report must not mint a project row")
+
+  states <- ingest_file_states(setup$db_path)
+  st <- states[!is.na(states$hash) & states$hash == acirl_hash, ]
+  expect_identical(st$state[[1]], "quarantined")
+})
+
+test_that("R-9.12: ordinary non-deliverable cruft is still NOT retained and still draws no warning - widening the gate must not re-open the round-3 noise", {
+  setup <- ingest_test_setup()
+  input_dir <- withr::local_tempdir()
+  esdat_dir <- testthat::test_path("fixtures", "esdat")
+  for (f in list.files(esdat_dir, pattern = "ES2617126", full.names = TRUE)) {
+    file.copy(f, file.path(input_dir, basename(f)))
+  }
+
+  # commit-5 (round 3) narrowed the retention SELECTION to a positive
+  # deliverable shape precisely so a stray README/photo/notes file stopped
+  # drawing a warning on every run forever. Widening the gate for ACIRL must
+  # not undo that - the ACIRL shape is itself a positive token, not a
+  # catch-all.
+  for (fn in c("README.md", "photo.jpg", "notes.docx")) {
+    p <- file.path(input_dir, fn)
+    writeBin(charToRaw(paste("ordinary cruft", fn, paste(1:20, collapse = " "))), p)
+  }
+
+  w <- NULL
+  withCallingHandlers(
+    ingest_dir(input_dir, db = setup$db_path),
+    warning = function(c) { w <<- c(w, conditionMessage(c)); invokeRestart("muffleWarning") }
+  )
+  expect_equal(sum(grepl("work order could not be recovered", w, fixed = TRUE)), 0,
+               info = "R-9.12: cruft must stay silent - the round-3 fix is not undone by the ACIRL widening")
+
+  con <- DBI::dbConnect(duckdb::duckdb(), setup$db_path, read_only = TRUE)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+  for (fn in c("README.md", "photo.jpg", "notes.docx")) {
+    h <- hash_file(file.path(input_dir, fn))
+    expect_equal(nrow(DBI::dbGetQuery(con, "SELECT 1 FROM asset WHERE hash = ?", params = list(h))), 0,
+                 info = sprintf("R-9.12: %s must not be retained", fn))
+  }
 })
 
 # ---- Phase-7b round-2 item 9: ingest_dir()-level coverage for the F.10
@@ -1827,38 +1968,12 @@ test_that("R-9.8: the same token-less deliverable in a folder resolving to TWO w
   expect_identical(st$state[[1]], "quarantined")
 })
 
-test_that("R-9.8: an ACIRL-shaped deliverable is NEVER inferred onto a folder-mate's work order, even when the folder resolves to exactly one", {
-  setup <- ingest_test_setup()
-
-  input_dir <- withr::local_tempdir()
-  esdat_dir <- testthat::test_path("fixtures", "esdat")
-  for (f in list.files(esdat_dir, pattern = "ES2617126", full.names = TRUE)) {
-    file.copy(f, file.path(input_dir, basename(f)))
-  }
-
-  # This is the arm that stops folder inference from becoming a false-merge
-  # engine. A 2400-* file positively declares a work order of its own that we
-  # deliberately refuse to parse (the ACIRL trap, R/commit.R) - so the folder
-  # resolving cleanly to ES2617126 is NOT permission to adopt it. Attaching
-  # ACIRL chemistry to an ALS work order is precisely the failure the refusal
-  # exists to prevent.
-  acirl <- file.path(input_dir, "2400-7538-02_QC.pdf")
-  writeBin(charToRaw(paste("fake ACIRL QC PDF", paste(1:20, collapse = " "))), acirl)
-  acirl_hash <- hash_file(acirl)
-
-  expect_warning(
-    ingest_dir(input_dir, db = setup$db_path),
-    regexp = "work order could not be recovered",
-    fixed = TRUE
-  )
-
-  con <- DBI::dbConnect(duckdb::duckdb(), setup$db_path, read_only = TRUE)
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
-  expect_equal(
-    nrow(DBI::dbGetQuery(con, "SELECT 1 FROM asset WHERE hash = ?", params = list(acirl_hash))), 0,
-    info = "R-9.8: an ACIRL 2400-* deliverable must never be attached to an ALS work order"
-  )
-})
+# NOTE: the arm that used to sit here asserted the OPPOSITE - that an ACIRL
+# 2400-* deliverable is never inferred onto a folder-mate's work order. Robin
+# overturned that on 2026-07-28 ("Retain and attach to ALS WO"), and the live
+# DB agrees: 104 of 124 ACIRL assets are already filed against an ES#######
+# project. The retain case now lives in R-9.12 above; the ambiguity case (two
+# work orders, or none) is what still refuses, and is covered there too.
 
 test_that("R-9.8: inference never overrides a filename that DOES carry a work order", {
   setup <- ingest_test_setup()
@@ -2087,16 +2202,21 @@ test_that("R-9.11: quarantine_report() returns exactly the non-archived terminal
   setup <- ingest_test_setup()
   input_dir <- withr::local_tempdir()
   esdat_dir <- testthat::test_path("fixtures", "esdat")
-  for (f in list.files(esdat_dir, pattern = "ES2617126", full.names = TRUE)) {
-    file.copy(f, file.path(input_dir, basename(f)))
+  # TWO work orders, so the folder is ambiguous and R-9.12 inference declines.
+  # With only one, the ACIRL report below would be retained and attached (which
+  # is now correct), and this report would have nothing ACIRL to show.
+  for (f in list.files(esdat_dir, full.names = TRUE)) {
+    if (grepl("ES2617126|XX1234567", basename(f))) {
+      file.copy(f, file.path(input_dir, basename(f)))
+    }
   }
 
   # One quarantined file we CAN name a work order for, one we deliberately
   # cannot (the ACIRL trap) - the report must show both and guess neither
   # wrongly.
   als <- write_coa_fixture(input_dir, "ES2699999")   # unattachable -> quarantined
-  acirl <- file.path(input_dir, "2400-7538-02_QC.pdf")
-  writeBin(charToRaw(paste("fake ACIRL QC", paste(1:20, collapse = " "))), acirl)
+  acirl <- file.path(input_dir, "2400-7538-02 January 2026 Quarterly Katoomba WMF.pdf")
+  writeBin(charToRaw(paste("fake ACIRL report", paste(1:20, collapse = " "))), acirl)
   acirl_hash <- hash_file(acirl)
 
   suppressWarnings(ingest_dir(input_dir, db = setup$db_path))

@@ -400,9 +400,13 @@ ambiguity notes referenced below.
 ### R-9.8 folder-sibling work-order inference (`tests/testthat/test-ingest.R`) - added 2026-07-28
 - token-less deliverable in a single-WO folder is attached to that WO → "R-9.8: a deliverable with NO work-order token, in a folder belonging to exactly one work order, is retained and attached to it"
 - same file in a TWO-WO folder is not attached, stays quarantined, warns → "R-9.8: the same token-less deliverable in a folder resolving to TWO work orders is NOT attached, stays quarantined, and warns"
-- ACIRL-shaped name never inferred onto a folder-mate's WO (the false-merge guard) → "R-9.8: an ACIRL-shaped deliverable is NEVER inferred onto a folder-mate's work order, even when the folder resolves to exactly one"
 - a filename that DOES carry a WO always wins over the folder → "R-9.8: inference never overrides a filename that DOES carry a work order"
-- the pre-existing residual-silence test is unchanged and still green → "Phase-7b round-2 item 7: a non-tabular sibling whose work order cannot be filename-guessed (the ACIRL 2400-* shape) still stays quarantined AND is named in a cli_warn - the residual exposure is not silent"
+- the residual-silence test, RE-POINTED at the ambiguous folder (its single-WO case became R-9.12's retain case) → "Phase-7b round-2 item 7 (RE-POINTED R-9.12): an ACIRL deliverable in an AMBIGUOUS folder stays quarantined AND is named in a cli_warn - the residual exposure is not silent"
+
+### R-9.12 ACIRL reports retained and attached to the ALS work order (`tests/testthat/test-ingest.R`) - added 2026-07-28
+- real-shaped ACIRL report in a single-WO folder is retained, attached, typed "Chemical analysis" → "R-9.12: a real-shaped ACIRL report in a folder belonging to one ALS work order is retained and attached to it"
+- ACIRL report with no resolvable WO stays quarantined, warns, mints no project → "R-9.12: an ACIRL report whose folder resolves to NO committed work order stays quarantined and warns - inference never invents a target"
+- cruft still neither retained nor warned about (round-3 commit-5 regression guard) → "R-9.12: ordinary non-deliverable cruft is still NOT retained and still draws no warning - widening the gate must not re-open the round-3 noise"
 
 ### R-9.9 empty-folder cleanup (`tests/testthat/test-ingest.R`) - added 2026-07-28
 - emptied folder deleted, and a `.DS_Store` does not keep it alive → "R-9.9: a folder emptied by a clean run is deleted, and a .DS_Store does not keep it alive"

@@ -408,16 +408,19 @@
 # as a reason to leave the file alone rather than adopt it onto a folder-mate's
 # work order.
 #
-# PROVISIONAL, and say so plainly. This guard is INERT against the real corpus
-# (the selection gate in .ig_retain_siblings() requires a
-# _(coa|coc|qc|qci|xtab) token and zero of the 272 real ACIRL files carry one),
-# so today it costs nothing and proves nothing. It becomes live only if that
-# gate is widened to retain the 137 ACIRL PDFs - and at that moment it is an
-# OPEN QUESTION whether it is still right, because Robin's 2026-07-28
-# correction says an ACIRL email almost always carries the underlying ALS work
-# order's files too, i.e. the ACIRL report and the ALS work order describe the
-# same sampling event. Filing the report under that work order may be exactly
-# what is wanted. Do not widen the gate without re-deciding this.
+# R-9.12 (Robin, 2026-07-28): this is now used ONLY to SELECT ACIRL files for
+# retention, never to refuse them. The earlier version blocked folder inference
+# for an ACIRL-shaped name on the theory that adopting it onto a folder-mate's
+# work order would be a false merge. That was overturned on the evidence: an
+# ACIRL email carries the underlying ALS work order's files too (matching this
+# package's own ACIRL adapter header - the workbook is field data plus copies
+# of ALS lab results, i.e. one sampling event under two identifiers), and the
+# live DB shows the legacy system already filed 104 of 124 ACIRL assets against
+# an ES####### project, one report per work order.
+#
+# The ACIRL work-order trap is untouched: we still never PARSE `2400-*` into a
+# work order. The attachment comes from the folder, which is a different and
+# safer question, and it still requires the folder to resolve to exactly one.
 #
 # Deliberately loose (`\d{4}-\d{4}` anywhere in the name): this gate decides
 # whether to STAY OUT of a file's business, so over-matching costs one warning
@@ -504,9 +507,20 @@
   # files actually worth naming in a warning, silencing it for ordinary
   # cruft instead of retraining an operator to ignore the warning that
   # matters.
+  #
+  # R-9.12 widens this to the ACIRL shape as well. Measured over the 1,227
+  # files in assets/unprocessed: of 272 ACIRL files, ZERO carry a
+  # COA/COC/QC/QCI/XTAB token - real ACIRL names are descriptive
+  # ("2400-7454-05 May 2025 Monthly Katoomba WMF.pdf"). So the token gate
+  # excluded all 137 ACIRL PDFs from retention AND, because it narrows the
+  # warning too, from being reported at all: they routed quarantined in
+  # silence. `\d{4}-\d{4}` is still a POSITIVE shape, so ordinary cruft
+  # (README.md, photo.jpg, notes.docx) stays excluded and stays silent - the
+  # round-3 commit-5 fix above is preserved, and pinned by its own test.
   idx <- which(routed$state == "quarantined" &
     !is.na(routed$reason) & routed$reason == "unclaimed" &
-    grepl("(?i)_(coa|coc|qc|qci|xtab)\\b", routed$filename, perl = TRUE))
+    (grepl("(?i)_(coa|coc|qc|qci|xtab)\\b", routed$filename, perl = TRUE) |
+       .ig_is_acirl_shaped(routed$filename)))
   if (length(idx) == 0) {
     return(retained)
   }
@@ -542,7 +556,7 @@
         # all - it must never override a name that does, or one work order's
         # certificate gets filed under another whenever a folder happens to
         # look tidier than the filename.
-        if (is.na(work_order) && !.ig_is_acirl_shaped(fm$filename)) {
+        if (is.na(work_order)) {
           work_order <- .ig_folder_work_order(con, routed, path)
         }
 
@@ -556,24 +570,16 @@
           # with no report field naming them - `retained` is returned then
           # discarded by the caller. Name it loudly instead.
           #
-          # R-9.8 does NOT close this gap for ACIRL. The reason is NOT the
-          # one first written here ("an ACIRL email's folder contains ACIRL
-          # files only") - Robin corrected that on 2026-07-28: an ACIRL email
-          # almost always carries the underlying ALS work order's files too,
-          # which matches this package's own ACIRL adapter header (the workbook
-          # is field data PLUS copies of ALS lab results, i.e. the same
-          # sampling event under two identifiers).
+          # Reached when the folder gave nothing to attach to either: it
+          # resolves to zero committed work orders, or to more than one. Both
+          # are genuine ambiguity, and the file stays where a human can find
+          # it rather than being filed against a guess.
           #
-          # The real reason is the SELECTION gate above: it requires a
-          # _(coa|coc|qc|qci|xtab) token, and zero of the 272 real ACIRL files
-          # carry one (they are named descriptively - "2400-7454-05 May 2025
-          # Monthly Katoomba WMF.pdf"). Nothing ACIRL reaches this branch at
-          # all. The 13 files PLAN-CHANGE-REQUESTS records as lost were ALS,
-          # not ACIRL - every one carries an ES####### token.
-          #
-          # What R-9.8 does fix is the token-less name (a renamed attachment)
-          # in an unambiguous folder. Retaining the 137 ACIRL PDFs is a
-          # separate, still-open question - see PLAN-09 R-9.8.
+          # This is now the ONLY residual for ACIRL (R-9.12): a `2400-*` report
+          # in a folder that does resolve to exactly one ALS work order is
+          # retained and attached to it. The 13 files PLAN-CHANGE-REQUESTS
+          # records as lost were ALS, not ACIRL - every one carries an
+          # ES####### token and is recovered by plain filename retention.
           cli::cli_warn(
             "ingest_dir(): {.path {path}} looks like a non-tabular lab
              deliverable but its work order could not be recovered from its
