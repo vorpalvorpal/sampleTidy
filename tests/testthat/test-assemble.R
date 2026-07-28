@@ -578,6 +578,89 @@ test_that("R-7.4 (seam: real ESdat parser -> assemble_events): a compound-Sample
   expect_true(any(grepl("foreign_work_order", event$report$warnings, fixed = TRUE)))
 })
 
+test_that("R-7.3: a sample_type disagreement among matched sample rows is flagged for review regardless of row order", {
+  # Regression: previously the first non-NA sample_type silently won with no
+  # flag, so whether a row committed (Normal) or was dropped by the R-8.1 QC
+  # filter (LAB_D) depended only on the order samples arrived in. Asserts
+  # BOTH orders - a test exercising only one order cannot detect an
+  # order-dependence bug.
+  mk_conflicted <- function(types) {
+    parsed <- list(
+      "h-chem" = mk_parsed_entry(
+        results = mk_result(source_hash = "h-chem", lab_sample_id = "XX1234567001", sample_type = "unknown"),
+        meta = list(work_order_guess = "XX1234567")
+      ),
+      "h-samp" = mk_parsed_entry(
+        samples = dplyr::bind_rows(
+          mk_sample(source_hash = "h-samp", lab_sample_id = "XX1234567001", feature_raw = "T.S01",
+                    sample_type = types[[1]]),
+          mk_sample(source_hash = "h-samp", lab_sample_id = "XX1234567001", feature_raw = "T.S01",
+                    sample_type = types[[2]])
+        ),
+        meta = list(work_order_guess = "XX1234567")
+      )
+    )
+    out <- assemble_events(parsed)
+    out$events[[1]]$results
+  }
+
+  normal_first <- mk_conflicted(c("Normal", "LAB_D"))
+  expect_identical(normal_first$sample_type[[1]], "Normal")
+  expect_true(isTRUE(normal_first$needs_review[[1]]))
+  expect_identical(normal_first$review_kind[[1]], "value_conflict")
+  expect_identical(normal_first$review_payload[[1]]$subkind, "sample_type_mismatch")
+  expect_setequal(normal_first$review_payload[[1]]$sample_type_candidates, c("Normal", "LAB_D"))
+
+  lab_d_first <- mk_conflicted(c("LAB_D", "Normal"))
+  expect_identical(lab_d_first$sample_type[[1]], "LAB_D")
+  expect_true(isTRUE(lab_d_first$needs_review[[1]]))
+  expect_identical(lab_d_first$review_kind[[1]], "value_conflict")
+  expect_identical(lab_d_first$review_payload[[1]]$subkind, "sample_type_mismatch")
+})
+
+test_that("R-7.3/R-7.4: a foreign-work-order row with a sample_datetime conflict carries both facts, not just the last one applied", {
+  # Regression: the datetime-mismatch check used to REPLACE review_payload
+  # wholesale, so a row that was ALSO flagged foreign_work_order (set before
+  # this join runs) ended with review_kind = "other" but a payload shaped for
+  # value_conflict/sample_datetime_mismatch - work_order/home_work_order gone,
+  # kind and payload describing different problems.
+  parsed <- list(
+    "h-multi" = mk_parsed_entry(
+      results = mk_result(source_hash = "h-multi", work_order = "ZZ0000002",
+                           lab_sample_id = "ZZ0000002001", sample_type = "unknown"),
+      meta = list(work_order_guess = "XX1234567")
+    ),
+    "h-anchor" = mk_parsed_entry(
+      results = mk_result(source_hash = "h-anchor", work_order = "XX1234567",
+                           lab_sample_id = "XX1234567001", sample_type = "unknown"),
+      meta = list(work_order_guess = "XX1234567")
+    ),
+    "h-samp" = mk_parsed_entry(
+      samples = dplyr::bind_rows(
+        mk_sample(source_hash = "h-samp", lab_sample_id = "ZZ0000002001", feature_raw = "T.S01",
+                  sample_datetime_raw = "24 May 2025 11:45"),
+        mk_sample(source_hash = "h-samp", lab_sample_id = "ZZ0000002001", feature_raw = "T.S01",
+                  sample_datetime_raw = "25 May 2025 09:00")
+      ),
+      meta = list(work_order_guess = "XX1234567")
+    )
+  )
+  out <- assemble_events(parsed)
+  event <- out$events[[1]]
+  foreign_row <- event$results[event$results$work_order == "ZZ0000002", ]
+  expect_equal(nrow(foreign_row), 1)
+  expect_true(isTRUE(foreign_row$needs_review[[1]]))
+  # kind stays the routing-relevant fact (foreign_work_order), set first
+  expect_identical(foreign_row$review_kind[[1]], "other")
+  payload <- foreign_row$review_payload[[1]]
+  expect_identical(payload$subkind, "foreign_work_order")
+  expect_identical(payload$work_order, "ZZ0000002")
+  expect_identical(payload$home_work_order, "XX1234567")
+  # ...and the datetime-conflict fact is not lost, just added alongside it
+  expect_true(!is.null(payload$datetime_candidates))
+  expect_setequal(payload$datetime_candidates, c("24 May 2025 11:45", "25 May 2025 09:00"))
+})
+
 # ---- R-7.5: event object shape / states completeness --------------------
 
 # ---- R-11.15: ACIRL synthetic lab_sample_id seam (adapter -> assemble) --

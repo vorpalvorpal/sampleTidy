@@ -74,6 +74,35 @@
   tolower(stringr::str_squish(x))
 }
 
+#' Flag row `i` of `results` `needs_review`, folding `extra` diagnostic
+#' fields into whatever `review_payload` the row already carries instead of
+#' replacing it.
+#'
+#' A row can independently earn a review flag twice over - e.g. R-7.4's
+#' `foreign_work_order` partition runs before this join, and a value
+#' conflict discovered here runs after. `review_kind` already follows a
+#' first-flag-wins rule (only set when still `NA`); this gives
+#' `review_payload` the same rule for its `kind`/`subkind`, so the two
+#' columns can never describe different problems. `extra`'s fields are
+#' always merged in - the newly-found fact is never dropped, only ever
+#' added alongside whichever fact claimed the row first.
+#' @keywords internal
+#' @noRd
+.st_flag_conflict <- function(results, i, subkind, extra) {
+  if (is.na(results$review_kind[[i]])) {
+    results$review_kind[[i]] <- "value_conflict"
+    results$review_payload[[i]] <- c(list(kind = "value_conflict", subkind = subkind), extra)
+  } else {
+    payload <- results$review_payload[[i]]
+    if (is.null(payload)) {
+      payload <- list()
+    }
+    results$review_payload[[i]] <- utils::modifyList(payload, extra)
+  }
+  results$needs_review[[i]] <- TRUE
+  results
+}
+
 # --- R-7.1 grouping ----------------------------------------------------
 
 #' Partition `parsed` hashes into event groups keyed on home work order
@@ -119,10 +148,15 @@
 #' the fallback key is left unresolved for the `results` side - see
 #' PLAN-CHANGE-REQUESTS.md). Fills `sample_datetime_raw` (only when NA),
 #' `sampler`, `matrix_raw`, `parent_sample`, and always overrides
-#' `sample_type` with a matched non-NA sample-metadata value (authoritative).
-#' A date-part disagreement among a result row's matched sample rows marks
-#' that row `needs_review` (`value_conflict` / `sample_datetime_mismatch`)
-#' without blocking any other row.
+#' `sample_type` with a matched non-NA sample-metadata value (authoritative,
+#' first-wins). Either a date-part disagreement or a `sample_type`
+#' disagreement among a result row's matched sample rows marks that row
+#' `needs_review` (`value_conflict` / `sample_datetime_mismatch` or
+#' `sample_type_mismatch` respectively) without blocking any other row or
+#' changing which value was kept. A row already flagged by an earlier stage
+#' (e.g. R-7.4's `foreign_work_order`) keeps that flag's `kind`/`subkind`;
+#' this only adds the new conflict's facts to its `review_payload`, it never
+#' replaces them (F4/cold-audit).
 #'
 #' @param results the pre-join assembled `results` tibble (already carries
 #'   `sample_datetime_raw`/`sampler`/`matrix_raw`/`parent_sample`/
@@ -174,10 +208,6 @@
 
     non_na_dates <- unique(m_date[!is.na(m_date)])
     if (length(non_na_dates) > 1) {
-      results$needs_review[[i]] <- TRUE
-      if (is.na(results$review_kind[[i]])) {
-        results$review_kind[[i]] <- "value_conflict"
-      }
       # Cold-audit defect 4: named `candidates` until this fix, the exact key
       # name `.rc_feature_review()` (R/reconcile.R) uses for `unknown_feature`/
       # `ambiguous` review items' candidate FEATURE uuids. Reconcile's STAGE-0
@@ -193,9 +223,9 @@
       # choice point the `work_order` -> `foreign_work_order` rename comment
       # (R/reconcile.R) describes: "Rename the diagnostics key so a reader does
       # not have to already know which is which."
-      results$review_payload[[i]] <- list(
-        kind = "value_conflict", subkind = "sample_datetime_mismatch",
-        datetime_candidates = unique(m_datetime[!is.na(m_datetime)])
+      results <- .st_flag_conflict(
+        results, i, subkind = "sample_datetime_mismatch",
+        extra = list(datetime_candidates = unique(m_datetime[!is.na(m_datetime)]))
       )
     }
 
@@ -209,6 +239,19 @@
     nn_type <- m_type[!is.na(m_type)]
     if (length(nn_type) > 0) {
       results$sample_type[[i]] <- nn_type[[1]]
+      # A matched-row disagreement here is not cosmetic: sample_type is what
+      # the R-8.1 QC filter keys on to keep or drop a row, so an unflagged
+      # first-wins pick would let input row order alone decide whether this
+      # sample ever reaches the warehouse. Flag it the same way the
+      # sample_datetime disagreement above does, without changing which value
+      # is kept (still first-wins, for continuity with every other field this
+      # loop fills).
+      if (length(unique(nn_type)) > 1) {
+        results <- .st_flag_conflict(
+          results, i, subkind = "sample_type_mismatch",
+          extra = list(sample_type_candidates = unique(nn_type))
+        )
+      }
     }
 
     if (is.na(results$sampler[[i]])) {

@@ -129,6 +129,117 @@ test_that("R-9.5: dry_run = TRUE produces a report with zero core-table DB write
   expect_length(list.files(setup$snapshot_dir), 0)
 })
 
+# ---- generic dry-run purity guard: EVERY base table, not a named list -----
+#
+# `all_core_counts()` above only enumerates the core business tables by
+# name, so a write to any other table (ops or otherwise) is invisible to it.
+# `all_table_counts()` instead discovers every base table from
+# `information_schema` at call time, so a table a later migration adds is
+# covered automatically without this file needing to be touched again.
+
+all_table_counts <- function(db_path) {
+  con <- DBI::dbConnect(duckdb::duckdb(), db_path, read_only = TRUE)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+  tables <- sort(DBI::dbGetQuery(
+    con, "SELECT table_name FROM information_schema.tables WHERE table_type = 'BASE TABLE'"
+  )$table_name)
+  rlang::set_names(
+    vapply(tables, function(t) DBI::dbGetQuery(con, sprintf('SELECT count(*) AS n FROM "%s"', t))$n, numeric(1)),
+    tables
+  )
+}
+
+# `route_files()` persists a fresh hash's OWN routing decision (`claimed`/
+# `unclaimed`/`failed`) whether or not the run is a dry run (T1.2) - a later
+# run's "already routed" check needs that row to avoid re-deciding it, and
+# unlike `adapter_tie` (below), neither carries a further side effect that a
+# dry run could leave orphaned. `ingest_sighting` is the same hash's per-path
+# bookkeeping. Both are ops tables, not core data - every OTHER base table
+# must show zero growth from a dry run.
+.dry_run_exempt_tables <- c("ingest_file", "ingest_sighting")
+
+expect_dry_run_writes_nothing_but_routing <- function(db_path, run) {
+  before <- all_table_counts(db_path)
+  run()
+  after <- all_table_counts(db_path)[names(before)]
+  diff <- after - before
+  offenders <- diff[diff != 0 & !(names(diff) %in% .dry_run_exempt_tables)]
+  expect_true(
+    length(offenders) == 0,
+    label = paste(
+      "tables grown by a dry run:",
+      paste(names(offenders), unname(offenders), sep = "=", collapse = ", ")
+    )
+  )
+}
+
+test_that("generic guard: a dry run over the full e2e corpus grows no base table except the routing ops tables", {
+  setup <- ingest_test_setup()
+  input_dir <- build_e2e_input_dir()
+
+  expect_dry_run_writes_nothing_but_routing(setup$db_path, function() {
+    suppressMessages(ingest_dir(input_dir, db = setup$db_path, dry_run = TRUE))
+  })
+})
+
+test_that("R-3.5/T1.2: an adapter tie writes nothing (review_queue/change_log, or a stuck quarantined state) under dry_run, and a later real run still resolves it", {
+  setup <- ingest_test_setup()
+  input_dir <- withr::local_tempdir()
+
+  tie_a_id <- "t8b_tie_a"
+  tie_b_id <- "t8b_tie_b"
+  register_adapter(list(
+    id = tie_a_id, version = "1.0",
+    match = function(fm) if (grepl("TIEBAIT", fm$filename)) "exact" else "no",
+    parse = function(path, file_meta) stop("never called: file is quarantined, not claimed")
+  ))
+  register_adapter(list(
+    id = tie_b_id, version = "1.0",
+    match = function(fm) if (grepl("TIEBAIT", fm$filename)) "exact" else "no",
+    parse = function(path, file_meta) stop("never called: file is quarantined, not claimed")
+  ))
+  withr::defer({
+    for (id in c(tie_a_id, tie_b_id)) {
+      if (exists(id, envir = sampleTidy:::.st_adapter_registry, inherits = FALSE)) {
+        rm(list = id, envir = sampleTidy:::.st_adapter_registry)
+      }
+    }
+  })
+
+  bait <- st_test_write_file(input_dir, "ES1234567_TIEBAIT_0.csv", content = "a,b\n1,2\n")
+  bait_hash <- hash_file(bait)
+
+  expect_dry_run_writes_nothing_but_routing(setup$db_path, function() {
+    suppressMessages(ingest_dir(input_dir, db = setup$db_path, dry_run = TRUE))
+  })
+
+  # the tie is not merely un-persisted in aggregate (the row-count guard
+  # above) - the hash itself must still be at `seen`, not stuck `quarantined`
+  # (a terminal state route_files() never re-decides), or a later real run
+  # would silently skip it forever instead of resolving the tie for real.
+  dry_state <- ingest_file_states(setup$db_path)
+  dry_row <- dry_state[!is.na(dry_state$hash) & dry_state$hash == bait_hash, ]
+  expect_equal(nrow(dry_row), 1)
+  expect_identical(dry_row$state, "seen")
+
+  before_review <- count_rows(setup$db_path, "review_queue")
+  suppressMessages(ingest_dir(input_dir, db = setup$db_path, dry_run = FALSE))
+  after_review <- count_rows(setup$db_path, "review_queue")
+
+  real_state <- ingest_file_states(setup$db_path)
+  real_row <- real_state[!is.na(real_state$hash) & real_state$hash == bait_hash, ]
+  expect_equal(nrow(real_row), 1)
+  expect_identical(real_row$state, "quarantined")
+  expect_identical(real_row$state_reason, "adapter_tie")
+  expect_equal(after_review, before_review + 1)
+
+  con <- DBI::dbConnect(duckdb::duckdb(), setup$db_path, read_only = TRUE)
+  queue <- DBI::dbGetQuery(con, "SELECT kind, status FROM review_queue WHERE kind = 'adapter_tie'")
+  DBI::dbDisconnect(con, shutdown = TRUE)
+  expect_equal(nrow(queue), 1)
+  expect_identical(queue$status[[1]], "open")
+})
+
 test_that("R-9.5: an adapter crash on one file is recorded as failed and the run completes", {
   setup <- ingest_test_setup()
   input_dir <- withr::local_tempdir()

@@ -474,10 +474,31 @@
 #' `add_project()` (R/mutate.R) opens its own connection via
 #' `with_db_write()`, which would escape this function's transaction, so the
 #' insert is done directly with `db_append()` on the caller's `con` instead.
+#'
+#' An orphan event's `work_order` is `NA` (no work order was ever recorded for
+#' it - see the ACIRL trap header above), and `name = ?` bound to `NA` compiles
+#' to `name = NULL`, a predicate SQL's three-valued logic never satisfies, for
+#' ANY row - so the find half silently never matched and every orphan commit
+#' minted its own indistinguishable `name IS NULL` project row. `IS NULL` is
+#' the only predicate that matches a NULL name, so orphans need their own
+#' branch. All orphans share the ONE resulting row rather than each getting a
+#' fresh one: a `NULL` name carries no identity to tell one orphan's project
+#' apart from another's, so multiplying that row buys nothing but registry
+#' clutter, and every consumer that keys `project` lookups off a work order
+#' (`.ct_wo_sample_count()`, `.ct_wo_prior_asset_hashes()`,
+#' `.rc_recorded_revision()`) already treats a `NA` work order as out of
+#' scope before it ever touches `project`, so a shared row changes nothing
+#' those consumers see.
 #' @keywords internal
 #' @noRd
 .ct_ensure_project <- function(con, work_order, reason) {
-  existing <- DBI::dbGetQuery(con, "SELECT uuid FROM project WHERE name = ?", params = list(work_order))
+  existing <- if (is.na(work_order)) {
+    DBI::dbGetQuery(
+      con, "SELECT uuid FROM project WHERE name IS NULL AND type = 'Work order'"
+    )
+  } else {
+    DBI::dbGetQuery(con, "SELECT uuid FROM project WHERE name = ?", params = list(work_order))
+  }
   if (nrow(existing) > 0) {
     return(existing$uuid[[1]])
   }
