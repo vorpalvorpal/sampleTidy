@@ -574,6 +574,145 @@ test_that("R-11.11: a dangling analyte is invisible to the analyte-joined join, 
   expect_equal(after2, 0.965)
 })
 
+test_that("Phase-8b regression (F01/F03/H): three consecutive confirm_analyte_methods() calls leave value AND reporting limits stable, including on rows whose value never moves under conversion (non-detect value = NA, and value = 0) - the exact shapes the old field='value'-only guard could not see, and n_converted converges to 0", {
+  # H: the ORIGINAL idempotency test above only ever proved idempotency on
+  # an-0002 (965 -> 0.965), a value that MOVES under conversion - so it was
+  # green even with the guard bug (varying only the fixture value flips it
+  # to fail; see _findings/repro/f05_untestable_invariant.R). lm-0009/a-0002
+  # is a real x1000 factor (mg/L -> ug/L): an-9701/an-9702 below leave
+  # `analysis.value` bit-for-bit unchanged (NA -> NA, 0 -> 0) while
+  # rl_low/rl_high DO move, which is exactly the shape that used to
+  # re-multiply on every re-run (500 -> 5e5 -> 5e8).
+  setup <- fa_setup()
+  con <- setup$con
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  DBI::dbExecute(con, "INSERT INTO \"sample\"
+    (uuid, uuid_feature_alias, uuid_project, date, datetime, organisation) VALUES
+    ('s-9701', 'fa-0001', 'p-0001', TIMESTAMP '2025-08-04 00:00:00', TIMESTAMP '2025-08-04 09:00:00', 'ALS')")
+  DBI::dbExecute(con, "INSERT INTO analysis
+    (uuid, uuid_sample, uuid_lab, value, quantified, rl_low, rl_high) VALUES
+    ('an-9701', 's-9701', 'lm-0009', NULL, FALSE, 0.5, 0.5),
+    ('an-9702', 's-9701', 'lm-0009', 0,    TRUE,  0.5, 0.5)")
+
+  run <- function() confirm_analyte_methods("lm-0009", "a-0002", confirmed_by = "alice")
+  fetch <- function() DBI::dbGetQuery(
+    con,
+    "SELECT uuid, value, rl_low, rl_high FROM analysis WHERE uuid_lab = 'lm-0009' ORDER BY uuid"
+  )
+
+  r1 <- run()
+  after1 <- fetch()
+  nd <- after1[after1$uuid == "an-9701", ]
+  zero <- after1[after1$uuid == "an-9702", ]
+  expect_true(is.na(nd$value[[1]]))
+  expect_equal(nd$rl_low[[1]], 500) # 0.5 mg/L -> 500 ug/L
+  expect_equal(nd$rl_high[[1]], 500)
+  expect_equal(zero$value[[1]], 0)
+  expect_equal(zero$rl_low[[1]], 500)
+  expect_equal(r1$action[[1]], "confirmed")
+  expect_equal(r1$n_converted[[1]], 3) # an-0004 (seed fixture) + an-9701 + an-9702
+
+  r2 <- run()
+  after2 <- fetch()
+  expect_equal(after2, after1) # STABLE - not 5e5
+  expect_equal(r2$action[[1]], "already_confirmed")
+  expect_equal(r2$n_converted[[1]], 0) # F03: nothing outstanding, not a blind re-report of 3
+
+  r3 <- run()
+  after3 <- fetch()
+  expect_equal(after3, after1) # STABLE across a THIRD call too - not 5e8
+  expect_equal(r3$n_converted[[1]], 0)
+})
+
+test_that("Phase-8b regression (F02): a lab_method with NULL units is treated at least as conservatively as 'n/a'/'-' - value left alone, an unknown_unit review is opened, and n_converted is honestly 0 (not a false 1) - the value must not be silently republished as if it were canonical", {
+  setup <- fa_setup()
+  con <- setup$con
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  # lm-0008 ships with units = 'uS/cm'; NULL it out to reproduce the
+  # ordinary-ESdat shape (an empty Result_Unit column - R/commit.R:722-727
+  # writes units = units_raw verbatim, NULL when the source column was
+  # empty; see _findings/repro/f07_null_units.R Part 2).
+  DBI::dbExecute(con, "UPDATE lab_method SET units = NULL WHERE uuid = 'lm-0008'")
+
+  before_unknown <- DBI::dbGetQuery(con, "SELECT count(*) n FROM review_queue WHERE kind = 'unknown_unit'")$n
+
+  result <- confirm_analyte_methods("lm-0008", "a-0003", confirmed_by = "alice")
+
+  expect_equal(result$n_converted[[1]], 0) # nothing was actually converted - claiming 1 would be false
+  value_after <- DBI::dbGetQuery(con, "SELECT value FROM analysis WHERE uuid = 'an-0002'")$value[[1]]
+  expect_equal(value_after, 965) # left alone
+
+  reviews <- DBI::dbGetQuery(con, "SELECT * FROM review_queue WHERE kind = 'unknown_unit'")
+  expect_equal(nrow(reviews), before_unknown + 1) # opened, same as 'n/a'/'-'
+  hit <- reviews[grepl("an-0002", reviews$payload, fixed = TRUE), , drop = FALSE]
+  expect_gt(nrow(hit), 0)
+
+  # idempotent: a second call opens no duplicate review and reports no false success.
+  result2 <- confirm_analyte_methods("lm-0008", "a-0003", confirmed_by = "alice")
+  expect_equal(result2$n_converted[[1]], 0)
+  reviews2 <- DBI::dbGetQuery(con, "SELECT count(*) n FROM review_queue WHERE kind = 'unknown_unit'")$n
+  expect_equal(reviews2, nrow(reviews))
+})
+
+test_that("Phase-8b regression (F01 e2e): an ordinary ESdat non-detect ingested via ingest_dir(), then confirmed three times, does not re-multiply its reporting limit", {
+  db_path <- seed_db(dir = withr::local_tempdir())
+  con0 <- seed_con(db_path)
+  ensure_test_asset_table(con0)
+  DBI::dbDisconnect(con0, shutdown = TRUE)
+  withr::local_options(list(
+    "sampletidy.archive_dir" = withr::local_tempdir(),
+    "sampletidy.snapshot_dir" = withr::local_tempdir(),
+    "sampletidy.remove_ingested" = FALSE
+  ))
+  input_dir <- withr::local_tempdir()
+
+  wo <- "ES4000001"
+  code <- paste0(wo, "001")
+  writeLines(c(
+    "SampleCode,Sampled_Date_Time,Field_ID,Blank1,Depth,Blank2,Matrix_Type,Sample_Type,Parent_Sample,Blank3,SDG,Lab_Name,Lab_SampleID,Lab_Comments,Lab_Report_Number",
+    sprintf("%s,10 Jun 2025,T.S07,,,,WATER,Normal,,,,ALSE-Sydney,%s,,%s", code, code, wo)
+  ), file.path(input_dir, sprintf("P.ESDAT_%s_0.Sample2e.CSV", wo)))
+  writeLines(c(
+    "SampleCode,ChemCode,OriginalChemName,Prefix,Result,Result_Unit,Total_or_Filtered,Result_Type,Method_Type,Method_Name,Extraction_Date,Analysed_Date,EQL,EQL_Units,Comments,Lab_Qualifier,UCL,LCL",
+    sprintf(
+      "%s,14808-79-8,Sulphate,,BDL,mg/L,T,Numeric,Sulphate by IC,EA045: Sulphate by IC,26 May 2025,26 May 2025,0.5,mg/L,,,,",
+      code
+    )
+  ), file.path(input_dir, sprintf("P.ESDAT_%s_0.Chemistry2e.CSV", wo)))
+
+  suppressWarnings(ingest_dir(input_dir, db = db_path))
+
+  fetch <- function() {
+    con <- DBI::dbConnect(duckdb::duckdb(), db_path, read_only = TRUE)
+    on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+    DBI::dbGetQuery(con, "SELECT a.value, a.rl_low, a.rl_high FROM analysis a
+      JOIN \"sample\" s ON s.uuid = a.uuid_sample
+      JOIN feature_alias fa ON fa.uuid = s.uuid_feature_alias
+      WHERE fa.name = 'T.S07'")
+  }
+
+  before <- fetch()
+  expect_equal(nrow(before), 1)
+  expect_true(is.na(before$value[[1]]))
+  expect_equal(before$rl_low[[1]], 0.5) # ordinary ESdat non-detect: value NA, rl from EQL
+
+  confirm_analyte_methods("lm-0009", "a-0002", confirmed_by = "alice", db = db_path)
+  after1 <- fetch()
+  expect_equal(after1$rl_low[[1]], 500) # 0.5 mg/L -> 500 ug/L
+
+  r2 <- confirm_analyte_methods("lm-0009", "a-0002", confirmed_by = "alice", db = db_path)
+  after2 <- fetch()
+  expect_equal(after2$rl_low[[1]], 500) # STABLE - NOT 5e5
+  expect_equal(r2$action[[1]], "already_confirmed")
+  expect_equal(r2$n_converted[[1]], 0)
+
+  confirm_analyte_methods("lm-0009", "a-0002", confirmed_by = "alice", db = db_path)
+  after3 <- fetch()
+  expect_equal(after3$rl_low[[1]], 500) # STABLE across a THIRD call too - NOT 5e8
+})
+
 test_that("R-11.11: an unconvertible unit does not corrupt the value and opens an unknown_unit review item", {
   setup <- fa_setup()
   con <- setup$con
@@ -2017,4 +2156,176 @@ test_that("R-11.10/R-11.11/E.8 (A55): the mandatory actor argument carries NO de
     expect_true(p$arg %in% names(formals(p$fn)))
     expect_true(identical(formals(p$fn)[[p$arg]], quote(expr = )))
   }
+})
+
+# ======================================================================
+# Phase-8b C2: transposed date_start/date_end validity bounds are rejected
+# up front, rather than silently accepted and resolving at no date at all.
+# ======================================================================
+
+test_that("Phase-8b C2: confirm_feature_aliases() rejects date_start AFTER date_end (an ordinary typo transposing the two arguments), with class sampletidy_error naming both values", {
+  setup <- fa_setup()
+  con <- setup$con
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  err <- tryCatch(
+    confirm_feature_aliases(
+      "fa-0010", "f-0002", confirmed_by = "alice",
+      date_start = as.Date("2030-01-01"), date_end = as.Date("2020-01-01")
+    ),
+    error = function(e) e
+  )
+  expect_s3_class(err, "sampletidy_error")
+  expect_true(grepl("2030-01-01", conditionMessage(err), fixed = TRUE))
+  expect_true(grepl("2020-01-01", conditionMessage(err), fixed = TRUE))
+})
+
+test_that("Phase-8b C2: after a rejected transposed-bounds call, the alias is EXACTLY as it was before - no partial write, no half-confirmed arm (the weaker 'it errors' test would miss a validation that writes then aborts)", {
+  setup <- fa_setup()
+  con <- setup$con
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  before <- feature_alias_row(con, "fa-0010")
+
+  expect_error(
+    confirm_feature_aliases(
+      "fa-0010", "f-0002", confirmed_by = "alice",
+      date_start = as.Date("2030-01-01"), date_end = as.Date("2020-01-01")
+    ),
+    class = "sampletidy_error"
+  )
+
+  after <- feature_alias_row(con, "fa-0010")
+  expect_identical(before, after) # not merely uuid_feature untouched - EVERY column, byte for byte
+  expect_true(is.na(after$uuid_feature[[1]])) # still dangling, not half-confirmed
+  expect_true(is.na(after$confirmed_by[[1]]))
+
+  # And the alias is still findable/resolvable at the date it was seen at -
+  # the transposed call must not have left it in the "resolves at no date at
+  # all" state C2 describes, since it never wrote anything.
+  reg <- .rc_load_registry(con)
+  cc <- .rc_feature_candidates("T.S09", as.Date("2025-05-10"), reg)
+  expect_equal(nrow(cc), 0) # still pending/dangling, exactly as seeded - not broken, not fixed
+})
+
+test_that("Phase-8b C2: a bounds-only call (uuid_feature omitted) rejects transposed bounds too, and writes nothing - the check runs once, ahead of the bounds_only branch, so both call shapes are covered", {
+  setup <- fa_setup()
+  con <- setup$con
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  DBI::dbExecute(con, "INSERT INTO feature_alias
+    (uuid, uuid_feature, name, alias_key, kind, n_seen, auto_assign,
+     first_seen, last_seen, confirmed_by, date_start, date_end) VALUES
+    ('fa-9601', 'f-0002', 'Z.ORDER01', 'z.order01', 'historical_code', 0, TRUE,
+     TIMESTAMP '2025-01-01 00:00:00', TIMESTAMP '2025-01-01 00:00:00', 'prior_op',
+     DATE '2024-01-01', DATE '2024-12-31')")
+  before <- feature_alias_row(con, "fa-9601")
+
+  expect_error(
+    confirm_feature_aliases(
+      "fa-9601", confirmed_by = "alice",
+      date_start = as.Date("2030-01-01"), date_end = as.Date("2020-01-01")
+    ),
+    class = "sampletidy_error"
+  )
+
+  after <- feature_alias_row(con, "fa-9601")
+  expect_identical(before, after)
+})
+
+test_that("Phase-8b C2: equal date_start == date_end is a legitimate single-day window and is NOT rejected (deliberately distinct from the transposed case)", {
+  setup <- fa_setup()
+  con <- setup$con
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  expect_no_error(
+    confirm_feature_aliases(
+      "fa-0010", "f-0002", confirmed_by = "alice",
+      date_start = as.Date("2025-05-10"), date_end = as.Date("2025-05-10")
+    )
+  )
+  after <- feature_alias_row(con, "fa-0010")
+  expect_equal(after$date_start[[1]], as.Date("2025-05-10"))
+  expect_equal(after$date_end[[1]], as.Date("2025-05-10"))
+})
+
+test_that("Phase-8b C2: clearing one bound (as.Date(NA)) while setting the other to a real Date is NOT treated as transposed - an NA side is unbounded, not 'after' or 'before' anything", {
+  setup <- fa_setup()
+  con <- setup$con
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  DBI::dbExecute(con, "INSERT INTO feature_alias
+    (uuid, uuid_feature, name, alias_key, kind, n_seen, auto_assign,
+     first_seen, last_seen, confirmed_by, date_start, date_end) VALUES
+    ('fa-9602', 'f-0002', 'Z.ORDER02', 'z.order02', 'historical_code', 0, TRUE,
+     TIMESTAMP '2025-01-01 00:00:00', TIMESTAMP '2025-01-01 00:00:00', 'prior_op',
+     DATE '2024-01-01', DATE '2024-12-31')")
+
+  expect_no_error(
+    confirm_feature_aliases(
+      "fa-9602", confirmed_by = "alice",
+      date_start = as.Date(NA), date_end = as.Date("2020-01-01")
+    )
+  )
+  after <- feature_alias_row(con, "fa-9602")
+  expect_true(is.na(after$date_start[[1]]))
+  expect_equal(after$date_end[[1]], as.Date("2020-01-01"))
+})
+
+# ======================================================================
+# Phase-8b C3: a raw DuckDB Catalog Error escaping unclassed (with no
+# mention of the db path) is reclassified as sampletidy_error, naming db.
+# ======================================================================
+
+test_that("Phase-8b C3: confirm_feature_aliases() on a nonexistent db path raises a classed sampletidy_error naming the db path, not a raw duckdb Catalog Error", {
+  dir <- withr::local_tempdir()
+  ghost <- file.path(dir, "ghost1.duckdb")
+  expect_false(file.exists(ghost))
+
+  err <- tryCatch(
+    confirm_feature_aliases("fa-x", "f-x", confirmed_by = "alice", db = ghost),
+    error = function(e) e
+  )
+  expect_s3_class(err, "sampletidy_error")
+  expect_false(inherits(err, "rlang_error") && !inherits(err, "sampletidy_error"))
+  expect_true(grepl(ghost, conditionMessage(err), fixed = TRUE))
+  expect_true(grepl("Catalog Error", conditionMessage(err), fixed = TRUE)) # underlying cause preserved
+})
+
+test_that("Phase-8b C3: confirm_analyte_methods() on a nonexistent db path raises a classed sampletidy_error naming the db path", {
+  dir <- withr::local_tempdir()
+  ghost <- file.path(dir, "ghost2.duckdb")
+
+  err <- tryCatch(
+    confirm_analyte_methods("lm-x", "a-x", confirmed_by = "alice", db = ghost),
+    error = function(e) e
+  )
+  expect_s3_class(err, "sampletidy_error")
+  expect_true(grepl(ghost, conditionMessage(err), fixed = TRUE))
+})
+
+test_that("Phase-8b C3: merge_identity_aliases() on a nonexistent db path raises a classed sampletidy_error naming the db path", {
+  dir <- withr::local_tempdir()
+  ghost <- file.path(dir, "ghost3.duckdb")
+
+  err <- tryCatch(
+    merge_identity_aliases(db = ghost, actor = "alice", dry_run = TRUE),
+    error = function(e) e
+  )
+  expect_s3_class(err, "sampletidy_error")
+  expect_true(grepl(ghost, conditionMessage(err), fixed = TRUE))
+})
+
+test_that("Phase-8b C3: a genuine application-level sampletidy_error (e.g. a nonexistent alias uuid) is re-signalled UNCHANGED - not double-wrapped with a 'Database operation on ... failed' prefix that would bury the real message", {
+  setup <- fa_setup()
+  con <- setup$con
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  err <- tryCatch(
+    confirm_feature_aliases("does-not-exist", "f-0002", confirmed_by = "alice"),
+    error = function(e) e
+  )
+  expect_s3_class(err, "sampletidy_error")
+  expect_false(grepl("Database operation on", conditionMessage(err), fixed = TRUE))
+  expect_true(grepl("does-not-exist", conditionMessage(err), fixed = TRUE))
 })

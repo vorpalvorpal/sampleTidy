@@ -137,11 +137,21 @@ db_transaction <- function(con, fn) {
 # timezone (UTC) so the audit trail is internally consistent and matches
 # the value duckdb actually stores (A32). Non-POSIXct values keep their
 # existing as.character() rendering; NA stays NA.
+#
+# This string is ALSO what db_update() diffs old vs new against to decide
+# whether a field actually changed (below). DuckDB's TIMESTAMP is
+# microsecond-precision, so formatting to whole seconds made two genuinely
+# different instants (differing only below the second) render identically -
+# the update silently no-opped and change_log recorded nothing, even though
+# `db_update()` returned success. `%OS6` keeps the microseconds; the all-zero
+# fractional part is then dropped so a whole-second instant still reads
+# exactly as it always has (no fractional noise on the common case).
 #' @keywords internal
 #' @noRd
 .st_changelog_str <- function(x) {
   if (inherits(x, "POSIXct")) {
-    out <- format(x, tz = "UTC", format = "%Y-%m-%d %H:%M:%S")
+    out <- format(x, tz = "UTC", format = "%Y-%m-%d %H:%M:%OS6")
+    out <- sub("\\.000000$", "", out)
     out[is.na(x)] <- NA_character_
     out
   } else {
@@ -557,6 +567,23 @@ add_feature <- function(name, site, lon, lat, flow = NA_character_,
   checkmate::assert_number(lat)
   new_uuid <- uuid::UUIDgenerate()
   key <- .rc_feature_key(name)
+  # An empty/whitespace-only (or all-punctuation) `name` normalises to NA
+  # (`.rc_feature_key()` requires at least one alnum char), which would
+  # otherwise reach the DB as the self-alias's `alias_key` and die on the
+  # raw "NOT NULL constraint failed: feature_alias.alias_key" - true but
+  # useless to a human, and thrown deep inside a transaction. Caught here,
+  # before any connection is opened, with a message that actually names the
+  # problem.
+  if (is.na(key)) {
+    cli::cli_abort(
+      paste0(
+        "add_feature(): name {.val {name}} has no alphanumeric characters ",
+        "after normalisation, so it cannot form a usable alias key. Choose a ",
+        "name containing at least one letter or digit."
+      ),
+      class = "sampletidy_error"
+    )
+  }
   row <- tibble::tibble(
     uuid = new_uuid, name = name, site = site, lon = lon, lat = lat,
     flow = flow, matrix = matrix, geom_wkt = geom_wkt, virtual = virtual
@@ -701,7 +728,29 @@ add_project <- function(name, type = "Work order", uuid_parent = NA_character_,
 #' Correct a single analysis value, logging the old value
 #'
 #' Resolves its own connection via `with_db_write(st_config("live_db"))`
-#' (A16). Thin wrapper over `db_update()`.
+#' (A16). An `analysis` row's `value` is not independent - `quantified`
+#' records whether it is a genuine measurement, below detection (`rl_low`), or
+#' above detection (`rl_high`), and a stale `quantified` after a value
+#' correction makes the row self-contradictory (e.g. a corrected value sitting
+#' above its own `rl_low` while still flagged below-detection). This function
+#' therefore reads the row's other columns first and picks one of two paths:
+#'
+#' - **numeric-shaped row** (`value_chr` is `NA`): `quantified` is
+#'   RECOMPUTED from `new_value` against the row's existing `rl_low`/`rl_high`
+#'   (still below/above its detection limit -> `FALSE`; otherwise -> `TRUE`)
+#'   and written alongside `value` in the SAME `db_update()` call, so both
+#'   land in `change_log` (no silent derived write). This is mechanical: the
+#'   detection limits do not change, only which side of them the corrected
+#'   value falls on.
+#' - **text-observation row** (`value_chr` is not `NA`, `quantified` is
+#'   `NA` - "not a measurement", e.g. a field note or a "no sample taken"
+#'   registry entry): REFUSED. There is no value-vs-limit comparison that
+#'   tells you whether a sample was actually taken; inferring "yes, now
+#'   there's a reading" from a bare number would assert an observation that
+#'   may never have happened (the same hazard `parse_value()` was written to
+#'   avoid - see `R/values.R`). Callers who really mean to reclassify such a
+#'   row must go through `db_update()` directly and set `value`, `value_chr`,
+#'   and `quantified` together, as a deliberate act.
 #'
 #' @param uuid_analysis the analysis row's uuid.
 #' @param new_value the corrected numeric value.
@@ -714,9 +763,52 @@ correct_value <- function(uuid_analysis, new_value, reason, actor) {
   checkmate::assert_number(new_value)
   with_db_write(
     function(con) {
+      current <- DBI::dbGetQuery(
+        con,
+        "SELECT value_chr, quantified, rl_low, rl_high FROM analysis WHERE uuid = ?",
+        params = list(uuid_analysis)
+      )
+      if (nrow(current) == 0) {
+        cli::cli_abort(
+          "No analysis row found for uuid {.val {uuid_analysis}}.",
+          class = "sampletidy_error"
+        )
+      }
+
+      if (!is.na(current$value_chr[[1]])) {
+        cli::cli_abort(
+          c(
+            paste0(
+              "correct_value(): analysis {.val {uuid_analysis}} holds a text ",
+              "observation ({.val {current$value_chr[[1]]}}), not a numeric ",
+              "measurement (its `quantified` is NA - not-a-measurement, not ",
+              "below/above detection)."
+            ),
+            "i" = paste0(
+              "correct_value() only corrects a genuine numeric reading and ",
+              "cannot infer whether a sample was actually taken. To turn this ",
+              "row into a real measurement, call db_update() directly and set ",
+              "`value`, `value_chr`, and `quantified` together."
+            )
+          ),
+          class = "sampletidy_error"
+        )
+      }
+
+      rl_low <- current$rl_low[[1]]
+      rl_high <- current$rl_high[[1]]
+      quantified <- if (!is.na(rl_low) && new_value <= rl_low) {
+        FALSE
+      } else if (!is.na(rl_high) && new_value >= rl_high) {
+        FALSE
+      } else {
+        TRUE
+      }
+
       db_update(
         con, "analysis", uuid_analysis,
-        changes = list(value = new_value), actor = actor, reason = reason
+        changes = list(value = new_value, quantified = quantified),
+        actor = actor, reason = reason
       )
     },
     db = st_config("live_db")
