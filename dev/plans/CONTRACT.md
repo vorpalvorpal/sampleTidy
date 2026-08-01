@@ -833,6 +833,8 @@ for lab reports; `sample.organisation ∈ {ACIRL, Internal, ALS}`;
   abort**, so the rest of the batch proceeds and the file re-processes naturally when the
   ALS report arrives (ACIRL routinely arrives first). A sheet may cite **two** work
   orders; **all** must be held. Measured cost: 74 of 640 sheets, 19 of 147 workbooks.
+  **Enforced in `ingest_dir()` (PLAN-09), not in the adapter** — `parse()` sees one
+  file and no database. The adapter only exposes `report$als_work_orders`.
 - **A75** **Field-vs-ALS selection is by value, not position (user, 2026-08-01).**
   Position is unsafe — 74 of 190 real sheets interleave ALS-copied rows among the field
   rows. Per label row: (i) no value in any sample column → heading, drop silently;
@@ -845,6 +847,12 @@ for lab reports; `sample.organisation ∈ {ACIRL, Internal, ALS}`;
   treating it as a copy would discard genuine field data. Where both sides hold the same
   field reading, **exactly one row is written** — dedupe on
   feature + datetime + analyte + `method = 'field'`.
+  **Enforced where the ALS data is visible — `assemble_events()` for same-batch
+  siblings, `reconcile(con)` for already-committed ALS — not in the adapter.** The
+  adapter must therefore *keep* ALS-looking rows, tagged `als_candidate`, rather
+  than dropping them at parse: the old drop-at-adapter behaviour destroyed the very
+  values this test needs to compare. Steps (i) heading-drop and (v) `----` are
+  decidable per-file and stay in the adapter.
 - **A76** **The ACIRL field set is maximal (user, 2026-08-01):** Temperature, pH, EC,
   Standing water level, DO, ORP, turbidity, flow, and **TSS** — TSS being a *field
   estimate* whenever it is not on the ALS results, and the one field analyte with a real

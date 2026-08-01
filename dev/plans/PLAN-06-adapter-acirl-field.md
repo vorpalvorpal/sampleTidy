@@ -28,9 +28,26 @@ multiple visits (date filled down). Front page: `REPORT NO:` / `SAMPLED BY:`
 ## R-6.1 `match()`
 
 `format` when ext ∈ {xls, xlsx} and `sheet_names` contains a front-page match
-`(?i)front` **and** any sheet has a `Units` marker cell in its first 15 rows
-(cheap `readxl` range read). `no` otherwise. Criteria: ACIRL fixture →
-`format`; a random xlsx and the plan-05 `.XLS` crosstab → `no`.
+`(?i)front` **and** *either*
+
+- any sheet has a `Units` marker cell in its first 15 rows (the water-sheet
+  fingerprint, cheap `readxl` range read), **or**
+- **(added 2026-08-01, A73)** any sheet matching `(?i)dust results` carries the
+  dust fingerprint `GAUGE NO.` + `INSOLUBLE SOLIDS`.
+
+`no` otherwise.
+
+**Why the second arm is required.** A `Units` marker only ever occurs on a water
+sheet. The 6 real dust-only workbooks (`2400-7286-10-02 Dust Blaxland WMF.xls`
+and siblings) have a front page and dust sheets but no water sheet, so all 6
+measured `match() == "no"` — the adapter never claims them. Reversing A10
+without widening `match()` would therefore recover **no dust at all** from those
+workbooks. Verified 2026-08-01 against all 6.
+
+Criteria: ACIRL fixture → `format`; **the dust-only fixture
+`2400-9999-12_DustOnly_WMF.xlsx` → `format`** (it is `no` under the old rule —
+this is the regression guard); a random xlsx and the plan-05 `.XLS` crosstab →
+`no`.
 
 ## R-6.2 Front page → report + samples context
 
@@ -106,32 +123,51 @@ Criteria: fixtures re-cut from real geometry (anonymised per A3) must include a
 ALS rows; the adapter extracts a non-zero row count from **every** structural
 variant present in the corpus.
 
-### R-6.3b Field-vs-ALS selection by value (A75, A76)
+### Layer note — A74/A75 are NOT adapter concerns
 
-Implements A75's five-step rule and A76's field set. Criteria:
+An adapter's `parse(path, file_meta)` sees **one file and no database**, so it
+cannot decide whether an ALS work order is held (A74) nor compare a value against
+ALS results (A75). Enforcement is split, and this plan owns only the first row:
 
-- a row with no value in any sample column (`Dissolved Major Cations`,
-  `Total Hardness`, …) is dropped as a heading and emits **no** review item;
-- where a sheet carries both `pH` (field) and `pH Value` (ALS copy), and the
-  latter equals the ALS value, **only the field row is imported** — same for
-  `Electrical Conductivity` vs `Electrical Conductivity @ 25°C`;
-- a value-matching row whose ALS twin is `EN67 - Client Supplied Data` is **kept
-  as a field reading**, and produces exactly one row, not two (A75 dedupe key);
-- a valued row that is neither allowlisted nor ALS-matched raises a
-  **review_queue** item (never a silent import, never a silent drop);
-- `----` is recorded as "not analysed", not parsed as a value;
+| concern | where it can see what it needs | plan |
+|---|---|---|
+| extract the ALS reference; classify rows; drop headings | per-file — **adapter** | R-6.3b below |
+| decide the ALS source is missing → quarantine | needs the DB + batch — **`ingest_dir()`** | PLAN-09 |
+| compare ACIRL values against ALS results | batch: `assemble_events(parsed)`; already-committed: `reconcile(con)` | PLAN-07 / PLAN-08 |
+
+The adapter therefore **defers, never guesses**: it emits every candidate row
+tagged with its classification and lets a later stage that can see the ALS data
+make the call.
+
+### R-6.3b Row classification, adapter side (A75 steps i/v, A76)
+
+- a row with **no value in any sample column** (`Dissolved Major Cations`,
+  `Total Hardness`, …) is dropped as a heading, emits **no** result and **no**
+  review item — this is decidable per-file, so the adapter does it;
+- `----` is recorded as "not analysed" (`skipped`), never parsed as a value;
+- a row whose label is on A76's field allowlist → emitted tagged
+  `field_candidate`;
+- any other valued row → emitted tagged `als_candidate`, **not dropped** — the
+  old behaviour of dropping it as `lab_data_dropped` at the adapter is what made
+  A75's value test impossible, since the values never survived to be compared;
 - observation labels split per A76: flow → `Stage`, clarity → `Appearance`, both
-  as `value_chr`.
+  carried as `value_chr`;
+- `report$als_work_orders` lists every `ES#######` found in the
+  `ALS Sydney Report No.` row (empty when the row is absent or unparseable).
 
-### R-6.5 ALS-linkage gate (A74)
+Criteria: a heading row yields nothing; a `----` cell is skipped not valued; both
+`pH` and `pH Value` survive parse as `field_candidate`/`als_candidate`
+respectively; `report$als_work_orders` is exact for a two-order citation
+(`ES2110541/ES2111935`) and empty for a bare `ES`.
 
-Water sheets only. Extract every `ES#######` from the `ALS Sydney Report No.`
-row; if any is not held, quarantine the **file** with reason
-`als_source_missing` naming the unresolved orders. Criteria: a workbook citing
-two orders with only one held is quarantined; a dust-only workbook is **never**
-gated; the rest of the batch still processes; an unparseable reference (bare
-`ES`, blank, or an ACIRL number in the ALS field) quarantines rather than
-silently passing.
+### R-6.5 Expose the ALS reference (gate itself is PLAN-09)
+
+Water sheets only. The adapter surfaces `als_work_orders` per R-6.3b and takes no
+action on it. **PLAN-09 owns the gate**: if any cited order is not held, the file
+is quarantined `als_source_missing` naming the unresolved orders; a workbook
+citing two orders with only one held is quarantined; a dust-only workbook is
+**never** gated; the rest of the batch still processes; an unparseable reference
+quarantines rather than silently passing.
 
 ## R-6.4 Dust sheets — PARSED (A73, supersedes A10)
 
