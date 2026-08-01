@@ -231,6 +231,44 @@ with no traceable ALS source, which is precisely what A74 exists to stop.
 yielded rows. That direction is deliberate: a future parser bug then closes the
 gate (quarantine, loud) instead of opening it (silent import).
 
+### R-6.7 Site-metadata labels are not analytes (MEASURED 2026-08-01)
+
+Found while measuring A75's value comparison, not by reading a sheet. A water
+sheet may carry the sampling point's *alternative name* as an ordinary label
+row. Measured over all 154 claimed workbooks there are exactly three such
+labels, and their values are 100% non-numeric:
+
+| label | rows | files |
+|---|---|---|
+| `Other Sample Id` | 2604 | 97 |
+| `Other Site Name` | 26 | — |
+| `Other Site ID` | 5 | — |
+
+Values are things like `BORE 2`, `Cripple creek DS`, `EFFLUENT` — site names,
+against the point code (`B.MW02`, `B.S01`, `B.EO1`) in the header row.
+
+They previously took the `als_candidate` path, so under A75 rule (iv) — "has
+values but neither allowlisted nor ALS-matched → review queue" — they would have
+opened **~2,635 review items of pure noise, 21% of the entire no-twin
+population**. They are now recognised by exact label match and skipped with
+reason `site_metadata_label`.
+
+**They are not discarded.** The point-code → name mapping is real evidence for
+the feature-alias subsystem, so it is carried on `report$feature_aliases`
+(`source_ref`, `feature_raw`, `label`, `alias`), deduped. Nothing consumes it
+yet. Corpus effect: `als_candidates` 41,085 → **38,450**; result rows unchanged
+at 5,704 (a metadata row was never a result); **91 distinct point → name pairs**
+recovered.
+
+The set is pinned in the adapter rather than in `st_config()` because, unlike
+the field allowlist, it is not a policy choice — it is a fact about the sheet
+layout, and a site name is never an analyte under any ruling.
+
+Criteria: none of the three labels yields a result or an ALS candidate; the
+skip reason is recorded; the alias mapping survives with a non-NA
+`feature_raw`, deduped; and an ordinary analyte label is untouched (the match
+is exact, never a prefix or substring).
+
 ### R-6.6 The widened field set and the observation split (A76, IMPLEMENTED 2026-08-01)
 
 R-6.3b named A76's allowlist and split; this section is what implementing them

@@ -178,6 +178,7 @@ acirl_field_xlsx_adapter <- function() {
   # `assemble_events(parsed)`, which is where the value comparison against the
   # real ALS data can actually run.
   als_candidate_rows <- list()
+  alias_rows_all <- list()
   als_work_orders <- character(0)
 
   for (idx in water_idx) {
@@ -189,6 +190,9 @@ acirl_field_xlsx_adapter <- function() {
     }
     if (length(ws$als_candidates) > 0) {
       als_candidate_rows <- c(als_candidate_rows, ws$als_candidates)
+    }
+    if (length(ws$feature_aliases) > 0) {
+      alias_rows_all <- c(alias_rows_all, ws$feature_aliases)
     }
     als_work_orders <- unique(c(als_work_orders, ws$als_work_orders))
 
@@ -256,6 +260,13 @@ acirl_field_xlsx_adapter <- function() {
     dplyr::bind_rows(skipped_list)
   }
 
+  feature_aliases <- if (length(alias_rows_all) == 0) {
+    tibble::tibble(source_ref = character(0), feature_raw = character(0),
+                   label = character(0), alias = character(0))
+  } else {
+    dplyr::distinct(dplyr::bind_rows(alias_rows_all))
+  }
+
   als_candidates <- if (length(als_candidate_rows) == 0) {
     tibble::tibble(
       source_ref = character(0), feature_raw = character(0),
@@ -288,7 +299,11 @@ acirl_field_xlsx_adapter <- function() {
       n_water_sheets = length(water_idx),
       # R-6.3b: ALS-looking rows kept WITH their values for A75's comparison
       # in assemble/reconcile.
-      als_candidates = als_candidates
+      als_candidates = als_candidates,
+      # R-6.7: point-code -> human-name evidence lifted off the site-metadata
+      # rows, so recognising them as metadata costs no information. Nothing
+      # consumes this yet; the feature-alias subsystem is its home.
+      feature_aliases = feature_aliases
     )
   )
 }
@@ -378,7 +393,7 @@ acirl_field_xlsx_adapter <- function() {
   empty_out <- function(skipped = list(), warnings = character(0)) {
     list(results = list(), samples = list(), skipped = skipped,
          warnings = warnings, als_candidates = list(),
-         als_work_orders = character(0))
+         feature_aliases = list(), als_work_orders = character(0))
   }
 
   grid <- tryCatch(
@@ -511,6 +526,12 @@ acirl_field_xlsx_adapter <- function() {
   obs_by_col <- list()
   warnings_local <- character(0)
 
+  alias_rows <- list()
+  # R-6.7: the three measured site-metadata labels. Pinned here rather than in
+  # `st_config()` because, unlike the field allowlist, this is not a policy
+  # choice - it is a fact about the sheet layout, and a site name is never an
+  # analyte under any ruling.
+  meta_norm <- c("OTHER SAMPLE ID", "OTHER SITE NAME", "OTHER SITE ID")
   allowed_norm <- toupper(stringr::str_squish(field_analytes))
   diff_norm <- toupper(stringr::str_squish(diff_required))
 
@@ -571,6 +592,38 @@ acirl_field_xlsx_adapter <- function() {
 
     analyte_raw_val <- normalise_lab_text(label)
     analyte_norm <- toupper(stringr::str_squish(analyte_raw_val))
+
+    # R-6.7: SITE-METADATA rows are not analytes. A water sheet may carry the
+    # sampling point's alternative name as an ordinary label row - values like
+    # "BORE 2", "Cripple Creek", "EFFLUENT" against the point code in the
+    # header. Measured over all 154 claimed workbooks there are exactly three
+    # such labels, and their values are 100% non-numeric:
+    #
+    #     Other Sample Id   2604 rows, 97 files
+    #     Other Site Name     26 rows
+    #     Other Site ID        5 rows
+    #
+    # Before this they took the `als_candidate` path, which under A75 rule (iv)
+    # would have opened ~2,635 review items of pure noise - 21% of the entire
+    # no-twin population. They are not dropped either: the point-code -> name
+    # mapping is real evidence for the feature-alias subsystem, so it is carried
+    # on `report$feature_aliases` rather than thrown away.
+    if (analyte_norm %in% meta_norm) {
+      for (j in sample_cols) {
+        v <- cell(r, j)
+        if (!nonempty(v)) next
+        alias_rows[[length(alias_rows) + 1]] <- tibble::tibble(
+          source_ref = sprintf("%s!r%dc%d", sheet_name, r, j),
+          feature_raw = feature_by_col[[as.character(j)]],
+          label = analyte_raw_val,
+          alias = stringr::str_squish(v)
+        )
+      }
+      skipped_rows[[length(skipped_rows) + 1]] <- tibble::tibble(
+        source_ref = sprintf("%s!r%d", sheet_name, r), reason = "site_metadata_label"
+      )
+      next
+    }
     # A75/A76: a diff-required label (the TSS pair) is a field reading whose
     # NAME is indistinguishable from the ALS analyte's. It is never allowed
     # through on the name alone - it takes the ALS-candidate path, tagged so
@@ -695,6 +748,7 @@ acirl_field_xlsx_adapter <- function() {
     skipped = skipped_rows,
     warnings = warnings_local,
     als_candidates = als_candidates,
+    feature_aliases = alias_rows,
     als_work_orders = als_work_orders
   )
 }

@@ -260,6 +260,11 @@ from the file being claimed for some unrelated reason.
 - **R-6.3** — R-6.3: a water sheet with no Units marker is skipped; sibling sheets still parse
 - **R-6.4** — R-6.4: dust sheet is detected and skipped, no dust-derived rows
 
+### R-6.7 site-metadata labels are not analytes - added 2026-08-01
+- the three measured metadata labels yield no result and no ALS candidate, and record a skip reason → "R-6.7: a site-metadata label yields no result and no ALS candidate"
+- the point-code → name mapping survives on `report$feature_aliases`, deduped → "R-6.7: the point-code -> name mapping is kept, not discarded"
+- an ordinary analyte label is untouched - exact match, not prefix/substring → "R-6.7: an ordinary analyte label is untouched by the metadata rule"
+
 ### R-6.5 / R-6.5b the ALS cross-reference the A74 gate consumes - added 2026-08-01
 - a two-order citation surfaces exactly, and EVERY `ALS ... Report No` row is scanned rather than only the first (the real `ALS Lithogw Report No` shadowing case) → "R-6.5: als_work_orders is exposed, including a two-order citation"
 - `report$n_water_sheets` separates a dust-only workbook from one whose water sheets cite nothing, which the gate needs and `als_work_orders` alone cannot say → "R-9.13/A73: a dust-only workbook is NEVER gated, whatever the DB holds", "R-9.13: water sheets that cite NOTHING are gated, not exempted"
