@@ -447,6 +447,36 @@ it as well or it will re-introduce the same noise.
 Measurement scripts: `scratchpad/dust_geometry.R`, `scratchpad/dust_obs_geometry.R`
 (saved to `dust_geometry.rds`, `dust_obs_geometry.rds`).
 
+**3. `INSOLUBLE SOLIDS` will not resolve — a ruling is needed before R-6.4 can
+import `dust-total`.** Everything else dust needs already exists in the live DB
+and needs no write: analytes `dust-total`/`dust-combustible`/`dust-incombustible`
+(`g/m2/month`, type `particulate`) with 102 committed analyses each, and four
+ACIRL `lab_method` rows. But reconcile resolves an analyte by matching
+`lab_method.name` against `analyte_raw`, and one of the four does not match the
+sheet:
+
+| sheet header (all 50) | folded | registered `lab_method.name` | folded | |
+|---|---|---|---|---|
+| `INSOLUBLE SOLIDS` | `insolublesolids` | `INSOLUBLE SOLID` | `insolublesolid` | **no match** |
+| `*COMBUSTIBLE MATTER` | `combustiblematter` | `*COMBUSTIBLE MATTER` | `combustiblematter` | match |
+| `INCOMBUSTIBLE MATTER` | `incombustiblematter` | `INCOMBUSTIBLE MATTER` | `incombustiblematter` | match |
+| `ANALYSIS OBSERVATIONS` | `analysisobservations` | `ANALYSIS OBSERVATIONS` | `analysisobservations` | match |
+
+A trailing `s`. `.rc_method_key()` folds punctuation and case but not plurals,
+so **one third of all dust results would route to review** while the other two
+analytes import. The registry name is legacy-chosen; the source document has
+said `INSOLUBLE SOLIDS` on every sheet measured.
+
+The adapter must emit the sheet's literal text — it must never normalise a label
+into a different word to make a lookup succeed, which would be the adapter lying
+about its source. So the fix is a database one and therefore Robin's: either add
+an `INSOLUBLE SOLIDS` `lab_method` for ACIRL against the existing `dust-total`
+analyte, or rename the existing row (safe — analyses reference it by `uuid_lab`,
+not by name). Until then `dust-total` lands in review, which is the correct loud
+failure, consistent with `Turbidity` and the EC-@-25 deletion.
+
+Measurement script: `scratchpad/dust_labels.R`.
+
 ## Fixtures
 
 **Re-cut from real geometry (2026-08-01)** — see R-6.3a. The previous synthetic
