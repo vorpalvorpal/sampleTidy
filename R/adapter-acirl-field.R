@@ -57,7 +57,35 @@ acirl_field_xlsx_adapter <- function() {
       return("format")
     }
   }
+
+  # Second arm (R-6.1, added 2026-08-01 with A73). A `Units` marker only ever
+  # occurs on a WATER sheet, so the 6 real dust-only workbooks
+  # ("2400-7286-10-02 Dust Blaxland WMF.xls" and siblings) all measured
+  # match() == "no" - the adapter never claimed them, and reversing A10 alone
+  # would have recovered no dust from them at all.
+  for (s in sheet_names[grepl("dust results", sheet_names, ignore.case = TRUE)]) {
+    if (.st_acirl_sheet_has_dust_marker(fm$path, s)) {
+      return("format")
+    }
+  }
   "no"
+}
+
+# Dust fingerprint: a "Dust Results" sheet carrying both the gauge-number and
+# insoluble-solids headers. Present on all 50 real dust-results sheets.
+.st_acirl_sheet_has_dust_marker <- function(path, sheet) {
+  df <- tryCatch(
+    suppressMessages(readxl::read_excel(
+      path, sheet = sheet, col_names = FALSE, col_types = "text", n_max = 20
+    )),
+    error = function(e) NULL
+  )
+  if (is.null(df) || nrow(df) == 0) {
+    return(FALSE)
+  }
+  flat <- trimws(unlist(df))
+  any(grepl("^GAUGE NO", flat, ignore.case = TRUE), na.rm = TRUE) &&
+    any(grepl("^INSOLUBLE SOLID", flat, ignore.case = TRUE), na.rm = TRUE)
 }
 
 # Cheap check: does this sheet have a cell reading exactly "Units" (after
@@ -144,6 +172,12 @@ acirl_field_xlsx_adapter <- function() {
 
   results_rows <- list()
   samples_rows <- list()
+  # A75/A74 (R-6.3b, R-6.5): carried on `report`, NOT on ir_results, whose
+  # columns are pinned by the IR contract. `report` reaches
+  # `assemble_events(parsed)`, which is where the value comparison against the
+  # real ALS data can actually run.
+  als_candidate_rows <- list()
+  als_work_orders <- character(0)
 
   for (idx in water_idx) {
     sheet_name <- sheet_names[[idx]]
@@ -152,6 +186,10 @@ acirl_field_xlsx_adapter <- function() {
     if (length(ws$skipped) > 0) {
       skipped_list <- c(skipped_list, ws$skipped)
     }
+    if (length(ws$als_candidates) > 0) {
+      als_candidate_rows <- c(als_candidate_rows, ws$als_candidates)
+    }
+    als_work_orders <- unique(c(als_work_orders, ws$als_work_orders))
 
     for (rr in ws$results) {
       results_rows[[length(results_rows) + 1]] <- tibble::tibble(
@@ -217,6 +255,16 @@ acirl_field_xlsx_adapter <- function() {
     dplyr::bind_rows(skipped_list)
   }
 
+  als_candidates <- if (length(als_candidate_rows) == 0) {
+    tibble::tibble(
+      source_ref = character(0), feature_raw = character(0),
+      analyte_raw = character(0), units_raw = character(0),
+      value_raw = character(0)
+    )
+  } else {
+    dplyr::bind_rows(als_candidate_rows)
+  }
+
   list(
     results = results,
     samples = samples,
@@ -225,7 +273,13 @@ acirl_field_xlsx_adapter <- function() {
       n_by_sample_type = table(results$sample_type),
       skipped = skipped,
       header = header,
-      warnings = warnings_vec
+      warnings = warnings_vec,
+      # R-6.5: exposed for PLAN-09's gate (A74). The adapter takes NO action
+      # on this - it cannot see which work orders are held.
+      als_work_orders = als_work_orders,
+      # R-6.3b: ALS-looking rows kept WITH their values for A75's comparison
+      # in assemble/reconcile.
+      als_candidates = als_candidates
     )
   )
 }
@@ -278,21 +332,43 @@ acirl_field_xlsx_adapter <- function() {
   )
 }
 
-# --- R-6.3 water sheets ----------------------------------------------------
+# --- R-6.3a water sheets (real geometry) ------------------------------------
 
-# Parses one water sheet into raw (pre-IR) results/samples row lists plus
-# skipped rows and warnings. Layout (tests/testthat/fixtures/acirl/README.md):
-# a "Site Name" row carries the `Units` marker (locates the header row and,
-# one column to its right, the units column) plus one feature name per
-# sample column; the next row matching `(?i)date` carries Excel-serial dates
-# (filled down across columns); each subsequent labelled row is either
-# "Comments" (attaches to samples, not results) or a candidate analyte row
-# (kept only if on the configured field-analyte allowlist; everything else,
-# including the ALS lab-result copies below the block terminator, is
-# recorded as `lab_data_dropped`).
+# Parses one water sheet into raw (pre-IR) results/samples row lists, ALS
+# candidates, skipped rows and warnings.
+#
+# GEOMETRY (PLAN-06 R-6.3a; measured over 986 real water sheets, 640 of which
+# carry a `Site Name` row - every rule below held on every one of them):
+#
+#   the `Site Name` row is the HEADER row and its column is the LABEL column
+#   units_col         == site_col + 1                        640/640
+#   first_feature_col == units_col + 1                       640/640
+#   date-label column == site_col                            640/640
+#   date_row          == site_row - 1  (ABOVE the site row)  640/640
+#
+# The previous implementation took the header from the `Units` marker row and
+# the labels from a hardcoded column 1. Neither holds in any real workbook: the
+# `Units` marker sits 3-4 rows ABOVE the site row on its own, and labels sit in
+# the site column. That defect extracted zero rows from all 147 real ACIRL
+# workbooks while passing every test. `Units` is now used only as the match()
+# fingerprint (R-6.1), never to locate the block.
+#
+# The date row is searched ABOVE the site row first and below only as a
+# fallback, so the older fixture layout (date below) still parses.
+#
+# There is NO block terminator any more. Rows below the block are no longer
+# guessed at by a regex: every labelled row is classified (A75) - a row with no
+# values anywhere is a heading and is dropped, `----` is "not analysed", a row
+# on the field allowlist is a field reading, and anything else is an
+# `als_candidate` recorded in `report$als_candidates` WITH ITS VALUES so the
+# A75 value comparison can run later in assemble/reconcile. Dropping those rows
+# here (the old `lab_data_dropped` behaviour) destroyed the very values that
+# comparison needs.
 .st_acirl_parse_water_sheet <- function(path, sheet_name, field_analytes) {
   empty_out <- function(skipped = list(), warnings = character(0)) {
-    list(results = list(), samples = list(), skipped = skipped, warnings = warnings)
+    list(results = list(), samples = list(), skipped = skipped,
+         warnings = warnings, als_candidates = list(),
+         als_work_orders = character(0))
   }
 
   grid <- tryCatch(
@@ -304,6 +380,7 @@ acirl_field_xlsx_adapter <- function() {
   if (is.null(grid) || nrow(grid) == 0) {
     return(empty_out())
   }
+
   mat <- as.matrix(grid)
   dimnames(mat) <- NULL # readxl's default col_names=FALSE colnames ("...1", ...)
   # would otherwise attach as a `names` attribute on every single-cell
@@ -311,51 +388,38 @@ acirl_field_xlsx_adapter <- function() {
   n_row <- nrow(mat)
   n_col <- ncol(mat)
 
-  # Units marker locates the header row and the units column.
-  units_hits <- str_which_df(grid, "^Units$", multiple_matches = TRUE)
-  if (nrow(units_hits) == 0) {
-    warn <- sprintf("Sheet '%s': no 'Units' marker found; sheet skipped.", sheet_name)
-    return(empty_out(
-      skipped = list(tibble::tibble(source_ref = sheet_name, reason = "no_units_marker")),
-      warnings = warn
-    ))
+  cell <- function(r, c) {
+    if (r < 1 || r > n_row || c < 1 || c > n_col) return(NA_character_)
+    v <- mat[r, c]
+    if (is.na(v)) NA_character_ else trimws(v)
   }
-  header_row <- units_hits$row[[1]]
-  header_col <- units_hits$col[[1]]
+  nonempty <- function(x) !is.na(x) && nzchar(x)
 
-  # Block terminator: the last row (column A) matching the field/comments
-  # pattern, at or after the header row.
-  col1 <- trimws(mat[, 1])
-  term_hits <- which(grepl(.st_acirl_terminator_re, col1, ignore.case = TRUE))
-  term_hits <- term_hits[term_hits >= header_row]
-  if (length(term_hits) == 0) {
+  # --- anchor: the `Site Name` row -----------------------------------------
+  site_hits <- which(
+    matrix(grepl("^site\\s*name$", trimws(mat), ignore.case = TRUE), nrow = n_row),
+    arr.ind = TRUE
+  )
+  if (nrow(site_hits) == 0) {
     warn <- sprintf(
-      "Sheet '%s': could not locate the end of the field-data block; sheet skipped.",
-      sheet_name
+      "Sheet '%s': no 'Site Name' header row found; sheet skipped.", sheet_name
     )
     return(empty_out(
-      skipped = list(tibble::tibble(source_ref = sheet_name, reason = "no_field_block")),
+      skipped = list(tibble::tibble(source_ref = sheet_name, reason = "no_site_row")),
       warnings = warn
     ))
   }
-  terminator_row <- max(term_hits)
+  header_row <- as.integer(site_hits[1, 1])
+  label_col <- as.integer(site_hits[1, 2])
+  units_col <- label_col + 1L
 
-  n_block_rows <- terminator_row - header_row + 1
-  warnings_local <- character(0)
-  if (n_block_rows > 20) {
-    warnings_local <- c(warnings_local, sprintf(
-      "Sheet '%s' field-data block has %d rows (more than 20); check for a layout mistake.",
-      sheet_name, n_block_rows
-    ))
-  }
-
-  # Sample columns + feature names, from the header row.
+  # --- sample columns + feature names, from the Site Name row ---------------
   sample_cols <- integer(0)
   feature_by_col <- list()
-  if (n_col > header_col) {
-    for (j in (header_col + 1):n_col) {
-      v <- mat[header_row, j]
-      if (!is.na(v) && nzchar(trimws(v))) {
+  if (n_col > units_col) {
+    for (j in (units_col + 1L):n_col) {
+      v <- cell(header_row, j)
+      if (nonempty(v)) {
         sample_cols <- c(sample_cols, j)
         feature_by_col[[as.character(j)]] <- stringr::str_squish(v)
       }
@@ -369,17 +433,39 @@ acirl_field_xlsx_adapter <- function() {
     ))
   }
 
-  # Date row: first row after the header matching `(?i)date`.
-  date_row <- NA_integer_
-  if (header_row < n_row) {
-    for (r in (header_row + 1):n_row) {
-      lbl <- trimws(mat[r, 1])
-      if (!is.na(lbl) && grepl("date", lbl, ignore.case = TRUE)) {
-        date_row <- r
-        break
-      }
+  # --- ALS cross-reference (R-6.5): exposed, never acted on here -------------
+  als_work_orders <- character(0)
+  als_row <- NA_integer_
+  for (r in seq_len(n_row)) {
+    v <- cell(r, label_col)
+    if (nonempty(v) && grepl("ALS.*report\\s*no", v, ignore.case = TRUE)) {
+      als_row <- r
+      break
     }
   }
+  if (!is.na(als_row)) {
+    for (j in seq_len(n_col)) {
+      if (j == label_col) next
+      v <- cell(als_row, j)
+      if (nonempty(v)) {
+        als_work_orders <- c(als_work_orders,
+                             unlist(regmatches(v, gregexpr("ES[0-9]{7}", v))))
+      }
+    }
+    als_work_orders <- unique(als_work_orders)
+  }
+
+  # --- date row: prefer ABOVE the header row, fall back to below -------------
+  date_candidates <- integer(0)
+  for (r in seq_len(n_row)) {
+    v <- cell(r, label_col)
+    if (nonempty(v) && grepl("date", v, ignore.case = TRUE)) {
+      date_candidates <- c(date_candidates, r)
+    }
+  }
+  above <- date_candidates[date_candidates < header_row]
+  below <- date_candidates[date_candidates > header_row]
+  date_row <- if (length(above)) max(above) else if (length(below)) min(below) else NA_integer_
   if (is.na(date_row)) {
     warn <- sprintf("Sheet '%s': no Date row found; sheet skipped.", sheet_name)
     return(empty_out(
@@ -392,10 +478,8 @@ acirl_field_xlsx_adapter <- function() {
   date_serial_by_col <- list()
   last_val <- NA_character_
   for (j in sample_cols) {
-    v <- mat[date_row, j]
-    if (!is.na(v) && nzchar(trimws(v))) {
-      last_val <- trimws(v)
-    }
+    v <- cell(date_row, j)
+    if (nonempty(v)) last_val <- v
     date_serial_by_col[[as.character(j)]] <- last_val
   }
   sample_datetime_by_col <- lapply(date_serial_by_col, function(raw) {
@@ -406,75 +490,111 @@ acirl_field_xlsx_adapter <- function() {
     if (is.na(num)) NA_character_ else format(excel_date(num), "%d/%m/%Y")
   })
 
-  # Parameter rows: everything from just after the date row to the end of
-  # the sheet (not just the terminator row - ALS lab-result copies below
-  # the terminator must still be scanned so they can be recorded as
-  # lab_data_dropped rather than silently ignored).
+  # --- parameter rows -------------------------------------------------------
   results_rows <- list()
   skipped_rows <- list()
+  als_candidates <- list()
   comments_by_col <- list()
+  warnings_local <- character(0)
 
-  if (date_row < n_row) {
-    for (r in (date_row + 1):n_row) {
-      label_raw <- mat[r, 1]
-      if (is.na(label_raw) || !nzchar(trimws(label_raw))) {
-        next
-      }
-      label <- trimws(label_raw)
+  allowed_norm <- toupper(stringr::str_squish(field_analytes))
 
-      if (grepl("^comments$", label, ignore.case = TRUE)) {
-        for (j in sample_cols) {
-          v <- mat[r, j]
-          if (!is.na(v) && nzchar(trimws(v))) {
-            comments_by_col[[as.character(j)]] <- stringr::str_squish(v)
-          }
-        }
-        next
-      }
+  for (r in seq_len(n_row)) {
+    if (r <= header_row || r == date_row) next
+    label_raw <- cell(r, label_col)
+    if (!nonempty(label_raw)) next
+    label <- label_raw
 
-      analyte_raw_val <- normalise_lab_text(label)
-      analyte_norm <- toupper(stringr::str_squish(analyte_raw_val))
-      allowed_norm <- toupper(stringr::str_squish(field_analytes))
-      is_allowed <- analyte_norm %in% allowed_norm
-      units_cell <- mat[r, header_col]
-
+    # Observation / comments rows attach to the sample, not to results. The
+    # real labels are not bare "Comments" - measured across the corpus:
+    # "General Comments/ Observations" (102), "Observations / Comments" (60),
+    # "Flow Observation / Appearance" (49). A76 converts these to qualitative
+    # `Stage`/`Appearance` analysis rows; that split needs a value vocabulary
+    # ("Low flow Clear" -> Stage + Appearance) and is deliberately NOT done
+    # here - see PLAN-06.
+    if (.st_acirl_is_comment_label(label)) {
       for (j in sample_cols) {
-        value_raw_cell <- mat[r, j]
-        source_ref <- sprintf("%s!r%dc%d", sheet_name, r, j)
-
-        if (!is_allowed) {
-          skipped_rows[[length(skipped_rows) + 1]] <- tibble::tibble(
-            source_ref = source_ref, reason = "lab_data_dropped"
-          )
-          next
+        v <- cell(r, j)
+        if (nonempty(v)) {
+          key <- as.character(j)
+          prev <- comments_by_col[[key]]
+          txt <- stringr::str_squish(v)
+          comments_by_col[[key]] <- if (is.null(prev)) txt else paste(prev, txt, sep = "; ")
         }
-
-        pv <- parse_value(value_raw_cell)
-        if (!is.na(pv$skip_reason)) {
-          skipped_rows[[length(skipped_rows) + 1]] <- tibble::tibble(
-            source_ref = source_ref, reason = pv$skip_reason
-          )
-          next
-        }
-
-        results_rows[[length(results_rows) + 1]] <- list(
-          source_ref = source_ref,
-          # R-11.15: synthetic per-column lab_sample_id, keyed on sheet name
-          # + column index (both stable across a re-parse of the same file,
-          # distinct per sample column) - ties this result to the exact
-          # sample column it came from, so `.st_join_samples_onto_results()`
-          # (assemble.R) takes the exact-match branch instead of the
-          # feature-name-only fallback that conflates sibling visits.
-          lab_sample_id = sprintf("%s!c%d", sheet_name, j),
-          feature_raw = feature_by_col[[as.character(j)]],
-          analyte_raw = analyte_raw_val,
-          units_raw = .st_acirl_repair_units(analyte_raw_val, units_cell),
-          value_raw = trimws(value_raw_cell),
-          value_num = pv$value_num,
-          value_chr = pv$value_chr,
-          below_detection = grepl("^<", trimws(value_raw_cell))
-        )
       }
+      next
+    }
+
+    analyte_raw_val <- normalise_lab_text(label)
+    analyte_norm <- toupper(stringr::str_squish(analyte_raw_val))
+    is_allowed <- analyte_norm %in% allowed_norm
+    units_cell <- cell(r, units_col)
+
+    # A row with no value in ANY sample column is a section heading
+    # ("Dissolved Major Cations", "Dissolved Metals by ICP-MS"), not an
+    # analyte. Dropped silently: no result, no ALS candidate, no review item.
+    if (!any(vapply(sample_cols, function(j) nonempty(cell(r, j)), logical(1)))) {
+      skipped_rows[[length(skipped_rows) + 1]] <- tibble::tibble(
+        source_ref = sprintf("%s!r%d", sheet_name, r), reason = "heading"
+      )
+      next
+    }
+
+    for (j in sample_cols) {
+      value_raw_cell <- cell(r, j)
+      source_ref <- sprintf("%s!r%dc%d", sheet_name, r, j)
+
+      # "----" is the sheet's "not analysed" placeholder, not a value.
+      if (nonempty(value_raw_cell) && grepl("^-{2,}$", value_raw_cell)) {
+        skipped_rows[[length(skipped_rows) + 1]] <- tibble::tibble(
+          source_ref = source_ref, reason = "not_analysed"
+        )
+        next
+      }
+
+      if (!is_allowed) {
+        # Kept WITH its value (A75) - the comparison against the real ALS
+        # result happens in assemble/reconcile, which can see the ALS data.
+        if (nonempty(value_raw_cell)) {
+          als_candidates[[length(als_candidates) + 1]] <- tibble::tibble(
+            source_ref = source_ref,
+            feature_raw = feature_by_col[[as.character(j)]],
+            analyte_raw = analyte_raw_val,
+            units_raw = .st_acirl_repair_units(analyte_raw_val, units_cell),
+            value_raw = value_raw_cell
+          )
+        }
+        skipped_rows[[length(skipped_rows) + 1]] <- tibble::tibble(
+          source_ref = source_ref, reason = "lab_data_dropped"
+        )
+        next
+      }
+
+      pv <- parse_value(value_raw_cell)
+      if (!is.na(pv$skip_reason)) {
+        skipped_rows[[length(skipped_rows) + 1]] <- tibble::tibble(
+          source_ref = source_ref, reason = pv$skip_reason
+        )
+        next
+      }
+
+      results_rows[[length(results_rows) + 1]] <- list(
+        source_ref = source_ref,
+        # R-11.15: synthetic per-column lab_sample_id, keyed on sheet name
+        # + column index (both stable across a re-parse of the same file,
+        # distinct per sample column) - ties this result to the exact
+        # sample column it came from, so `.st_join_samples_onto_results()`
+        # (assemble.R) takes the exact-match branch instead of the
+        # feature-name-only fallback that conflates sibling visits.
+        lab_sample_id = sprintf("%s!c%d", sheet_name, j),
+        feature_raw = feature_by_col[[as.character(j)]],
+        analyte_raw = analyte_raw_val,
+        units_raw = .st_acirl_repair_units(analyte_raw_val, units_cell),
+        value_raw = value_raw_cell,
+        value_num = pv$value_num,
+        value_chr = pv$value_chr,
+        below_detection = grepl("^<", value_raw_cell)
+      )
     }
   }
 
@@ -496,8 +616,18 @@ acirl_field_xlsx_adapter <- function() {
     results = results_rows,
     samples = samples_rows,
     skipped = skipped_rows,
-    warnings = warnings_local
+    warnings = warnings_local,
+    als_candidates = als_candidates,
+    als_work_orders = als_work_orders
   )
+}
+
+# Observation/comments row labels. Bare "Comments" is the fixture form; the
+# real corpus uses longer variants, all of which attach to the sample rather
+# than producing a result row.
+.st_acirl_is_comment_label <- function(label) {
+  grepl("^comments$", label, ignore.case = TRUE) ||
+    grepl("comment|observation", label, ignore.case = TRUE)
 }
 
 # Old reader's unit repairs (WEM.data's tidy_ACIRL_field_data): Temperature

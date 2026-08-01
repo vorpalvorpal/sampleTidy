@@ -123,6 +123,36 @@ Criteria: fixtures re-cut from real geometry (anonymised per A3) must include a
 ALS rows; the adapter extracts a non-zero row count from **every** structural
 variant present in the corpus.
 
+**IMPLEMENTED 2026-08-01.** Measured on the real corpus after the rewrite:
+
+| | before | after |
+|---|---|---|
+| workbooks matched | 147 | **154** (the 7 dust-only ones now claimed) |
+| workbooks yielding ≥1 row | **0 of 147** | **146 of 154** |
+| total result rows | **0** | **2138** |
+| sheets skipped `no_field_block` | 612 | **0** |
+
+The 8 workbooks still at zero are the 7 dust-only ones (dust parsing is R-6.4,
+not yet implemented) and `2400-7453-03 Annual March 2025 Blaxland WMF .xls`,
+whose field labels are not on the un-widened allowlist — that resolves with A76.
+2138 rows is with the **old** 4-entry allowlist still in force; A76 widens it.
+
+Two criteria are **RETIRED** by this rewrite:
+
+- *"a >20-row field block emits a warning but still parses"* — the warning
+  measured the size of the terminator-bounded block, and there is no terminator
+  any more (A75 classifies rows individually). Real sheets routinely carry ~50
+  labelled rows, so the warning would now fire on essentially every sheet.
+  Replaced by the positive property that a large sheet parses in full.
+- *"a water sheet with no `Units` marker is skipped"* — the marker is now only
+  the `match()` fingerprint and never locates the block, so such a sheet parses
+  (with `units_raw` NA). The real skip is **`no_site_row`** — no `Site Name`
+  anchor — which 70 real sheets take. `no_units_marker` and `no_field_block` no
+  longer occur.
+
+Mutation-verified: reverting `label_col` to the hardcoded `1L`, or searching for
+the date row only *below* the header, each turns 12 tests red.
+
 ### Layer note — A74/A75 are NOT adapter concerns
 
 An adapter's `parse(path, file_meta)` sees **one file and no database**, so it

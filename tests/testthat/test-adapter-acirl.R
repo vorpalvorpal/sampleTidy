@@ -16,6 +16,10 @@ main_path       <- test_path("fixtures", "acirl", "2400-9999-01_Test_WMF.xlsx")
 edge_path       <- test_path("fixtures", "acirl", "EDGECASES.xlsx")
 no_report_path  <- test_path("fixtures", "acirl", "NO_REPORT_NO.xlsx")
 random_xlsx_path <- test_path("fixtures", "acirl", "random.xlsx")
+# Real-geometry fixtures (R-6.3a) - see fixtures/acirl/README-real-geometry.md
+real_path       <- test_path("fixtures", "acirl", "2400-9999-11_Real_WMF.xlsx")
+dustonly_path   <- test_path("fixtures", "acirl", "2400-9999-12_DustOnly_WMF.xlsx")
+alsrefs_path    <- test_path("fixtures", "acirl", "2400-9999-13_AlsRefs_WMF.xlsx")
 xtab_xlsx_path  <- test_path("fixtures", "crosstab", "XX1234567_0_XTAB.xlsx")
 
 fake_als_labels <- c("Fluoride", "Sulphate", "Total Dissolved Solids", "Alkalinity")
@@ -170,26 +174,49 @@ test_that("R-6.3: ir_validate() passes on the main workbook's output", {
   expect_silent(sampleTidy:::ir_validate(out$samples, kind = "samples"))
 })
 
-test_that("R-6.3: a >20-row field block emits a warning but still parses", {
+# RETIRED 2026-08-01 (R-6.3a): "a >20-row field block emits a warning".
+# The warning measured the size of the terminator-bounded block, and there is
+# no terminator any more - rows are classified individually (A75). Real water
+# sheets routinely carry ~50 labelled rows (the reference workbook has 50), so
+# the old warning would now fire on essentially every real sheet. Replaced by
+# the positive property that actually matters: a large sheet parses in full.
+test_that("R-6.3a: a large field block parses in full, with no spurious size warning", {
   meta <- sampleTidy:::file_meta(edge_path)
   out <- acirl_adapter()$parse(edge_path, meta)
-  expect_true(any(grepl("20", out$report$warnings)))
-  big_ph <- out$results[out$results$analyte_raw == "pH" & out$results$value_raw == "7", ]
   # Field Data Big's own pH values (7.00, 7.10, 7.05, 7.15) must appear
   expect_true(any(out$results$value_raw %in% c("7", "7.1", "7.05", "7.15") |
                     out$results$value_num %in% c(7, 7.1, 7.05, 7.15)))
+  expect_false(any(grepl("more than 20", out$report$warnings, fixed = TRUE)))
 })
 
-test_that("R-6.3: a water sheet with no Units marker is skipped; sibling sheets still parse", {
+# CHANGED 2026-08-01 (R-6.3a): the `Units` marker is now ONLY the match()
+# fingerprint (R-6.1); it no longer locates the block, because in every real
+# workbook it sits 3-4 rows above the header on its own row. A sheet that has
+# a `Site Name` row but no `Units` marker is therefore parsed (units_raw NA)
+# rather than skipped. What IS skipped is a sheet with no `Site Name` row at
+# all - 70 such sheets exist in the real corpus.
+test_that("R-6.3a: a sheet with no Units marker still parses; the anchor is Site Name", {
   meta <- sampleTidy:::file_meta(edge_path)
   out <- acirl_adapter()$parse(edge_path, meta)
-  # Field Data NoUnits' own pH values (7.20, 7.35) must be entirely absent
-  no_units_present <- any(out$results$value_num %in% c(7.20, 7.35))
-  expect_false(no_units_present)
-  expect_true(any(grepl("Units", out$report$warnings, ignore.case = TRUE) |
-                    grepl("NoUnits", out$report$warnings, fixed = TRUE)))
-  # Field Data Big must still have parsed successfully alongside the skip
+  # Field Data NoUnits has a Site Name row, so its values are now recovered
+  expect_true(any(out$results$value_num %in% c(7.20, 7.35)))
+  # and it must not be reported as skipped for want of a Units marker
+  expect_false(any(out$report$skipped$reason == "no_units_marker"))
+  # sibling sheets still parse
   expect_true(nrow(out$results) > 0)
+})
+
+test_that("R-6.3a: a sheet with no Site Name row is skipped as no_site_row", {
+  # "Water Methodology" is a real-shaped sheet with no Site Name row. Fed to
+  # the water-sheet parser directly it must skip loudly, not return silently
+  # empty - 70 real corpus sheets take this path.
+  ws <- sampleTidy:::.st_acirl_parse_water_sheet(
+    real_path, "Water Methodology", st_config("field_analytes")
+  )
+  expect_length(ws$results, 0)
+  reasons <- vapply(ws$skipped, function(s) s$reason[[1]], character(1))
+  expect_true("no_site_row" %in% reasons)
+  expect_true(any(grepl("Site Name", ws$warnings, fixed = TRUE)))
 })
 
 # ---- R-6.4 dust sheets (A10) -----------------------------------------------------
@@ -261,4 +288,86 @@ test_that("R-11.15: lab_sample_id is stable across a re-parse of the same file (
   out2 <- acirl_adapter()$parse(main_path, meta)
   expect_identical(out1$samples$lab_sample_id, out2$samples$lab_sample_id)
   expect_identical(out1$results$lab_sample_id, out2$results$lab_sample_id)
+})
+
+# ---- R-6.3a / R-6.3b / R-6.5: real-workbook geometry -----------------------
+# These run against the real-geometry fixtures. Against the PREVIOUS adapter
+# every one of them fails (the fixture yielded 0 rows, 2x no_field_block) -
+# which is exactly the result the old adapter gave on all 147 real ACIRL
+# workbooks. See fixtures/acirl/README-real-geometry.md for the measurement.
+
+test_that("R-6.3a: real geometry parses - Units marker off the header row, labels in the Site Name column", {
+  meta <- sampleTidy:::file_meta(real_path)
+  out <- acirl_adapter()$parse(real_path, meta)
+
+  expect_gt(nrow(out$results), 0)
+  # the old failure mode must be gone entirely
+  expect_false(any(out$report$skipped$reason == "no_field_block"))
+  # features come from the Site Name row, not the Units row (which is blank)
+  expect_setequal(unique(out$results$feature_raw), c("T.S01", "T.S02"))
+  # both field analytes on the current allowlist are recovered
+  expect_true(all(c("pH", "Temperature") %in% out$results$analyte_raw))
+})
+
+test_that("R-6.3a: the date row ABOVE the header row is used", {
+  meta <- sampleTidy:::file_meta(real_path)
+  out <- acirl_adapter()$parse(real_path, meta)
+  # fixture dates are 24/05/2025 (visit 1) and 25/05/2025 (visit 2)
+  expect_setequal(unique(out$samples$sample_datetime_raw),
+                  c("24/05/2025", "25/05/2025"))
+})
+
+test_that("R-6.3b: a valueless heading row is dropped, and never becomes a result", {
+  meta <- sampleTidy:::file_meta(real_path)
+  out <- acirl_adapter()$parse(real_path, meta)
+  # "Dissolved Major Cations" is a section heading with no values in any
+  # sample column - it must not appear as a result NOR as an ALS candidate
+  expect_false("Dissolved Major Cations" %in% out$results$analyte_raw)
+  expect_false("Dissolved Major Cations" %in% out$report$als_candidates$analyte_raw)
+  expect_true(any(out$report$skipped$reason == "heading"))
+})
+
+test_that("R-6.3b: '----' is recorded as not_analysed, never parsed as a value", {
+  meta <- sampleTidy:::file_meta(real_path)
+  out <- acirl_adapter()$parse(real_path, meta)
+  expect_true(any(out$report$skipped$reason == "not_analysed"))
+  expect_false(any(grepl("^-{2,}$", out$results$value_raw)))
+  expect_false(any(grepl("^-{2,}$", out$report$als_candidates$value_raw)))
+})
+
+test_that("R-6.3b: ALS-looking rows are KEPT with their values, not discarded at parse", {
+  meta <- sampleTidy:::file_meta(real_path)
+  out <- acirl_adapter()$parse(real_path, meta)
+  cand <- out$report$als_candidates
+  expect_gt(nrow(cand), 0)
+  # the ALS twins of the field probes must survive parse WITH their values,
+  # because A75's comparison happens later in assemble/reconcile and cannot
+  # run on values the adapter threw away
+  expect_true("pH Value" %in% cand$analyte_raw)
+  ph_copy <- cand$value_raw[cand$analyte_raw == "pH Value"]
+  expect_true(all(c("6.42", "6.61") %in% ph_copy))
+  # and the field reading is a result, distinct from its ALS twin
+  expect_true("pH" %in% out$results$analyte_raw)
+  expect_false("pH Value" %in% out$results$analyte_raw)
+})
+
+test_that("R-6.5: als_work_orders is exposed, including a two-order citation", {
+  meta <- sampleTidy:::file_meta(real_path)
+  expect_identical(acirl_adapter()$parse(real_path, meta)$report$als_work_orders,
+                   "ES9999001")
+
+  # 2400-9999-13 cites ES9999001/ES9999002 on one sheet, and carries a bare
+  # "ES", an ACIRL number and a blank on the others - none of which yield a
+  # work order. A74 requires ALL cited orders, so both must surface.
+  meta2 <- sampleTidy:::file_meta(alsrefs_path)
+  wo <- acirl_adapter()$parse(alsrefs_path, meta2)$report$als_work_orders
+  expect_setequal(wo, c("ES9999001", "ES9999002"))
+})
+
+test_that("R-6.1: a dust-only workbook matches (it has no Units marker at all)", {
+  # All 6 real dust-only workbooks measured match() == "no" before the second
+  # match arm was added; reversing A10 alone would have recovered no dust.
+  meta <- sampleTidy:::file_meta(dustonly_path)
+  expect_identical(acirl_adapter()$match(meta), "format")
+  expect_false(any(grepl("Units", readxl::excel_sheets(dustonly_path))))
 })
