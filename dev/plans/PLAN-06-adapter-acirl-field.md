@@ -269,6 +269,41 @@ skip reason is recorded; the alias mapping survives with a non-NA
 `feature_raw`, deduped; and an ordinary analyte label is untouched (the match
 is exact, never a prefix or substring).
 
+**What the mapping resolves (2026-08-02).** Some ACIRL sheets put the human name
+in the header row where others put the point code, so 25 header values matched no
+`feature` and no `feature_alias`. Inverting the recovered mapping (2,635 rows, 67
+distinct names) resolves **9 of them determinately — 991 rows**. A name counts
+only when it maps to exactly one code that is itself a known feature:
+
+| header value | → feature | via sheet code | rows |
+|---|---|---|---|
+| `BORE 2` | `B.MW02` | `B.MW02` | 168 |
+| `BORE 4` | `B.MW04` | `B.MW04` | 168 |
+| `BORE 9` | `B.MW09` | `B.MW09` | 168 |
+| `BORE 10` | `B.MW10` | `B.MW10`, `B.MW010` | 168 |
+| `BORE 6` | `B.MW06` | `B.MW06` | 148 |
+| `BORE 7` | `B.MW07` | `B.MW07` | 148 |
+| `CRIPPLE CREEK OUTLET` | `B.S05` | `B.S05` | 15 |
+| `E1` | `K.S05` | `S5`, `E1` | 5 |
+| `EFFLUENT` | `B.E01` | `B.E01` | 3 |
+
+These take `kind = 'descriptive'`. **Two are ambiguous and are not guessed:**
+`BORE 11` → `B.MW11` *or* `B.CW02` (168 rows), and `CRIPPLE CREEK INLET` →
+`B.S12` *or* `B.S04` (15 rows) — each name appears against two different codes in
+the corpus, so only Robin can say which.
+
+Still unresolved by this mapping, and needing separate evidence: `LEACHATE` (386),
+`BORE10A`/`BORE11B`/`BORE12` (1,154), `MP # 1..4` (325), `LEACHATE DAM 1/2` (248),
+`B.SO1 S1`/`B.SO3 S3` (270), `S1`, `S22`.
+
+**No alias rows are written from this.** `feature_alias` rows carry `n_seen`,
+`first_seen` and `date_start` that the commit path derives from the data actually
+ingested (`.ct_materialise_feature_aliases()`); pre-creating them by hand would
+fabricate that provenance. As with A78 this table is the **answer sheet** for the
+`confirm_feature_aliases()` step once ACIRL ingests, not a migration.
+
+Measurement: `scratchpad/wire_descriptive.R` → `wire_descriptive.rds`.
+
 ### R-6.6 The widened field set and the observation split (A76, IMPLEMENTED 2026-08-01)
 
 R-6.3b named A76's allowlist and split; this section is what implementing them

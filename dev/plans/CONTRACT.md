@@ -1023,10 +1023,12 @@ for lab reports; `sample.organisation ∈ {ACIRL, Internal, ALS}`;
   and `feature_alias` 1994 all unchanged, three `change_log` update rows.
   Backup `monitoring_pre-blo02_20260802T073257.duckdb`.
 
-  **Left inconsistent, flagged not fixed:** `B.EO01` and `B.LO01` still carry
-  `kind = 'historical_code'` while `B.LO02` is now `transcription_error`. Under this
-  ruling all three are misspellings, so the other two arguably want re-kinding — a
-  `kind`-only change, no target move — but that was not asked for and is not done.
+  **Applied to the whole O-form family (2026-08-02).** `B.EO01` and `B.LO01` were
+  re-kinded from `historical_code` to `transcription_error` (targets already correct
+  and passed back unchanged, so `kind` was the only field to move). All three now read
+  `B.EO01 → B.E01`, `B.LO01 → B.L01`, `B.LO02 → B.L02`, all `transcription_error`,
+  `confirmed_by = 'R. Shannon'`; `sample` 15149, `analysis` 97118 and `feature_alias`
+  1994 unchanged. Backup `monitoring_pre-okind_20260802T074215.duckdb`.
 
   **Not covered by this ruling:** the 25 remaining unmatched codes (3,587 rows) are not
   spelling variants at all — they are descriptive human names (`EFFLUENT`, `BORE 2`,
