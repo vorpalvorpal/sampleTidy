@@ -879,6 +879,38 @@ for lab reports; `sample.organisation ∈ {ACIRL, Internal, ALS}`;
   than dropping them at parse: the old drop-at-adapter behaviour destroyed the very
   values this test needs to compare. Steps (i) heading-drop and (v) `----` are
   decidable per-file and stay in the adapter.
+  **Implementation notes added 2026-08-02 (Robin's question: use the
+  `lab_method -> analyte` map), all measured over 38,450 real candidate rows:**
+  (a) **The comparison keys on the RESOLVED ANALYTE, not the label.** ACIRL and ALS
+  name the same analyte differently — ACIRL writes `Total Suspended Solids`, ALS's
+  method is `Suspended Solids (SS)`, canonical `TSS`. Resolving both sides through
+  `lab_method.uuid_analyte` fixes it: those 605 rows go from **0 twins by label to
+  468 by analyte**. Keyed on the label, all 605 would have read as "no ALS twin ->
+  field estimate -> import", i.e. importing transcribed ALS values as field
+  readings — exactly what A75 exists to prevent.
+  (b) **The map is safe as a key.** Of 271 folded `lab_method` names, exactly **one**
+  is ambiguous: `>C10 - C16 Fraction` -> `TRH-C11-C16` or `TRH-F2`, two ALS rows
+  differing only by `method` (`EP080/071:` vs `EP071:`), which an ACIRL sheet cannot
+  supply. Ambiguous keys must route to review, never guess — note the label key
+  "found" those 123 twins only by coin-flipping between the two analytes.
+  (c) Coverage: **97.0%** of candidate labels resolve; **76.1%** have an ALS twin.
+  (d) **Both A75 arms need the database, so both belong in `reconcile(con)`.**
+  `assemble_events()` has no connection and so cannot resolve an analyte at all. The
+  same-batch case then needs no separate mechanism — it only needs the ALS event to
+  reconcile *before* the ACIRL event, which is an event-ORDERING guarantee (ACIRL
+  events are orphans, home work order `NA`, so ordering is not currently guaranteed).
+  This supersedes A75's "assemble for same-batch siblings" split: not because the
+  split is wrong, but because ordering makes one mechanism serve both.
+  (e) **The residual review load is a FEATURE problem, not an analyte one.** Of the
+  9,205 no-twin rows, **5,018 fail on the feature**: 36 of 104 ACIRL point codes match
+  neither a `feature` nor a `feature_alias`. They fall in two groups — human names
+  the R-6.7 alias mapping already recovers (`EFFLUENT`, `BORE 2`,
+  `CRIPPLE CREEK INLET`), and letter-**O**-for-**zero** codes (`B.EO1`, `B.SO1`,
+  `B.SO5`, `B.LO1`, `K.SO6`, plus unpadded `B.MW2`). **Not auto-mapped** — the alias
+  domain rule is old != misspelling, no fuzzy — so these need Robin's ruling.
+  Only **3,016** rows are genuinely "ALS did not measure that analyte at that point",
+  plus **1,171** analyte registry gaps (`Total Hardness` 438, `Nitrite` 260, the
+  EC-@-25 mojibake 150, `Nitrite + Nitrate` 60, ...).
 - **A76** **The ACIRL field set is maximal (user, 2026-08-01):** Temperature, pH, EC,
   Standing water level, DO, ORP, turbidity, flow, and **TSS** — TSS being a *field
   estimate* whenever it is not on the ALS results, and the one field analyte with a real
