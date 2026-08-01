@@ -242,7 +242,8 @@ for lab reports; `sample.organisation ∈ {ACIRL, Internal, ALS}`;
 - **A7** Migrations: additive-only, idempotent, recorded in `schema_version`.
 - **A8** MVP is synchronous, single-process `ingest_dir()`; no watcher.
 - **A9** Naive local civil time stored; canonical tz Australia/Sydney.
-- **A10** ACIRL dust sheets: detected, counted, state `ignored` in MVP.
+- **A10** *(REVERSED by A73, 2026-08-01 — read A73 instead.)* ACIRL dust sheets:
+  detected, counted, state `ignored` in MVP.
 - **A11** *(refined by A62 — read A62 with this.)* `sample.date` always set
   (midnight-truncated); `sample.datetime` only when clock time known.
   Existing-row matching is at date granularity first, then datetime when both
@@ -816,6 +817,55 @@ for lab reports; `sample.organisation ∈ {ACIRL, Internal, ALS}`;
   reason this needed pinning before PLAN-14 was written:** PLAN-14 R-14.1 deletes an
   `analyte` row and must stay idempotent, so it carries an explicit existence pre-check
   rather than relying on a tolerant delete.
+- **A73** **A10 IS REVERSED (user, 2026-08-01): ACIRL dust sheets are parsed, not
+  ignored.** Both `Dust Results` and `Dust Observations`. Dust has no ALS counterpart
+  (every `lab_method` ever recorded against `B.D07`/`B.D08` is ACIRL, method
+  AS3580.10.1), so dust is **exempt from the ALS-linkage gate (A74)** — 6 workbooks
+  are dust-only and have no water sheet at all. Analytes already exist:
+  `dust-total` ← `INSOLUBLE SOLID`, `dust-combustible` ← `*COMBUSTIBLE MATTER`,
+  `dust-incombustible` ← `INCOMBUSTIBLE MATTER`, and `Appearance` ←
+  `ANALYSIS OBSERVATIONS` for the observation text.
+- **A74** **ACIRL water sheets require their ALS source (user, 2026-08-01).** Most of
+  an ACIRL water sheet is ALS lab data copied by hand; we do not trust the transcription,
+  and it drops reporting limits. Every water sheet declares an `ALS Sydney Report No.`
+  (present in 640/640 real sheets). **If any cited `ES#######` work order is not held,
+  the file is quarantined with reason `als_source_missing`, per file — not a run-level
+  abort**, so the rest of the batch proceeds and the file re-processes naturally when the
+  ALS report arrives (ACIRL routinely arrives first). A sheet may cite **two** work
+  orders; **all** must be held. Measured cost: 74 of 640 sheets, 19 of 147 workbooks.
+- **A75** **Field-vs-ALS selection is by value, not position (user, 2026-08-01).**
+  Position is unsafe — 74 of 190 real sheets interleave ALS-copied rows among the field
+  rows. Per label row: (i) no value in any sample column → heading, drop silently;
+  (ii) values equal the ALS values for the same feature+analyte → ALS copy, drop
+  (`lab_data_dropped`); (iii) on the field allowlist and not matching ALS → import as a
+  field reading; (iv) has values but neither allowlisted nor ALS-matched → **review
+  queue**, never a silent import or a silent drop; (v) `----` means "not analysed".
+  Rule (ii) **must exclude** ALS rows whose method is `EN67 - Client Supplied Data` (or
+  any `field`-flagged method): there ALS is carrying the field reading itself, and
+  treating it as a copy would discard genuine field data. Where both sides hold the same
+  field reading, **exactly one row is written** — dedupe on
+  feature + datetime + analyte + `method = 'field'`.
+- **A76** **The ACIRL field set is maximal (user, 2026-08-01):** Temperature, pH, EC,
+  Standing water level, DO, ORP, turbidity, flow, and **TSS** — TSS being a *field
+  estimate* whenever it is not on the ALS results, and the one field analyte with a real
+  ALS twin, so it separates on A75's value test rather than on name. Writes go to the
+  existing `lab_method` convention `method = 'field'`, `organisation = 'ACIRL'` (already
+  populated: pH 1026 rows, Temperature 965, EC 856, Standing water level 260; TSS/DO/ORP
+  have the `lab_method` row but zero analyses). **`Turbidity` does not exist and is to be
+  created** (NTU, type `quality`) with its ACIRL `field` lab_method. Observation labels
+  are qualitative (`value_chr`): `General Comments/ Observations` and
+  `Observations / Comments` → `Appearance` via lab_method `Comments`;
+  `Flow Observation / Appearance` is **split** into `Stage` (flow) + `Appearance`
+  (clarity). Historical rows that conflate the two are **left alone**. The 6
+  `Standing water level` lab_method name variants (`Water Height`, `Water Depth`,
+  `Standing Water Height`, …) are **preserved as received**, not consolidated.
+- **A77** **Dust exposure dating is cross-checked, never assumed.** `Dust Results.Month`
+  and `Dust Observations.EXPOSURE DATE` disagree in 8 of 64 real gauge-blocks; in 6 of
+  those `Month` holds the *collection* date instead, but in `2400-7538-02` the
+  Observations sheet is stale by two years while `Month` is right. **Neither sheet is
+  authoritative** — parse both, and route every disagreement to review rather than
+  auto-preferring one. (This is what turned an apparent 2025-06 duplicate plus an
+  apparent 2025-05 gap into a single data-entry error.)
 
 ## Gates
 
