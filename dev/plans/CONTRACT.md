@@ -969,6 +969,55 @@ for lab reports; `sample.organisation ∈ {ACIRL, Internal, ALS}`;
   auto-preferring one. (This is what turned an apparent 2025-06 duplicate plus an
   apparent 2025-05 gap into a single data-entry error.)
 
+- **A78** **ACIRL point-code spelling variants are MISSPELLINGS, not old names
+  (user, 2026-08-02).** The letter-O-for-zero codes and the padding/dot drift on ACIRL
+  water sheets (`B.EO1`, `K.SO6`, `KS07`, `B.MW2`, …) are transcription errors, so they
+  take `feature_alias.kind = 'transcription_error'` — **not** `historical_code`, which
+  is reserved for a genuinely different former identifier. This resolves 1,375 of the
+  5,018 rows that were failing the A75 twin test on the feature rather than the analyte.
+
+  **No hand-written alias rows.** The existing machinery already covers this end to
+  end: an unresolved `feature_raw` mints a `feature_alias` row with `kind = 'pending'`
+  at commit (`.ct_materialise_feature_aliases()`), it surfaces as an `unknown_feature`
+  review item, and an operator attaches it with
+  `confirm_feature_aliases(..., kind = "transcription_error")`. Pre-creating the rows
+  by hand would bypass that flow and skip the `date_start` bookkeeping the commit path
+  does. This ruling is therefore the **answer sheet** for the confirmation step, not a
+  migration.
+
+  Verified determinate (each correction lands on exactly ONE feature *uuid* — several
+  candidate spellings are already registered `historical_code` aliases of the same
+  point, so name-uniqueness is the wrong test):
+
+  | ACIRL code | → feature | rule | rows |
+  |---|---|---|---|
+  | `B.EO1` | `B.E01` | O→0 | 290 |
+  | `KS07` | `K.S07` | insert dot | 309 |
+  | `K.SO9` | `K.S09` | O→0 | 285 |
+  | `K.SO6` | `K.S06` | O→0 | 188 |
+  | `B.LO1` | `B.L01` | O→0 | 132 |
+  | `B.SO5` | `B.S05` | O→0 | 76 |
+  | `KS05` | `K.S05` | insert dot | 41 |
+  | `K.SO7` | `K.S07` | O→0 | 28 |
+  | `B.MW2` | `B.MW02` | zero-pad | 14 |
+  | `KE01` | `K.E01` | insert dot | 12 |
+
+  **`B.LO2` (132 rows) is EXCLUDED and needs a further ruling.** It is the one place
+  where this ruling and the registry disagree: `B.LO02` is already registered as a
+  `historical_code` alias of **`B.E01`**, not of `B.L02`. So `B.LO2` is either a
+  misspelling of `B.L02` (this ruling) or ACIRL's rendering of the historical
+  `B.LO02` = `B.E01` — exactly the *old ≠ misspelling* distinction, and not decidable
+  by rule. Left unresolved rather than guessed; 132 rows ride on it.
+
+  **Not covered by this ruling:** the 25 remaining unmatched codes (3,587 rows) are not
+  spelling variants at all — they are descriptive human names (`EFFLUENT`, `BORE 2`,
+  `CRIPPLE CREEK INLET`, `LEACHATE DAM 1`, `MP # 1`…) plus a few odd forms
+  (`B.SO1 S1`, `S1`, `S22`, `E1`, `BORE10A`, `BORE12`). Those take
+  `kind = 'descriptive'`, and R-6.7's `report$feature_aliases` mapping (91 point→name
+  pairs recovered from the sheets themselves) is the evidence for them.
+
+  Measurement: `scratchpad/feature_misspell3.R` → `feature_misspell.rds`.
+
 ## Gates
 
 - Per-plan: `testthat::test_file()` green for the plan's own test file(s).
