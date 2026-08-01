@@ -884,10 +884,16 @@ for lab reports; `sample.organisation ∈ {ACIRL, Internal, ALS}`;
   - **turbidity, DO, ORP and flow occur zero times** in the 213-workbook corpus —
     DO/ORP are allowlisted anyway (they are registered ACIRL `field` methods), and
     `Turbidity` still needs creating, but neither will import anything today.
-  - `Electrical Conductivity @ 25°C` **is registered as an ACIRL `field`
-    lab_method in the live database and should not be.** It is the ALS value
-    transcribed into the sheet. It is deliberately excluded from the allowlist;
-    the registry row is a pre-existing data defect for Robin, not fixed here.
+  - `Electrical Conductivity @ 25°C` is the ALS value transcribed into the
+    sheet, never a field reading, and is deliberately excluded from the
+    allowlist. ACIRL owned a `field` lab_method under the **mojibake** spelling
+    of that label carrying **zero analyses**; it was **deleted from the live
+    database on 2026-08-01** (`db_delete()`, `change_log` uuid_row `9f59b10a`,
+    backup `monitoring_pre-ec25-fix_20260801T213736.duckdb`). The clean-named
+    row is correct and untouched — org ALS, `EA010P: Conductivity by PC
+    Titrator`, 1272 analyses. With the mojibake row gone, an ACIRL sheet
+    carrying that label resolves to nothing under org ACIRL and lands in
+    review, which is the correct loud failure mode.
   - The **`Flow Observation / Appearance` split applies to all three observation
     labels**, not just that one — the value text, not the label, carries the
     stage/appearance distinction. A third class ("could not locate", "no access",

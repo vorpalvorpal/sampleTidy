@@ -207,11 +207,23 @@ routing to review.
 
 **Two labels are deliberately excluded, for opposite reasons:**
 
-- `Electrical Conductivity @ 25°C` is registered as an ACIRL `field` lab_method
-  in the live DB **and should not be** — it is the ALS value transcribed into
-  the sheet. Allowlisting it would import ALS data as a field reading, exactly
-  what A74/A75 exist to prevent. The registry row is a pre-existing data defect,
-  flagged for Robin, not fixed here.
+- `Electrical Conductivity @ 25°C` is the ALS value transcribed into the sheet,
+  never a field reading. Allowlisting it would import ALS data as a field
+  reading, exactly what A74/A75 exist to prevent.
+
+  The registry defect behind this was **narrower than first reported, and is now
+  fixed.** The row ACIRL owned as `method = 'field'` was the **mojibake**
+  spelling `Electrical Conductivity @ 25Â°C`, and it carried **zero analyses** —
+  it had never mis-typed a single value. The clean-named row is correct (org
+  ALS, `EA010P: Conductivity by PC Titrator`, 1272 analyses). The mojibake row
+  was deleted from the live database on 2026-08-01 through the mutation layer
+  (`change_log` uuid_row `9f59b10a`), after confirming no column in any of the
+  18 tables referenced it. Deleting rather than re-encoding was deliberate:
+  repairing the name would leave ACIRL owning a `field` method for an
+  ALS-transcribed label, which is the wrong thing stated more explicitly, and
+  there is no honest ACIRL `method` value for an ALS result. Note the two names
+  do **not** collide under `.rc_method_key()` (`…25âc` vs `…25c`) —
+  `normalise_lab_text()` does not repair this mojibake.
 - The TSS pair (`Total Suspended Solids`, `Suspended Solids (SS)`) is a genuine
   ACIRL field estimate whose **name is the ALS analyte's**, so no name test can
   separate them. New config key `field_analytes_diff_required` holds them; the
