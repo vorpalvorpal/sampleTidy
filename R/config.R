@@ -29,10 +29,14 @@
   #       `name` column IS the ACIRL sheet label ("Electrical Conductivity",
   #       "Water Depth", "Flow observation", ...).
   #
-  # Deliberately NOT here, though both are registered ACIRL `field` methods:
+  # Deliberately NOT here:
   #   * "Electrical Conductivity @ 25<degC>" - that is the ALS value transcribed
-  #     into the sheet, not a field reading. Its `field` registration is a
-  #     pre-existing data defect, flagged for Robin, not honoured here.
+  #     into the sheet, not a field reading. ACIRL used to own a `field`
+  #     lab_method under the MOJIBAKE spelling of that label with zero analyses;
+  #     it was deleted from the live database on 2026-08-01 (change_log
+  #     uuid_row 9f59b10a). The clean-named row is correct and untouched: org
+  #     ALS, method "EA010P: Conductivity by PC Titrator". Either way the label
+  #     must never be allowlisted.
   #   * the TSS pair - see `field_analytes_diff_required` below.
   # Observation labels are not here either: they take the qualitative
   # Stage/Appearance path in the ACIRL adapter, not the allowlist.

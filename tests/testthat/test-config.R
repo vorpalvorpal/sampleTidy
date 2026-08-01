@@ -59,10 +59,12 @@ test_that("R-1.1: the ALS-transcribed labels are NOT on the field allowlist", {
   withr::local_options(list("sampletidy.field_analytes" = NULL))
   withr::local_envvar(c(SAMPLETIDY_FIELD_ANALYTES = NA))
   allow <- st_config("field_analytes")
-  # `Electrical Conductivity @ 25<degC>` IS registered as an ACIRL `field`
-  # lab_method in the live database, which is a pre-existing data defect: it is
-  # the ALS value transcribed into the ACIRL sheet. Allowlisting it would
-  # import ALS data as a field reading, which A74/A75 exist to prevent.
+  # `Electrical Conductivity @ 25<degC>` is the ALS value transcribed into the
+  # ACIRL sheet, never a field reading. ACIRL used to own a `field` lab_method
+  # under the mojibake spelling of that label (zero analyses); it was deleted
+  # from the live database on 2026-08-01. The allowlist exclusion is what makes
+  # that stay true regardless of what the registry holds - allowlisting it
+  # would import ALS data as a field reading, which A74/A75 exist to prevent.
   expect_false("Electrical Conductivity @ 25°C" %in% allow)
   # The TSS pair is a genuine field reading whose NAME is the ALS analyte's, so
   # it can only be selected by the A75 value comparison, never by name.
