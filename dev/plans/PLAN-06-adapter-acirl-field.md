@@ -403,6 +403,50 @@ Criteria: a quarterly fixture with 3 month-blocks yields 3 × 2 × 3 results and
 cell; `<0.1` sets `below_detection`; a fixture whose `Month` contradicts its
 `EXPOSURE DATE` raises a review item rather than silently picking one.
 
+### R-6.4a Dust geometry, RE-MEASURED 2026-08-01 (before implementing)
+
+All 50 real dust-results sheets and all 50 dust-observations sheets re-measured
+rather than trusted from the prose above — the same discipline that caught the
+water-sheet geometry. Most of R-6.4 holds; **two claims do not**, and both change
+the implementation.
+
+**1. The two dates A77 needs are on the OTHER sheet.** R-6.4 above reads as
+though `Month` and `EXPOSURE DATE` are both on the results sheet. They are not —
+the split is total and consistent:
+
+| anchor | Dust Results | Dust Observations |
+|---|---|---|
+| `GAUGE NO.` | 50/50 | 0/50 (labelled `GAUGE`) |
+| `INSOLUBLE SOLIDS`, `*COMBUSTIBLE MATTER`, `INCOMBUSTIBLE MATTER` | 50/50 | 0/50 |
+| `Month` | 50/50 | **0/50** |
+| `Exposure Days` | 50/50 | **0/50** |
+| `EXPOSURE DATE` | **0/50** | 50/50 |
+| `COLLECTION DATE` | **0/50** | 50/50 |
+| `ANALYSIS OBSERVATIONS` | 0/50 | 50/50 |
+
+So **A77's cross-check is inherently cross-sheet**: `Month` comes from Results,
+`EXPOSURE DATE`/`COLLECTION DATE` from Observations, and they must be joined on
+gauge + block before they can be compared. A dust-results sheet parsed alone can
+never satisfy A77.
+
+**2. The incombustible column shift is 49 of 50, not 50 of 50.** One sheet has
+its `INCOMBUSTIBLE MATTER` values under their own header. The legacy reader's
+`coalesce(last_col, last_col - 1)` is therefore load-bearing and must be ported
+as a *coalesce*, not as a constant `+1` offset. A fixed offset silently reads
+NA for that sheet.
+
+Confirmed unchanged: 50 sheets; every anchor present on every sheet; gauges are
+exactly `B.D07`/`B.D08` (50/50 each); month-blocks repeat 1× on 43 sheets, 2× on
+3, 3× on 2, 4× on 2, with `Exposure Days` label rows tracking the block count
+exactly; 11 of 50 sheets carry a `<` below-detection value.
+
+**Also:** `Other Sample Id` appears on all 50 dust-results sheets too. R-6.7's
+site-metadata rule is currently water-sheet only, so the dust parser must handle
+it as well or it will re-introduce the same noise.
+
+Measurement scripts: `scratchpad/dust_geometry.R`, `scratchpad/dust_obs_geometry.R`
+(saved to `dust_geometry.rds`, `dust_obs_geometry.rds`).
+
 ## Fixtures
 
 **Re-cut from real geometry (2026-08-01)** — see R-6.3a. The previous synthetic
