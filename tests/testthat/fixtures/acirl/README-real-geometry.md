@@ -76,8 +76,27 @@ Measured across all 50 real dust-results sheets; every one carries every anchor
 |---|---|
 | `2400-9999-11_Real_WMF.xlsx` | main workbook — 2 water sheets (real geometry, interleaved ALS rows, a heading row with no values, `----` not-analysed cells, mojibake `µS/cm`, one genuinely empty cell) + quarterly dust (3 month-blocks) + observations + methodology |
 | `2400-9999-12_DustOnly_WMF.xlsx` | dust-only, **no water sheet** — must never be ALS-gated (A74), and is the regression guard for R-6.1's second match arm |
-| `2400-9999-13_AlsRefs_WMF.xlsx` | ALS-reference edge cases: two orders cited (`ES9999001/ES9999002`), a bare `ES`, an ACIRL number in the ALS field, and a blank cell |
+| `2400-9999-13_AlsRefs_WMF.xlsx` | ALS-reference edge cases: two orders cited (`ES9999001/ES9999002`), a bare `ES`, an ACIRL number in the ALS field, and a blank cell. Its first sheet also carries a **shadowing** `ALS Lithogw Report No` row above the Sydney one (see below) |
+| `2400-9999-15_Uncited_WMF.xlsx` | Water sheets whose ALS cell reads a bare `ES` — real water data with no traceable ALS source. The A74 gate must quarantine it, not treat it as dust-only |
 | `2400-9999-14_DustDateConflict_WMF.xlsx` | A77 — `Month` holds the collection date while `EXPOSURE DATE` holds the true start |
+
+### The shadowing ALS row (A74, added 2026-08-01)
+
+`2400-9999-13`'s first sheet carries two `ALS … Report No` rows:
+
+```
+ALS Lithogw Report No | 2400-9999-13     <- matches the label pattern, no ES number
+ALS Sydney Report No. | ES9999001/ES9999002
+```
+
+Copied from `2400-7223-12-01 2022 December Quarterly Katoomba WMF.xls`, whose
+water sheets have exactly this pair (`ALS Lithogw Report No | 2400-7223-12-01`
+above `ALS Sydney Report No. | ES2246297`). An extractor that stops at the first
+matching label reads the Lithgow row, finds no work order, and reports the file
+as citing nothing — which under the A74 gate quarantines its 57 real rows.
+Restoring the `break` in `.st_acirl_parse_water_sheet()` turns
+"R-6.5: als_work_orders is exposed, including a two-order citation" red with an
+EMPTY result, which is the real failure exactly.
 
 ### Field-vs-ALS values (A75)
 

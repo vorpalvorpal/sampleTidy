@@ -260,6 +260,10 @@ from the file being claimed for some unrelated reason.
 - **R-6.3** — R-6.3: a water sheet with no Units marker is skipped; sibling sheets still parse
 - **R-6.4** — R-6.4: dust sheet is detected and skipped, no dust-derived rows
 
+### R-6.5 / R-6.5b the ALS cross-reference the A74 gate consumes - added 2026-08-01
+- a two-order citation surfaces exactly, and EVERY `ALS ... Report No` row is scanned rather than only the first (the real `ALS Lithogw Report No` shadowing case) → "R-6.5: als_work_orders is exposed, including a two-order citation"
+- `report$n_water_sheets` separates a dust-only workbook from one whose water sheets cite nothing, which the gate needs and `als_work_orders` alone cannot say → "R-9.13/A73: a dust-only workbook is NEVER gated, whatever the DB holds", "R-9.13: water sheets that cite NOTHING are gated, not exempted"
+
 <!-- 55 adapter tests -->
 # Pipeline (plans 07-10)
 
@@ -417,6 +421,19 @@ ambiguity notes referenced below.
 - real-shaped ACIRL report in a single-WO folder is retained, attached, typed "Chemical analysis" → "R-9.12: a real-shaped ACIRL report in a folder belonging to one ALS work order is retained and attached to it"
 - ACIRL report with no resolvable WO stays quarantined, warns, mints no project → "R-9.12: an ACIRL report whose folder resolves to NO committed work order stays quarantined and warns - inference never invents a target"
 - cruft still neither retained nor warned about (round-3 commit-5 regression guard) → "R-9.12: ordinary non-deliverable cruft is still NOT retained and still draws no warning - widening the gate must not re-open the round-3 noise"
+
+### R-9.13 the ALS-source gate (A74) (`tests/testthat/test-ingest.R`) - added 2026-08-01
+- cited work order held → the workbook imports → "R-9.13: an ACIRL workbook whose cited ALS work order IS held imports"
+- same workbook, order not held → quarantined `als_source_missing`, zero rows/events/review items → "R-9.13: the SAME workbook is quarantined als_source_missing when the work order is not held, and contributes nothing"
+- ALL cited orders required; holding the second one then lets it through → "R-9.13: A74 requires ALL cited work orders - one of two held is still gated"
+- dust-only workbook never gated (A73), whatever the DB holds → "R-9.13/A73: a dust-only workbook is NEVER gated, whatever the DB holds"
+- water sheets citing NOTHING are gated, not exempted (the `2400-7483-01` case) → "R-9.13: water sheets that cite NOTHING are gated, not exempted"
+- same-batch ALS sibling satisfies the gate in one run, in either file order → "R-9.13: an ALS sibling in the SAME batch satisfies the gate, in one run"
+- gating one file does not stop the rest of the batch → "R-9.13: gating one file does not stop the rest of the batch"
+- non-ACIRL adapter families are never gated → "R-9.13: a non-ACIRL adapter family is never gated"
+- `dry_run` reports the verdict and writes nothing (no core-table write, no stuck terminal state) → "R-9.13: dry_run reports the verdict and writes nothing"
+- gated file re-processes on the NEXT ordinary run once its ALS report lands, with no `reconsider` flag → "R-9.13: a gated file re-processes on the NEXT ordinary run once its ALS report lands - no reconsider flag"
+- a still-unheld file re-gates without accreting state → "R-9.13: a still-unheld gated file stays quarantined on re-run and imports nothing twice"
 
 ### R-9.9 empty-folder cleanup (`tests/testthat/test-ingest.R`) - added 2026-07-28
 - emptied folder deleted, and a `.DS_Store` does not keep it alive → "R-9.9: a folder emptied by a clean run is deleted, and a .DS_Store does not keep it alive"

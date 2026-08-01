@@ -106,6 +106,119 @@
   parsed
 }
 
+# ---- R-9.13 the ALS-source gate (A74) ------------------------------------
+
+#' Withhold a parsed ACIRL workbook whose ALS source we do not hold
+#'
+#' A74 (Robin, 2026-08-01). Most of an ACIRL water sheet is ALS lab data
+#' copied by hand; we do not trust the transcription and it drops reporting
+#' limits. A water sheet may therefore only be imported when we hold the ALS
+#' report it cites. Dust is exempt (A73) - it is ACIRL's own AS3580.10.1
+#' analysis with no ALS counterpart.
+#'
+#' This runs as its own pass, AFTER every file is parsed and BEFORE
+#' [assemble_events()]. After, because "held" includes an ALS sibling arriving
+#' in the same batch and the parse order within a batch is arbitrary; before,
+#' because a gated file must contribute no rows, no events and no review items.
+#' It cannot live in the adapter at all: `parse()` sees one file and no
+#' database (PLAN-06 R-6.5).
+#'
+#' Governed files are exactly those whose `report` carries an
+#' `als_work_orders` field - today, ACIRL workbooks. Every other adapter
+#' family passes through untouched.
+#'
+#' @param parsed the `.ig_parse_claimed()` list.
+#' @param dry_run skip the `ingest_file` write; the verdict is still computed
+#'   and the file is still withheld from the preview, so a dry run's row
+#'   counts tell the truth about what a real run would import.
+#' @return `list(parsed = <the surviving entries>, gated = <hashes withheld>)`.
+#' @keywords internal
+#' @noRd
+.ig_als_gate <- function(con, parsed, dry_run = FALSE) {
+  if (length(parsed) == 0) {
+    return(list(parsed = parsed, gated = character(0)))
+  }
+  governed <- names(parsed)[vapply(
+    parsed, function(p) !is.null(p$report$als_work_orders), logical(1)
+  )]
+  if (length(governed) == 0) {
+    return(list(parsed = parsed, gated = character(0)))
+  }
+
+  # Same-batch arm. ACIRL and ALS routinely arrive in one PowerAutomate
+  # folder, and ACIRL routinely arrives FIRST; without this, the ordinary
+  # both-in-one-email case would need two runs to import. It is also exactly
+  # the case A75's `assemble_events()` value comparison is written for - if the
+  # sibling is in the batch, assemble can see its values.
+  batch_wo <- unique(vapply(
+    parsed, function(p) .st_home_work_order(p$report, p$meta), character(1)
+  ))
+  batch_wo <- batch_wo[!is.na(batch_wo)]
+
+  gated <- character(0)
+  for (h in governed) {
+    p <- parsed[[h]]
+
+    # A file may not vouch for ITSELF. Today this is unreachable through
+    # `ingest_dir()` - an ACIRL workbook's home work order is always NA, because
+    # `2400-*` is never parsed into one (the ACIRL trap, R-9.12) - but the rule
+    # should hold because it is true, not because a naming convention happens
+    # to. Covered directly against `.ig_als_gate()` rather than left as dead
+    # code.
+    own <- .st_home_work_order(p$report, p$meta)
+    held_by_batch <- if (is.na(own)) batch_wo else setdiff(batch_wo, own)
+
+    # A73: a dust-only workbook has no water sheet and is never gated,
+    # whatever the database holds. `n_water_sheets` counts sheets ATTEMPTED as
+    # water sheets, not sheets that yielded rows, so a future parser bug closes
+    # this gate rather than opening it - and a report that omits the field
+    # entirely (an older adapter) is treated as having water, i.e. fails
+    # closed.
+    if (isTRUE(p$report$n_water_sheets == 0)) next
+
+    cited <- p$report$als_work_orders
+    unheld <- setdiff(cited, held_by_batch)
+    if (length(unheld) > 0) {
+      held <- DBI::dbGetQuery(
+        con,
+        sprintf("SELECT name FROM project WHERE name IN (%s)",
+                paste(rep("?", length(unheld)), collapse = ",")),
+        params = as.list(unheld)
+      )$name
+      unheld <- setdiff(unheld, held)
+    }
+
+    # Two ways to fail, one state. `als_source_missing` is the reason A74
+    # pins, so both carry it; the warning says which, because the human action
+    # differs (chase ALS for a work order, versus open the workbook and find
+    # out why it names none).
+    if (length(cited) == 0) {
+      cli::cli_warn(
+        "{.file {p$meta$filename}}: has {p$report$n_water_sheets} water
+         sheet{?s} but cites no ALS report at all - quarantined
+         ({.val als_source_missing}). Measured in 1 of 154 real workbooks,
+         where the {.val ALS Sydney Report No.} cell reads a bare {.val ES}."
+      )
+    } else if (length(unheld) > 0) {
+      cli::cli_warn(
+        "{.file {p$meta$filename}}: ALS source not held for
+         {.val {unheld}} - quarantined ({.val als_source_missing}). It will
+         re-process automatically once that report is ingested (A74)."
+      )
+    } else {
+      next
+    }
+
+    gated <- c(gated, h)
+    if (!dry_run) {
+      ingest_file_set_state(con, h, "quarantined", "als_source_missing")
+    }
+  }
+
+  parsed[gated] <- NULL
+  list(parsed = parsed, gated = gated)
+}
+
 # ---- assemble-state application -----------------------------------------
 
 #' Apply every `assemble_events()` state-transition row (R-9.5 step d)
@@ -928,6 +1041,10 @@
     rows_superseded = as.integer(pipeline$outcome$tally$superseded),
     rows_skipped = as.integer(pipeline$outcome$tally$skipped),
     review_items_opened = as.integer(pipeline$outcome$tally$review_opened),
+    # R-9.13/A74. Carried explicitly rather than read off `files_by_state`,
+    # because a DRY run writes no state at all: without this field a dry run
+    # could not report the verdict it just reached.
+    als_gated = pipeline$als_gated,
     snapshot_path = snapshot_path,
     removed_files = removed
   )
@@ -1018,6 +1135,11 @@ ingest_dir <- function(path, db = st_config("live_db"), dry_run = FALSE,
 
       parsed <- .ig_parse_claimed(con, routed, dry_run)
 
+      # R-9.13/A74: withhold any ACIRL workbook whose cited ALS report we do
+      # not hold. Between parse and assemble deliberately - see `.ig_als_gate()`.
+      gate <- .ig_als_gate(con, parsed, dry_run)
+      parsed <- gate$parsed
+
       events <- list()
       if (length(parsed) > 0) {
         asm <- assemble_events(parsed)
@@ -1070,6 +1192,7 @@ ingest_dir <- function(path, db = st_config("live_db"), dry_run = FALSE,
 
       list(routed = routed, events = events, outcome = outcome,
            file_states = file_states, retained = retained,
+           als_gated = gate$gated,
            removable_pending = unique(removable_pending))
     },
     db = db
@@ -1102,10 +1225,14 @@ ingest_dir <- function(path, db = st_config("live_db"), dry_run = FALSE,
 
   report <- .ig_build_report(pipeline, dry_run, snapshot_path, removed)
 
+  # R-9.13/A74: the gated count belongs in the ONE line an operator actually
+  # reads. The per-file warnings name each one, but on a real batch (17 of 154
+  # workbooks) a running total is what tells them whether the run was normal.
   cli::cli_inform(
     "ingest_dir({.path {path}}): {report$n_files_routed} file(s) routed,
      {report$n_events} event(s) ({report$n_events_committed} committed),
      {report$review_items_opened} review item(s) opened,
+     {length(report$als_gated)} file(s) withheld (ALS source missing),
      {length(report$removed_files)} file(s) removed."
   )
 

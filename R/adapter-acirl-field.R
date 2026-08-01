@@ -278,6 +278,14 @@ acirl_field_xlsx_adapter <- function() {
       # R-6.5: exposed for PLAN-09's gate (A74). The adapter takes NO action
       # on this - it cannot see which work orders are held.
       als_work_orders = als_work_orders,
+      # R-6.5b: how many sheets this file treated as WATER sheets. The gate
+      # needs this because an empty `als_work_orders` is ambiguous on its own:
+      # it means "dust-only workbook, exempt per A73" for 5 real files and
+      # "water workbook that cites no ALS report at all" for 1 (`2400-7483-01
+      # May 2025 Lawson Landfill.xls`, whose ALS row literally reads `ES` with
+      # no number). Keyed on sheets ATTEMPTED, not sheets that yielded rows, so
+      # a future parser bug closes the gate rather than opening it.
+      n_water_sheets = length(water_idx),
       # R-6.3b: ALS-looking rows kept WITH their values for A75's comparison
       # in assemble/reconcile.
       als_candidates = als_candidates
@@ -436,26 +444,29 @@ acirl_field_xlsx_adapter <- function() {
   }
 
   # --- ALS cross-reference (R-6.5): exposed, never acted on here -------------
+  # EVERY matching label row is scanned, not just the first. A sheet may carry
+  # more than one `ALS ... Report No` row - measured: `2400-7223-12-01 2022
+  # December Quarterly Katoomba WMF.xls` has `ALS Lithogw Report No` (holding
+  # the ACIRL report number, no ES at all) immediately ABOVE `ALS Sydney Report
+  # No.` (holding ES2246297). Breaking on the first match read the Lithgow row,
+  # found no `ES#######`, and reported the file as citing NOTHING - which under
+  # the A74 gate is the difference between importing 57 rows and quarantining
+  # them. Scanning every match costs nothing: a row with no ES pattern
+  # contributes no work orders.
   als_work_orders <- character(0)
-  als_row <- NA_integer_
   for (r in seq_len(n_row)) {
     v <- cell(r, label_col)
-    if (nonempty(v) && grepl("ALS.*report\\s*no", v, ignore.case = TRUE)) {
-      als_row <- r
-      break
-    }
-  }
-  if (!is.na(als_row)) {
+    if (!nonempty(v) || !grepl("ALS.*report\\s*no", v, ignore.case = TRUE)) next
     for (j in seq_len(n_col)) {
       if (j == label_col) next
-      v <- cell(als_row, j)
-      if (nonempty(v)) {
+      w <- cell(r, j)
+      if (nonempty(w)) {
         als_work_orders <- c(als_work_orders,
-                             unlist(regmatches(v, gregexpr("ES[0-9]{7}", v))))
+                             unlist(regmatches(w, gregexpr("ES[0-9]{7}", w))))
       }
     }
-    als_work_orders <- unique(als_work_orders)
   }
+  als_work_orders <- unique(als_work_orders)
 
   # --- date row: prefer ABOVE the header row, fall back to below -------------
   date_candidates <- integer(0)

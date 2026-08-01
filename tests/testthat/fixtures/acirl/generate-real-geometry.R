@@ -67,7 +67,7 @@ write_row <- function(wb, sheet, row, start_col, values) {
 # no values in any sample column (real examples: "Dissolved Major Cations").
 build_water_sheet <- function(wb, sheet, features, dates, rows,
                               als_ref = "ES9999001", report_no = "2400-9999-01",
-                              units_marker = "Units") {
+                              units_marker = "Units", shadow_ref = NA) {
   addWorksheet(wb, sheet)
   n <- length(features)
 
@@ -79,6 +79,17 @@ build_water_sheet <- function(wb, sheet, features, dates, rows,
   # match() fingerprint (R-6.1) and is NOT the header row.
   if (!is.na(units_marker)) set_cell(wb, sheet, UNITS_ROW, UNITS_COL, units_marker)
 
+  # A SECOND `ALS ... Report No` row, immediately above the Sydney one and
+  # holding a value that is NOT an `ES#######`. Measured from `2400-7223-12-01
+  # 2022 December Quarterly Katoomba WMF.xls`, whose water sheets carry
+  # `ALS Lithogw Report No | 2400-7223-12-01` directly above
+  # `ALS Sydney Report No. | ES2246297`. An extractor that stops at the first
+  # matching label reads the Lithgow row, finds no work order, and reports the
+  # file as citing nothing - which under the A74 gate quarantines 57 real rows.
+  if (!is.na(shadow_ref)) {
+    set_cell(wb, sheet, ALS_ROW - 1L, SITE_COL, "ALS Lithogw Report No")
+    set_cell(wb, sheet, ALS_ROW - 1L, FEAT_COL, shadow_ref)
+  }
   set_cell(wb, sheet, ALS_ROW, SITE_COL, "ALS Sydney Report No.")
   if (!is.na(als_ref)) set_cell(wb, sheet, ALS_ROW, FEAT_COL, als_ref)
   set_cell(wb, sheet, REPORT_ROW, SITE_COL, "REPORT NO:")
@@ -296,9 +307,12 @@ saveWorkbook(wb, file.path(here, "2400-9999-12_DustOnly_WMF.xlsx"), overwrite = 
 # ===========================================================================
 wb <- createWorkbook()
 add_front_page(wb, "2400-9999-13")
-# two work orders cited - BOTH must be held for the gate to pass
+# two work orders cited - BOTH must be held for the gate to pass. The sheet
+# also carries a SHADOWING `ALS Lithogw Report No` row above the Sydney one, so
+# a first-match-wins extractor reports this sheet as citing nothing.
 build_water_sheet(wb, "Sampling Sites 1", FEATURES, DATES, main_rows,
-                  als_ref = "ES9999001/ES9999002", report_no = "2400-9999-13")
+                  als_ref = "ES9999001/ES9999002", report_no = "2400-9999-13",
+                  shadow_ref = "2400-9999-13")
 # bare "ES" - unparseable, must quarantine rather than silently pass
 build_water_sheet(wb, "Sampling Sites 2", FEATURES, DATES, main_rows,
                   als_ref = "ES", report_no = "2400-9999-13")
@@ -309,6 +323,24 @@ build_water_sheet(wb, "Sampling Sites 3", FEATURES, DATES, main_rows,
 build_water_sheet(wb, "Sampling Sites 4", FEATURES, DATES, main_rows,
                   als_ref = NA, report_no = "2400-9999-13")
 saveWorkbook(wb, file.path(here, "2400-9999-13_AlsRefs_WMF.xlsx"), overwrite = TRUE)
+
+# ===========================================================================
+# 3b. Water sheets that cite NOTHING (A74, R-9.13). Modelled on
+#     `2400-7483-01 May 2025 Lawson Landfill.xls`, whose eight water sheets
+#     each carry `ALS Sydney Report No. | ES` - the number was never filled
+#     in. It is the ONE real workbook that separates "gate on no citation"
+#     from "exempt on no citation": it has real water data (30 rows) and no
+#     traceable ALS source, so it must be quarantined, not waved through as
+#     if it were dust-only.
+# ===========================================================================
+wb <- createWorkbook()
+add_front_page(wb, "2400-9999-15")
+build_water_sheet(wb, "Sampling Sites 1", FEATURES, DATES, main_rows,
+                  als_ref = "ES", report_no = "2400-9999-15")
+build_water_sheet(wb, "Sampling Sites 2", FEATURES, DATES, main_rows,
+                  als_ref = "ES", report_no = "2400-9999-15")
+add_stub_sheet(wb, "Water Methodology", "WATER METHODOLOGY")
+saveWorkbook(wb, file.path(here, "2400-9999-15_Uncited_WMF.xlsx"), overwrite = TRUE)
 
 # ===========================================================================
 # 4. Dust exposure-date conflict (A77): Results$Month holds the COLLECTION

@@ -255,7 +255,11 @@ ensure_schema <- function(con) {
 .st_ingest_transitions <- list(
   seen          = c("claimed", "ignored", "quarantined"),
   claimed       = c("parsed", "failed", "quarantined", "ignored"),
-  parsed        = c("assembled", "ignored", "failed"),
+  # `parsed -> quarantined` exists for R-9.13/A74: the ALS-source gate is the
+  # first decision that can withhold a file AFTER it has parsed (it needs the
+  # database and the whole batch, which `parse()` cannot see). Until A74 no
+  # post-parse stage could quarantine, which is why it was absent.
+  parsed        = c("assembled", "ignored", "failed", "quarantined"),
   assembled     = c("reconciled", "failed"),
   reconciled    = c("needs_review", "committed"),
   needs_review  = c("committed"),

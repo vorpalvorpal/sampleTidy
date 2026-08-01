@@ -835,6 +835,32 @@ for lab reports; `sample.organisation ∈ {ACIRL, Internal, ALS}`;
   orders; **all** must be held. Measured cost: 74 of 640 sheets, 19 of 147 workbooks.
   **Enforced in `ingest_dir()` (PLAN-09), not in the adapter** — `parse()` sees one
   file and no database. The adapter only exposes `report$als_work_orders`.
+  **Implementation notes added 2026-08-01** (PLAN-09 R-9.13, PLAN-06 R-6.5b), all
+  measured rather than assumed:
+  (a) the gate runs as its own pass **between parse and assemble** — after, because
+  "held" includes an ALS sibling arriving in the same batch and parse order within a
+  batch is arbitrary; before, because a gated file must contribute no rows, no events
+  and no review items.
+  (b) **"held" = a `project` row for the `ES#######`, OR that work order arriving in
+  this same batch.** ACIRL and ALS routinely land in one PowerAutomate folder; without
+  the same-batch arm the ordinary case would need two runs.
+  (c) **Citing nothing is a gate failure, not an exemption.** The A73 dust exemption is
+  keyed on `report$n_water_sheets == 0`, NOT on an empty citation. Measured: of the 8
+  claimed workbooks citing nothing, 7 are dust-only but 1 (`2400-7483-01 May 2025
+  Lawson Landfill.xls`, 30 rows) has eight water sheets whose ALS cell reads a bare
+  `ES`. Reading "cites nothing" as "must be dust" would have imported it with no
+  traceable source.
+  (d) `als_source_missing` is **re-decided on every ordinary run**, with no
+  `reconsider` flag — it is a fact about the world, not about the file or the adapter
+  registry, and A74's "re-processes naturally when the ALS report arrives" is otherwise
+  unreachable. Safe (a gated file committed nothing) and self-limiting.
+  (e) Measured cost against the live DB's 423 held work orders: **17 of 154 workbooks,
+  644 rows** — 16 citing an unheld order, 1 citing nothing. 13 distinct work orders
+  missing, of which 11 are pre-2025 and out of scope, leaving `ES2503724` and
+  `ES2522505`. This **supersedes the "19 of 147 workbooks" above**, which predates
+  both the A76 allowlist widening (which changed which workbooks yield rows) and the
+  R-6.5b extractor fix (which moved `2400-7223-12-01`, 57 rows, out of the gated set
+  by finding the citation it had been shadowing).
 - **A75** **Field-vs-ALS selection is by value, not position (user, 2026-08-01).**
   Position is unsafe — 74 of 190 real sheets interleave ALS-copied rows among the field
   rows. Per label row: (i) no value in any sample column → heading, drop silently;

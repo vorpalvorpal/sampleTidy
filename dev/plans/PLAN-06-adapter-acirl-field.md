@@ -190,6 +190,47 @@ Criteria: a heading row yields nothing; a `----` cell is skipped not valued; bot
 respectively; `report$als_work_orders` is exact for a two-order citation
 (`ES2110541/ES2111935`) and empty for a bare `ES`.
 
+### R-6.5b What the A74 gate needs from the adapter (MEASURED 2026-08-01)
+
+Written while implementing PLAN-09's gate. Two things the adapter exposed were
+not enough, and both were found by measuring the corpus rather than by reading
+this plan.
+
+**1. Every `ALS … Report No` row is scanned, not just the first.** The extractor
+took the first label row matching `ALS.*report\s*no` and stopped. `2400-7223-12-01
+2022 December Quarterly Katoomba WMF.xls` carries two such rows on each water
+sheet:
+
+```
+ALS Lithogw Report No | 2400-7223-12-01      <- matched first; no ES number
+ALS Sydney Report No. | ES2246297            <- never reached
+```
+
+so the file reported citing **nothing**. Harmless while nobody acted on the
+field; under the gate it is the difference between importing its 57 rows and
+quarantining them. All matching rows are now scanned — a row with no `ES#######`
+contributes nothing, so this costs only the loop. Pinned by a shadowing
+`ALS Lithogw Report No` row on `2400-9999-13_AlsRefs`'s first sheet; restoring
+the `break` turns that test red with `als_work_orders` empty.
+
+**2. `report$n_water_sheets` is exposed.** An empty `als_work_orders` is
+ambiguous on its own, and the two readings need opposite treatment. Measured
+over the 154 claimed workbooks, 8 cite nothing:
+
+| | count | correct treatment |
+|---|---|---|
+| no water sheet at all — dust-only | 7 | **exempt** (A73) |
+| water sheets, but the ALS row reads a bare `ES` | 1 | **quarantine** |
+
+The one is `2400-7483-01 May 2025 Lawson Landfill.xls`, whose eight water sheets
+each carry `ALS Sydney Report No. | ES` — the number was never filled in. Had
+the gate read "cites nothing → exempt", that file's 30 rows would have imported
+with no traceable ALS source, which is precisely what A74 exists to stop.
+
+`n_water_sheets` counts sheets **attempted** as water sheets, not sheets that
+yielded rows. That direction is deliberate: a future parser bug then closes the
+gate (quarantine, loud) instead of opening it (silent import).
+
 ### R-6.6 The widened field set and the observation split (A76, IMPLEMENTED 2026-08-01)
 
 R-6.3b named A76's allowlist and split; this section is what implementing them

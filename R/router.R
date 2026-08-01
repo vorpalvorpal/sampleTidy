@@ -123,6 +123,22 @@ route_files <- function(paths, con, dry_run = FALSE, reconsider = FALSE) {
   identical(state, "failed")
 }
 
+# R-9.13/A74: a verdict about the WORLD rather than about the file or the
+# adapter registry - "we do not hold the ALS report this workbook cites". It
+# stops being true the moment that report is ingested, so it is re-decided on
+# EVERY ordinary run, with no `reconsider` flag: A74 says the file
+# "re-processes naturally when the ALS report arrives", and requiring a flag
+# would mean it never does. ACIRL routinely arrives BEFORE ALS, so this is the
+# normal path, not an edge case.
+#
+# Safe because a gated file committed nothing - re-routing it cannot duplicate
+# data - and self-limiting, because once the source is held the file passes the
+# gate and leaves this state for good.
+.st_is_retryable_verdict <- function(state, reason) {
+  identical(state, "quarantined") &&
+    !is.na(reason) && identical(reason, "als_source_missing")
+}
+
 .st_route_one_file <- function(path, con, dry_run = FALSE, reconsider = FALSE) {
   fm <- file_meta(path)
   hash <- fm$hash
@@ -139,8 +155,10 @@ route_files <- function(paths, con, dry_run = FALSE, reconsider = FALSE) {
   # previews what a real run would conclude. That asymmetry is deliberate and
   # matches the dry-run contract the three verdict branches below already
   # follow: report the verdict, persist nothing.
-  reconsidering <- already_routed && isTRUE(reconsider) &&
-    .st_is_registry_verdict(existing$state[[1]], existing$state_reason[[1]])
+  reconsidering <- already_routed &&
+    (.st_is_retryable_verdict(existing$state[[1]], existing$state_reason[[1]]) ||
+       (isTRUE(reconsider) &&
+          .st_is_registry_verdict(existing$state[[1]], existing$state_reason[[1]])))
   if (reconsidering) {
     already_routed <- FALSE
     if (!dry_run) {
