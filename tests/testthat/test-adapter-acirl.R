@@ -522,3 +522,53 @@ test_that("R-6.1: a dust-only workbook matches (it has no Units marker at all)",
   expect_identical(acirl_adapter()$match(meta), "format")
   expect_false(any(grepl("Units", readxl::excel_sheets(dustonly_path))))
 })
+
+# ---- R-6.7: site-metadata labels are not analytes -------------------------
+#
+# Measured over all 154 claimed workbooks: exactly three labels carry the
+# sampling point's alternative name as an ordinary label row, and their values
+# are 100% non-numeric - "BORE 2", "Cripple Creek", "EFFLUENT".
+#
+#     Other Sample Id   2604 rows across 97 files
+#     Other Site Name     26 rows
+#     Other Site ID        5 rows
+#
+# They used to take the `als_candidate` path, where A75 rule (iv) would open
+# ~2,635 review items of pure noise - 21% of the whole no-twin population.
+
+test_that("R-6.7: a site-metadata label yields no result and no ALS candidate", {
+  meta <- sampleTidy:::file_meta(real_path)
+  out <- acirl_adapter()$parse(real_path, meta)
+
+  for (lab in c("Other Sample Id", "Other Site Name", "Other Site ID")) {
+    expect_false(lab %in% out$results$analyte_raw, info = lab)
+    expect_false(lab %in% out$report$als_candidates$analyte_raw, info = lab)
+  }
+  expect_true(any(out$report$skipped$reason == "site_metadata_label"))
+})
+
+test_that("R-6.7: the point-code -> name mapping is kept, not discarded", {
+  meta <- sampleTidy:::file_meta(real_path)
+  al <- acirl_adapter()$parse(real_path, meta)$report$feature_aliases
+
+  # Recognising these rows as metadata must not throw the evidence away: the
+  # mapping is exactly what the feature-alias subsystem needs.
+  expect_true(nrow(al) > 0)
+  expect_named(al, c("source_ref", "feature_raw", "label", "alias"),
+               ignore.order = TRUE)
+  expect_true(all(!is.na(al$feature_raw)))
+  expect_true(all(nzchar(al$alias)))
+  # deduped - the same (feature, label, alias) on two sheets is one row
+  expect_equal(nrow(al), nrow(dplyr::distinct(al)))
+})
+
+test_that("R-6.7: an ordinary analyte label is untouched by the metadata rule", {
+  # Reachability guard: the metadata set must be an exact-label match, not a
+  # prefix or substring one. "Other Sample Id" must not take "Total Suspended
+  # Solids" (or anything else) down with it.
+  meta <- sampleTidy:::file_meta(real_path)
+  out <- acirl_adapter()$parse(real_path, meta)
+  expect_true(nrow(out$results) > 0)
+  expect_true(nrow(out$report$als_candidates) > 0)
+  expect_true("pH" %in% out$results$analyte_raw)
+})
