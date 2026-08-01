@@ -57,7 +57,12 @@ test_that("R-10.1: router_matrix() claims every fixture at exactly one winning t
     fam_dir <- file.path(fixture_root, fam)
     if (!dir.exists(fam_dir)) next
     files <- list.files(fam_dir, full.names = TRUE)
-    files <- files[!basename(files) %in% c("README.md", "generate.R")]
+    # Documentation and fixture GENERATORS live alongside the fixtures but are
+    # not data files and no adapter should ever claim them. Excluded by
+    # extension rather than by an explicit name list: the list form silently
+    # broke when README-real-geometry.md / generate-real-geometry.R were added
+    # (2026-08-01), reporting them as unclaimed fixtures.
+    files <- files[!grepl("[.](md|R)$", basename(files))]
     paths <- c(paths, files)
   }
   expect_true(length(paths) > 0, info = "expected at least the plan-04 esdat fixtures to be present")
