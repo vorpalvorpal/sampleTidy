@@ -110,9 +110,12 @@ test_that("R-6.3: results = features x visits x 3 field analytes minus the one e
   meta <- sampleTidy:::file_meta(main_path)
   out <- acirl_adapter()$parse(main_path, meta)
   # 2 features x 2 visits x 3 analytes x 2 sheets = 24, minus 1 genuinely
-  # empty Temperature cell (Field Data 1, T.S02 @ 25 May) = 23
-  expect_equal(nrow(out$results), 23)
-  expect_true(all(out$results$analyte_raw %in% c("pH", "EC", "Temperature")))
+  # empty Temperature cell (Field Data 1, T.S02 @ 25 May) = 23, plus the one
+  # qualitative Appearance row A76 now splits out of this fixture's single
+  # parseable Comments cell ("Clear") = 24.
+  expect_equal(nrow(out$results), 24)
+  expect_true(all(out$results$analyte_raw %in% c("pH", "EC", "Temperature", "Comments")))
+  expect_equal(sum(out$results$analyte_raw == "Comments"), 1)
   empty_skips <- out$report$skipped[out$report$skipped$reason == "empty", ]
   expect_equal(nrow(empty_skips), 1)
 })
@@ -145,10 +148,23 @@ test_that("R-6.3: date fill-down - second-visit rows carry the second date (25/0
   expect_equal(nrow(visit1) + nrow(visit2), nrow(out$samples))
 })
 
-test_that("R-6.3: Comments cell text lands on the matching ir_samples row, not as a result", {
+# CHANGED 2026-08-01 (A76, Robin): an observation is a qualitative RESULT as
+# well as a note. The raw text still reaches the sample - it is the only home
+# for the observations that describe no water at all - but a recognised
+# appearance/stage term now ALSO produces an analysis row. The original
+# `expect_false(any(analyte_raw == "Comments"))` pinned exactly the behaviour
+# the ruling reverses, so it is inverted here rather than deleted.
+test_that("R-6.3/A76: Comments cell text lands on the sample AND as a qualitative result", {
   meta <- sampleTidy:::file_meta(main_path)
   out <- acirl_adapter()$parse(main_path, meta)
-  expect_false(any(out$results$analyte_raw == "Comments"))
+  appearance <- out$results[out$results$analyte_raw == "Comments", ]
+  expect_equal(nrow(appearance), 1)
+  expect_identical(appearance$value_chr, "Clear")
+  expect_identical(appearance$feature_raw, "T.S01")
+  # "Slight turbidity", "Odour noted" and "Duplicate sample" carry no term in
+  # the measured vocabulary, so they stay comments-only - no invented result.
+  expect_equal(nrow(out$results), 24)
+
   clear_row <- out$samples[!is.na(out$samples$comments) & out$samples$comments == "Clear", ]
   expect_equal(nrow(clear_row), 1)
   expect_identical(clear_row$feature_raw, "T.S01")
@@ -276,9 +292,19 @@ test_that("R-11.15: a result row's lab_sample_id ties it to its own visit's samp
   for (lsid in s_v1$lab_sample_id) {
     res_rows <- out$results[!is.na(out$results$lab_sample_id) &
                                out$results$lab_sample_id == lsid, ]
-    expect_equal(nrow(res_rows), 3)
     expect_true(all(res_rows$feature_raw == "T.S01"))
-    expect_setequal(res_rows$analyte_raw, c("pH", "EC", "Temperature"))
+    # The property under test is that visit 1's rows are NOT merged with visit
+    # 2's: each of the three field analytes appears exactly once per visit
+    # column. A76 may add one qualitative Appearance row on a column whose
+    # Comments cell carries a recognised term, so the total is 3 or 4 - the
+    # per-analyte count is what pins the id partitioning.
+    expect_equal(sum(res_rows$analyte_raw %in% c("pH", "EC", "Temperature")), 3)
+    expect_setequal(
+      intersect(res_rows$analyte_raw, c("pH", "EC", "Temperature")),
+      c("pH", "EC", "Temperature")
+    )
+    expect_true(all(res_rows$analyte_raw %in%
+                      c("pH", "EC", "Temperature", "Comments", "Flow observation")))
   }
 })
 
@@ -349,6 +375,131 @@ test_that("R-6.3b: ALS-looking rows are KEPT with their values, not discarded at
   # and the field reading is a result, distinct from its ALS twin
   expect_true("pH" %in% out$results$analyte_raw)
   expect_false("pH Value" %in% out$results$analyte_raw)
+})
+
+# ---- R-6.6 (A76): the widened field set, the diff-required pair, and the
+# ---- qualitative Stage/Appearance split ------------------------------------
+#
+# The vocabulary these tests assert against is MEASURED, not invented: 262
+# distinct observation values over the real corpus, cross-checked against the
+# `Stage`/`Appearance` values already in the live database. See
+# `scratchpad/a76_split_result.csv` for the full calibration table.
+
+test_that("R-6.6: the widened allowlist imports Electrical Conductivity and Standing Water Level", {
+  meta <- sampleTidy:::file_meta(real_path)
+  out <- acirl_adapter()$parse(real_path, meta)
+  # Both were silently dropped by the old four-entry allowlist, which matched
+  # labels exactly and knew only "Conductivity"/"EC".
+  expect_true("Electrical Conductivity" %in% out$results$analyte_raw)
+  expect_true("Standing Water Level" %in% out$results$analyte_raw)
+  # ...while the @-25 variant, which is the ALS value transcribed into the
+  # sheet, stays an ALS candidate and never becomes a result.
+  expect_false("Electrical Conductivity @ 25°C" %in% out$results$analyte_raw)
+  expect_true("Electrical Conductivity @ 25°C" %in% out$report$als_candidates$analyte_raw)
+})
+
+test_that("R-6.6: a diff-required label is never imported on its name alone", {
+  meta <- sampleTidy:::file_meta(real_path)
+  out <- acirl_adapter()$parse(real_path, meta)
+  # `Total Suspended Solids` is a genuine ACIRL field estimate AND the ALS
+  # analyte's own name, so the adapter - which cannot see the ALS data - must
+  # not decide. It routes the row to als_candidates flagged for the A75 value
+  # comparison in assemble/reconcile.
+  expect_false("Total Suspended Solids" %in% out$results$analyte_raw)
+  cand <- out$report$als_candidates
+  tss <- cand[cand$analyte_raw == "Total Suspended Solids", ]
+  expect_gt(nrow(tss), 0)
+  expect_true(all(tss$diff_required))
+  # its values survive parse - the comparison needs them
+  expect_true(all(c("6", "<5") %in% tss$value_raw))
+  # every OTHER candidate is a plain ALS copy, not diff-required
+  expect_false(any(cand$diff_required[cand$analyte_raw != "Total Suspended Solids"]))
+  expect_true(any(out$report$skipped$reason == "diff_required"))
+})
+
+test_that("R-6.6: observations split into one Stage and one Appearance qualitative row", {
+  meta <- sampleTidy:::file_meta(real_path)
+  out <- acirl_adapter()$parse(real_path, meta)
+  qual <- out$results[out$results$analyte_raw %in% c("Flow observation", "Comments"), ]
+  expect_gt(nrow(qual), 0)
+  # qualitative: value_chr carries the canonical term, value_num is empty
+  expect_true(all(is.na(qual$value_num)))
+  expect_true(all(!is.na(qual$value_chr)))
+  expect_true(all(is.na(qual$units_raw)))
+  # value_raw keeps the WHOLE original observation, so the split is auditable
+  # from the row itself
+  stage <- qual[qual$analyte_raw == "Flow observation", ]
+  expect_true("Low flow" %in% stage$value_chr)
+  expect_true("Low flow Clear" %in% stage$value_raw)
+  expect_true("Pooled" %in% stage$value_chr)
+  expect_true("Mod level" %in% stage$value_chr)
+})
+
+test_that("R-6.6: at most one Stage and one Appearance row per sample column", {
+  meta <- sampleTidy:::file_meta(real_path)
+  out <- acirl_adapter()$parse(real_path, meta)
+  qual <- out$results[out$results$analyte_raw %in% c("Flow observation", "Comments"), ]
+  # This fixture carries BOTH "Observations / Comments" and "Flow Observation /
+  # Appearance" on the same sheet and they disagree on appearance (Cloudy vs
+  # Clear). That combination occurs ZERO times in the real corpus - the three
+  # observation labels never co-occur on one sheet - so the fixture is
+  # deliberately stricter than reality, and exists solely to pin the dedupe
+  # rule Robin asked for (2026-08-01: "make sure we don't end up with duplicate
+  # rows for the field rows"). First non-NA wins, top-to-bottom.
+  per_col <- table(qual$lab_sample_id, qual$analyte_raw)
+  expect_true(all(per_col <= 1))
+  first_col <- qual[qual$lab_sample_id == qual$lab_sample_id[[1]], ]
+  expect_setequal(first_col$analyte_raw, c("Flow observation", "Comments"))
+  # "Observations / Comments" sits ABOVE "Flow Observation / Appearance" in the
+  # sheet, so its "Cloudy" wins over the later row's "Clear".
+  expect_identical(first_col$value_chr[first_col$analyte_raw == "Comments"], "Cloudy")
+})
+
+test_that("R-6.6: the raw observation text still reaches the sample, unsplit", {
+  meta <- sampleTidy:::file_meta(real_path)
+  out <- acirl_adapter()$parse(real_path, meta)
+  # Both observation rows are concatenated, in sheet order, and nothing is lost
+  # to the split - this is the only home for observations that describe no
+  # water at all ("could not locate", "no access").
+  expect_true("Cloudy; Low flow Clear" %in% out$samples$comments)
+})
+
+test_that("R-6.6: the observation splitter reproduces the measured corpus vocabulary", {
+  split <- sampleTidy:::.st_acirl_split_observation
+  expect_identical(split("Low flow Clear"), list(stage = "Low flow", appearance = "Clear"))
+  expect_identical(split("Mod level/ Cloudy"), list(stage = "Mod level", appearance = "Cloudy"))
+  expect_identical(split("Low dis/Clear"), list(stage = "Low discharge", appearance = "Clear"))
+  expect_identical(split("Very low flow Clear"),
+                   list(stage = "Very low flow", appearance = "Clear"))
+  # run-together and split spellings, both measured
+  expect_identical(split("Lowflow/ Clear"), list(stage = "Low flow", appearance = "Clear"))
+  expect_identical(split("Mod flowClear"), list(stage = "Mod flow", appearance = "Clear"))
+  expect_identical(split("Mod flow C lear"), list(stage = "Mod flow", appearance = "Clear"))
+  # measured misspellings, matched by explicit alternation - never fuzzily
+  expect_identical(split("Low flow, celar"), list(stage = "Low flow", appearance = "Clear"))
+  expect_identical(split("High evel Slightly cloudy"),
+                   list(stage = "High level", appearance = "Slightly cloudy"))
+  expect_identical(split("Mod level, slighhtly cloudy"),
+                   list(stage = "Mod level", appearance = "Slightly cloudy"))
+  # "slightly cloudy" must never be read as "cloudy"
+  expect_identical(split("Slightly cloudy")$appearance, "Slightly cloudy")
+  # standalone stage terms, no magnitude
+  expect_identical(split("Non Discharge"), list(stage = "No discharge", appearance = NA_character_))
+  expect_identical(split("Dry"), list(stage = "Dry", appearance = NA_character_))
+  expect_identical(split("Clear, polled"), list(stage = "Pooled", appearance = "Clear"))
+  # the "low" inside "flow" must not manufacture a magnitude - this is the
+  # false positive the leading word boundary was added to kill
+  expect_identical(split("Clear, flow flow"), list(stage = NA_character_, appearance = "Clear"))
+  # observations that describe no water at all yield neither analyte; the raw
+  # text is preserved on the sample instead
+  for (v in c("Could not locate, grass too long", "No access, snakes on site and track",
+              "Decomissioned", "Too dangerous to sample", "Insufficient sample",
+              "Unable to locate", "No longer exists", "Blocked")) {
+    expect_identical(split(v), list(stage = NA_character_, appearance = NA_character_),
+                     info = v)
+  }
+  expect_identical(split(NA_character_), list(stage = NA_character_, appearance = NA_character_))
+  expect_identical(split(""), list(stage = NA_character_, appearance = NA_character_))
 })
 
 test_that("R-6.5: als_work_orders is exposed, including a two-order citation", {

@@ -35,10 +35,53 @@ test_that("R-1.1: live_db default lives under R_user_dir, never a cloud-sync pat
   expect_true(grepl(tools::R_user_dir("sampleTidy", "data"), default_db, fixed = TRUE))
 })
 
+# WIDENED 2026-08-01 (A76, Robin): the field set is maximal. The old four-entry
+# default matched labels EXACTLY, so it silently dropped `Electrical
+# Conductivity` (192 real sheets) and every `Standing Water Level` variant (87)
+# - while `Conductivity` and `EC` never appear as standalone labels in the real
+# corpus at all. Every entry below is either measured in the corpus or a
+# registered ACIRL `field` lab_method name; see R/config.R for why the EC-@-25
+# and TSS labels are deliberately absent.
 test_that("R-1.1: field_analytes default is the pinned vector", {
   withr::local_options(list("sampletidy.field_analytes" = NULL))
   withr::local_envvar(c(SAMPLETIDY_FIELD_ANALYTES = NA))
-  expect_equal(st_config("field_analytes"), c("pH", "Temperature", "Conductivity", "EC"))
+  expect_equal(
+    st_config("field_analytes"),
+    c("pH", "Temperature", "Electrical Conductivity",
+      "Standing Water Level", "Standing Water Height", "Standing water level",
+      "Water Height", "Water Depth",
+      "DO", "ORP", "CH4 Reading % v/v", "H2S Reading % v/v",
+      "Turbidity", "Conductivity", "EC")
+  )
+})
+
+test_that("R-1.1: the ALS-transcribed labels are NOT on the field allowlist", {
+  withr::local_options(list("sampletidy.field_analytes" = NULL))
+  withr::local_envvar(c(SAMPLETIDY_FIELD_ANALYTES = NA))
+  allow <- st_config("field_analytes")
+  # `Electrical Conductivity @ 25<degC>` IS registered as an ACIRL `field`
+  # lab_method in the live database, which is a pre-existing data defect: it is
+  # the ALS value transcribed into the ACIRL sheet. Allowlisting it would
+  # import ALS data as a field reading, which A74/A75 exist to prevent.
+  expect_false("Electrical Conductivity @ 25°C" %in% allow)
+  # The TSS pair is a genuine field reading whose NAME is the ALS analyte's, so
+  # it can only be selected by the A75 value comparison, never by name.
+  expect_false(any(c("Total Suspended Solids", "Suspended Solids (SS)", "TSS") %in% allow))
+})
+
+test_that("R-1.1: field_analytes_diff_required default is the pinned TSS set", {
+  withr::local_options(list("sampletidy.field_analytes_diff_required" = NULL))
+  withr::local_envvar(c(SAMPLETIDY_FIELD_ANALYTES_DIFF_REQUIRED = NA))
+  expect_equal(
+    st_config("field_analytes_diff_required"),
+    c("Total Suspended Solids", "Suspended Solids (SS)", "TSS")
+  )
+})
+
+test_that("R-12.11: field_analytes_diff_required is guarded as list-valued too", {
+  withr::local_options(list("sampletidy.field_analytes_diff_required" = NULL))
+  withr::local_envvar(c(SAMPLETIDY_FIELD_ANALYTES_DIFF_REQUIRED = "Total Suspended Solids"))
+  expect_error(st_config("field_analytes_diff_required"), class = "sampletidy_error")
 })
 
 test_that("R-1.1: remove_ingested default is TRUE (supersedes A13's FALSE, 2026-07-23)", {
