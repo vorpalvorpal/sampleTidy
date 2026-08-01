@@ -1002,12 +1002,31 @@ for lab reports; `sample.organisation ∈ {ACIRL, Internal, ALS}`;
   | `B.MW2` | `B.MW02` | zero-pad | 14 |
   | `KE01` | `K.E01` | insert dot | 12 |
 
-  **`B.LO2` (132 rows) is EXCLUDED and needs a further ruling.** It is the one place
-  where this ruling and the registry disagree: `B.LO02` is already registered as a
-  `historical_code` alias of **`B.E01`**, not of `B.L02`. So `B.LO2` is either a
-  misspelling of `B.L02` (this ruling) or ACIRL's rendering of the historical
-  `B.LO02` = `B.E01` — exactly the *old ≠ misspelling* distinction, and not decidable
-  by rule. Left unresolved rather than guessed; 132 rows ride on it.
+  **`B.LO2` → `B.L02`; the registry was wrong (ruled 2026-08-02, then verified).**
+  `B.LO02` had been registered as a `historical_code` alias of **`B.E01`**. That was a
+  registry defect, not a historical fact, and three independent checks agree:
+  * **matrix** — `B.E01` is *stormwater*; `B.L01`/`B.L02` are *leachate*. An `L` code
+    cannot sensibly be a former name for a stormwater point, and the sibling
+    `B.LO01` correctly points at `B.L01`.
+  * **chemistry, decisive** — ACIRL writes `B.LO2` on two 2024 Blaxland quarterlies
+    citing `ES2419948`/`ES2429912`. The ALS data for `B.L02` under those exact work
+    orders matches the sheet **value for value** on three analytes: Ammonia 96.9/77.4,
+    Alkalinity 454, TOC 40/139. `B.E01` has **eight** analyses across both work orders
+    (Appearance, Temperature, pH) and was recorded `Dry` — no ammonia, alkalinity or
+    TOC at all, so the block cannot be its data.
+  * **volume** — the ACIRL `B.LO2` block is 66 rows per file, matching `B.L02`'s 41–44
+    analyses per work order, not `B.E01`'s 4.
+
+  Repointed via `confirm_feature_aliases()` to `B.L02` with
+  `kind = 'transcription_error'`, `confirmed_by = 'R. Shannon'`. No `sample` rows were
+  attached to that alias, so no committed data moved: `sample` 15149, `analysis` 97118
+  and `feature_alias` 1994 all unchanged, three `change_log` update rows.
+  Backup `monitoring_pre-blo02_20260802T073257.duckdb`.
+
+  **Left inconsistent, flagged not fixed:** `B.EO01` and `B.LO01` still carry
+  `kind = 'historical_code'` while `B.LO02` is now `transcription_error`. Under this
+  ruling all three are misspellings, so the other two arguably want re-kinding — a
+  `kind`-only change, no target move — but that was not asked for and is not done.
 
   **Not covered by this ruling:** the 25 remaining unmatched codes (3,587 rows) are not
   spelling variants at all — they are descriptive human names (`EFFLUENT`, `BORE 2`,
