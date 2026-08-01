@@ -1,5 +1,14 @@
 # ACIRL fixtures (plan 06: `acirl_field_xlsx`)
 
+> **SUPERSEDED AS A LAYOUT MODEL (2026-08-01) — see `README-real-geometry.md`.**
+> The water-sheet layout described below was reproduced from PLAN-06's prose,
+> never measured from a real workbook, and **occurs zero times in the real
+> corpus** (0 of 640 real sheets put the `Units` marker on the `Site Name` row).
+> The adapter passed 100% of the tests built on these fixtures while extracting
+> **zero rows from all 147 real ACIRL workbooks**. These files are retained only
+> until the adapter and its tests move to the real-geometry fixtures; do not
+> copy this layout, and do not add new fixtures in this shape.
+
 Synthetic, structurally-exact fixtures for the ACIRL monthly-workbook adapter
 (A3 - no real lab data committed). Generated deterministically by
 `generate.R`; re-run with `Rscript tests/testthat/fixtures/acirl/generate.R`.
