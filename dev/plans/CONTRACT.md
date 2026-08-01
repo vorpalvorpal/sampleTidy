@@ -911,6 +911,37 @@ for lab reports; `sample.organisation ∈ {ACIRL, Internal, ALS}`;
   Only **3,016** rows are genuinely "ALS did not measure that analyte at that point",
   plus **1,171** analyte registry gaps (`Total Hardness` 438, `Nitrite` 260, the
   EC-@-25 mojibake 150, `Nitrite + Nitrate` 60, ...).
+
+  **Risks of the reconcile-only design, measured 2026-08-02 before building.** The
+  design is sound but has two failure modes that must be built out from the start, not
+  patched later:
+  (i) **The twin test is an ABSENCE test, and absence is not evidence when the data may
+  be incomplete.** 5,094 of the 9,205 no-twin rows sit on a feature that does not
+  resolve — no twin could have been found there whatever the truth. Most go safely to
+  review under rule (iv), but rule (iii) rows *import* on absence: **70 diff-required
+  TSS rows would silently import an ALS copy as a field reading**, which is precisely
+  the failure A75 exists to prevent, delivered by A75 itself. **Mitigation: a row may
+  never take the absence branch unless its feature resolved. Unresolved feature →
+  review, always.**
+  (ii) **Order-dependence is a silent-corruption coupling.** Making correctness depend
+  on ALS events reconciling before ACIRL ones is a hidden temporal dependency: a later
+  reorder (parallelism, performance, refactor) flips verdicts silently and no test
+  notices unless written for it. **Mitigation: do not rely on ordering — CHECK it.**
+  The ACIRL branch asserts the cited work order has *visible analyses*, not merely a
+  `project` row; project-but-no-analyses (the same-batch, not-yet-committed case) →
+  review. Ordering then becomes an optimisation, not a correctness requirement.
+  (iii) **`als_candidates` does not currently reach reconcile.** `.st_build_event()`
+  builds a fresh `report` with five fields; `als_candidates`, `als_work_orders`,
+  `feature_aliases` and `n_water_sheets` are all dropped at assemble. So the unit is
+  *not* reconcile-local — assemble must be changed to carry them onto the event.
+  (iv) The verdict becomes a function of **(file, database state)**, not of the file
+  alone: the same workbook re-processed later can decide differently. Inherent to A75,
+  but it means provenance must record *why* each row was dropped or imported, or the
+  decision is unauditable afterwards.
+  (v) **Sequencing.** Feature aliasing is now load-bearing for A75's correctness, so
+  the alias work (A78 + the 9 descriptive codes) should land first — or (i) must gate
+  it. A third outcome, *undecidable*, is also needed for the one ambiguous analyte
+  (`>C10 - C16 Fraction`, 148 rows); rules (i)–(v) do not name it.
 - **A76** **The ACIRL field set is maximal (user, 2026-08-01):** Temperature, pH, EC,
   Standing water level, DO, ORP, turbidity, flow, and **TSS** — TSS being a *field
   estimate* whenever it is not on the ALS results, and the one field analyte with a real
