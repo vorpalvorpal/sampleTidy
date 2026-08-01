@@ -93,6 +93,25 @@ identify them as copies. The field rows deliberately differ
 (`pH` = 5.90, 6.10, 6.60, 6.40), reproducing the real field-vs-lab split — the
 same split behind the 2026-07-24 ruling that the field pH wins.
 
+### Observation rows (A76) — one deliberate divergence from reality
+
+The main fixture carries **both** `Observations / Comments` (row 12) and
+`Flow Observation / Appearance` (row 20) on the same sheet, and they *disagree*
+on appearance (`Cloudy` vs `Clear`) in the first column.
+
+**That combination occurs zero times in the real corpus** — measured across 578
+sheets, the three observation labels never co-occur. The fixture is deliberately
+stricter than reality here, and only for one reason: it is the only way to pin
+the dedupe rule Robin asked for on 2026-08-01 ("make sure we don't end up with
+duplicate rows for the field rows"). If the two rows agreed, the rule would be
+untestable. Precedence is first non-NA, top-to-bottom, so row 12's `Cloudy`
+wins.
+
+Everything else about these rows is measured: the values (`Low flow Clear`,
+`Pooled Cloudy`, `Mod level Clear`, `Slightly cloudy`) are all real vocabulary,
+and `Total Suspended Solids` carries `----`/`----`/`6`/`<5` so the fixture
+exercises the not-analysed placeholder and the diff-required path together.
+
 ## Calibration — these fixtures reproduce the real failure
 
 Run against the **current, unfixed** adapter (2026-08-01):

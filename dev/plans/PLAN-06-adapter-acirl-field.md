@@ -190,6 +190,93 @@ Criteria: a heading row yields nothing; a `----` cell is skipped not valued; bot
 respectively; `report$als_work_orders` is exact for a two-order citation
 (`ES2110541/ES2111935`) and empty for a bare `ES`.
 
+### R-6.6 The widened field set and the observation split (A76, IMPLEMENTED 2026-08-01)
+
+R-6.3b named A76's allowlist and split; this section is what implementing them
+actually required, all of it measured before it was written.
+
+**The allowlist is built from labels, not from analyte names.** A76 lists
+analytes ("EC", "turbidity"); `st_config("field_analytes")` matches a *sheet
+label* exactly. Two independent measurements ground the list: a census of all
+13,768 label rows / 296 distinct labels in the corpus, and the 32 `lab_method`
+rows already carrying `method = 'field'`, whose `name` column IS the ACIRL sheet
+label. Where they agree the label is allowlisted; the four A76 analytes that
+occur **zero** times (turbidity, DO, ORP, flow) are allowlisted anyway where a
+`field` lab_method exists, so a future sheet imports rather than silently
+routing to review.
+
+**Two labels are deliberately excluded, for opposite reasons:**
+
+- `Electrical Conductivity @ 25°C` is registered as an ACIRL `field` lab_method
+  in the live DB **and should not be** — it is the ALS value transcribed into
+  the sheet. Allowlisting it would import ALS data as a field reading, exactly
+  what A74/A75 exist to prevent. The registry row is a pre-existing data defect,
+  flagged for Robin, not fixed here.
+- The TSS pair (`Total Suspended Solids`, `Suspended Solids (SS)`) is a genuine
+  ACIRL field estimate whose **name is the ALS analyte's**, so no name test can
+  separate them. New config key `field_analytes_diff_required` holds them; the
+  adapter emits them to `report$als_candidates` with `diff_required = TRUE` and
+  skip reason `diff_required`, never as results. **Only A75's value comparison
+  may promote one.** This makes "A75 before import" structural rather than a
+  sequencing promise — 678 real rows currently sit behind it.
+
+**The observation split applies to all three observation labels**, since the
+value text, not the label, carries the distinction.
+`.st_acirl_split_observation()` returns at most one `Stage` and one `Appearance`
+term; `analyte_raw` is the registered `lab_method.name` (`Flow observation` →
+`Stage`, `Comments` → `Appearance`) because reconcile resolves an analyte by
+matching `lab_method.name` against `analyte_raw`. Both are qualitative:
+`value_chr` holds the canonical term, `value_num` is NA, and `value_raw` keeps
+the whole original string so the split is auditable from the row.
+
+Vocabulary and precedence, all calibrated against the 262 distinct real
+observation values (`scratchpad/a76_split_result.csv`):
+
+- stage tier 1 — magnitude × noun, `{Very low, Low, Mod, High} × {flow, level,
+  discharge}` — wins outright over tier 2, so "Pooled low level Clear" reads as
+  `Low level`, not `Pooled`;
+- stage tier 2 — standalone `No discharge` / `Pooled` / `Dry`, leftmost wins;
+- appearance — `Slightly cloudy` before `Cloudy` before `Clear`;
+- misspellings by **explicit alternation only, never fuzzy matching** (celar,
+  clouidy, slighlty, "c lear", "high evel", run-together "lowflow"/"modflowClear");
+- a third class — "could not locate", "no access", "decommissioned", "too
+  dangerous to sample", "blocked" — describes no water and yields **neither**
+  analyte. Its raw text still reaches `sample.comments`, as every observation's
+  does, split or not.
+
+**Dedupe**: at most one Stage and one Appearance row per sample column, first
+non-NA wins top-to-bottom (Robin, 2026-08-01: "make sure we don't end up with
+duplicate rows for the field rows"). Measured: the three observation labels
+**never co-occur** on a real sheet (0 of 578), so this is defensive only — the
+main fixture is deliberately stricter than reality in order to pin it.
+
+Criteria (real-geometry fixture):
+- `Electrical Conductivity` and `Standing Water Level` import; `Electrical
+  Conductivity @ 25°C` stays an ALS candidate;
+- `Total Suspended Solids` never appears in results, appears in
+  `als_candidates` with `diff_required = TRUE` **and its values intact**, and no
+  other candidate is diff-required;
+- observation rows produce qualitative rows with `value_num` NA, `units_raw` NA
+  and the full original text in `value_raw`;
+- at most one Stage and one Appearance per `lab_sample_id`, earlier label wins;
+- the splitter reproduces the measured vocabulary, including the misspellings,
+  and yields neither analyte for the site-access class;
+- "Clear, flow flow" yields **no** stage — the `low` inside `flow` must not
+  manufacture a magnitude (this false positive was found by calibration, not by
+  the suite, and the leading `\b` that kills it is mutation-verified).
+
+Corpus effect, measured over all 213 workbooks before and after:
+
+| | before step 3 | after |
+|---|---|---|
+| workbooks matched | 154 | 154 |
+| workbooks yielding ≥1 row | 146 | **147** |
+| total result rows | 2138 | **5704** |
+| rows held for A75's value test | — | 678 |
+
+The 7 workbooks still yielding nothing are all **dust-only** — R-6.4 territory.
+Every water-bearing workbook now produces rows.
+
 ### R-6.5 Expose the ALS reference (gate itself is PLAN-09)
 
 Water sheets only. The adapter surfaces `als_work_orders` per R-6.3b and takes no

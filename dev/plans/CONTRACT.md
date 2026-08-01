@@ -867,6 +867,36 @@ for lab reports; `sample.organisation ∈ {ACIRL, Internal, ALS}`;
   (clarity). Historical rows that conflate the two are **left alone**. The 6
   `Standing water level` lab_method name variants (`Water Height`, `Water Depth`,
   `Standing Water Height`, …) are **preserved as received**, not consolidated.
+
+  *Implementation notes added 2026-08-01 after measuring the corpus (see PLAN-06
+  R-6.6); none of these change the ruling, they record what honouring it meant:*
+
+  - The allowlist is built from **measured labels**, not from the analyte names
+    above. `st_config("field_analytes")` matches a label exactly (squished,
+    upper-cased); the sheets say `Electrical Conductivity`, never `EC`.
+  - **TSS is not on the allowlist and must not be.** Its ACIRL label *is* the ALS
+    analyte's name, so the name cannot separate them. It has its own key,
+    `field_analytes_diff_required`; the adapter routes those rows to
+    `report$als_candidates` with `diff_required = TRUE` and skip reason
+    `diff_required`, and **only A75's value comparison may promote one to a field
+    result**. This makes the A75-before-import ordering structural rather than a
+    promise: 678 real rows currently sit behind it.
+  - **turbidity, DO, ORP and flow occur zero times** in the 213-workbook corpus —
+    DO/ORP are allowlisted anyway (they are registered ACIRL `field` methods), and
+    `Turbidity` still needs creating, but neither will import anything today.
+  - `Electrical Conductivity @ 25°C` **is registered as an ACIRL `field`
+    lab_method in the live database and should not be.** It is the ALS value
+    transcribed into the sheet. It is deliberately excluded from the allowlist;
+    the registry row is a pre-existing data defect for Robin, not fixed here.
+  - The **`Flow Observation / Appearance` split applies to all three observation
+    labels**, not just that one — the value text, not the label, carries the
+    stage/appearance distinction. A third class ("could not locate", "no access",
+    "decommissioned") describes no water at all and correctly yields neither
+    analyte; its raw text is preserved on `sample.comments`, as is every
+    observation's, split or not.
+  - The three observation labels **never co-occur on a real sheet** (0 of 578
+    measured), so the "one Stage + one Appearance per sample column" dedupe is
+    defensive only.
 - **A77** **Dust exposure dating is cross-checked, never assumed.** `Dust Results.Month`
   and `Dust Observations.EXPOSURE DATE` disagree in 8 of 64 real gauge-blocks; in 6 of
   those `Month` holds the *collection* date instead, but in `2400-7538-02` the

@@ -19,8 +19,12 @@ prefix `sampletidy.`). Defaults resolved in order: option → env var
 Keys (pin exactly): `live_db` (default
 `file.path(tools::R_user_dir("sampleTidy", "data"), "monitoring.duckdb")`),
 `input_dir` (no default — abort if unset when needed), `archive_dir`,
-`snapshot_dir`, `field_analytes` (default
-`c("pH", "Temperature", "Conductivity", "EC")`), `remove_ingested` (default
+`snapshot_dir`, `field_analytes` (default was
+`c("pH", "Temperature", "Conductivity", "EC")` — **WIDENED 2026-08-01 per A76**;
+see R/config.R and PLAN-06 R-6.6 for the measured list and why it changed),
+`field_analytes_diff_required` (added 2026-08-01; A75/A76 — the labels that
+share the ALS analyte's name and can only be selected by the value test),
+`remove_ingested` (default
 `FALSE`; A13), `corpus_dir` (default `Sys.getenv("SAMPLETIDY_CORPUS", "")`).
 
 Correctness criteria:

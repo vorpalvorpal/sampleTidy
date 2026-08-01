@@ -168,6 +168,7 @@ acirl_field_xlsx_adapter <- function() {
 
   # --- water sheets -> results + samples ----------------------------------
   field_analytes <- st_config("field_analytes")
+  diff_required <- st_config("field_analytes_diff_required")
   adapter_tag <- paste0("acirl_field_xlsx/", version)
 
   results_rows <- list()
@@ -181,7 +182,7 @@ acirl_field_xlsx_adapter <- function() {
 
   for (idx in water_idx) {
     sheet_name <- sheet_names[[idx]]
-    ws <- .st_acirl_parse_water_sheet(path, sheet_name, field_analytes)
+    ws <- .st_acirl_parse_water_sheet(path, sheet_name, field_analytes, diff_required)
     warnings_vec <- c(warnings_vec, ws$warnings)
     if (length(ws$skipped) > 0) {
       skipped_list <- c(skipped_list, ws$skipped)
@@ -259,7 +260,7 @@ acirl_field_xlsx_adapter <- function() {
     tibble::tibble(
       source_ref = character(0), feature_raw = character(0),
       analyte_raw = character(0), units_raw = character(0),
-      value_raw = character(0)
+      value_raw = character(0), diff_required = logical(0)
     )
   } else {
     dplyr::bind_rows(als_candidate_rows)
@@ -364,7 +365,8 @@ acirl_field_xlsx_adapter <- function() {
 # A75 value comparison can run later in assemble/reconcile. Dropping those rows
 # here (the old `lab_data_dropped` behaviour) destroyed the very values that
 # comparison needs.
-.st_acirl_parse_water_sheet <- function(path, sheet_name, field_analytes) {
+.st_acirl_parse_water_sheet <- function(path, sheet_name, field_analytes,
+                                        diff_required = character(0)) {
   empty_out <- function(skipped = list(), warnings = character(0)) {
     list(results = list(), samples = list(), skipped = skipped,
          warnings = warnings, als_candidates = list(),
@@ -495,9 +497,11 @@ acirl_field_xlsx_adapter <- function() {
   skipped_rows <- list()
   als_candidates <- list()
   comments_by_col <- list()
+  obs_by_col <- list()
   warnings_local <- character(0)
 
   allowed_norm <- toupper(stringr::str_squish(field_analytes))
+  diff_norm <- toupper(stringr::str_squish(diff_required))
 
   for (r in seq_len(n_row)) {
     if (r <= header_row || r == date_row) next
@@ -515,19 +519,53 @@ acirl_field_xlsx_adapter <- function() {
     if (.st_acirl_is_comment_label(label)) {
       for (j in sample_cols) {
         v <- cell(r, j)
-        if (nonempty(v)) {
-          key <- as.character(j)
-          prev <- comments_by_col[[key]]
-          txt <- stringr::str_squish(v)
-          comments_by_col[[key]] <- if (is.null(prev)) txt else paste(prev, txt, sep = "; ")
+        if (!nonempty(v)) next
+        key <- as.character(j)
+        txt <- stringr::str_squish(v)
+        prev <- comments_by_col[[key]]
+        # The RAW text is preserved on the sample regardless of the split
+        # below. It is the only home for the observations that describe no
+        # water at all ("could not locate", "no access", "decommissioned"),
+        # which map to neither analyte.
+        comments_by_col[[key]] <- if (is.null(prev)) txt else paste(prev, txt, sep = "; ")
+
+        # A76: an observation is a QUALITATIVE RESULT, not merely a note.
+        # Split it into at most one `Stage` and one `Appearance` value.
+        # First non-NA wins per (column, analyte): a sheet carrying both
+        # "Flow Observation / Appearance" and "Observations / Comments" would
+        # otherwise emit the same field reading twice (Robin, 2026-08-01).
+        sp <- .st_acirl_split_observation(txt)
+        cur <- obs_by_col[[key]]
+        if (is.null(cur)) {
+          cur <- list(
+            stage = NA_character_, stage_ref = NA_character_, stage_raw = NA_character_,
+            appearance = NA_character_, appearance_ref = NA_character_,
+            appearance_raw = NA_character_
+          )
         }
+        if (is.na(cur$stage) && !is.na(sp$stage)) {
+          cur$stage <- sp$stage
+          cur$stage_raw <- txt
+          cur$stage_ref <- sprintf("%s!r%dc%d", sheet_name, r, j)
+        }
+        if (is.na(cur$appearance) && !is.na(sp$appearance)) {
+          cur$appearance <- sp$appearance
+          cur$appearance_raw <- txt
+          cur$appearance_ref <- sprintf("%s!r%dc%d", sheet_name, r, j)
+        }
+        obs_by_col[[key]] <- cur
       }
       next
     }
 
     analyte_raw_val <- normalise_lab_text(label)
     analyte_norm <- toupper(stringr::str_squish(analyte_raw_val))
-    is_allowed <- analyte_norm %in% allowed_norm
+    # A75/A76: a diff-required label (the TSS pair) is a field reading whose
+    # NAME is indistinguishable from the ALS analyte's. It is never allowed
+    # through on the name alone - it takes the ALS-candidate path, tagged so
+    # assemble/reconcile can promote it once it has compared the values.
+    needs_diff <- analyte_norm %in% diff_norm
+    is_allowed <- !needs_diff && analyte_norm %in% allowed_norm
     units_cell <- cell(r, units_col)
 
     # A row with no value in ANY sample column is a section heading
@@ -561,11 +599,13 @@ acirl_field_xlsx_adapter <- function() {
             feature_raw = feature_by_col[[as.character(j)]],
             analyte_raw = analyte_raw_val,
             units_raw = .st_acirl_repair_units(analyte_raw_val, units_cell),
-            value_raw = value_raw_cell
+            value_raw = value_raw_cell,
+            diff_required = needs_diff
           )
         }
         skipped_rows[[length(skipped_rows) + 1]] <- tibble::tibble(
-          source_ref = source_ref, reason = "lab_data_dropped"
+          source_ref = source_ref,
+          reason = if (needs_diff) "diff_required" else "lab_data_dropped"
         )
         next
       }
@@ -594,6 +634,32 @@ acirl_field_xlsx_adapter <- function() {
         value_num = pv$value_num,
         value_chr = pv$value_chr,
         below_detection = grepl("^<", value_raw_cell)
+      )
+    }
+  }
+
+  # A76: emit the split observations. `analyte_raw` is the registered
+  # `lab_method.name` ("Flow observation" -> analyte `Stage`, "Comments" ->
+  # analyte `Appearance`), because reconcile resolves an analyte by matching
+  # `lab_method.name` against `analyte_raw` - see `.rc_resolve_one_analyte()`.
+  # Both are qualitative: `value_chr` carries the canonical term, `value_num`
+  # is NA, and `value_raw` keeps the whole original observation so the split
+  # stays auditable from the row itself.
+  for (key in names(obs_by_col)) {
+    o <- obs_by_col[[key]]
+    for (part in c("stage", "appearance")) {
+      val <- o[[part]]
+      if (is.na(val)) next
+      results_rows[[length(results_rows) + 1]] <- list(
+        source_ref = o[[paste0(part, "_ref")]],
+        lab_sample_id = sprintf("%s!c%s", sheet_name, key),
+        feature_raw = feature_by_col[[key]],
+        analyte_raw = if (part == "stage") "Flow observation" else "Comments",
+        units_raw = NA_character_,
+        value_raw = o[[paste0(part, "_raw")]],
+        value_num = NA_real_,
+        value_chr = val,
+        below_detection = FALSE
       )
     }
   }
@@ -628,6 +694,90 @@ acirl_field_xlsx_adapter <- function() {
 .st_acirl_is_comment_label <- function(label) {
   grepl("^comments$", label, ignore.case = TRUE) ||
     grepl("comment|observation", label, ignore.case = TRUE)
+}
+
+# A76 (Robin, 2026-08-01): an ACIRL observation cell encodes two independent
+# qualitative readings in one free-text string - the watercourse STAGE ("Low
+# flow", "Pooled", "No discharge") and the water's APPEARANCE ("Clear",
+# "Cloudy"). Historically both were written whole into a single `Appearance`
+# row; those 291 conflated rows are left alone by ruling, and only new imports
+# are split.
+#
+# The vocabulary below is measured, not invented: 194 distinct observation
+# values across the real corpus (`scratchpad/a76_obs_values.rds`) plus the
+# existing `Stage`/`Appearance` values already in the database. Misspellings
+# are handled by explicit alternation, never by fuzzy matching.
+#
+# Returns `list(stage, appearance)`, either or both `NA_character_`. A third
+# class of observation describes no water at all ("could not locate", "no
+# access", "decommissioned", "too dangerous to sample") and correctly yields
+# NA for both - the raw text still reaches `sample.comments`.
+.st_acirl_split_observation <- function(text) {
+  out <- list(stage = NA_character_, appearance = NA_character_)
+  if (is.na(text) || !nzchar(text)) return(out)
+  x <- tolower(text)
+  # The one measured typo that a pattern cannot absorb: "high evel" for
+  # "high level". Anchored on word boundaries so real "level" is untouched.
+  x <- gsub("\\bevel\\b", "level", x)
+
+  # --- stage ---------------------------------------------------------------
+  # Tier 1, magnitude + noun ("Low flow", "Mod level", "High discharge"): the
+  # most informative form, so it wins outright over the standalone terms.
+  # `\\s*` between the two absorbs the run-together spellings ("lowflow",
+  # "modflow"), and the optional separator absorbs "low flow/ clear",
+  # "mod-flow", "mod level; clear". The LEADING `\\b` is load-bearing and was
+  # added after calibration: without it the "low" inside "flow" matched, so
+  # "Clear, flow flow" was read as stage "Low flow". There is deliberately no
+  # TRAILING boundary - that would break "lowflow" / "modflow".
+  hit <- regmatches(x, regexec(
+    "\\b(very\\s*low|low|mod(?:erate)?|high)\\s*[-/,;]?\\s*(flows?|levels?|dis(?:charge)?s?)",
+    x, perl = TRUE
+  ))[[1]]
+  if (length(hit) == 3) {
+    magnitude <- switch(
+      gsub("\\s+", "", hit[[2]]),
+      "verylow" = "Very low", "low" = "Low", "mod" = "Mod",
+      "moderate" = "Mod", "high" = "High"
+    )
+    noun <- if (grepl("^flow", hit[[3]])) {
+      "flow"
+    } else if (grepl("^level", hit[[3]])) {
+      "level"
+    } else {
+      "discharge"
+    }
+    out$stage <- paste(magnitude, noun)
+  } else {
+    # Tier 2, standalone terms. Where several appear ("pipe not running dry",
+    # "pooled/ almost dry") the LEFTMOST wins - deterministic, and in the
+    # measured corpus the leading term is the one the sampler led with.
+    standalone <- c(
+      "No discharge" = "no\\s*discharge|non\\s*discharge|no\\s*dis\\b|not\\s*running|no\\s*flows?\\b|not\\s*flowing",
+      "Pooled" = "pooled|polled",
+      "Dry" = "\\bdry\\b"
+    )
+    pos <- vapply(standalone, function(p) {
+      m <- regexpr(p, x, perl = TRUE)
+      if (m[[1]] == -1L) .Machine$integer.max else as.integer(m[[1]])
+    }, integer(1))
+    if (any(pos < .Machine$integer.max)) {
+      out$stage <- names(standalone)[[which.min(pos)]]
+    }
+  }
+
+  # --- appearance ----------------------------------------------------------
+  # Most specific first: "slightly cloudy" must not be read as "cloudy".
+  # `sli\\w*ly` covers the measured misspellings (slighlty, slighhtly);
+  # `clou\\w*dy` covers clouidy/clouldy; `c\\s*lear` covers the split "c lear".
+  if (grepl("sli\\w*ly[ ,/-]*clou\\w*dy", x, perl = TRUE)) {
+    out$appearance <- "Slightly cloudy"
+  } else if (grepl("clou\\w*dy", x, perl = TRUE)) {
+    out$appearance <- "Cloudy"
+  } else if (grepl("c\\s*lear|celar", x, perl = TRUE)) {
+    out$appearance <- "Clear"
+  }
+
+  out
 }
 
 # Old reader's unit repairs (WEM.data's tidy_ACIRL_field_data): Temperature

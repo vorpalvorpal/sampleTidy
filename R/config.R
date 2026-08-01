@@ -18,8 +18,59 @@
   live_db = function() {
     file.path(tools::R_user_dir("sampleTidy", "data"), "monitoring.duckdb")
   },
+  # A76 (Robin, 2026-08-01): the field set is MAXIMAL. Every entry below is
+  # matched exactly (after `str_squish()` + upper-case) against an ACIRL water
+  # sheet's parameter label. The list is grounded in two measurements, not in
+  # the analyte names of the ruling:
+  #
+  #   (a) a label census over the real corpus (156 workbooks, 13768 label rows,
+  #       296 distinct labels - `scratchpad/a76_label_counts.csv`), and
+  #   (b) the 32 `lab_method` rows already carrying `method = 'field'`, whose
+  #       `name` column IS the ACIRL sheet label ("Electrical Conductivity",
+  #       "Water Depth", "Flow observation", ...).
+  #
+  # Deliberately NOT here, though both are registered ACIRL `field` methods:
+  #   * "Electrical Conductivity @ 25<degC>" - that is the ALS value transcribed
+  #     into the sheet, not a field reading. Its `field` registration is a
+  #     pre-existing data defect, flagged for Robin, not honoured here.
+  #   * the TSS pair - see `field_analytes_diff_required` below.
+  # Observation labels are not here either: they take the qualitative
+  # Stage/Appearance path in the ACIRL adapter, not the allowlist.
   field_analytes = function() {
-    c("pH", "Temperature", "Conductivity", "EC")
+    c(
+      # Present in the corpus AND registered as ACIRL `field` lab_methods.
+      "pH", "Temperature", "Electrical Conductivity",
+      # The six standing-water-level name variants, preserved as received
+      # (A76): each is its own registered lab_method against the single
+      # `Standing water level` analyte.
+      "Standing Water Level", "Standing Water Height", "Standing water level",
+      "Water Height", "Water Depth",
+      # Registered ACIRL `field` methods with ZERO occurrences in the
+      # 2026-08-01 corpus. Allowlisted so a future sheet is imported rather
+      # than routed to review; they cost nothing while absent.
+      "DO", "ORP", "CH4 Reading % v/v", "H2S Reading % v/v",
+      # A76 ruled turbidity in. It has no analyte, no lab_method and zero
+      # corpus occurrences - until the `Turbidity` analyte is created it will
+      # resolve to `analyte_pending` and surface in review, which is the
+      # correct failure mode.
+      "Turbidity",
+      # Retained from the original pinned default. Neither occurs as a
+      # standalone label in the real corpus; both are registered `field`
+      # methods for the `legacy`/`Internal` organisations.
+      "Conductivity", "EC"
+    )
+  },
+  # A76 + A75: labels that ARE field readings but share their name with the ALS
+  # analyte, so the allowlist alone cannot tell the two apart. The ACIRL sheet
+  # carries "Total Suspended Solids" for both its own field estimate and the
+  # transcribed ALS result. These are therefore NEVER imported on the strength
+  # of the name: the adapter routes them to `report$als_candidates` with
+  # `diff_required = TRUE`, and only the value comparison in
+  # assemble/reconcile - which can see the real ALS data - may promote one to a
+  # field result. Both names are already registered as ACIRL `field`
+  # lab_methods against the `TSS` analyte, with zero analyses so far.
+  field_analytes_diff_required = function() {
+    c("Total Suspended Solids", "Suspended Solids (SS)", "TSS")
   },
   # TRUE since 2026-07-23 (Robin): a successfully ingested source file is
   # deleted from the input directory once its archive copy has been verified.
@@ -48,7 +99,7 @@
 #'
 #' @keywords internal
 #' @noRd
-.st_config_list_keys <- c("field_analytes")
+.st_config_list_keys <- c("field_analytes", "field_analytes_diff_required")
 
 #' Get or set a sampleTidy configuration value
 #'
