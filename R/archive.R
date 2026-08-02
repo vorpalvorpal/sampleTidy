@@ -16,7 +16,9 @@
 #'
 #' Resolves the event's project via `event$work_order` (`.ct_ensure_project()`,
 #' R/commit.R - find-or-create, so an orphan (NA) work order and a genuinely
-#' new one both resolve to a real project row rather than `NA`), copies
+#' new one both resolve to a real project row rather than `NA`), or, when the
+#' event carries an ACIRL report number, via that report's own project row
+#' (R-9.14/A80 - see the call site), copies
 #' `path` to
 #' `file.path(st_config("archive_dir"), <new asset uuid>, basename(path))`
 #' (directory-per-asset, A70), and inserts the `asset` row through
@@ -85,7 +87,26 @@ archive_file <- function(con, path, hash, event, type = "Chemical analysis") {
   # row exists at all. Delegating the create half here too means the shared
   # anonymous project row exists by the time it is needed either way,
   # instead of only on a later, non-blocked retry.
-  uuid_project <- .ct_ensure_project(con, event$work_order, "archive source file")
+  #
+  # R-9.14/A80: an ACIRL workbook HAS no work order (its header carries a
+  # report number, and `2400-*` is never parsed from a filename), so the line
+  # above would file every ACIRL asset under the shared anonymous orphan
+  # project. Its real home is the ACIRL report project - the asset IS that
+  # report, not a lab job - so an event carrying a report number resolves to it
+  # instead. Only the report row is find-or-created here; the child ALS work
+  # orders are NOT re-parented from this path, because `.ct_archive_files()`
+  # also runs on `commit_event()`'s BLOCKED branch and a blocked event must not
+  # rewrite the parent of a project row it never committed to.
+  # `.ct_ensure_report_project()` fills an empty parent only, so a report row
+  # minted here and completed by the later real commit is the same row.
+  report_no <- .ct_event_report_no(event)
+  uuid_project <- if (is.na(report_no)) {
+    .ct_ensure_project(con, event$work_order, "archive source file")
+  } else {
+    .ct_ensure_report_project(
+      con, report_no, .ct_event_als_work_orders(event), "archive source file"
+    )$uuid
+  }
 
   new_uuid <- uuid::UUIDgenerate()
   archive_dir <- st_config("archive_dir")

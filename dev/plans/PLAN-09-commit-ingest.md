@@ -499,3 +499,112 @@ and a gate is exactly the kind of rule that grows back.
   files by report number instead;
 - the inversion of "gating takes no snapshot": an imported workbook **is**
   snapshotted and its source removed.
+
+## R-9.14 The A80 project hierarchy (`.ct_ensure_project_tree()`, `R/commit.R`)
+
+ACIRL data is filed against the **ACIRL report number**, with the cited ALS work
+order as a **child** project of it and the campaign that work order already
+belonged to as the **grandparent** (CONTRACT A80):
+
+```
+campaign "EPL quarterly"   uuid_parent = NULL          (root)
+  └── 2400-7400-06-01      uuid_parent = campaign      (the ACIRL report)
+        └── ES2420251      uuid_parent = ACIRL report  (the ALS work order)
+```
+
+`commit_event()` calls `.ct_ensure_project_tree(con, event, reason)` where it
+used to call `.ct_ensure_project(con, event$work_order, reason)`. An event with
+no ACIRL report number takes the old path verbatim and produces no review rows,
+so this is a **no-op for every ALS/ESdat event**.
+
+### What identifies an ACIRL filing
+
+`event$report$sources[[hash]]$report_no` (PLAN-07 R-7.5b). Only the ACIRL adapter
+writes `report$header$report_no`, so its presence is the test — no org sniff.
+The report number comes from the front-page `REPORT NO:` cell, **never** the
+filename (the ACIRL filename trap, R-9.12).
+
+An ACIRL workbook has no home work order, so `.st_group_events()` keys it
+`__orphan__::<hash>` and one ACIRL event has exactly one source. Multiplicity is
+therefore unreachable; it resolves deterministically (sorted-first) rather than
+aborting.
+
+### The rules
+
+1. **The report project** is find-or-create **by name**, typed `ACIRL report`.
+   The type is load-bearing: `.ct_wo_sample_count()` matches
+   `type = 'Work order'`, and an ACIRL clean row carries the report number in
+   `work_order`, so typing it `Work order` would make the second file bearing a
+   reused number look like a re-ingest and let `.ct_reingest_guard()` **block**
+   it — contradicting A80's "the data still imports".
+2. **Collisions merge** into the existing row (A80). Six of the corpus's 132
+   report numbers already exist as `Monthly gas monitoring` projects carrying
+   169–178 samples each.
+3. **A parent that is already set is never overwritten.** That is what makes the
+   merge safe and what makes the whole thing order-independent —
+   `archive_file()` may mint the same report row from `commit_event()`'s blocked
+   branch before any citation is known, and the later real commit fills the
+   parent in without the two calls fighting.
+4. **The grandparent is the campaign the cited orders already sit under, and
+   only when they agree.** A candidate parent that is itself an `ACIRL report`
+   is excluded — without that exclusion a second commit of the same report makes
+   the report its own parent (a cycle), and where two reports cite one order the
+   first becomes the second's "campaign" and the order is silently stolen. Both
+   were caught by a failing test, not foreseen.
+5. **A cited order is re-pointed only from `NULL` or from the chosen
+   grandparent.** Anything else is a real parent, and overwriting it is the
+   exact loss the grandparent ruling exists to prevent: the existing parent
+   stands and `project_parent_conflict` is raised.
+6. **`duplicate_report_number`** fires when the report project already has an ALS
+   work-order child and the incoming workbook cites a **different** one — the
+   contract's discriminator exactly, not repetition and not the content hash.
+7. **Samples attach to the child** when exactly one order is cited, and to the
+   report otherwise (dust-only, or two citations).
+
+### Measured, before implementing (`scratchpad/a80_cardinality_probe.R`, `a80_tree_probe.R`)
+
+| fact | consequence |
+|---|---|
+| 116 of 129 cited orders already have a campaign parent | the grandparent level exists at all |
+| **5 workbooks cite TWO distinct ALS orders** (347 of 6,208 rows) | one event has one `uuid_project` and the per-row citation is not carried past the sheet, so those samples attach to the **parent**. Honest, not clever |
+| **4 orders are cited by TWO report numbers** | a row has one parent, so the second report cannot adopt it → `project_parent_conflict` |
+| 1 workbook cites orders under **two different campaigns** | no consensus → the report is a root and neither order moves |
+| 141 of 154 workbooks cite exactly one order | the simple case is 92% of the corpus |
+| `uuid_root`: 469 parented rows have `root = parent`, 79 unparented have `root = self` | the convention this code keeps: root = topmost ancestor, a root points at itself |
+
+### `review_items_opened` counted commit-side
+
+A80's review rows are decided at **commit** time from the project tree, and
+reconcile cannot see them (it has no `uuid_project`). `ingest_dir()`'s tally used
+`nrow(resolved$review)` — what reconcile *would* have written — and reported 162
+while 163 rows sat in `review_queue`. It now prefers `commit_event()`'s own
+`n_review`. **Known gap, deliberate:** a `dry_run` still under-forecasts by the
+tree's own review rows, because previewing the hierarchy read-only means a second
+implementation of it, and that drift is exactly what
+`.ct_reingest_guard_preview()` has to work to avoid.
+
+### Criteria
+
+- a cited order that already sits under a campaign ends up **under the report**,
+  the report ends up **under the campaign**, and `uuid_root` is the campaign for
+  both;
+- the displaced campaign is in `change_log`, so the move is recoverable;
+- a dust-only workbook files under the report itself, which is its own root, and
+  mints **no** anonymous orphan project row;
+- a cited order we have never seen is created as a child of the report;
+- a report number colliding with an existing project **merges** into it, its
+  parent untouched, and raises **no** duplicate flag;
+- a number reused for a **different** sampling event raises
+  `duplicate_report_number` **and still imports**, leaving one parent with two
+  children;
+- a re-save (same number, same cited order) raises **nothing** and re-points
+  nothing on the second commit — no `change_log` churn per retry;
+- an order already claimed by another ACIRL report keeps its parent, raises
+  `project_parent_conflict`, and its samples still attach to it;
+- a two-citation workbook makes both children and attaches to the parent;
+- two cited orders under different campaigns leave **both** campaigns intact and
+  flag both;
+- an event with no report number resolves to exactly
+  `.ct_ensure_project(event$work_order)` and produces no review rows;
+- the archived ACIRL workbook lands on its **report** project, not the anonymous
+  orphan row.

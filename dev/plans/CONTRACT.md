@@ -1196,6 +1196,33 @@ for lab reports; `sample.organisation ∈ {ACIRL, Internal, ALS}`;
   reports — a pre-existing gas project of the same number is not a new sampling
   event under a reused number.
 
+  **Three cases A80 did not cover, decided at implementation time (Claude,
+  2026-08-02, from measurement — flagged here for Robin to overrule).** Built as
+  PLAN-09 R-9.14; all three are loud rather than silent, and none destroys data.
+
+  1. **A workbook citing TWO ALS orders** (measured: 5 workbooks, 347 of 6,208
+     result rows) makes **both** children, but its samples attach to the
+     **parent**. One event resolves to one `uuid_project` and the per-row ALS
+     citation is not carried past the sheet, so they cannot be split between the
+     two children. Attaching them all to one arbitrarily would assert a lab job
+     we cannot evidence. *If this matters, the fix is in the adapter — carry the
+     sheet's ALS order onto each row — not here.*
+  2. **An ALS order cited by TWO DIFFERENT report numbers** (measured: 4 of 129,
+     e.g. `ES2245792` by both `2400-7222-12-01` and `2400-7222-12-04`). A row has
+     one parent, so the second report cannot also adopt it. The existing parent
+     **stands** and a new `project_parent_conflict` review item is raised. First
+     claim wins, and it is visible rather than silent.
+  3. **Two cited orders under DIFFERENT campaigns** (measured: exactly one
+     workbook, `2400-7286-03` — `EPL annual` and `2022 March pollution
+     incidents`). There is no campaign to promote without asserting a membership
+     we cannot justify, so the report becomes a **root**, neither order moves,
+     and both are flagged. Same principle as the grandparent ruling itself:
+     never overwrite a curated parent.
+
+  A parent that is already set is **never overwritten** — that is what makes the
+  merge safe, and what makes the whole thing order-independent when
+  `archive_file()` mints the report row before any citation is known.
+
 - **A81** **Feature-alias rulings (user, 2026-08-02).** `BORE 11` → `B.MW11`.
   `CRIPPLE CREEK INLET` → **`B.S04`**, confirmed against the registry rather than
   assumed: `B.S04` already carries the aliases `B.CRIPPLE` and `Diversion pipe inlet`,

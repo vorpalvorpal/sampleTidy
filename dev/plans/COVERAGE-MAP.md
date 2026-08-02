@@ -459,6 +459,25 @@ gate growing back anywhere fails loudly.
 - an ACIRL workbook has no home work order (R-9.12's filename trap), which is *why* A80 files by report number -> "A80: an ACIRL workbook has no home work order - it must be filed by report number"
 - the inversion of "gating takes no snapshot": an imported workbook IS snapshotted and its source removed -> "A79: an imported ACIRL workbook IS snapshotted and its source removed"
 
+### R-9.14 the A80 project hierarchy (`tests/testthat/test-commit.R`) - added 2026-08-02
+`campaign -> ACIRL report -> ALS work order`, built at commit time from
+`event$report$sources`. Every case below was measured off the real corpus and the
+live registry first (`scratchpad/a80_cardinality_probe.R`, `a80_tree_probe.R`) -
+A80 taken literally would have overwritten the campaign on 116 of 129 cited
+orders. All 12 mutations killed (`scratchpad/a80_mutations.R`).
+- the report is INSERTED between campaign and work order; `uuid_root` is the campaign for both; samples attach to the CHILD -> "A80: an ACIRL event with a cited ALS order builds campaign -> report -> work order, and its samples attach to the CHILD"
+- the displaced campaign survives in `change_log` -> "A80: the displaced campaign survives in change_log, so the move is recoverable"
+- a dust-only workbook files under the report itself, its own root, and mints no anonymous orphan row -> "A80: a dust-only workbook (no ALS citation) files under the report project itself, as its own root"
+- a cited order we have never seen is created as a child -> "A80: a cited ALS order we have never seen is created as a child of the report"
+- a colliding report number MERGES, its parent untouched, and raises no duplicate flag; its non-work-order children are not read as ALS orders -> "A80: a report number colliding with an existing project MERGES into it and never touches its parent"
+- a number reused for a DIFFERENT sampling event flags and still imports, leaving one parent with two children -> "A80: a report number reused for a DIFFERENT sampling event raises duplicate_report_number - and still imports"
+- a re-save flags nothing and re-points nothing the second time (no `change_log` churn per retry) -> "A80: a re-saved report (same number, same cited order) does NOT raise duplicate_report_number"
+- an order already claimed by another ACIRL report keeps its parent and flags; its samples still attach to it -> "A80: an ALS order already claimed by ANOTHER ACIRL report keeps its parent and raises project_parent_conflict"
+- two citations in one file make two children, samples on the PARENT, no duplicate flag -> "A80: a workbook citing TWO orders makes both children, attaches its samples to the PARENT, and raises no duplicate flag"
+- two campaigns, no consensus: both campaigns intact, both flagged -> "A80: two cited orders under DIFFERENT campaigns leave both campaigns intact and flag both"
+- a non-ACIRL event is untouched - same project, no review rows -> "A80: an event with no ACIRL report number is untouched - same project, no review rows"
+- the archived workbook lands on its report project, not the orphan row -> "A80: the archived ACIRL workbook lands on its report project, not the anonymous orphan row"
+
 ### R-9.9 empty-folder cleanup (`tests/testthat/test-ingest.R`) - added 2026-07-28
 - emptied folder deleted, and a `.DS_Store` does not keep it alive → "R-9.9: a folder emptied by a clean run is deleted, and a .DS_Store does not keep it alive"
 - folder holding a kept-back (quarantined) file survives → "R-9.9: a folder still holding a quarantined file survives"

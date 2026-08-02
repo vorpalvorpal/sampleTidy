@@ -2659,3 +2659,379 @@ test_that("commit_event(): two DIFFERENT orphan work orders (no work order recor
       WHERE p.name IS NULL')
   expect_equal(nrow(proj_uuids), 1)
 })
+
+# ---- R-9.14 / A80: the ACIRL project hierarchy ------------------------------
+#
+# campaign -> ACIRL report -> ALS work order, with samples on the CHILD wherever
+# an ALS order is cited and on the parent when none is.
+#
+# Every number these tests encode was MEASURED off the real corpus and the live
+# registry before a line of this was written (`scratchpad/a80_cardinality_probe.R`,
+# `a80_tree_probe.R`), because A80 taken literally would have overwritten the
+# campaign on 116 of the 129 cited work orders.
+
+a80_seed_project <- function(con, name, type = "Work order",
+                             parent = NA_character_, root = NA_character_) {
+  u <- uuid::UUIDgenerate()
+  DBI::dbExecute(
+    con,
+    "INSERT INTO project (uuid, uuid_parent, uuid_root, name, type) VALUES (?, ?, ?, ?, ?)",
+    params = list(u, parent, root, name, type)
+  )
+  u
+}
+
+a80_project <- function(con, name) {
+  DBI::dbGetQuery(
+    con, "SELECT uuid, uuid_parent, uuid_root, name, type FROM project WHERE name = ?",
+    params = list(name)
+  )
+}
+
+# An ACIRL event as assembly really builds one: no home work order (the header
+# carries a report number, never a work order, and `2400-*` is never parsed
+# from a filename), with PLAN-07 R-7.5b's per-hash `sources`.
+a80_event <- function(con, src_dir, report_no, cited = character(0), tag = "a") {
+  path <- file.path(src_dir, sprintf("%s_%s_WMF.xls", report_no, tag))
+  writeLines(sprintf("acirl workbook %s %s", report_no, tag), path)
+  hash <- hash_file(path)
+  DBI::dbExecute(
+    con,
+    "INSERT INTO ingest_file (hash, filename, path_first_seen, state, work_order, revision)
+     VALUES (?, ?, ?, 'reconciled', NULL, 0)",
+    params = list(hash, basename(path), path)
+  )
+  list(
+    hash = hash,
+    path = path,
+    event = list(
+      work_order = NA_character_, orphan = TRUE,
+      results = tibble::tibble(), samples = tibble::tibble(),
+      files = tibble::tibble(hash = hash, kept = TRUE),
+      report = list(sources = stats::setNames(list(list(
+        hash = hash, filename = basename(path), report_no = report_no,
+        als_work_orders = cited, feature_aliases = list(), als_candidates = list()
+      )), hash))
+    )
+  )
+}
+
+a80_clean <- function(hash, report_no, feature = "T.S01", date = "2025-06-10") {
+  mk_clean_row(
+    source_hash = hash, source_ref = "r1", work_order = report_no, org = "ACIRL",
+    adapter = "acirl_field_xlsx/1", feature_raw = feature,
+    sample_date = as.Date(date), sample_datetime = as.POSIXct(NA)
+  )
+}
+
+# `seed_db()` already seeds a `sample` row of its own, so a bare
+# `SELECT DISTINCT uuid_project FROM sample` conflates it with the rows the
+# commit under test wrote. Only the NEW samples say where A80 filed anything.
+a80_sample_uuids <- function(con) {
+  DBI::dbGetQuery(con, 'SELECT uuid FROM "sample"')$uuid
+}
+a80_new_sample_projects <- function(con, before) {
+  rows <- DBI::dbGetQuery(con, 'SELECT uuid, uuid_project FROM "sample"')
+  unique(rows$uuid_project[!(rows$uuid %in% before)])
+}
+
+a80_setup <- function() {
+  dir <- withr::local_tempdir(.local_envir = parent.frame())
+  db_path <- seed_db(dir = dir)
+  con <- seed_con(db_path)
+  ensure_test_asset_table(con)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE), envir = parent.frame())
+  withr::local_options(
+    list("sampletidy.archive_dir" = withr::local_tempdir(.local_envir = parent.frame())),
+    .local_envir = parent.frame()
+  )
+  list(con = con, src = withr::local_tempdir(.local_envir = parent.frame()))
+}
+
+test_that("A80: an ACIRL event with a cited ALS order builds campaign -> report -> work order, and its samples attach to the CHILD", {
+  s <- a80_setup()
+  con <- s$con
+  # The measured starting state: the ALS work order already exists and already
+  # sits under a campaign (116 of 129 real ones do).
+  campaign <- a80_seed_project(con, "EPL quarterly", type = NA_character_)
+  DBI::dbExecute(con, "UPDATE project SET uuid_root = uuid WHERE uuid = ?", params = list(campaign))
+  wo <- a80_seed_project(con, "ES2420251", parent = campaign, root = campaign)
+
+  ev <- a80_event(con, s$src, "2400-7400-06-01", cited = "ES2420251")
+  before <- a80_sample_uuids(con)
+  res <- commit_event(ev$event, mk_resolved(clean = a80_clean(ev$hash, "2400-7400-06-01")), con)
+  expect_false(isTRUE(res$blocked))
+
+  report <- a80_project(con, "2400-7400-06-01")
+  expect_equal(nrow(report), 1)
+  expect_identical(report$type[[1]], "ACIRL report")
+  # The report is INSERTED between them; the campaign is displaced, not lost.
+  expect_identical(report$uuid_parent[[1]], campaign)
+  expect_identical(report$uuid_root[[1]], campaign)
+
+  wo_after <- a80_project(con, "ES2420251")
+  expect_identical(wo_after$uuid[[1]], wo)          # same row, re-pointed
+  expect_identical(wo_after$uuid_parent[[1]], report$uuid[[1]])
+  expect_identical(wo_after$uuid_root[[1]], campaign)
+
+  # A80: samples attach to the CHILD wherever an ALS order is cited.
+  expect_identical(a80_new_sample_projects(con, before), wo)
+})
+
+test_that("A80: the displaced campaign survives in change_log, so the move is recoverable", {
+  s <- a80_setup()
+  con <- s$con
+  campaign <- a80_seed_project(con, "Monthly monitoring", type = NA_character_)
+  a80_seed_project(con, "ES2420251", parent = campaign, root = campaign)
+
+  ev <- a80_event(con, s$src, "2400-7400-06-01", cited = "ES2420251")
+  commit_event(ev$event, mk_resolved(clean = a80_clean(ev$hash, "2400-7400-06-01")), con)
+
+  moved <- DBI::dbGetQuery(
+    con,
+    "SELECT old, new FROM change_log
+      WHERE tbl = 'project' AND field = 'uuid_parent' AND action = 'update'"
+  )
+  expect_true(any(moved$old == campaign))
+})
+
+test_that("A80: a dust-only workbook (no ALS citation) files under the report project itself, as its own root", {
+  s <- a80_setup()
+  con <- s$con
+  ev <- a80_event(con, s$src, "2400-7538-02", cited = character(0))
+  before <- a80_sample_uuids(con)
+  commit_event(ev$event, mk_resolved(clean = a80_clean(ev$hash, "2400-7538-02")), con)
+
+  report <- a80_project(con, "2400-7538-02")
+  expect_equal(nrow(report), 1)
+  expect_true(is.na(report$uuid_parent[[1]]))
+  # The registry's own convention for a root row: it points at itself.
+  expect_identical(report$uuid_root[[1]], report$uuid[[1]])
+
+  expect_identical(a80_new_sample_projects(con, before), report$uuid[[1]])
+  # No anonymous orphan row was minted for it - that is the wart A80 removes.
+  expect_equal(DBI::dbGetQuery(con, "SELECT count(*) n FROM project WHERE name IS NULL")$n, 0)
+})
+
+test_that("A80: a cited ALS order we have never seen is created as a child of the report", {
+  s <- a80_setup()
+  con <- s$con
+  ev <- a80_event(con, s$src, "2400-7400-09-01", cited = "ES2434371")
+  commit_event(ev$event, mk_resolved(clean = a80_clean(ev$hash, "2400-7400-09-01")), con)
+
+  report <- a80_project(con, "2400-7400-09-01")
+  wo <- a80_project(con, "ES2434371")
+  expect_equal(nrow(wo), 1)
+  expect_identical(wo$uuid_parent[[1]], report$uuid[[1]])
+  # No campaign anywhere, so the report is the root of the pair (13 of 129).
+  expect_identical(report$uuid_root[[1]], report$uuid[[1]])
+  expect_identical(wo$uuid_root[[1]], report$uuid[[1]])
+})
+
+test_that("A80: a report number colliding with an existing project MERGES into it and never touches its parent", {
+  s <- a80_setup()
+  con <- s$con
+  # The measured shape of the six real collisions: a `Monthly gas monitoring`
+  # project already carrying samples, already a child of a campaign.
+  gas_campaign <- a80_seed_project(con, "Monthly gas monitoring", type = NA_character_)
+  gas <- a80_seed_project(con, "2400-7222-01", type = "Monthly gas monitoring",
+                          parent = gas_campaign, root = gas_campaign)
+  # A child of its own, of a kind that is NOT a lab work order. The duplicate
+  # check restricts `kids` to `type = 'Work order'` precisely so a merged
+  # project's unrelated children cannot be misread as ALS orders already filed.
+  a80_seed_project(con, "Gauge block A", type = "Dust monitoring",
+                   parent = gas, root = gas_campaign)
+  als_campaign <- a80_seed_project(con, "EPL quarterly", type = NA_character_)
+  a80_seed_project(con, "ES2420251", parent = als_campaign, root = als_campaign)
+
+  ev <- a80_event(con, s$src, "2400-7222-01", cited = "ES2420251")
+  commit_event(ev$event, mk_resolved(clean = a80_clean(ev$hash, "2400-7222-01")), con)
+
+  rows <- a80_project(con, "2400-7222-01")
+  expect_equal(nrow(rows), 1)                       # merged, not duplicated
+  expect_identical(rows$uuid[[1]], gas)
+  expect_identical(rows$type[[1]], "Monthly gas monitoring")
+  expect_identical(rows$uuid_parent[[1]], gas_campaign)   # NOT re-pointed
+  # A pre-existing gas project is not a new sampling event under a reused
+  # number, so the merge must not raise the duplicate flag (contract A80).
+  expect_equal(
+    DBI::dbGetQuery(con, "SELECT count(*) n FROM review_queue WHERE kind = 'duplicate_report_number'")$n,
+    0
+  )
+})
+
+test_that("A80: a report number reused for a DIFFERENT sampling event raises duplicate_report_number - and still imports", {
+  s <- a80_setup()
+  con <- s$con
+  ev1 <- a80_event(con, s$src, "2400-7430-01", cited = "ES2417748", tag = "a")
+  commit_event(ev1$event, mk_resolved(clean = a80_clean(ev1$hash, "2400-7430-01", date = "2024-05-29")), con)
+
+  # The worst of the three real collisions: the May 2025 report carrying the
+  # 2024 filename AND the 2024 report number; only its date and ALS order are
+  # right.
+  ev2 <- a80_event(con, s$src, "2400-7430-01", cited = "ES2515829", tag = "b")
+  res <- commit_event(
+    ev2$event,
+    mk_resolved(clean = a80_clean(ev2$hash, "2400-7430-01", feature = "T.S02", date = "2025-05-27")),
+    con
+  )
+
+  expect_false(isTRUE(res$blocked))                 # "the data still imports"
+  flag <- DBI::dbGetQuery(
+    con, "SELECT kind, work_order, payload FROM review_queue WHERE kind = 'duplicate_report_number'"
+  )
+  expect_equal(nrow(flag), 1)
+  expect_identical(flag$work_order[[1]], "2400-7430-01")
+  diag <- jsonlite::fromJSON(flag$payload[[1]])
+  expect_identical(unlist(diag$als_work_orders_incoming), "ES2515829")
+  expect_identical(unlist(diag$als_work_orders_already_filed), "ES2417748")
+
+  # One parent, two children - which is what makes the reuse survivable.
+  report <- a80_project(con, "2400-7430-01")
+  kids <- DBI::dbGetQuery(con, "SELECT name FROM project WHERE uuid_parent = ? ORDER BY name",
+                          params = list(report$uuid[[1]]))
+  expect_identical(kids$name, c("ES2417748", "ES2515829"))
+})
+
+test_that("A80: a re-saved report (same number, same cited order) does NOT raise duplicate_report_number", {
+  s <- a80_setup()
+  con <- s$con
+  # 13 of the 16 real repeats are this: one report re-saved or revised. Byte
+  # difference alone is not a discriminator, so flagging them would bury the
+  # three that matter.
+  ev1 <- a80_event(con, s$src, "2400-7399-04", cited = "ES2417748", tag = "a")
+  commit_event(ev1$event, mk_resolved(clean = a80_clean(ev1$hash, "2400-7399-04")), con)
+  ev2 <- a80_event(con, s$src, "2400-7399-04", cited = "ES2417748", tag = "b")
+  commit_event(ev2$event, mk_resolved(clean = a80_clean(ev2$hash, "2400-7399-04", feature = "T.S02")), con)
+
+  expect_equal(
+    DBI::dbGetQuery(con, "SELECT count(*) n FROM review_queue WHERE kind = 'duplicate_report_number'")$n,
+    0
+  )
+  # And the second commit re-points nothing: the order is already adopted, so
+  # there is no second UPDATE and no change_log churn per retry.
+  updates <- DBI::dbGetQuery(
+    con,
+    "SELECT count(*) n FROM change_log
+      WHERE tbl = 'project' AND field = 'uuid_parent' AND action = 'update'"
+  )$n
+  expect_equal(updates, 1)
+})
+
+test_that("A80: an ALS order already claimed by ANOTHER ACIRL report keeps its parent and raises project_parent_conflict", {
+  s <- a80_setup()
+  con <- s$con
+  # Measured: 4 of the 129 cited orders are cited by two different report
+  # numbers (e.g. ES2245792 by 2400-7222-12-01 and -12-04). A row has one
+  # parent, so the second report cannot also adopt it.
+  ev1 <- a80_event(con, s$src, "2400-7222-12-01", cited = "ES2245792", tag = "a")
+  commit_event(ev1$event, mk_resolved(clean = a80_clean(ev1$hash, "2400-7222-12-01")), con)
+  first_report <- a80_project(con, "2400-7222-12-01")
+
+  ev2 <- a80_event(con, s$src, "2400-7222-12-04", cited = "ES2245792", tag = "b")
+  res <- commit_event(
+    ev2$event,
+    mk_resolved(clean = a80_clean(ev2$hash, "2400-7222-12-04", feature = "T.S02")), con
+  )
+  expect_false(isTRUE(res$blocked))
+
+  wo <- a80_project(con, "ES2245792")
+  expect_identical(wo$uuid_parent[[1]], first_report$uuid[[1]])   # NOT stolen
+
+  flag <- DBI::dbGetQuery(
+    con, "SELECT work_order, payload FROM review_queue WHERE kind = 'project_parent_conflict'"
+  )
+  expect_equal(nrow(flag), 1)
+  expect_identical(flag$work_order[[1]], "ES2245792")
+  diag <- jsonlite::fromJSON(flag$payload[[1]])
+  expect_identical(diag$existing_parent_name, "2400-7222-12-01")
+
+  # The samples still attach to the cited work order - the flag is about the
+  # tree, not about where the data belongs.
+  attached <- DBI::dbGetQuery(
+    con, 'SELECT DISTINCT uuid_project FROM "sample" WHERE uuid_project = ?',
+    params = list(wo$uuid[[1]])
+  )
+  expect_equal(nrow(attached), 1)
+})
+
+test_that("A80: a workbook citing TWO orders makes both children, attaches its samples to the PARENT, and raises no duplicate flag", {
+  s <- a80_setup()
+  con <- s$con
+  campaign <- a80_seed_project(con, "EPL annual", type = NA_character_)
+  a80_seed_project(con, "ES2507242", parent = campaign, root = campaign)
+  a80_seed_project(con, "ES2407054", parent = campaign, root = campaign)
+
+  ev <- a80_event(con, s$src, "2400-7454-03", cited = c("ES2507242", "ES2407054"))
+  before <- a80_sample_uuids(con)
+  commit_event(ev$event, mk_resolved(clean = a80_clean(ev$hash, "2400-7454-03")), con)
+
+  report <- a80_project(con, "2400-7454-03")
+  expect_identical(report$uuid_parent[[1]], campaign)
+  kids <- DBI::dbGetQuery(con, "SELECT name FROM project WHERE uuid_parent = ? ORDER BY name",
+                          params = list(report$uuid[[1]]))
+  expect_identical(kids$name, c("ES2407054", "ES2507242"))
+
+  # One event resolves to ONE project and the per-row ALS citation is not
+  # carried past the sheet, so these samples cannot be split between the two
+  # children. They sit on the report - honest about what we know.
+  expect_identical(a80_new_sample_projects(con, before), report$uuid[[1]])
+
+  # Both children were established in ONE call, so this is not a reused number.
+  expect_equal(
+    DBI::dbGetQuery(con, "SELECT count(*) n FROM review_queue WHERE kind = 'duplicate_report_number'")$n,
+    0
+  )
+})
+
+test_that("A80: two cited orders under DIFFERENT campaigns leave both campaigns intact and flag both", {
+  s <- a80_setup()
+  con <- s$con
+  # The one real workbook with this shape: 2400-7286-03 cites ES2308842 (under
+  # `EPL annual`) and ES2308767 (under `2022 March pollution incidents`).
+  # There is no single campaign to promote, so nothing is displaced.
+  c1 <- a80_seed_project(con, "EPL annual", type = NA_character_)
+  c2 <- a80_seed_project(con, "2022 March pollution incidents", type = NA_character_)
+  a80_seed_project(con, "ES2308842", parent = c1, root = c1)
+  a80_seed_project(con, "ES2308767", parent = c2, root = c2)
+
+  ev <- a80_event(con, s$src, "2400-7286-03", cited = c("ES2308842", "ES2308767"))
+  commit_event(ev$event, mk_resolved(clean = a80_clean(ev$hash, "2400-7286-03")), con)
+
+  expect_true(is.na(a80_project(con, "2400-7286-03")$uuid_parent[[1]]))
+  expect_identical(a80_project(con, "ES2308842")$uuid_parent[[1]], c1)
+  expect_identical(a80_project(con, "ES2308767")$uuid_parent[[1]], c2)
+  expect_equal(
+    DBI::dbGetQuery(con, "SELECT count(*) n FROM review_queue WHERE kind = 'project_parent_conflict'")$n,
+    2
+  )
+})
+
+test_that("A80: an event with no ACIRL report number is untouched - same project, no review rows", {
+  s <- a80_setup()
+  con <- s$con
+  before <- count_rows(con, "project")
+
+  ev <- list(
+    work_order = "XX1234567", results = tibble::tibble(), samples = tibble::tibble(),
+    files = tibble::tibble(hash = "hash-x", kept = TRUE), report = list()
+  )
+  tree <- .ct_ensure_project_tree(con, ev, "test")
+
+  expect_identical(tree$uuid_project, .ct_ensure_project(con, "XX1234567", "test"))
+  expect_null(tree$review)
+  expect_equal(count_rows(con, "project"), before)
+})
+
+test_that("A80: the archived ACIRL workbook lands on its report project, not the anonymous orphan row", {
+  s <- a80_setup()
+  con <- s$con
+  ev <- a80_event(con, s$src, "2400-7538-02", cited = character(0))
+  commit_event(ev$event, mk_resolved(clean = a80_clean(ev$hash, "2400-7538-02")), con)
+
+  report <- a80_project(con, "2400-7538-02")
+  asset <- DBI::dbGetQuery(con, "SELECT uuid_project FROM asset WHERE hash = ?",
+                           params = list(ev$hash))
+  expect_equal(nrow(asset), 1)
+  expect_identical(asset$uuid_project[[1]], report$uuid[[1]])
+})

@@ -515,6 +515,358 @@
   new_uuid
 }
 
+# ---- step 1a: the A80 project hierarchy (R-9.14) ----------------------------
+#
+# A80 files ACIRL data against the ACIRL REPORT NUMBER, with the cited ALS work
+# order as a CHILD project of it, and the campaign that work order already
+# belonged to as the GRANDPARENT:
+#
+#   campaign "EPL quarterly"   uuid_parent = NULL          (root)
+#     +- 2400-7400-06-01       uuid_parent = campaign      (the ACIRL report)
+#          +- ES2420251        uuid_parent = ACIRL report  (the ALS work order)
+#
+# The grandparent level is not decoration. MEASURED before implementing: 116 of
+# the 129 ALS work orders our ACIRL workbooks cite ALREADY have a `uuid_parent`,
+# and it is a campaign (`Monthly monitoring` 27, `2022 March pollution
+# incidents` 27, `EPL quarterly` 24, ...) - human-curated and recoverable from
+# nothing else we hold. A row has ONE parent, so re-pointing it at the ACIRL
+# report without inserting a level would have overwritten the record of WHY the
+# sampling happened. Robin's ruling (2026-08-02): insert, do not displace.
+#
+# Two more measurements shaped the code (`scratchpad/a80_cardinality_probe.R`,
+# `a80_tree_probe.R`, both read-only over all 154 claimed workbooks):
+#
+#   * 5 workbooks cite TWO distinct ALS work orders (347 of 6,208 result rows).
+#     One event resolves to ONE `uuid_project`, and the per-row ALS citation is
+#     not carried past the sheet, so those samples cannot be split across both
+#     children. They attach to the PARENT (the ACIRL report) instead - see
+#     `.ct_ensure_project_tree()`'s return value. Honest, not clever: we know
+#     the report, we do not know which lab job a given row belongs to.
+#   * 4 ALS work orders are cited by TWO DIFFERENT report numbers (e.g.
+#     `ES2245792` by both `2400-7222-12-01` and `2400-7222-12-04`). A row has
+#     one parent, so the second report to commit CANNOT also adopt it. It does
+#     not steal it and it does not silently skip: the existing parent stands and
+#     a `project_parent_conflict` review item is raised.
+#
+# `uuid_root` follows the convention the live registry already keeps (measured:
+# 469 parented rows have `uuid_root == uuid_parent`, 79 unparented rows have
+# `uuid_root == uuid`): it is the TOPMOST ancestor, and a root points at itself.
+
+#' The ACIRL report number this event files under, or `NA` (R-9.14)
+#'
+#' Read off `event$report$sources` (PLAN-07 R-7.5b), which carries `report_no`
+#' per source hash rather than merged - deliberately, because A80's duplicate
+#' detection dies if two workbooks' report numbers collapse into one value.
+#'
+#' `report_no` is set by the ACIRL adapter alone (verified: no other adapter
+#' writes `report$header$report_no`), so its presence IS the "this is an ACIRL
+#' filing" test - there is no need for a separate org sniff.
+#'
+#' Multiplicity is unreachable today and is resolved deterministically rather
+#' than defensively aborted: an ACIRL workbook has no home work order (its
+#' header carries `report_no`, not `work_order`, and `2400-*` is never parsed
+#' from a filename), so `.st_group_events()` keys every ACIRL file as its own
+#' `__orphan__::<hash>` event and one event therefore has exactly one source.
+#' @keywords internal
+#' @noRd
+.ct_event_report_no <- function(event) {
+  sources <- event$report$sources
+  if (is.null(sources) || length(sources) == 0) {
+    return(NA_character_)
+  }
+  rn <- vapply(sources, function(s) {
+    v <- s$report_no
+    if (is.null(v) || length(v) == 0) NA_character_ else as.character(v[[1]])
+  }, character(1))
+  rn <- unique(rn[!is.na(rn) & nzchar(rn)])
+  if (length(rn) == 0) {
+    return(NA_character_)
+  }
+  sort(rn)[[1]]
+}
+
+#' Every ALS work order this event's sources cite, sorted and de-duplicated
+#' @keywords internal
+#' @noRd
+.ct_event_als_work_orders <- function(event) {
+  sources <- event$report$sources
+  if (is.null(sources) || length(sources) == 0) {
+    return(character(0))
+  }
+  wo <- unlist(lapply(sources, function(s) {
+    v <- s$als_work_orders
+    if (is.null(v)) character(0) else as.character(v)
+  }), use.names = FALSE)
+  if (is.null(wo) || length(wo) == 0) {
+    return(character(0))
+  }
+  sort(unique(wo[!is.na(wo) & nzchar(wo)]))
+}
+
+#' The hash of the event's first file, for a review row's provenance
+#'
+#' `event$files` is a TIBBLE, so `event$files[[1]]` is its first COLUMN, not its
+#' first row - the reason this is a named helper rather than an inline
+#' expression is that the inline version aborted the whole commit transaction.
+#' @keywords internal
+#' @noRd
+.ct_event_first_hash <- function(event) {
+  files <- event$files
+  if (is.null(files) || !("hash" %in% names(files)) || nrow(files) == 0) {
+    return(NA_character_)
+  }
+  as.character(files$hash[[1]])
+}
+
+#' One `project` row by name, or `NULL`
+#' @keywords internal
+#' @noRd
+.ct_project_by_name <- function(con, name) {
+  r <- DBI::dbGetQuery(
+    con, "SELECT uuid, uuid_parent, uuid_root, name, type FROM project WHERE name = ?",
+    params = list(name)
+  )
+  if (nrow(r) == 0) NULL else r[1, , drop = FALSE]
+}
+
+#' One `project` row by uuid, or `NULL`
+#' @keywords internal
+#' @noRd
+.ct_project_by_uuid <- function(con, uuid) {
+  r <- DBI::dbGetQuery(
+    con, "SELECT uuid, uuid_parent, uuid_root, name, type FROM project WHERE uuid = ?",
+    params = list(uuid)
+  )
+  if (nrow(r) == 0) NULL else r[1, , drop = FALSE]
+}
+
+#' The topmost ancestor recorded for a `project` row
+#'
+#' A stored `uuid_root` wins; failing that a parent IS the root (the depth-1
+#' case, 469 of 472 parented rows in the live registry); failing that the row is
+#' its own root (the convention 79 unparented rows already keep).
+#' @keywords internal
+#' @noRd
+.ct_project_root_of <- function(row) {
+  if (is.null(row)) {
+    return(NA_character_)
+  }
+  if (!is.na(row$uuid_root[[1]])) {
+    return(row$uuid_root[[1]])
+  }
+  if (!is.na(row$uuid_parent[[1]])) {
+    return(row$uuid_parent[[1]])
+  }
+  row$uuid[[1]]
+}
+
+#' Find-or-create the ACIRL report project, filling an EMPTY parent only (A80)
+#'
+#' Returns `list(uuid, grandparent, root)`.
+#'
+#' **Collisions merge** (Robin, 2026-08-02): six of the corpus's 132 report
+#' numbers already exist as `Monthly gas monitoring` projects carrying 169-178
+#' samples each. The incoming water data attaches to that existing row rather
+#' than minting a parallel one - find-by-name, no namespacing, no flag.
+#'
+#' **Never overwrite a parent that is already set.** That is what makes the
+#' merge safe (those six already sit under their own campaign), and it is also
+#' what makes this function ORDER-INDEPENDENT: `.ct_archive_project()` may mint
+#' this same row from `commit_event()`'s blocked branch before any citation is
+#' known, and the later real commit must be able to fill the parent in without
+#' the two calls fighting over it.
+#'
+#' The grandparent is the campaign the cited work orders already sit under, and
+#' only when they AGREE. Zero cited orders (a dust-only workbook) or two
+#' campaigns (measured: exactly one workbook, `2400-7286-03`, whose two orders
+#' sit under `EPL annual` and `2022 March pollution incidents`) leave the report
+#' a root rather than asserting a campaign membership we cannot justify.
+#' @keywords internal
+#' @noRd
+.ct_ensure_report_project <- function(con, report_no, cited, reason) {
+  # A candidate grandparent must be a CAMPAIGN - never another ACIRL report.
+  # Both exclusions are load-bearing and both were caught by a failing test
+  # rather than reasoned about in advance:
+  #
+  #   * on the SECOND commit of the same report, the cited order's parent is
+  #     this very report, so an unfiltered consensus made the report its own
+  #     parent - a cycle;
+  #   * where two reports cite one order (4 measured cases), the first report
+  #     became the second's "campaign", and the second then re-pointed the
+  #     order to itself under the `current == grandparent` rule below - silently
+  #     stealing the child instead of raising `project_parent_conflict`.
+  parents <- character(0)
+  for (wo in cited) {
+    r <- .ct_project_by_name(con, wo)
+    if (is.null(r) || is.na(r$uuid_parent[[1]])) {
+      next
+    }
+    p <- .ct_project_by_uuid(con, r$uuid_parent[[1]])
+    if (is.null(p) || identical(p$type[[1]], "ACIRL report")) {
+      next
+    }
+    parents <- c(parents, r$uuid_parent[[1]])
+  }
+  parents <- unique(parents)
+  grandparent <- if (length(parents) == 1) parents[[1]] else NA_character_
+
+  existing <- .ct_project_by_name(con, report_no)
+  if (!is.null(existing)) {
+    if (is.na(existing$uuid_parent[[1]]) && !is.na(grandparent)) {
+      root <- .ct_project_root_of(.ct_project_by_uuid(con, grandparent))
+      db_update(
+        con, "project",
+        uuid = existing$uuid[[1]],
+        changes = list(uuid_parent = grandparent, uuid_root = root),
+        actor = .ct_actor, reason = reason
+      )
+      return(list(uuid = existing$uuid[[1]], grandparent = grandparent, root = root))
+    }
+    return(list(
+      uuid = existing$uuid[[1]],
+      grandparent = existing$uuid_parent[[1]],
+      root = .ct_project_root_of(existing)
+    ))
+  }
+
+  new_uuid <- uuid::UUIDgenerate()
+  root <- if (is.na(grandparent)) {
+    new_uuid
+  } else {
+    .ct_project_root_of(.ct_project_by_uuid(con, grandparent))
+  }
+  # `type = "ACIRL report"` is load-bearing, not cosmetic. `.ct_wo_sample_count()`
+  # (and through it `.ct_reingest_guard()`) matches on `p.type = 'Work order'`,
+  # and an ACIRL clean row carries the REPORT NUMBER in `work_order` (the
+  # adapter sets `work_order = header$report_no`). Typing this row `Work order`
+  # would therefore make the second file bearing a reused report number look
+  # like a re-ingest of the first and BLOCK it - contradicting A80's "the data
+  # still imports; the flag exists so ACIRL fixes their process". A distinct
+  # type keeps the guard scoped to real lab work orders, which is what it is
+  # about. The `duplicate_report_number` item below is what makes the reuse
+  # visible instead.
+  row <- tibble::tibble(
+    uuid = new_uuid, uuid_parent = grandparent, uuid_root = root,
+    uuid_project = NA_character_, name = report_no, type = "ACIRL report",
+    purpose = NA_character_, date_start = as.POSIXct(NA), date_end = as.POSIXct(NA),
+    regulated_by = NA_character_, cypher = NA_character_, site = NA_character_,
+    value = NA_character_
+  )
+  db_append(con, "project", row, actor = .ct_actor, reason = reason)
+  list(uuid = new_uuid, grandparent = grandparent, root = root)
+}
+
+#' Resolve the project an event's samples attach to, building A80's tree (R-9.14)
+#'
+#' Returns `list(uuid_project, review)`. An event with no ACIRL report number -
+#' every ALS/ESdat event - takes the unchanged `.ct_ensure_project()` path and
+#' returns no review rows, so this is a no-op for everything but ACIRL.
+#' @keywords internal
+#' @noRd
+.ct_ensure_project_tree <- function(con, event, reason) {
+  report_no <- .ct_event_report_no(event)
+  if (is.na(report_no)) {
+    return(list(
+      uuid_project = .ct_ensure_project(con, event$work_order, reason),
+      review = NULL
+    ))
+  }
+
+  cited <- .ct_event_als_work_orders(event)
+  rp <- .ct_ensure_report_project(con, report_no, cited, reason)
+  review <- list()
+
+  # A80's `duplicate_report_number`, keyed exactly as the contract specifies:
+  # "this ACIRL parent already has a child ALS work order, and the incoming
+  # workbook cites a DIFFERENT one". NOT on repetition of the number and NOT on
+  # the content hash - of the 16 numbers appearing on more than one file, 13 are
+  # one report re-saved or revised (same date, same cited order) and flagging
+  # those would bury the three real ones.
+  #
+  # Three shapes this must NOT fire on, all measured: a re-save cites the same
+  # order, so `novel` is empty; the 5 two-citation workbooks establish both
+  # children in ONE call, so `kids` is empty when the check runs; and a merged
+  # `Monthly gas monitoring` project has no ALS children at all, which is why
+  # `kids` is restricted to `type = 'Work order'`.
+  kids <- DBI::dbGetQuery(
+    con, "SELECT name FROM project WHERE uuid_parent = ? AND type = 'Work order'",
+    params = list(rp$uuid)
+  )$name
+  kids <- kids[!is.na(kids)]
+  novel <- setdiff(cited, kids)
+  if (length(kids) > 0 && length(novel) > 0) {
+    rq <- .rq_row(
+      kind = "duplicate_report_number", subkind = "acirl",
+      work_order = report_no,
+      source_hash = .ct_event_first_hash(event),
+      diagnostics = list(
+        report_no = report_no,
+        als_work_orders_incoming = as.list(cited),
+        als_work_orders_already_filed = as.list(kids)
+      )
+    )
+    rq$review$uuid_target <- rp$uuid
+    review[[length(review) + 1L]] <- rq$review
+  }
+
+  child_uuid <- character(0)
+  for (wo in cited) {
+    existing <- .ct_project_by_name(con, wo)
+    if (is.null(existing)) {
+      u <- .ct_ensure_project(con, wo, reason)
+      db_update(
+        con, "project", uuid = u,
+        changes = list(uuid_parent = rp$uuid, uuid_root = rp$root),
+        actor = .ct_actor, reason = reason
+      )
+      child_uuid <- c(child_uuid, u)
+      next
+    }
+    current <- existing$uuid_parent[[1]]
+    if (identical(current, rp$uuid)) {
+      # Already adopted - a re-commit of the same report. Idempotent by design:
+      # no UPDATE, so no `change_log` churn on every retry.
+    } else if (is.na(current) || identical(current, rp$grandparent)) {
+      # The A80 move proper: campaign -> ACIRL report, through db_update() so
+      # `change_log` keeps the displaced parent and the campaign is recoverable
+      # even though it is now one level up rather than gone.
+      db_update(
+        con, "project", uuid = existing$uuid[[1]],
+        changes = list(uuid_parent = rp$uuid, uuid_root = rp$root),
+        actor = .ct_actor, reason = reason
+      )
+    } else {
+      # This order is already claimed by SOMETHING ELSE - another ACIRL report
+      # (4 measured cases), or a campaign that is not this report's grandparent
+      # (the one two-campaign workbook). Adopting it would overwrite a real
+      # parent, which is the exact loss the grandparent ruling exists to
+      # prevent, so the existing parent stands and the anomaly is made loud.
+      parent_row <- .ct_project_by_uuid(con, current)
+      rq <- .rq_row(
+        kind = "project_parent_conflict", subkind = "acirl",
+        work_order = wo,
+        source_hash = .ct_event_first_hash(event),
+        diagnostics = list(
+          als_work_order = wo,
+          report_no = report_no,
+          existing_parent_name = if (is.null(parent_row)) NA_character_ else parent_row$name[[1]],
+          existing_parent_type = if (is.null(parent_row)) NA_character_ else parent_row$type[[1]]
+        )
+      )
+      rq$review$uuid_target <- existing$uuid[[1]]
+      review[[length(review) + 1L]] <- rq$review
+    }
+    child_uuid <- c(child_uuid, existing$uuid[[1]])
+  }
+
+  # A80: samples attach to the CHILD wherever an ALS order is cited, and to the
+  # parent when none is (a dust-only workbook). The two-citation workbooks fall
+  # to the parent as well - see the header note; one event has one project.
+  uuid_project <- if (length(child_uuid) == 1) child_uuid[[1]] else rp$uuid
+
+  list(uuid_project = uuid_project, review = dplyr::bind_rows(review))
+}
+
 # ---- step 1b: materialise pending aliases + dangling methods (R-11.8) --------
 
 #' NA-safe vectorised `isTRUE()` for a possibly-absent logical column.
@@ -1582,10 +1934,20 @@ commit_event <- function(event, resolved, con) {
       return(list(blocked = TRUE, n_review = nrow(written_review)))
     }
 
-    uuid_project <- .ct_ensure_project(con, event$work_order, reason)
+    # R-9.14/A80: for an ACIRL event this builds the campaign -> report -> work
+    # order tree and returns the project the samples attach to; for everything
+    # else it is `.ct_ensure_project(con, event$work_order, reason)` verbatim.
+    tree <- .ct_ensure_project_tree(con, event, reason)
+    uuid_project <- tree$uuid_project
 
     clean <- resolved$clean
     review <- resolved$review
+    # The tree's own review rows (`duplicate_report_number`,
+    # `project_parent_conflict`) join the ordinary reconcile items so they take
+    # the one sanctioned write path below rather than a second inserter.
+    if (!is.null(tree$review) && nrow(tree$review) > 0) {
+      review <- dplyr::bind_rows(review, tree$review)
+    }
     if (nrow(clean) > 0) {
       # Step 1b (R-11.8, D8): all pending-alias / dangling-method WRITES happen
       # here (reconcile stays read-only). Must precede sample resolution so a

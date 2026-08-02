@@ -271,7 +271,27 @@
       } else {
         tally$new <- tally$new + nrow(clean)
       }
-      tally$review_opened <- tally$review_opened + nrow(resolved$review)
+      # R-9.14: `nrow(resolved$review)` alone is what reconcile WOULD have
+      # written, and commit now writes MORE than that - A80's
+      # `duplicate_report_number` / `project_parent_conflict` rows are decided
+      # at commit time, from the project tree, and reconcile cannot see them
+      # (it has no `uuid_project`). Reported as 162 while 163 rows sat in
+      # `review_queue`, caught by the e2e corpus. `commit_event()`'s own
+      # `n_review` is the count of rows ACTUALLY written, so prefer it and keep
+      # `nrow(resolved$review)` only for the dry-run path, where
+      # `commit_result` is NULL because nothing was written to count.
+      #
+      # KNOWN GAP, deliberate: a dry run therefore still under-forecasts by the
+      # tree's own review rows. Closing it means previewing the hierarchy
+      # read-only, and a second implementation of that logic is exactly the
+      # drift `.ct_reingest_guard_preview()` already has to work to avoid. A
+      # forecast that omits them is better than a mirror that disagrees with
+      # them.
+      tally$review_opened <- tally$review_opened + if (!is.null(step$commit_result$n_review)) {
+        step$commit_result$n_review
+      } else {
+        nrow(resolved$review)
+      }
     }
 
     if (!dry_run) {
