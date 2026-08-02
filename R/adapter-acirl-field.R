@@ -159,13 +159,6 @@ acirl_field_xlsx_adapter <- function() {
     ))
   }
 
-  # --- dust sheets: detected, not parsed (A10/R-6.4) ---------------------
-  for (idx in which(is_dust)) {
-    skipped_list[[length(skipped_list) + 1]] <- tibble::tibble(
-      source_ref = sheet_names[[idx]], reason = "dust_sheet_ignored"
-    )
-  }
-
   # --- water sheets -> results + samples ----------------------------------
   field_analytes <- st_config("field_analytes")
   diff_required <- st_config("field_analytes_diff_required")
@@ -180,6 +173,113 @@ acirl_field_xlsx_adapter <- function() {
   als_candidate_rows <- list()
   alias_rows_all <- list()
   als_work_orders <- character(0)
+
+  # --- dust sheets -> results + samples (R-6.4, A73/A77) -----------------
+  # A73 reversed A10: dust IS parsed. Results and Observations carry disjoint
+  # information and are joined on (gauge, month-block) - see R-6.4a. Dust is
+  # exempt from any ALS linkage: it is ACIRL's own AS3580.10.1 analysis.
+  dust_res_idx <- which(is_dust & grepl("result", sheet_names, ignore.case = TRUE))
+  dust_obs_idx <- which(is_dust & !grepl("result|method", sheet_names, ignore.case = TRUE))
+
+  dust_rows <- list()
+  for (idx in dust_res_idx) {
+    dr <- .st_acirl_parse_dust_results(path, sheet_names[[idx]])
+    if (length(dr$skipped) > 0) skipped_list <- c(skipped_list, dr$skipped)
+    warnings_vec <- c(warnings_vec, dr$warnings)
+    dust_rows <- c(dust_rows, dr$rows)
+  }
+  obs_rows <- list()
+  for (idx in dust_obs_idx) {
+    do_ <- .st_acirl_parse_dust_observations(path, sheet_names[[idx]])
+    if (length(do_$skipped) > 0) skipped_list <- c(skipped_list, do_$skipped)
+    warnings_vec <- c(warnings_vec, do_$warnings)
+    obs_rows <- c(obs_rows, do_$rows)
+  }
+  obs_by_key <- list()
+  for (o in obs_rows) obs_by_key[[paste(o$gauge, o$block, sep = "\r")]] <- o
+
+  serial_date <- function(x) {
+    n <- suppressWarnings(as.numeric(x))
+    if (is.na(n)) return(NA_character_)
+    format(as.Date(n, origin = "1899-12-30"), "%d/%m/%Y")
+  }
+
+  dust_samples <- list()
+  for (d in dust_rows) {
+    key <- paste(d$gauge, d$block, sep = "\r")
+    o <- obs_by_key[[key]]
+
+    # A77: `Month` (Results) and `EXPOSURE DATE` (Observations) are cross-checked
+    # and NEITHER is authoritative - they disagree on 8 of 64 real gauge-blocks.
+    # A disagreement is recorded and routed to review; it never silently picks one.
+    month_d <- serial_date(d$month_serial)
+    exp_d   <- if (is.null(o)) NA_character_ else serial_date(o$exposure_serial)
+    if (!is.na(month_d) && !is.na(exp_d) && !identical(month_d, exp_d)) {
+      skipped_list[[length(skipped_list) + 1]] <- tibble::tibble(
+        source_ref = d$source_ref, reason = "dust_exposure_date_conflict"
+      )
+      warnings_vec <- c(warnings_vec, sprintf(
+        "%s: gauge %s block %d - Results Month (%s) and Observations EXPOSURE DATE (%s) disagree; routed to review (A77).",
+        fm$filename, d$gauge, d$block, month_d, exp_d))
+    }
+    # Exposure start is the sampling date where we have it; `Month` is the
+    # fallback for a workbook with no Observations sheet.
+    samp_date <- if (!is.na(exp_d)) exp_d else month_d
+    lab_id <- sprintf("%s!b%d", d$gauge, d$block)
+
+    pv <- parse_value(d$value_raw)
+    results_rows[[length(results_rows) + 1]] <- tibble::tibble(
+      source_hash = fm$hash, source_ref = d$source_ref,
+      work_order = header$report_no, revision = 0L, org = "ACIRL",
+      adapter = adapter_tag, lab_sample_id = lab_id, sample_type = "Normal",
+      feature_raw = d$gauge, analyte_raw = d$analyte, cas_number = NA_character_,
+      method_raw = NA_character_, total_or_filtered = NA_character_,
+      units_raw = "g/m2/month", value_raw = d$value_raw,
+      value_num = pv$value_num, value_chr = NA_character_,
+      below_detection = grepl("^<", d$value_raw),
+      rl = NA_real_, lab_qualifier = NA_character_,
+      analysed_date = as.Date(NA_character_), comments = NA_character_, confidence = 1
+    )
+    if (is.null(dust_samples[[lab_id]])) {
+      dust_samples[[lab_id]] <- tibble::tibble(
+        source_hash = fm$hash, source_ref = d$source_ref,
+        work_order = header$report_no, org = "ACIRL", adapter = adapter_tag,
+        lab_sample_id = lab_id, feature_raw = d$gauge,
+        sample_datetime_raw = samp_date, sample_type = "Normal",
+        parent_sample = NA_character_, matrix_raw = "Dust",
+        sampler = header$sampled_by,
+        comments = if (is.null(o)) NA_character_ else o$observation,
+        confidence = 1
+      )
+    }
+    # R-6.7 extends to dust: `Other Sample Id` is a site name, not an analyte.
+    if (!is.null(d$other_id) && !is.na(d$other_id) && nzchar(d$other_id)) {
+      alias_rows_all[[length(alias_rows_all) + 1]] <- tibble::tibble(
+        source_ref = d$source_ref, feature_raw = d$gauge,
+        label = "Other Sample Id", alias = d$other_id
+      )
+    }
+  }
+  # The observation text is a QUALITATIVE RESULT as well as a sample comment
+  # (A73): `ANALYSIS OBSERVATIONS` is a registered ACIRL lab_method against the
+  # `Appearance` analyte, so it must resolve like any other analyte_raw.
+  for (o in obs_rows) {
+    if (is.na(o$observation) || !nzchar(o$observation)) next
+    lab_id <- sprintf("%s!b%d", o$gauge, o$block)
+    results_rows[[length(results_rows) + 1]] <- tibble::tibble(
+      source_hash = fm$hash, source_ref = o$source_ref,
+      work_order = header$report_no, revision = 0L, org = "ACIRL",
+      adapter = adapter_tag, lab_sample_id = lab_id, sample_type = "Normal",
+      feature_raw = o$gauge, analyte_raw = "ANALYSIS OBSERVATIONS",
+      cas_number = NA_character_, method_raw = NA_character_,
+      total_or_filtered = NA_character_, units_raw = NA_character_,
+      value_raw = o$observation, value_num = NA_real_,
+      value_chr = o$observation, below_detection = FALSE,
+      rl = NA_real_, lab_qualifier = NA_character_,
+      analysed_date = as.Date(NA_character_), comments = NA_character_, confidence = 1
+    )
+  }
+  samples_rows <- c(samples_rows, unname(dust_samples))
 
   for (idx in water_idx) {
     sheet_name <- sheet_names[[idx]]
@@ -751,6 +851,177 @@ acirl_field_xlsx_adapter <- function() {
     feature_aliases = alias_rows,
     als_work_orders = als_work_orders
   )
+}
+
+
+# ---- R-6.4 dust sheets (A73/A77) ------------------------------------------
+#
+# GEOMETRY, re-measured 2026-08-01 over all 50 real dust-results sheets and all
+# 50 dust-observations sheets (PLAN-06 R-6.4a). The two sheets carry DISJOINT
+# information and both are needed:
+#
+#   Dust Results      GAUGE NO. | Other Sample Id | Month | INSOLUBLE SOLIDS |
+#                     *COMBUSTIBLE MATTER | INCOMBUSTIBLE MATTER | Exposure Days
+#   Dust Observations GAUGE | EXPOSURE DATE | COLLECTION DATE | DAYS EXPOSED |
+#                     ANALYSIS OBSERVATIONS
+#
+# `Month` and `Exposure Days` appear on Results 50/50 and on Observations 0/50;
+# `EXPOSURE DATE`/`COLLECTION DATE` the exact reverse. So **A77's cross-check is
+# inherently CROSS-SHEET** and is done in `.st_acirl_parse_impl()`, not here.
+#
+# Two quirks, both measured, both load-bearing:
+#  * INCOMBUSTIBLE MATTER's values sit one column RIGHT of its header on 49 of
+#    50 sheets - but on 1 they sit under it. The legacy reader's
+#    `coalesce(last, last - 1)` is therefore ported as a COALESCE, never as a
+#    constant +1 offset, which would read NA for that one sheet.
+#  * quarterly sheets repeat the month-block: gauge rows then one
+#    `Exposure Days` row, up to 4 times. `Exposure Days` is NOT a result.
+
+#' Locate a header cell by text, returning `list(row, col)` or NULL.
+#' @keywords internal
+#' @noRd
+.st_acirl_find_header <- function(mat, pattern) {
+  hit <- which(matrix(grepl(pattern, mat, ignore.case = TRUE),
+                      nrow(mat), ncol(mat)), arr.ind = TRUE)
+  if (nrow(hit) == 0) return(NULL)
+  list(row = hit[1, 1], col = hit[1, 2])
+}
+
+#' Parse one `Dust Results` sheet into per-gauge, per-month rows.
+#'
+#' @return `list(rows, skipped, warnings)`; `rows` is a list of
+#'   `list(gauge, other_id, month_serial, block, analyte, value_raw, source_ref)`.
+#' @keywords internal
+#' @noRd
+.st_acirl_parse_dust_results <- function(path, sheet_name) {
+  out <- list(rows = list(), skipped = list(), warnings = character(0))
+  grid <- tryCatch(
+    suppressMessages(readxl::read_excel(path, sheet = sheet_name,
+                                        col_names = FALSE, col_types = "text")),
+    error = function(e) NULL
+  )
+  if (is.null(grid) || nrow(grid) == 0) return(out)
+  mat <- as.matrix(grid); dimnames(mat) <- NULL
+  cell <- function(r, c) {
+    if (r < 1 || c < 1 || r > nrow(mat) || c > ncol(mat)) return(NA_character_)
+    v <- mat[r, c]; if (is.na(v)) NA_character_ else stringr::str_squish(v)
+  }
+  nonempty <- function(x) !is.na(x) && nzchar(x)
+
+  gh <- .st_acirl_find_header(mat, "^GAUGE NO")
+  if (is.null(gh)) {
+    out$skipped[[1]] <- tibble::tibble(source_ref = sheet_name, reason = "no_gauge_header")
+    return(out)
+  }
+  hdr <- gh$row
+  col_of <- function(pat) {
+    h <- .st_acirl_find_header(mat, pat)
+    if (is.null(h) || h$row != hdr) NA_integer_ else h$col
+  }
+  c_gauge <- gh$col
+  c_other <- col_of("^Other Sample Id")
+  c_month <- col_of("^Month$")
+  # `*COMBUSTIBLE` must be matched BEFORE `INCOMBUSTIBLE`, and anchored, or
+  # "INCOMBUSTIBLE MATTER" satisfies a bare "COMBUSTIBLE" pattern.
+  analyte_cols <- list(
+    `INSOLUBLE SOLIDS`     = col_of("^INSOLUBLE"),
+    `*COMBUSTIBLE MATTER`  = col_of("^[*]?COMBUSTIBLE"),
+    `INCOMBUSTIBLE MATTER` = col_of("^INCOMBUSTIBLE")
+  )
+  if (all(is.na(unlist(analyte_cols)))) {
+    out$skipped[[1]] <- tibble::tibble(source_ref = sheet_name, reason = "no_dust_analyte_headers")
+    return(out)
+  }
+
+  block <- 1L
+  for (r in (hdr + 1L):nrow(mat)) {
+    lab <- cell(r, c_month)
+    # `Exposure Days` closes a month-block and is never a result.
+    if (nonempty(lab) && grepl("^Exposure Days", lab, ignore.case = TRUE)) {
+      block <- block + 1L
+      next
+    }
+    g <- cell(r, c_gauge)
+    if (!nonempty(g) || !grepl("^[A-Z]\\.?D[0-9]", g, ignore.case = TRUE)) next
+
+    for (an in names(analyte_cols)) {
+      cc <- analyte_cols[[an]]
+      if (is.na(cc)) next
+      # COALESCE, not a fixed offset: 49 of 50 sheets carry INCOMBUSTIBLE's
+      # values one column right of its header, 1 carries them beneath it.
+      v <- cell(r, cc)
+      if (!nonempty(v)) v <- cell(r, cc + 1L)
+      if (!nonempty(v)) next
+      out$rows[[length(out$rows) + 1L]] <- list(
+        gauge = g, other_id = if (is.na(c_other)) NA_character_ else cell(r, c_other),
+        month_serial = if (is.na(c_month)) NA_character_ else cell(r, c_month),
+        block = block, analyte = an, value_raw = v,
+        source_ref = sprintf("%s!r%dc%d", sheet_name, r, cc)
+      )
+    }
+  }
+  out
+}
+
+#' Parse one `Dust Observations` sheet.
+#'
+#' @return `list(rows, skipped, warnings)`; `rows` is a list of
+#'   `list(gauge, block, exposure_serial, collection_serial, days, observation,
+#'   source_ref)`.
+#' @keywords internal
+#' @noRd
+.st_acirl_parse_dust_observations <- function(path, sheet_name) {
+  out <- list(rows = list(), skipped = list(), warnings = character(0))
+  grid <- tryCatch(
+    suppressMessages(readxl::read_excel(path, sheet = sheet_name,
+                                        col_names = FALSE, col_types = "text")),
+    error = function(e) NULL
+  )
+  if (is.null(grid) || nrow(grid) == 0) return(out)
+  mat <- as.matrix(grid); dimnames(mat) <- NULL
+  cell <- function(r, c) {
+    if (r < 1 || c < 1 || r > nrow(mat) || c > ncol(mat)) return(NA_character_)
+    v <- mat[r, c]; if (is.na(v)) NA_character_ else stringr::str_squish(v)
+  }
+  nonempty <- function(x) !is.na(x) && nzchar(x)
+
+  # The observations sheet labels the column `GAUGE`, not `GAUGE NO.` (0 of 50
+  # carry the results-sheet spelling).
+  gh <- .st_acirl_find_header(mat, "^GAUGE$")
+  if (is.null(gh)) {
+    out$skipped[[1]] <- tibble::tibble(source_ref = sheet_name, reason = "no_gauge_header")
+    return(out)
+  }
+  hdr <- gh$row
+  col_of <- function(pat) {
+    h <- .st_acirl_find_header(mat, pat)
+    if (is.null(h) || h$row != hdr) NA_integer_ else h$col
+  }
+  c_exp  <- col_of("^EXPOSURE *DATE")
+  c_coll <- col_of("^COLLECTION *DATE")
+  c_days <- col_of("^DAYS *EXPOSED")
+  c_obs  <- col_of("^ANALYSIS *OBSERVATION")
+
+  seen <- list()
+  for (r in (hdr + 1L):nrow(mat)) {
+    g <- cell(r, gh$col)
+    if (!nonempty(g) || !grepl("^[A-Z]\\.?D[0-9]", g, ignore.case = TRUE)) next
+    # Quarterly sheets repeat each gauge once per month-block, in order, so the
+    # nth sighting of a gauge is its nth block - the same ordering the results
+    # sheet uses.
+    prev <- seen[[g]]
+    n <- if (is.null(prev)) 1L else prev + 1L
+    seen[[g]] <- n
+    out$rows[[length(out$rows) + 1L]] <- list(
+      gauge = g, block = n,
+      exposure_serial   = if (is.na(c_exp))  NA_character_ else cell(r, c_exp),
+      collection_serial = if (is.na(c_coll)) NA_character_ else cell(r, c_coll),
+      days              = if (is.na(c_days)) NA_character_ else cell(r, c_days),
+      observation       = if (is.na(c_obs))  NA_character_ else cell(r, c_obs),
+      source_ref = sprintf("%s!r%d", sheet_name, r)
+    )
+  }
+  out
 }
 
 # Observation/comments row labels. Bare "Comments" is the fixture form; the
