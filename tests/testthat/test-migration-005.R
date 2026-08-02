@@ -189,6 +189,45 @@
     ('an-362', 's-362', 'lm-fld-acirl', 4.20, TRUE, NULL),
     ('an-361', 's-361', 'lm-fld-acirl', 4.10, TRUE, NULL)")
 
+  # ---- P7: ONE feature/date, TWO samples, TWO analytes - the shape that
+  # showed `a.uuid` alone is not enough (scratchpad/m6a_frankenstein.R).
+  #
+  # The final tiebreak used to be the ANALYSIS uuid, which bears no relation to
+  # the sample the analysis came from. So each analyte picked its rank-1 row
+  # independently, and on a feature/date holding two samples they could pick
+  # DIFFERENT ones - 62 live feature/date groups did, including the B.D07 dust
+  # triple where combustible came from one gauge and incombustible and total
+  # from the other, leaving the "canonical" rows failing to sum.
+  #
+  # The uuids below are chosen so ANALYSIS order and SAMPLE order DISAGREE,
+  # which is the only arrangement that can tell the two orderings apart:
+  #
+  #   analyte a-901:  an-371 (on s-372)   an-374 (on s-371)   -> a.uuid picks s-372
+  #   analyte a-902:  an-372 (on s-371)   an-373 (on s-372)   -> a.uuid picks s-371
+  #
+  # Ordering on `a.uuid` alone therefore selects a different sample per
+  # analyte; ordering on `s.uuid` first makes both select s-371. Both rows of
+  # each pair are LAB rows of the same organisation, so `is_field` and `is_als`
+  # tie and the tiebreak is genuinely what decides. ----
+  DBI::dbExecute(con, "INSERT INTO feature
+    (uuid, name, site, flow, matrix, lon, lat, cypher) VALUES
+    ('f-306', 'PM-RANK-6', 'PreMigSite', 'surface', 'water', 150.3006, -33.3006, NULL)")
+  DBI::dbExecute(con, "INSERT INTO analyte (uuid, name, units, type, CAS) VALUES
+    ('a-902', 'Analyte Y', 'mg/L', 'anion', NULL)")
+  DBI::dbExecute(con, "INSERT INTO lab_method
+    (uuid, uuid_analyte, name, method, organisation, rl_low) VALUES
+    ('lm-lab-acirl-y', 'a-902', 'Analyte Y ACIRL', 'EK-Y-ACIRL', 'ACIRL', 0.1)")
+  DBI::dbExecute(con, "INSERT INTO \"sample\"
+    (uuid, uuid_feature, date, datetime, organisation) VALUES
+    ('s-371', 'f-306', TIMESTAMP '2024-07-07 00:00:00', TIMESTAMP '2024-07-07 01:00:00', 'ACIRL'),
+    ('s-372', 'f-306', TIMESTAMP '2024-07-07 00:00:00', TIMESTAMP '2024-07-07 03:00:00', 'ACIRL')")
+  DBI::dbExecute(con, "INSERT INTO analysis
+    (uuid, uuid_sample, uuid_lab, value, quantified, rl_low) VALUES
+    ('an-371', 's-372', 'lm-lab-acirl',   1.10, TRUE, 0.1),
+    ('an-374', 's-371', 'lm-lab-acirl',   2.20, TRUE, 0.1),
+    ('an-372', 's-371', 'lm-lab-acirl-y', 3.30, TRUE, 0.1),
+    ('an-373', 's-372', 'lm-lab-acirl-y', 4.40, TRUE, 0.1)")
+
   invisible(NULL)
 }
 
@@ -333,6 +372,36 @@ test_that("005: two equally-ranked field readings are separated by the uuid tieb
   expect_equal(seen[[1]], c(1L, 2L))
   expect_equal(seen[[2]], seen[[1]])
   expect_equal(seen[[3]], seen[[1]])
+})
+
+test_that("005: rank 1 selects ONE sample for every analyte at a feature/date", {
+  # P7. Found by measuring the ranked output on a copy of the live database,
+  # not by reasoning about the SQL: with `a.uuid` as the only tiebreak, each
+  # analyte picked its canonical row independently of every other, so a
+  # feature/date holding two samples could yield a rank-1 row set assembled
+  # from BOTH. 62 live feature/date groups did exactly that, and the B.D07 dust
+  # triple is the one that shows why it matters - the canonical combustible,
+  # incombustible and total no longer summed, because they were not all from
+  # the same gauge.
+  mig1 <- .mig005_load_001(); mig4 <- .mig005_load_004(); mig5 <- .mig005_load()
+  path <- .run_001_004_005(mig1, mig4, mig5)
+  v <- .mig005_read_view(path)
+
+  p7 <- v[v$uuid_analysis %in% c("an-371", "an-372", "an-373", "an-374"), ]
+  expect_identical(nrow(p7), 4L)
+
+  winners <- p7[p7$preference_rank == 1L, ]
+  expect_identical(nrow(winners), 2L)              # one per analyte
+  expect_length(unique(winners$uuid_sample), 1L)   # ...and BOTH from one sample
+  expect_identical(unique(winners$uuid_sample), "s-371")
+
+  # Non-vacuity: the analysis uuids were chosen so that ordering on `a.uuid`
+  # alone would have split these across s-372 and s-371. an-371 sorts first in
+  # its partition but sits on the LOSING sample, so it must rank 2.
+  expect_equal(.rank_of(v, "an-371"), 2L)
+  expect_equal(.rank_of(v, "an-374"), 1L)
+  expect_equal(.rank_of(v, "an-372"), 1L)
+  expect_equal(.rank_of(v, "an-373"), 2L)
 })
 
 test_that("005: a partition of one always ranks 1", {

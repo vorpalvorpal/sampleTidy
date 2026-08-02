@@ -1377,6 +1377,33 @@ for lab reports; `sample.organisation ∈ {ACIRL, Internal, ALS}`;
      the ambiguity this migration removes. Arbitrary, but the same arbitrary
      answer every time.
 
+  **Two corrections made 2026-08-02 (overnight), after measuring the RANKED
+  OUTPUT on a copy of the live database rather than reasoning about the SQL —
+  both landed before 005 was ever applied:**
+  - **`preference_rank > 1` returns 2,471, not 972**, and conflating the two is
+    the easiest mistake to make about this migration. 972 is the FIELD-VS-LAB
+    figure; the rank counts every partition holding more than one row, whatever
+    the reason. It decomposes exactly (`scratchpad/m6a_972.R`): field-vs-lab 931
+    partitions → 972 out-ranked; **two or more LAB rows 706 partitions → 1,460**;
+    two or more FIELD rows 39 → 39. The 1,460 were never counted because the
+    design question was only ever about field-vs-lab, and **494 of those 706
+    partitions hold DIFFERENT values**. `WHERE preference_rank = 1` returns
+    94,647 of 97,118, not 96,146.
+  - **`s.uuid` was added as the third ordering key, before `a.uuid`.** With the
+    analysis uuid as the only tiebreak, each analyte chose its canonical row
+    independently, and the analysis uuid bears no relation to the sample — so on
+    a feature/date holding two samples, `preference_rank = 1` could select a
+    DIFFERENT sample per analyte. **62 live feature/date groups did**
+    (`scratchpad/m6a_frankenstein.R`). The dust triple at B.D07 on 2021-08-01 is
+    the proof: canonical combustible came from one gauge, incombustible and
+    total from the other, so the rank-1 rows read 0.6 + 2.2 against a total of
+    4.2. With the sample key they read 0.6 + 0.7 = 1.3 and the triple sums. The
+    residual 40 groups are structural — their two samples carry different
+    analyte sets, so no ordering can put every analyte on one sample. Pinned by
+    fixture P7, which is verified against a mutation applied to the SQL **and**
+    its R oracle together (the only case the independent oracle cannot catch —
+    the `.RC_FIELD_METHODS` lesson).
+
   Two corrections to earlier records, both measured:
   - **931, not 898.** The 898 figure was ACIRL-field-vs-ALS-lab joined on the raw
     `sample.date`; 931 is field-vs-lab regardless of organisation, keyed on the

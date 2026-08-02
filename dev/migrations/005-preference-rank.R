@@ -24,7 +24,7 @@
 #   1. `v_measurement*` has no in-repo consumer (`dev/epa-monitoring-report.R`
 #      builds its own base query and says so at its assumption C). The only
 #      consumers are external, and this migration cannot see them. Adding a
-#      column is additive for every one of them; dropping 972 rows from
+#      column is additive for every one of them; dropping 2,471 rows from
 #      `v_measurement` would silently change an answer some spreadsheet is
 #      already producing.
 #   2. Both rows are real data. The out-ranked lab pH is not wrong - it is a
@@ -36,7 +36,25 @@
 #      expected difference the gate would have to be loosened to accommodate.
 #
 # Consumers opt in with `WHERE preference_rank = 1`. On the live DB that
-# returns 96,146 of `v_measurement`'s 97,118 rows.
+# returns 94,647 of `v_measurement`'s 97,118 rows, out-ranking 2,471.
+#
+# THAT 2,471 IS NOT THE 931/972 FIELD-VS-LAB FIGURE, and conflating the two is
+# the easiest mistake to make about this migration. `preference_rank > 1`
+# counts EVERY partition holding more than one row, whatever the reason.
+# Measured on a copy of the live DB (scratchpad/m6a_972.R), it decomposes
+# exactly:
+#
+#     field vs lab            931 partitions, 1,903 rows ->   972 out-ranked
+#     two or more LAB rows    706 partitions, 2,166 rows -> 1,460 out-ranked
+#     two or more FIELD rows   39 partitions,    78 rows ->    39 out-ranked
+#                                                          -------
+#                                                            2,471
+#
+# The 1,460 were never counted before because the design question was only ever
+# about field-vs-lab. They are duplicate LAB analyses of one analyte at one
+# feature on one Sydney date - 494 of the 706 partitions hold DIFFERENT values -
+# and `is_field`/`is_als` cannot separate them, so they fall to the tiebreak.
+# That is what makes the sample key below load-bearing rather than cosmetic.
 #
 # THREE THINGS MEASUREMENT SETTLED THAT REASONING HAD NOT (all in
 # scratchpad/m005_partition_probe.R; each would have shipped a defect):
@@ -55,9 +73,21 @@
 #       rows. `is_field DESC, is_als DESC` leaves those two indistinguishable,
 #       so `preference_rank` would be nondeterministic - a consumer could get a
 #       different "canonical" pH on two runs of the same query, which is worse
-#       than the ambiguity this migration exists to remove. `a.uuid` is
-#       appended as a total, stable tiebreak. It is arbitrary but it is the
-#       same arbitrary answer every time, which is the property that matters.
+#       than the ambiguity this migration exists to remove. `s.uuid, a.uuid`
+#       are appended as a total, stable tiebreak. Arbitrary, but the same
+#       arbitrary answer every time, which is the property that matters.
+#       THE SAMPLE KEY COMES FIRST, and that was found by measuring the ranked
+#       output rather than by reasoning about it (scratchpad/m6a_frankenstein.R):
+#       with `a.uuid` alone the last tiebreak is the ANALYSIS uuid, which bears
+#       no relation to the sample, so on a feature/date where two distinct
+#       samples were both analysed `preference_rank = 1` selected a DIFFERENT
+#       sample per analyte. 62 feature/date groups did exactly that. The dust
+#       triple at B.D07 on 2021-08-01 is the clearest: rank 1 took combustible
+#       from one gauge and incombustible and total from the other, so the
+#       canonical rows read 0.6 + 2.2 against a total of 4.2, while within
+#       either sample the triple sums. Ordering on the sample first makes every
+#       analyte in a feature/date agree on which sample wins; it cannot affect
+#       field-vs-lab, where `is_field DESC` already decides.
 #   (c) `lm.method IN (...)` IS NULL, NOT FALSE, FOR A NULL METHOD, and 3,170
 #       analyses sit on a NULL-method lab_method. Under DuckDB's NULLS LAST
 #       default a bare `(lm.method = 'field') DESC` would rank them last, which
@@ -185,7 +215,23 @@
 
 #' The `preference_rank` window expression
 #'
-#' `a.uuid` is the third ordering key and it is load-bearing, not decorative:
+#' `s.uuid` is the THIRD ordering key and `a.uuid` the fourth, and the sample
+#' key was added after the ranking was first measured on the live database
+#' (`scratchpad/m6a_frankenstein.R`). Without it the final tiebreak is the
+#' ANALYSIS uuid, which bears no relation to the sample the analysis came
+#' from - so on a feature/date where two distinct samples were both analysed,
+#' `preference_rank = 1` could select a DIFFERENT sample for each analyte.
+#' Measured: **62** feature/date groups did exactly that, and the clearest is
+#' the dust triple at B.D07 on 2021-08-01, where combustible came from one
+#' gauge and incombustible and total from the other - so the rank-1 rows read
+#' 0.6 + 2.2 against a total of 4.2, while within either sample the triple
+#' sums correctly. A consumer filtering `WHERE preference_rank = 1` was getting
+#' a row set assembled from more than one physical sample. Ordering on the
+#' sample first makes every analyte in a feature/date agree on which sample
+#' wins. It changes nothing for field-vs-lab, where `is_field DESC` already
+#' dominates: it can only break ties the first two keys leave open.
+#'
+#' `a.uuid` remains the last key and is still load-bearing, not decorative:
 #' 74 live partitions hold two field rows, which the first two keys cannot
 #' separate, and an unstable `preference_rank` would be worse than the
 #' ambiguity this migration removes (header note (b)).
@@ -194,7 +240,7 @@
 #' @return length-1 character SQL expression.
 .mig005_rank_sql <- function(field_methods) {
   sprintf(
-    "ROW_NUMBER() OVER (PARTITION BY %s ORDER BY %s DESC, %s DESC, a.uuid)",
+    "ROW_NUMBER() OVER (PARTITION BY %s ORDER BY %s DESC, %s DESC, s.uuid, a.uuid)",
     .mig005_partition_sql, .mig005_is_field_sql(field_methods), .mig005_is_als_sql
   )
 }
@@ -537,6 +583,7 @@ mig005_backup <- function(db, snapshot_dir, .now = NULL) {
   # the answer must never depend on.
   rows <- DBI::dbGetQuery(con, "
     SELECT a.uuid AS uuid_analysis,
+           s.uuid AS uuid_sample,
            fa.uuid_feature AS uuid_feature,
            strftime(s.datetime, '%Y-%m-%d %H:%M:%S') AS dt_utc,
            lm.uuid_analyte AS uuid_analyte,
@@ -569,7 +616,12 @@ mig005_backup <- function(db, snapshot_dir, .now = NULL) {
   # uuid, so two different key triples can never collide into one string.
   key <- paste(rows$uuid_feature, syd_date, analyte_key, sep = "\r")
 
-  o <- order(key, !is_field, !is_als, rows$uuid_analysis, method = "radix")
+  # Same key order as the view, reached independently: R's own radix order is
+  # C-locale byte order for character, which is what DuckDB's VARCHAR
+  # comparison does. `uuid_sample` before `uuid_analysis` mirrors `s.uuid,
+  # a.uuid` - see the note on `.mig005_rank_sql()`.
+  o <- order(key, !is_field, !is_als, rows$uuid_sample, rows$uuid_analysis,
+             method = "radix")
   ranks <- integer(length(key))
   ranks[o] <- sequence(rle(key[o])$lengths)
 
