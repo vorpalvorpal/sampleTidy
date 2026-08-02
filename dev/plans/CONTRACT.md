@@ -1153,6 +1153,49 @@ for lab reports; `sample.organisation ∈ {ACIRL, Internal, ALS}`;
   | `2400-7222-12-05` | 2022-12-21 / `ES2246501` and 2022-12-28 / `ES2246801` | two consecutive "Special Wednesday" reports |
   | `2400-7286-01-03` | 2023-01-11 / `ES2301026` and 2023-01-18 / `ES2301817` | the second file is *named* `…-01-04` — the FILENAME is right and the front-page `REPORT NO:` cell is stale |
   | `2400-7430-01` | 2024-05-29 / `ES2417748` and 2025-05-27 / `ES2515829` | worst of the three: the second is the **May 2025** report carrying both the 2024 filename and the 2024 report number; only its sample date and ALS order are correct |
+
+  **THE CAMPAIGN IS THE GRANDPARENT (user, 2026-08-02).** Measured before
+  implementing, and it changed the shape: **116 of the 129 ALS work orders our
+  ACIRL workbooks cite already have a `uuid_parent`**, and it is a *campaign* —
+  `Monthly monitoring` (27), `2022 March pollution incidents` (27), `EPL quarterly`
+  (24), `EPL annual` (12), `Melaleuca swamp groundwater contamination` (11),
+  `Cutoff wall failure 2023` (7), `Post-closure monitoring` (7),
+  `2021 stormwater dam contamination` (1). A row has one parent, so A80 taken
+  literally would have **overwritten** the record of *why the sampling happened* —
+  human-curated and not recoverable from anything else we hold.
+
+  Robin's ruling: **insert the ACIRL report between them, do not displace.**
+
+  ```
+  Campaign  "EPL quarterly"            uuid_parent = NULL      (root)
+    └── 2400-7400-06-01  ACIRL report  uuid_parent = campaign
+          └── ES2420251  ALS work order uuid_parent = ACIRL report
+  ```
+
+  So the ALS work order's `uuid_parent` moves campaign → ACIRL report, and the
+  ACIRL report takes the campaign as *its* parent. Nothing is lost; the campaign is
+  one level further up. `uuid_root` stays the topmost ancestor for both. Where a
+  cited work order has **no** existing parent (13 of 129), the ACIRL report simply
+  becomes the root of that pair.
+
+  This also matches a precedent already in the database that runs against the naive
+  reading: **71 projects are already named with ACIRL report numbers**
+  (`2400-7222-01`…), all typed `Monthly gas monitoring`, all **children** of a
+  campaign of that name, carrying **12,478 samples**. Filing an ACIRL report as a
+  project keyed on its report number is established practice here; what A80 adds is
+  the level below it.
+
+  **A report number colliding with an existing project MERGES into it (user,
+  2026-08-02).** Six of the corpus's 132 report numbers already exist as those gas
+  rows — `2400-7222-01`, `2400-7222-02`, `2400-7222-04`, `2400-7222-10`,
+  `2400-7286-07`, `2400-7286-09`. The incoming water samples attach to the existing
+  project row of that name rather than minting a parallel one or raising a flag:
+  `.ct_ensure_project()`'s find-by-name behaviour is already correct and needs no
+  namespacing. This does **not** weaken `duplicate_report_number`, which is keyed on
+  (sample date, cited ALS work order) and fires prospectively on *newly arriving*
+  reports — a pre-existing gas project of the same number is not a new sampling
+  event under a reused number.
+
 - **A81** **Feature-alias rulings (user, 2026-08-02).** `BORE 11` → `B.MW11`.
   `CRIPPLE CREEK INLET` → **`B.S04`**, confirmed against the registry rather than
   assumed: `B.S04` already carries the aliases `B.CRIPPLE` and `Diversion pipe inlet`,
