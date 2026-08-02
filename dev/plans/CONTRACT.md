@@ -1131,7 +1131,11 @@ for lab reports; `sample.organisation ∈ {ACIRL, Internal, ALS}`;
   a reused parent number cannot corrupt the data — the events stay separate either way.
   The flag exists so ACIRL fixes their process, not to withhold the results.
 
-  The three in the corpus as at 2026-08-02:
+  **Prospective only (user, 2026-08-02): the historical three are NOT to be chased.**
+  They are recorded below as evidence for the rule and to explain the collisions in the
+  corpus, not as a work list. The flag fires on reports arriving from now on.
+
+  The three already in the corpus, for reference only:
 
   | report no. | events it was used for | note |
   |---|---|---|
