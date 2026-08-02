@@ -3035,3 +3035,41 @@ test_that("A80: the archived ACIRL workbook lands on its report project, not the
   expect_equal(nrow(asset), 1)
   expect_identical(asset$uuid_project[[1]], report$uuid[[1]])
 })
+
+test_that("D6 sibling: the existing-sample pick is stable, not storage order", {
+  # ADVERSARIAL-AUDIT FINDING (2026-08-03). `.rc_find_existing()` carries an
+  # explicit `ORDER BY a.uuid` and a docstring (R/reconcile.R:1794, PLAN-7b
+  # round-2 D6) explaining that without it the `cand[1, ]` pick is whichever
+  # row DuckDB's physical storage order emits first - not stable across
+  # compaction or checkpoint. `.ct_existing_sample_uuid()` is the SIBLING of
+  # that function and never got the fix.
+  #
+  # Measured on the live DB before fixing (scratchpad/m6a_sample_pick.R): 68
+  # (feature, date) groups hold more than one sample, the datetime narrowing
+  # cannot separate 13 of them, and in 8 of those 13 the unordered SELECT's
+  # first row was NOT the lowest uuid - so storage order was deciding which
+  # sample the whole batch attaches to.
+  #
+  # The two samples below share a feature, a date AND a datetime, so the A62
+  # narrowing cannot separate them, and they are INSERTED IN REVERSE UUID
+  # ORDER so physical order and uuid order disagree. Without `ORDER BY uuid`
+  # this returns 's-zzz'; with it, 's-aaa', every time.
+  path <- seed_db()
+  con <- DBI::dbConnect(duckdb::duckdb(), path, read_only = FALSE)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
+
+  alias <- DBI::dbGetQuery(con, "SELECT uuid FROM feature_alias ORDER BY uuid LIMIT 1")$uuid[[1]]
+  DBI::dbExecute(con, sprintf("INSERT INTO \"sample\"
+    (uuid, uuid_feature_alias, date, datetime, organisation) VALUES
+    ('s-zzz', '%s', TIMESTAMP '2025-03-04 00:00:00', TIMESTAMP '2025-03-04 09:00:00', 'ALS'),
+    ('s-aaa', '%s', TIMESTAMP '2025-03-04 00:00:00', TIMESTAMP '2025-03-04 09:00:00', 'ALS')",
+    alias, alias))
+
+  got <- replicate(3, .ct_existing_sample_uuid(
+    con, pending = TRUE, match_feature = NA_character_, alias_uuid = alias,
+    sample_date = as.Date("2025-03-04"),
+    sample_datetime = as.POSIXct("2025-03-04 09:00:00", tz = "UTC")
+  ))
+
+  expect_identical(unique(got), "s-aaa")   # the lowest uuid, not the first stored
+})

@@ -31,7 +31,8 @@
 # WHAT IT DOES. One `lab_method` per mapping row: `organisation = 'ACIRL'`,
 # `name` = the label verbatim, `method` = NULL, `uuid_analyte` = the mapped
 # analyte. It writes NOTHING else - no `analysis` row is created, updated or
-# read for content, and no existing `lab_method` is touched.
+# deleted, and no existing `lab_method` is touched. (The verify gate DOES read
+# `analysis` content, to checksum it; it never writes it.)
 #
 # THREE THINGS MEASUREMENT SETTLED (scratchpad/m6a_*.R, all read-only):
 #
@@ -54,12 +55,22 @@
 #       including all 19 existing ACIRL ones. Writing units here would invent a
 #       convention the database does not have, for a column nothing reads.
 #
-#   (c) NO LABEL COLLIDES WITH A FIELD METHOD. A minted transcription method
-#       must not shadow an ACIRL `field` method, or a genuine field reading
-#       would start classifying as a transcription and become deletable.
-#       Measured across the whole corpus: the transcription-label set and the
-#       field-label set are DISJOINT (0 of 215). The mapping gate below still
-#       refuses a collision rather than trusting that measurement to stay true.
+#   (c) ONE LABEL COLLIDES WITH AN ACIRL `field` METHOD, AND IT IS NOT FIXED
+#       HERE. This note first read "the transcription-label set and the
+#       field-label set are DISJOINT (0 of 215)". That was measured, but it
+#       measured the wrong pair: the two CORPUS STREAMS (`als_candidates` vs
+#       `$results`) are indeed disjoint, which says nothing about the REGISTRY.
+#       `Total Dissolved Solids` is a transcription label with 382 corpus rows
+#       AND an existing ACIRL `lab_method` carrying `method = 'field'`
+#       (uuid 6b642a83, zero analyses, not on the A76 allowlist). It therefore
+#       already RESOLVES, as kind `field` - so those 382 transcribed ALS
+#       numbers would import as field readings, which A79 never supersedes and
+#       005 ranks ABOVE the real ALS value. The label is excluded from the
+#       mapping and the disposal of that method is Robin's ruling, not this
+#       migration's: see scratchpad/DECISIONS-6a-2026-08-02.md. It is the third
+#       of a family already ruled on twice, and `scratchpad/m6a_field_sweep.R`
+#       shows it is the last. The mapping gate below refuses the collision
+#       either way.
 #
 # LEAVING A LABEL OUT OF THE MAPPING ONLY STOPS IT RESOLVING - IT DOES NOT STOP
 # IT BEING IMPORTED, and reading it the other way round would be a costly
@@ -129,6 +140,22 @@
 
 .mig006_default <- function(x, default) if (is.null(x)) default else x
 
+#' Trim leading/trailing whitespace INCLUDING the Unicode kinds
+#'
+#' `trimws()` is ASCII-only, so a label with a leading NBSP (U+00A0), thin
+#' space (U+2009) or zero-width space (U+200B) sails past it. PLAN-15 F.2
+#' records a real duplicate-alias defect caused by exactly that and adopted the
+#' `[\h\v]` form; this mirrors it rather than inventing a second convention.
+#' @keywords internal
+#' @noRd
+.mig006_trim <- function(x) {
+  # The zero-width space and BOM are written as LITERAL characters in the
+  # class, not as `\x{200B}` escapes: R's PCRE rejects those inside a class
+  # alongside `\h`/`\v` ("invalid regular expression"), which is a compile
+  # error, not a silent miss - caught immediately by the suite.
+  gsub("^[\\h\\v​﻿]+|[\\h\\v​﻿]+$", "", x, perl = TRUE)
+}
+
 #' Guard: the internal reconcile helpers this migration verifies through
 #'
 #' Fails in the CALLER's session, before the backup is taken, if the package
@@ -167,15 +194,25 @@
   map <- if (is.data.frame(mapping)) {
     mapping
   } else {
-    checkmate::assert_string(mapping)
+    if (!(is.character(mapping) && length(mapping) == 1L && !is.na(mapping))) {
+      cli::cli_abort(
+        "006-acirl-transcription-methods: `mapping` must be a data frame or a
+         path to a CSV, not {.cls {class(mapping)}} of length {length(mapping)}.",
+        class = "sampletidy_error"
+      )
+    }
     if (!file.exists(mapping)) {
       cli::cli_abort(
         "006-acirl-transcription-methods: mapping file not found: {mapping}.",
         class = "sampletidy_error"
       )
     }
+    # `na.strings = character(0)`: a label that is literally "NA" is a label,
+    # and read.csv's default would turn it into a missing value - so the CSV
+    # path would refuse a row the data-frame path accepts. Blank cells still
+    # arrive as "" and are caught by the blank gate below.
     utils::read.csv(mapping, stringsAsFactors = FALSE, encoding = "UTF-8",
-                    colClasses = "character")
+                    colClasses = "character", na.strings = character(0))
   }
 
   missing_cols <- setdiff(.mig006_required_cols, names(map))
@@ -200,8 +237,8 @@
 
   for (col in .mig006_required_cols) {
     v <- map[[col]]
-    if (any(is.na(v) | !nzchar(trimws(v)))) {
-      bad <- which(is.na(v) | !nzchar(trimws(v)))
+    if (any(is.na(v) | !nzchar(.mig006_trim(v)))) {
+      bad <- which(is.na(v) | !nzchar(.mig006_trim(v)))
       cli::cli_abort(
         "006-acirl-transcription-methods: mapping column `{col}` is blank on
          row(s) {paste(utils::head(bad, 5), collapse = ', ')}.",
@@ -214,7 +251,7 @@
   # label with surrounding whitespace would mint a method the import can never
   # hit on that branch. Refuse rather than silently trim - trimming would make
   # the stored name differ from the reviewed mapping.
-  ws <- map$label != trimws(map$label)
+  ws <- map$label != .mig006_trim(map$label)
   if (any(ws)) {
     cli::cli_abort(
       "006-acirl-transcription-methods: {sum(ws)} label(s) carry leading or
@@ -301,7 +338,10 @@
   # hand-edited CSV whose name and uuid have drifted apart, which would link a
   # label to an analyte nobody reviewed.
   want <- analyte$name[match(map$uuid_analyte, analyte$uuid)]
-  drift <- want != map$analyte
+  # `is.na(want)` first: `analyte.name` is nullable, and a NULL name would make
+  # the comparison NA, which `any()` propagates and `if ()` then dies on with a
+  # bare `simpleError` instead of this gate's own message.
+  drift <- is.na(want) | want != map$analyte
   if (any(drift)) {
     i <- which(drift)[[1]]
     cli::cli_abort(
@@ -404,32 +444,38 @@
 #' @param con an open DBI connection.
 #' @return a named list.
 mig006_counts_checksum <- function(con) {
-  tbls <- c("feature", "feature_mask", "analyte", "sample", "analysis")
-  present <- DBI::dbListTables(con)
+  # EVERY table is covered, discovered from the database rather than listed -
+  # a hand-written list silently stops covering whatever is added next. Only
+  # the three this migration is ALLOWED to change are excluded.
+  #
+  # This was rewritten after an adversarial audit showed the first version was
+  # a tripwire that did not trip: it named 6 of 18 tables, checked 5 of those
+  # by ROW COUNT ONLY, and hashed just 4 of `analysis`'s 10 columns - so
+  # flipping every non-detect to a detect, or rewriting `rl_low`, `comments`
+  # or `purpose`, passed cleanly. A gate that the header advertises as proof
+  # must actually be proof.
+  skip <- c("lab_method", "change_log", "schema_version")
+  tbls <- setdiff(DBI::dbListTables(con), skip)
+  tbls <- sort(tbls[!grepl("^_st_", tbls)])   # transient append views
+
   out <- list()
   for (t in tbls) {
-    if (!(t %in% present)) {
-      out[[t]] <- NA_integer_
-      next
-    }
-    out[[t]] <- as.integer(DBI::dbGetQuery(con, sprintf("SELECT COUNT(*) n FROM %s", t))$n)
-  }
-  if ("feature_alias" %in% present) {
-    out$feature_alias <- as.integer(
-      DBI::dbGetQuery(con, "SELECT COUNT(*) n FROM feature_alias")$n)
-  }
-  # `analysis` is the table an error here would damage most, so it gets a
-  # CONTENT checksum, not merely a count: a migration that swapped two values
-  # without changing the row count would pass a count-only gate.
-  out$analysis_checksum <- if ("analysis" %in% present) {
-    as.character(DBI::dbGetQuery(
-      con,
-      "SELECT COALESCE(SUM(HASH(COALESCE(uuid, '') || '|' || COALESCE(uuid_sample, '')
-         || '|' || COALESCE(uuid_lab, '') || '|' || COALESCE(CAST(value AS VARCHAR), ''))), 0) h
-       FROM analysis"
-    )$h)
-  } else {
-    NA_character_
+    n <- as.integer(DBI::dbGetQuery(con, sprintf('SELECT COUNT(*) n FROM "%s"', t))$n)
+    cols <- DBI::dbListFields(con, t)
+    # A CONTENT checksum for every table, not just a count: a migration that
+    # swapped two values without changing the row count would pass a count.
+    # Cast the sum to VARCHAR IN SQL - returned as a double it arrives as
+    # "8.93319151646462e+23", roughly 1e8 of absolute resolution on a 24-digit
+    # sum, which is a checksum with a hole in it.
+    expr <- paste(
+      sprintf('COALESCE(CAST("%s" AS VARCHAR), \'\\x00\')', cols),
+      collapse = " || '|' || "
+    )
+    h <- DBI::dbGetQuery(
+      con, sprintf('SELECT CAST(COALESCE(SUM(HASH(%s)), 0) AS VARCHAR) h FROM "%s"', expr, t)
+    )$h
+    out[[t]] <- n
+    out[[paste0(t, "_checksum")]] <- as.character(h)
   }
   out
 }
@@ -633,8 +679,62 @@ mig006_run <- function(db, snapshot_dir, mapping, dry_run = FALSE,
 
   if (nrow(marker) > 0) {
     recorded_at <- marker$applied_at[[1]]
-    logf("006-acirl-transcription-methods already applied at %s; nothing to do.",
-         format(recorded_at))
+
+    # THE MARKER ALONE IS NOT EVIDENCE THE SUPPLIED MAPPING IS APPLIED, and
+    # trusting it made this branch actively misleading. Two reachable states,
+    # both reproduced:
+    #
+    #   (a) THE MAPPING HAS GROWN. `-EXCLUDED.csv` tells the operator to create
+    #       an analyte and "then add to this mapping", and 4 of its 7 rows are
+    #       explicitly awaiting a ruling - so a LARGER mapping on a second run
+    #       is the designed workflow, not an error. Reported as "nothing to do"
+    #       the new label silently never gets linked, and then dangles at import
+    #       with no analyte for A79's twin test: the exact failure this
+    #       migration exists to prevent, reintroduced by its own success path.
+    #   (b) A TORN STATE - marker present, minted rows gone.
+    #
+    # So re-running now asks the question that actually matters, through the
+    # same production resolver the SUCCESS half uses: is every label in THIS
+    # mapping already resolved, as a transcription? If yes it is a true no-op.
+    # If not, refuse loudly rather than report success over the gap.
+    # Bound to a local: cli reads a `{}` expression starting with a DOT as a
+    # style name, not a value, so `{.mig006_org}` aborts with an rlib_error
+    # about an invalid cli literal instead of this gate's `sampletidy_error`.
+    # Second time this trap has been sprung in this file; the tests caught it
+    # both times.
+    org_label <- .mig006_org
+    check_con <- st_connect(db, read_only = TRUE)
+    unapplied <- tryCatch({
+      registry <- .rc_load_registry(check_con)
+      bad <- character(0)
+      for (i in seq_len(nrow(map))) {
+        res <- .rc_resolve_one_analyte(map$label[[i]], .mig006_org, NA_character_, registry)
+        if (!identical(res$status, "resolved") ||
+            !identical(res$uuid_analyte, map$uuid_analyte[[i]]) ||
+            !identical(.rc_lab_kind(res$uuid_lab, registry), "acirl_transcription")) {
+          bad <- c(bad, map$label[[i]])
+        }
+      }
+      bad
+    }, finally = DBI::dbDisconnect(check_con, shutdown = TRUE))
+
+    if (length(unapplied) > 0) {
+      cli::cli_abort(
+        "{db}: the 1006 marker says 006-acirl-transcription-methods was applied at
+         {format(recorded_at)}, but {length(unapplied)} label(s) in the supplied
+         mapping do not resolve as an {org_label} transcription - e.g.
+         {paste(sQuote(utils::head(unapplied, 3)), collapse = ', ')}. Either the
+         mapping has GROWN since the migration ran (the workflow -EXCLUDED.csv
+         prescribes), or the minted rows are gone. Reporting 'nothing to do'
+         here would silently leave those labels dangling at import. Apply the
+         additions as a NEW migration, or remove the 1006 marker deliberately
+         and re-run this one.",
+        class = "sampletidy_error"
+      )
+    }
+
+    logf("006-acirl-transcription-methods already applied at %s; all %d mapped label(s) verified resolved; nothing to do.",
+         format(recorded_at), nrow(map))
     read_con <- st_connect(db, read_only = TRUE)
     counts <- tryCatch(
       mig006_counts_checksum(read_con),

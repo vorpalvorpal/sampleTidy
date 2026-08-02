@@ -242,6 +242,141 @@ test_that("re-running is a clean no-op", {
   expect_identical(nrow(twice$change_log), nrow(once$change_log))
 })
 
+test_that("a GROWN mapping is refused, not reported as `already_migrated`", {
+  # ADVERSARIAL-AUDIT FINDING. `-EXCLUDED.csv` tells the operator to create an
+  # analyte and "then add to this mapping", and 4 of its 7 rows await a ruling -
+  # so a LARGER mapping on a second run is the designed workflow. Trusting the
+  # marker alone reported "nothing to do", the new label was never linked, and
+  # it then dangles at import with no analyte for A79's twin test: the exact
+  # failure this migration exists to prevent, reintroduced by its own no-op path.
+  mig <- .mig006_load()
+  e <- .mig006_env()
+
+  mig$mig006_run(db = e$db, snapshot_dir = e$snapshot_dir, mapping = .mig006_map())
+  once <- .mig006_state(e$db)
+
+  grown <- .mig006_map()
+  grown[nrow(grown) + 1, ] <- list("Magnesium", "Calcium", "a-9001")
+
+  expect_error(
+    mig$mig006_run(db = e$db, snapshot_dir = e$snapshot_dir, mapping = grown),
+    class = "sampletidy_error"
+  )
+  # ...and it refuses without touching anything.
+  expect_identical(.mig006_state(e$db)$n_lab, once$n_lab)
+})
+
+test_that("a TORN state - marker present, minted rows gone - is refused", {
+  mig <- .mig006_load()
+  e <- .mig006_env()
+  mig$mig006_run(db = e$db, snapshot_dir = e$snapshot_dir, mapping = .mig006_map())
+
+  con <- DBI::dbConnect(duckdb::duckdb(), e$db, read_only = FALSE)
+  DBI::dbExecute(con, "DELETE FROM lab_method
+    WHERE organisation = 'ACIRL' AND method IS NULL AND name IN ('Calcium','Arsenic','Total Suspended Solids')")
+  DBI::dbDisconnect(con, shutdown = TRUE)
+
+  expect_error(
+    mig$mig006_run(db = e$db, snapshot_dir = e$snapshot_dir, mapping = .mig006_map()),
+    class = "sampletidy_error"
+  )
+})
+
+test_that("an unchanged mapping on an applied DB is still a clean no-op", {
+  # Non-vacuity for the two tests above: the new check must not turn the
+  # ordinary, correct re-run into an error.
+  mig <- .mig006_load()
+  e <- .mig006_env()
+  mig$mig006_run(db = e$db, snapshot_dir = e$snapshot_dir, mapping = .mig006_map())
+  again <- mig$mig006_run(db = e$db, snapshot_dir = e$snapshot_dir, mapping = .mig006_map())
+  expect_identical(again$status, "already_migrated")
+})
+
+test_that("the SAFETY half catches a change to ANY column of ANY table", {
+  # ADVERSARIAL-AUDIT FINDING: the first checksum named 6 of 18 tables, checked
+  # 5 of them by row count only, and hashed 4 of `analysis`'s 10 columns - so
+  # flipping every non-detect to a detect, or rewriting `rl_low`/`comments`/
+  # `purpose`, or deleting every `project` row, all passed. Each mutation below
+  # is one the audit demonstrated slipping through.
+  mig <- .mig006_load()
+
+  mutations <- list(
+    "analysis.quantified" = "UPDATE analysis SET quantified = NOT quantified",
+    "analysis.rl_low"     = "UPDATE analysis SET rl_low = COALESCE(rl_low, 0) + 1",
+    "analysis.comments"   = "UPDATE analysis SET comments = 'mutated'",
+    "analysis.purpose"    = "UPDATE analysis SET purpose = 'mutated'",
+    "analyte.name"        = "UPDATE analyte SET name = name || 'x'",
+    "feature.name"        = "UPDATE feature SET name = name || 'x'",
+    "project (delete all)" = "DELETE FROM project"
+  )
+
+  for (nm in names(mutations)) {
+    e <- .mig006_env()
+    before <- .mig006_state(e$db)
+    m <- .mig006_load()
+    append_ok <- m$.mig006_append_methods
+    m$.mig006_append_methods <- function(con, map, uuid_fn = uuid::UUIDgenerate) {
+      out <- append_ok(con, map, uuid_fn = uuid_fn)
+      DBI::dbExecute(con, mutations[[nm]])
+      out
+    }
+    expect_error(
+      m$mig006_run(db = e$db, snapshot_dir = e$snapshot_dir, mapping = .mig006_map()),
+      class = "sampletidy_error",
+      info = nm
+    )
+    expect_identical(.mig006_state(e$db)$n_lab, before$n_lab, info = nm)
+  }
+})
+
+test_that("labels are trimmed Unicode-aware, not just ASCII", {
+  # ADVERSARIAL-AUDIT FINDING: `trimws()` is ASCII-only, so a leading NBSP,
+  # thin space, ZWSP or BOM slipped past the whitespace gate. PLAN-15 F.2
+  # records a real duplicate-alias defect from exactly that.
+  mig <- .mig006_load()
+  for (ws in c(" ", " ", "​", "﻿")) {
+    e <- .mig006_env()
+    map <- .mig006_map(); map$label[[1]] <- paste0(ws, "Calcium")
+    expect_error(
+      mig$mig006_run(db = e$db, snapshot_dir = e$snapshot_dir, mapping = map),
+      class = "sampletidy_error",
+      info = sprintf("U+%04X", utf8ToInt(ws))
+    )
+  }
+})
+
+test_that("a mapping that is neither a data frame nor a path raises sampletidy_error", {
+  mig <- .mig006_load()
+  e <- .mig006_env()
+  for (bad in list(42L, list(1, 2), NULL, c("a", "b"), NA_character_)) {
+    expect_error(
+      mig$mig006_run(db = e$db, snapshot_dir = e$snapshot_dir, mapping = bad),
+      class = "sampletidy_error"
+    )
+  }
+})
+
+test_that("a label that is literally \"NA\" survives the CSV path", {
+  # `read.csv`'s default na.strings would turn it into a missing value, so the
+  # CSV path refused a row the data-frame path accepts. Nothing in the real
+  # mapping is called "NA"; the point is that the two paths must agree.
+  mig <- .mig006_load()
+  e <- .mig006_env()
+  dir <- withr::local_tempdir()
+  path <- file.path(dir, "map.csv")
+  map <- .mig006_map(); map$label[[3]] <- "NA"
+  utils::write.csv(map, path, row.names = FALSE)
+
+  res <- mig$mig006_run(db = e$db, snapshot_dir = e$snapshot_dir, mapping = path)
+  expect_identical(res$status, "migrated")
+
+  con <- DBI::dbConnect(duckdb::duckdb(), e$db, read_only = TRUE)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
+  registry <- .rc_load_registry(con)
+  got <- .rc_resolve_one_analyte("NA", "ACIRL", NA_character_, registry)
+  expect_identical(got$status, "resolved")
+})
+
 test_that("dry_run writes nothing at all - no rows, no marker, no backup", {
   mig <- .mig006_load()
   e <- .mig006_env()
@@ -367,10 +502,21 @@ test_that("a label that folds to nothing is refused", {
   .expect_006_refused(mig, e, map)
 })
 
-test_that("an analyte uuid that does not exist is refused", {
+test_that("an analyte uuid that does not exist is refused, BY THE UUID GATE", {
+  # MUTATION-DRIVEN, same shape as the blank-cell gate. Once the name-drift
+  # check became NA-safe it also catches an unknown uuid (the name lookup
+  # returns NA), so "is this refused?" no longer distinguishes the two. The
+  # unknown-uuid gate earns its place by naming the real problem - a uuid that
+  # is not in `analyte` - and telling the operator to use add_analyte() first,
+  # so that message is what the test pins.
   mig <- .mig006_load()
   e <- .mig006_env()
   map <- .mig006_map(); map$uuid_analyte[[3]] <- "a-does-not-exist"
+  expect_error(
+    mig$mig006_run(db = e$db, snapshot_dir = e$snapshot_dir, mapping = map),
+    regexp = "do not exist in `analyte`",
+    class = "sampletidy_error"
+  )
   .expect_006_refused(mig, e, map)
 })
 
