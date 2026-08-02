@@ -891,7 +891,12 @@ for lab reports; `sample.organisation ∈ {ACIRL, Internal, ALS}`;
   values this test needs to compare. Steps (i) heading-drop and (v) `----` are
   decidable per-file and stay in the adapter.
   **Implementation notes added 2026-08-02 (Robin's question: use the
-  `lab_method -> analyte` map), all measured over 38,450 real candidate rows:**
+  `lab_method -> analyte` map), all measured over 38,450 real candidate rows**
+  (that row count DOUBLE COUNTS — 10 workbooks sit in both `unprocessed/` and
+  `processed/`, so only 34,024 (file, source_ref) pairs are distinct and 34,137
+  is the `unprocessed/` figure a 6c ingest would see; noted 2026-08-03. The
+  RATIOS below were not re-derived, and the duplication is not uniform across
+  labels, so treat them as directional until they are):
   (a) **The comparison keys on the RESOLVED ANALYTE, not the label.** ACIRL and ALS
   name the same analyte differently — ACIRL writes `Total Suspended Solids`, ALS's
   method is `Suspended Solids (SS)`, canonical `TSS`. Resolving both sides through
