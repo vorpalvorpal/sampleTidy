@@ -1352,6 +1352,7 @@
 #' datetime-equal candidate.
 #' @keywords internal
 #' @noRd
+
 #' The READ-ONLY half of `.ct_find_or_create_sample()`: the uuid of an
 #' existing sample this measurement belongs to, or `NA_character_` if it
 #' would need a new one.
@@ -1362,6 +1363,23 @@
 #' transaction does any work, and a guard that reasoned about sample identity
 #' with its own second copy of the R-11.18/A62 predicate would be free to
 #' drift from the one commit actually uses.
+#'
+#' BOTH candidate queries carry an explicit `ORDER BY uuid` - the PLAN-7b
+#' round-2 D6 convention, applied here on 2026-08-03 after an audit found this
+#' function was the SIBLING that never got it. `.rc_find_existing()`
+#' (R/reconcile.R:1794) carries a full docstring explaining why: when the
+#' datetime narrowing below does not collapse the candidate set to one, the
+#' `cand$uuid[[1]]` pick at the bottom is whichever row DuckDB's physical
+#' storage order happens to emit first, which is not stable across compaction
+#' or checkpoint - and that uuid becomes `clean$uuid_sample`, i.e. the sample
+#' every row of the batch is attached to.
+#'
+#' Measured on the live database (scratchpad/m6a_sample_pick.R): 68
+#' (feature, date) groups hold more than one sample; the datetime narrowing
+#' cannot separate 13 of them; and in 8 of those 13 the unordered SELECT's
+#' first row is NOT the lowest uuid, so the choice was being made by storage
+#' order today. The pick is still arbitrary - it is now the same arbitrary
+#' answer every time, which is the property that matters.
 #' @keywords internal
 #' @noRd
 .ct_existing_sample_uuid <- function(con, pending, match_feature, alias_uuid,
@@ -1370,7 +1388,8 @@
     if (is.na(alias_uuid)) return(NA_character_)
     cand <- DBI::dbGetQuery(
       con,
-      'SELECT uuid, datetime FROM "sample" WHERE uuid_feature_alias = ? AND CAST(date AS DATE) = ?',
+      'SELECT uuid, datetime FROM "sample" WHERE uuid_feature_alias = ? AND CAST(date AS DATE) = ?
+         ORDER BY uuid',
       params = list(alias_uuid, as.character(sample_date))
     )
   } else {
@@ -1379,7 +1398,8 @@
       con,
       'SELECT s.uuid, s.datetime FROM "sample" s
          JOIN feature_alias fa ON fa.uuid = s.uuid_feature_alias
-        WHERE fa.uuid_feature = ? AND CAST(s.date AS DATE) = ?',
+        WHERE fa.uuid_feature = ? AND CAST(s.date AS DATE) = ?
+        ORDER BY s.uuid',
       params = list(match_feature, as.character(sample_date))
     )
   }
