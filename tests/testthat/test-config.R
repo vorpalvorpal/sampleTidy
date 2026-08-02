@@ -67,23 +67,23 @@ test_that("R-1.1: the ALS-transcribed labels are NOT on the field allowlist", {
   # would import ALS data as a field reading, which A74/A75 exist to prevent.
   expect_false("Electrical Conductivity @ 25°C" %in% allow)
   # The TSS pair is a genuine field reading whose NAME is the ALS analyte's, so
-  # it can only be selected by the A75 value comparison, never by name.
+  # it is a TRANSCRIPTION label (measured, 2026-08-02), never a field reading.
   expect_false(any(c("Total Suspended Solids", "Suspended Solids (SS)", "TSS") %in% allow))
 })
 
-test_that("R-1.1: field_analytes_diff_required default is the pinned TSS set", {
-  withr::local_options(list("sampletidy.field_analytes_diff_required" = NULL))
-  withr::local_envvar(c(SAMPLETIDY_FIELD_ANALYTES_DIFF_REQUIRED = NA))
+test_that("R-1.1: acirl_transcription_labels default is the pinned TSS set", {
+  withr::local_options(list("sampletidy.acirl_transcription_labels" = NULL))
+  withr::local_envvar(c(SAMPLETIDY_ACIRL_TRANSCRIPTION_LABELS = NA))
   expect_equal(
-    st_config("field_analytes_diff_required"),
+    st_config("acirl_transcription_labels"),
     c("Total Suspended Solids", "Suspended Solids (SS)", "TSS")
   )
 })
 
-test_that("R-12.11: field_analytes_diff_required is guarded as list-valued too", {
-  withr::local_options(list("sampletidy.field_analytes_diff_required" = NULL))
-  withr::local_envvar(c(SAMPLETIDY_FIELD_ANALYTES_DIFF_REQUIRED = "Total Suspended Solids"))
-  expect_error(st_config("field_analytes_diff_required"), class = "sampletidy_error")
+test_that("R-12.11: acirl_transcription_labels is guarded as list-valued too", {
+  withr::local_options(list("sampletidy.acirl_transcription_labels" = NULL))
+  withr::local_envvar(c(SAMPLETIDY_ACIRL_TRANSCRIPTION_LABELS = "Total Suspended Solids"))
+  expect_error(st_config("acirl_transcription_labels"), class = "sampletidy_error")
 })
 
 test_that("R-1.1: remove_ingested default is TRUE (supersedes A13's FALSE, 2026-07-23)", {

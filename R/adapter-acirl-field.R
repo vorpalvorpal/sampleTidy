@@ -161,7 +161,7 @@ acirl_field_xlsx_adapter <- function() {
 
   # --- water sheets -> results + samples ----------------------------------
   field_analytes <- st_config("field_analytes")
-  diff_required <- st_config("field_analytes_diff_required")
+  transcription_labels <- st_config("acirl_transcription_labels")
   adapter_tag <- paste0("acirl_field_xlsx/", version)
 
   results_rows <- list()
@@ -285,7 +285,8 @@ acirl_field_xlsx_adapter <- function() {
 
   for (idx in water_idx) {
     sheet_name <- sheet_names[[idx]]
-    ws <- .st_acirl_parse_water_sheet(path, sheet_name, field_analytes, diff_required)
+    ws <- .st_acirl_parse_water_sheet(path, sheet_name, field_analytes,
+                                      transcription_labels)
     warnings_vec <- c(warnings_vec, ws$warnings)
     if (length(ws$skipped) > 0) {
       skipped_list <- c(skipped_list, ws$skipped)
@@ -373,7 +374,7 @@ acirl_field_xlsx_adapter <- function() {
     tibble::tibble(
       source_ref = character(0), feature_raw = character(0),
       analyte_raw = character(0), units_raw = character(0),
-      value_raw = character(0), diff_required = logical(0)
+      value_raw = character(0), transcription_label = logical(0)
     )
   } else {
     dplyr::bind_rows(als_candidate_rows)
@@ -503,7 +504,7 @@ acirl_field_xlsx_adapter <- function() {
 # outright; keeping them is what lets A79 import them as transcriptions once
 # their labels have analytes.
 .st_acirl_parse_water_sheet <- function(path, sheet_name, field_analytes,
-                                        diff_required = character(0)) {
+                                        transcription_labels = character(0)) {
   empty_out <- function(skipped = list(), warnings = character(0)) {
     list(results = list(), samples = list(), skipped = skipped,
          warnings = warnings, als_candidates = list(),
@@ -647,7 +648,7 @@ acirl_field_xlsx_adapter <- function() {
   # analyte under any ruling.
   meta_norm <- c("OTHER SAMPLE ID", "OTHER SITE NAME", "OTHER SITE ID")
   allowed_norm <- toupper(stringr::str_squish(field_analytes))
-  diff_norm <- toupper(stringr::str_squish(diff_required))
+  trans_norm <- toupper(stringr::str_squish(transcription_labels))
 
   for (r in seq_len(n_row)) {
     if (r <= header_row || r == date_row) next
@@ -738,20 +739,20 @@ acirl_field_xlsx_adapter <- function() {
       )
       next
     }
-    # A76: a diff-required label (the TSS pair) is a field reading whose NAME
-    # is indistinguishable from the ALS analyte's - `Total Suspended Solids` is
-    # both the ACIRL sheet label and the ALS analyte name, so NO name test can
-    # separate them. It is never allowed through on the name alone; it takes
-    # the ALS-candidate path, tagged.
+    # The TSS pair: a label whose NAME is indistinguishable from the ALS
+    # analyte's - `Total Suspended Solids` is both the ACIRL sheet label and the
+    # ALS analyte name, so no name test can separate a reading from a copy.
     #
-    # A79 leaves this OPEN, and it is the one place A75's value comparison has
-    # no replacement. Measured over the 678 real rows: 532 have an ALS twin at
-    # the same feature and analyte and 146 do not. Treated as transcriptions
-    # they all become deletable, and the 146 genuine field estimates go with
-    # them; treated as field readings the 532 become duplicate records of an
-    # ALS measurement. Robin's call - flagged, not guessed.
-    needs_diff <- analyte_norm %in% diff_norm
-    is_allowed <- !needs_diff && analyte_norm %in% allowed_norm
+    # SETTLED 2026-08-02 by measurement, not by the name: they are copies. 284
+    # of 678 carry ALS's own `<5` reporting limit, and 355 of the 362 values
+    # comparable against an ALS TSS row are identical (the 7 that differ are
+    # permutations of ALS's numbers - copy errors). ACIRL's two `field` TSS
+    # lab_methods, which claimed otherwise and carried zero analyses, were
+    # deleted from the live registry the same day. So this is no longer a
+    # deferred decision: the label takes the ALS-candidate path because it IS a
+    # transcription, and R-8.9 supersedes it once its analyte is known.
+    is_transcription_label <- analyte_norm %in% trans_norm
+    is_allowed <- !is_transcription_label && analyte_norm %in% allowed_norm
     units_cell <- cell(r, units_col)
 
     # A row with no value in ANY sample column is a section heading
@@ -787,12 +788,12 @@ acirl_field_xlsx_adapter <- function() {
             analyte_raw = analyte_raw_val,
             units_raw = .st_acirl_repair_units(analyte_raw_val, units_cell),
             value_raw = value_raw_cell,
-            diff_required = needs_diff
+            transcription_label = is_transcription_label
           )
         }
         skipped_rows[[length(skipped_rows) + 1]] <- tibble::tibble(
           source_ref = source_ref,
-          reason = if (needs_diff) "diff_required" else "lab_data_dropped"
+          reason = if (is_transcription_label) "transcription_label" else "lab_data_dropped"
         )
         next
       }

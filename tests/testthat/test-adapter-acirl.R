@@ -487,23 +487,25 @@ test_that("R-6.6: the widened allowlist imports Electrical Conductivity and Stan
   expect_true("Electrical Conductivity @ 25°C" %in% out$report$als_candidates$analyte_raw)
 })
 
-test_that("R-6.6: a diff-required label is never imported on its name alone", {
+test_that("R-6.6: a transcription label is never imported on its name alone", {
   meta <- sampleTidy:::file_meta(real_path)
   out <- acirl_adapter()$parse(real_path, meta)
-  # `Total Suspended Solids` is a genuine ACIRL field estimate AND the ALS
-  # analyte's own name, so the adapter - which cannot see the ALS data - must
-  # not decide. It routes the row to als_candidates flagged for the A75 value
-  # comparison in assemble/reconcile.
+  # `Total Suspended Solids` is the ALS analyte's own name, and measurement
+  # settled what the ACIRL rows are: transcriptions, not field estimates. The
+  # adapter still cannot decide anything (one file, no DB) - it routes them to
+  # als_candidates WITH THEIR VALUES, and R-8.9 supersedes them once the label
+  # has an analyte.
   expect_false("Total Suspended Solids" %in% out$results$analyte_raw)
   cand <- out$report$als_candidates
   tss <- cand[cand$analyte_raw == "Total Suspended Solids", ]
   expect_gt(nrow(tss), 0)
-  expect_true(all(tss$diff_required))
-  # its values survive parse - the comparison needs them
+  expect_true(all(tss$transcription_label))
+  # The values survive parse. `<5` is the evidence itself: it is ALS's own
+  # reporting limit for EA025, which is why these rows are known to be copies.
   expect_true(all(c("6", "<5") %in% tss$value_raw))
-  # every OTHER candidate is a plain ALS copy, not diff-required
-  expect_false(any(cand$diff_required[cand$analyte_raw != "Total Suspended Solids"]))
-  expect_true(any(out$report$skipped$reason == "diff_required"))
+  # every OTHER candidate is a plain ALS copy, not a name-collision label
+  expect_false(any(cand$transcription_label[cand$analyte_raw != "Total Suspended Solids"]))
+  expect_true(any(out$report$skipped$reason == "transcription_label"))
 })
 
 test_that("R-6.6: observations split into one Stage and one Appearance qualitative row", {
