@@ -1108,6 +1108,42 @@ for lab reports; `sample.organisation ∈ {ACIRL, Internal, ALS}`;
   * Note the **legacy system already implemented A75's policy**: zero existing
     (feature, date, analyte) triples carry both an ALS row and a non-field ACIRL row.
     So this is a deliberate change of policy, starting from a base with no duplicates.
+  **Two corrections and one open question, from implementing R-8.9 (Claude,
+  2026-08-02, all measured — flagged here for Robin).**
+
+  1. **"Every other ACIRL row is a transcription" is wrong as written.** All
+     four of ACIRL's non-field `lab_method` rows in the live registry are
+     **dust** (`AS3580.10.1-2003` — 310 analyses). ALS does not run deposition
+     gauges, so ACIRL dust is ACIRL's OWN lab measurement: a third category,
+     never superseded. The discriminator used is the method code, and it is
+     measured rather than invented — **zero** ACIRL lab_methods have a NULL
+     `method` today and ACIRL water sheets carry no method codes at all, so the
+     rule is a provable no-op on every row now in the database.
+  2. **`EN67 - Client Supplied Data` must rank as field on BOTH sides.** A75
+     already said it ranks as field for the read-time preference; it matters
+     here too. EN67 is an *ALS* method (`pH`, one row) meaning the client
+     supplied the number and ALS reported it back — our own field reading
+     round-tripped. Treated as an ordinary ALS lab row it would delete a
+     committed ACIRL pH transcription: a field reading superseding a field
+     reading.
+  3. **OPEN — the TSS pair.** `Total Suspended Solids` is both the ACIRL sheet
+     label and the ALS analyte name, so no name test separates a field estimate
+     from a transcription; A75's value comparison was the mechanism and A79
+     removed it without a replacement. Measured over the 678 real rows: **532
+     have an ALS twin** at the same feature and analyte, **146 do not**. As
+     transcriptions all 678 become deletable and the 146 genuine field
+     estimates go with them; as field readings the 532 become duplicate records
+     of one ALS measurement. Not guessed — the adapter still routes them to
+     `als_candidates` and the question is Robin's.
+
+  **SEQUENCING, measured and load-bearing: the dangling-method confirmation
+  pass must precede the transcription import, not follow it.** 215 of the 218
+  transcription labels have no ACIRL `lab_method` at all today. Importing them
+  first mints dangling methods, and a dangling method has no `uuid_analyte`, so
+  R-8.9's twin test cannot fire for any of them — leaving ~38,000 provisional
+  rows nothing can ever supersede. That is the silent-duplicate failure mode
+  A79 inverts. This reorders steps 4 and 6 of the ACIRL plan.
+
 - **A80** **ACIRL data is filed against the ACIRL REPORT NUMBER; the ALS work order
   becomes a CHILD project of it (user, 2026-08-02).** The ACIRL report is the parent
   engagement; the ALS job is the lab work within it. `project` already supports this

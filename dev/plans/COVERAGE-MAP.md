@@ -459,6 +459,34 @@ gate growing back anywhere fails loudly.
 - an ACIRL workbook has no home work order (R-9.12's filename trap), which is *why* A80 files by report number -> "A80: an ACIRL workbook has no home work order - it must be filed by report number"
 - the inversion of "gating takes no snapshot": an imported workbook IS snapshotted and its source removed -> "A79: an imported ACIRL workbook IS snapshotted and its source removed"
 
+### R-8.9 ACIRL transcription supersession (`tests/testthat/test-reconcile.R`) - added 2026-08-02
+A79's split: a `field` (or `EN67`) lab_method is a real field measurement, a
+NULL-method ACIRL lab_method is a hand transcription of an ALS number, and a
+real ACIRL method code is ACIRL's own dust lab work. Matched on the resolved
+ANALYTE uuid, never the raw label. All 14 mutations killed
+(`scratchpad/a79_supersede_mutations.R`); two of them found real defects
+(A79's "every other ACIRL row" wording, and EN67).
+- incoming transcription with a committed ALS twin is dropped, both values on the skip row -> "R-8.9: an incoming ACIRL transcription whose ALS twin is already committed is dropped, carrying both values"
+- incoming ALS row marks the committed transcription, reason carries the transcribed value -> "R-8.9: an incoming ALS row marks the committed ACIRL transcription for deletion, with both values in the reason"
+- commit performs the delete and `change_log` records the value -> "R-8.9: commit_event() performs the deletion and change_log records the transcribed value"
+- a committed ACIRL FIELD reading is never superseded -> "R-8.9: an ACIRL FIELD reading is never superseded - it is a different measurement, not a copy"
+- an incoming ACIRL FIELD row is kept even when its ALS twin exists -> "R-8.9: an incoming ACIRL FIELD row is kept even when its ALS twin is already committed"
+- ACIRL's own DUST lab work is never superseded, committed side -> "R-8.9: ACIRL's own DUST lab work is never superseded - it is not a transcription"
+- ACIRL's own DUST lab work is never superseded, incoming side -> "R-8.9: an incoming ACIRL DUST row is kept even when an ALS twin is already committed"
+- an ALS EN67 row does not supersede - it IS the field reading -> "R-8.9: an ALS `EN67 - Client Supplied Data` row does NOT supersede - it IS the field reading"
+- a committed EN67 row is not an ALS twin either -> "R-8.9: a committed EN67 row is not an ALS twin either - an incoming transcription survives it"
+- only ALS supersedes; a legacy lab row does not -> "R-8.9: only an ALS row supersedes - a legacy lab row leaves the transcription alone"
+- a dangling ACIRL method has no analyte, so nothing twins -> "R-8.9: a DANGLING ACIRL method has no analyte, so nothing twins and nothing is deleted"
+- the twin is found on the ANALYTE across two different labels -> "R-8.9: the twin is found on the ANALYTE, across two different labels"
+- a different analyte at the same feature and date is not a twin -> "R-8.9: a different analyte at the same feature and date is not a twin"
+- a date-only ACIRL sample twins with a TIMED ALS sample on the same day -> "R-8.9: a date-only ACIRL sample twins with a TIMED ALS sample on the same day"
+- two provably distinct times on one day are not twins -> "R-8.9: two provably distinct sampling times on one day are NOT twins"
+- a different date is not a twin -> "R-8.9: a different date is not a twin"
+- two rows naming one transcription yield ONE delete (driven directly - the pipeline cannot reach it, and routing it through produced a vacuous test) -> "R-8.9: two rows naming ONE committed transcription yield ONE delete, not two"
+- two incoming ALS rows delete it once, end to end -> "R-8.9: two incoming ALS rows naming ONE transcription delete it once, not twice"
+- a uuid already deleted by another event is skipped, not an abort -> "R-8.9: a supersede uuid already deleted by another event is skipped, not an abort"
+- an already_present row deletes nothing -> "R-8.9: an already_present ALS row deletes nothing - the delete needs a real commit"
+
 ### R-9.14 the A80 project hierarchy (`tests/testthat/test-commit.R`) - added 2026-08-02
 `campaign -> ACIRL report -> ALS work order`, built at commit time from
 `event$report$sources`. Every case below was measured off the real corpus and the

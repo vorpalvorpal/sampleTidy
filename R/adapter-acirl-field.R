@@ -404,8 +404,15 @@ acirl_field_xlsx_adapter <- function() {
       # so a parser bug reads as "water we failed to parse", not "never had
       # any".
       n_water_sheets = length(water_idx),
-      # R-6.3b: ALS-looking rows kept WITH their values for A75's comparison
-      # in assemble/reconcile.
+      # R-6.3b: ALS-looking rows kept WITH their values. Written for A75's
+      # value comparison, which A79 replaced. They are STILL not results: A79
+      # imports them as transcriptions, but only once each label has an ACIRL
+      # `lab_method` carrying an analyte, and 215 of the 218 labels have no
+      # ACIRL method at all today (measured). Until the dangling-method
+      # confirmation pass runs, promoting them here would import ~38,000 rows
+      # that R-8.9's supersession cannot match and so cannot ever supersede -
+      # silent duplicates, the failure mode A79 inverts. The promotion belongs
+      # with that pass, not here.
       als_candidates = als_candidates,
       # R-6.7: point-code -> human-name evidence lifted off the site-metadata
       # rows, so recognising them as metadata costs no information. Nothing
@@ -488,13 +495,13 @@ acirl_field_xlsx_adapter <- function() {
 # fallback, so the older fixture layout (date below) still parses.
 #
 # There is NO block terminator any more. Rows below the block are no longer
-# guessed at by a regex: every labelled row is classified (A75) - a row with no
+# guessed at by a regex: every labelled row is classified - a row with no
 # values anywhere is a heading and is dropped, `----` is "not analysed", a row
 # on the field allowlist is a field reading, and anything else is an
-# `als_candidate` recorded in `report$als_candidates` WITH ITS VALUES so the
-# A75 value comparison can run later in assemble/reconcile. Dropping those rows
-# here (the old `lab_data_dropped` behaviour) destroyed the very values that
-# comparison needs.
+# `als_candidate` recorded in `report$als_candidates` WITH ITS VALUES. Dropping
+# those rows here (the old `lab_data_dropped` behaviour) destroyed the values
+# outright; keeping them is what lets A79 import them as transcriptions once
+# their labels have analytes.
 .st_acirl_parse_water_sheet <- function(path, sheet_name, field_analytes,
                                         diff_required = character(0)) {
   empty_out <- function(skipped = list(), warnings = character(0)) {
@@ -710,9 +717,9 @@ acirl_field_xlsx_adapter <- function() {
     #     Other Site Name     26 rows
     #     Other Site ID        5 rows
     #
-    # Before this they took the `als_candidate` path, which under A75 rule (iv)
-    # would have opened ~2,635 review items of pure noise - 21% of the entire
-    # no-twin population. They are not dropped either: the point-code -> name
+    # Before this they took the `als_candidate` path, and would have carried
+    # ~2,635 rows of pure noise into the transcription population - 21% of the
+    # entire no-twin population. They are not dropped either: the point-code -> name
     # mapping is real evidence for the feature-alias subsystem, so it is carried
     # on `report$feature_aliases` rather than thrown away.
     if (analyte_norm %in% meta_norm) {
@@ -731,10 +738,18 @@ acirl_field_xlsx_adapter <- function() {
       )
       next
     }
-    # A75/A76: a diff-required label (the TSS pair) is a field reading whose
-    # NAME is indistinguishable from the ALS analyte's. It is never allowed
-    # through on the name alone - it takes the ALS-candidate path, tagged so
-    # assemble/reconcile can promote it once it has compared the values.
+    # A76: a diff-required label (the TSS pair) is a field reading whose NAME
+    # is indistinguishable from the ALS analyte's - `Total Suspended Solids` is
+    # both the ACIRL sheet label and the ALS analyte name, so NO name test can
+    # separate them. It is never allowed through on the name alone; it takes
+    # the ALS-candidate path, tagged.
+    #
+    # A79 leaves this OPEN, and it is the one place A75's value comparison has
+    # no replacement. Measured over the 678 real rows: 532 have an ALS twin at
+    # the same feature and analyte and 146 do not. Treated as transcriptions
+    # they all become deletable, and the 146 genuine field estimates go with
+    # them; treated as field readings the 532 become duplicate records of an
+    # ALS measurement. Robin's call - flagged, not guessed.
     needs_diff <- analyte_norm %in% diff_norm
     is_allowed <- !needs_diff && analyte_norm %in% allowed_norm
     units_cell <- cell(r, units_col)
@@ -762,8 +777,9 @@ acirl_field_xlsx_adapter <- function() {
       }
 
       if (!is_allowed) {
-        # Kept WITH its value (A75) - the comparison against the real ALS
-        # result happens in assemble/reconcile, which can see the ALS data.
+        # Kept WITH its value - the adapter sees one file and no database, so
+        # it can neither resolve the analyte nor find the ALS twin. Both are
+        # R-8.9's job at reconcile.
         if (nonempty(value_raw_cell)) {
           als_candidates[[length(als_candidates) + 1]] <- tibble::tibble(
             source_ref = source_ref,

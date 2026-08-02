@@ -867,6 +867,51 @@
   list(uuid_project = uuid_project, review = dplyr::bind_rows(review))
 }
 
+# ---- step 3b: delete superseded ACIRL transcriptions (R-8.9 / A79) ----------
+
+#' Delete the committed ACIRL transcriptions this event's ALS rows supersede
+#'
+#' Reconcile decides (it can read, it cannot write); this writes. Each row's
+#' `reason` was built by `.rc_acirl_supersession()` and already carries both
+#' values, because `db_delete()` records only the uuid in `change_log` - the
+#' reason string is the ONLY place the transcribed number survives, and it is
+#' what makes ACIRL's transcription-error rate measurable after the fact.
+#'
+#' Tolerates a missing `supersede` (a hand-built `resolved` fixture, or any
+#' producer predating R-8.9) rather than erroring on it - the same defensive
+#' shape `.ct_commit_review()` uses for the typed review columns.
+#'
+#' A uuid that no longer exists is NOT an error: two events in one batch can
+#' both supersede the same transcription, and the first one to commit wins.
+#' `db_delete()` aborts on a zero-row key and would take the whole transaction
+#' down with it, so existence is checked first.
+#' @keywords internal
+#' @noRd
+.ct_delete_superseded <- function(con, supersede, reason) {
+  if (is.null(supersede) || nrow(supersede) == 0) {
+    return(invisible(0L))
+  }
+  n <- 0L
+  for (i in seq_len(nrow(supersede))) {
+    uuid_row <- supersede$uuid_analysis[[i]]
+    if (is.na(uuid_row)) {
+      next
+    }
+    still_there <- DBI::dbGetQuery(
+      con, "SELECT count(*) AS n FROM analysis WHERE uuid = ?", params = list(uuid_row)
+    )$n[[1]]
+    if (still_there == 0) {
+      next
+    }
+    db_delete(
+      con, "analysis", uuid = uuid_row, actor = .ct_actor,
+      reason = paste0(reason, " | ", supersede$reason[[i]])
+    )
+    n <- n + 1L
+  }
+  invisible(n)
+}
+
 # ---- step 1b: materialise pending aliases + dangling methods (R-11.8) --------
 
 #' NA-safe vectorised `isTRUE()` for a possibly-absent logical column.
@@ -1963,6 +2008,12 @@ commit_event <- function(event, resolved, con) {
       .ct_record_resolution_provenance(con, clean, .ct_actor)
     }
     .ct_commit_analyses(con, clean, .ct_actor, reason)
+    # R-8.9/A79: AFTER the insert, deliberately. The transcription is deleted
+    # because the real ALS result now exists - if the insert aborts, the
+    # transaction rolls back and the provisional row is still there, which is
+    # the correct outcome. Doing it first would open a window in which neither
+    # row exists.
+    .ct_delete_superseded(con, resolved$supersede, reason)
 
     .ct_archive_files(con, event)
     .ct_record_already_present(con, resolved$skipped, .ct_actor, reason)

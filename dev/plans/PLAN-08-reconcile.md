@@ -110,3 +110,101 @@ Review/skipped rows never appear in `clean` (disjoint, union = input rows
 after QC filter). `counts` covers every disposition. Criterion: disjointness
 + completeness asserted on a mixed fixture event (every R-8.x case present at
 once); reconcile is pure — DB row counts unchanged after run.
+
+## R-8.9 ACIRL transcription supersession (A79)
+
+A79 splits every ACIRL row in two, using only what the data already encodes —
+no new column, no migration:
+
+| category | test | treatment |
+|---|---|---|
+| **field measurement** | `lab_method.method` is `field` (or `EN67 - Client Supplied Data`) | ACIRL measured it in the field; ALS measured it in the lab days later, after the sample degassed. **Two different measurements.** Both persist; ranking between them is migration 005's business |
+| **ACIRL's own lab work** | org `ACIRL`, a real method code (`AS3580.10.1-2003`) | dust. ALS does not run deposition gauges, so this is nobody's copy. Never superseded |
+| **transcription** | org `ACIRL`, `method IS NULL` | ACIRL copied ALS's number by hand. **One measurement, two records** — provisional, deleted when the ALS equivalent commits |
+
+Reconcile decides (`.rc_acirl_supersession()`, read-only); `commit_event()`
+writes (`.ct_delete_superseded()`), inside the same transaction as the insert
+and **after** it — if the insert aborts, the transaction rolls back and the
+provisional row is still there, which is the correct outcome.
+
+`reconcile_event()` gains a fourth output, `supersede`
+(`uuid_analysis, source_ref, source_hash, reason`).
+
+### Both directions, because ACIRL routinely arrives first
+
+- **incoming ACIRL transcription, ALS already committed** → the incoming row is
+  dropped, `reason = "transcription_superseded"`, both values on the skip row.
+  Importing it only to delete it on the next ALS commit is the same outcome
+  with a duplicate in between.
+- **incoming ALS lab row, ACIRL transcription already committed** → the
+  committed row is marked for deletion.
+
+### Matched on the resolved ANALYTE uuid, never the raw label
+
+Measured over 38,450 real candidate rows: the analyte key finds **76.1%** twins
+against the label's **69.7%**, and the whole lift lands where the labels
+*diverge*. Keyed on the label, all 605 real `Total Suspended Solids` rows read
+as "no twin → field estimate → import" — importing transcribed ALS values as
+field readings, the exact thing this exists to stop.
+
+`.rc_find_existing()` (R-8.7) cannot serve: it keys on `a.uuid_lab`, and the
+whole point is that the two rows sit on **different** lab_methods. Same
+feature/date/A62-datetime predicate, different join.
+
+### What measurement changed about A79's own wording
+
+1. **"Every other ACIRL row is a transcription" is wrong as stated.** All four
+   of ACIRL's non-field lab_methods in the live registry are **dust**
+   (310 analyses). The discriminator is the method code, and it is measured:
+   **zero** ACIRL lab_methods have a NULL `method` today, and ACIRL's water
+   sheets carry no method codes at all — so the rule is a provable **no-op on
+   every row now in the database** and can only classify rows that do not exist
+   yet.
+2. **`EN67 - Client Supplied Data` is an ALS method that must rank as field.**
+   EN67 means the *client* supplied the number and ALS reported it back — our
+   own field reading round-tripped. Without the carve-out an incoming EN67 pH
+   row deletes a committed ACIRL pH transcription: a field reading superseding
+   a field reading. Found by a surviving mutation, not by reading the code.
+3. **Only an `ALS` lab row supersedes**, per A79's wording. `legacy`,
+   `Internal` and NULL-organisation methods leave the transcription alone —
+   the safe direction, since keeping a row loses nothing and deleting one does.
+
+### The delete reason is the audit trail
+
+`db_delete()` writes only the uuid into `change_log` (`old = uuid_row`), never
+the row's content. The reason string built by `.rc_acirl_supersession()` is
+therefore the **only** place the transcribed number survives, and it is what
+makes ACIRL's transcription-error rate measurable after the fact. Deleting
+without it would destroy the evidence A79 says the delete preserves.
+
+### Sequencing: this must run BEFORE the transcription import, not after
+
+Measured: **215 of the 218** transcription labels have no ACIRL `lab_method` at
+all today (3 do). Importing them mints dangling methods, and a dangling method
+has **no `uuid_analyte`** — so the twin test cannot fire for any of them until
+the confirmation pass gives them analytes. Importing first would leave ~38,000
+provisional rows that nothing can ever supersede: silent duplicates, which is
+the failure mode A79 inverts. **The dangling-method confirmation pass has to
+precede the transcription import.** The adapter therefore still routes those
+rows to `report$als_candidates` and R-8.9 governs only rows whose method is
+already registered.
+
+### Criteria
+
+- an incoming ACIRL transcription with a committed ALS twin is dropped as
+  `transcription_superseded`, carrying **both** values;
+- an incoming ALS row marks the committed transcription for deletion, and the
+  reason carries the transcribed value;
+- `commit_event()` performs the delete and `change_log` records that value;
+- an ACIRL **field** reading is never superseded, from either direction;
+- ACIRL's own **dust** lab work is never superseded, from either direction;
+- an ALS **EN67** row neither supersedes nor is treated as an ALS twin;
+- only ALS supersedes — a `legacy` lab row does not;
+- a **dangling** ACIRL method has no analyte, so nothing twins;
+- the twin is found across two different **labels** on one analyte, and a
+  different analyte at the same feature and date is not a twin;
+- a date-only ACIRL sample twins with a **timed** ALS sample on the same day;
+  two provably distinct times on one day do not; a different date does not;
+- two rows naming one transcription yield **one** delete;
+- a uuid already deleted by another event is skipped, not an abort;
+- an `already_present` row deletes nothing — the delete needs a real commit.

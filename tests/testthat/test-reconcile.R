@@ -5252,3 +5252,459 @@ test_that("round-3 [GENERALIZE]: every order() in reconcile.R pins method='radix
   expect_identical(bad, character(0),
     info = "every order() in R/reconcile.R must pin method = 'radix' (D4/D7)")
 })
+
+# ---- R-8.9 / A79: ACIRL transcription supersession --------------------------
+#
+# A79 splits every ACIRL row in two, using only what the data already encodes:
+# a `method = 'field'` lab_method is a genuine field measurement (kept forever,
+# ranked above lab), and a NULL-method ACIRL lab_method is a hand transcription
+# of an ALS number (one measurement, two records - provisional). Matched on the
+# resolved ANALYTE uuid, never the raw label.
+#
+# The fixture below is built to be honest about the live registry: ACIRL's four
+# non-field methods there are all DUST (`AS3580.10.1-2003`), which is ACIRL's
+# own lab work and must never be superseded. Hence `lmt-dust`.
+
+a79_seed_methods <- function(con) {
+  DBI::dbExecute(con, "INSERT INTO lab_method
+    (uuid, uuid_analyte, name, method, organisation, rl_low, units, conversion_constant) VALUES
+    ('lmt-trans', 'a-0002', 'Fluoride', NULL, 'ACIRL', NULL, 'mg/L', NULL),
+    ('lmt-field', 'a-0002', 'Fluoride field', 'field', 'ACIRL', NULL, 'mg/L', NULL),
+    ('lmt-dust',  'a-0002', 'INSOLUBLE SOLIDS', 'AS3580.10.1-2003', 'ACIRL', NULL, 'mg/L', NULL),
+    ('lmt-legacy','a-0002', 'Fluoride legacy', 'LEG001', 'legacy', NULL, 'mg/L', NULL)")
+}
+
+# A committed analysis on `uuid_lab` at feature alias `fa`, on `date`, with
+# `datetime` (NA = the date-only shape every ACIRL sample has until the field
+# sheets are OCR'd).
+a79_seed_analysis <- function(con, uuid, uuid_lab, value, fa = "fa-0001",
+                              date = "2025-05-24", datetime = NA_character_) {
+  s <- paste0("s-", uuid)
+  DBI::dbExecute(con, sprintf(
+    "INSERT INTO \"sample\" (uuid, uuid_feature_alias, uuid_project, date, datetime, organisation)
+     VALUES ('%s', '%s', 'p-0001', TIMESTAMP '%s 00:00:00', %s, 'ACIRL')",
+    s, fa, date,
+    if (is.na(datetime)) "NULL" else sprintf("TIMESTAMP '%s'", datetime)
+  ))
+  DBI::dbExecute(con, sprintf(
+    "INSERT INTO analysis (uuid, uuid_sample, uuid_lab, value, quantified, rl_low)
+     VALUES ('%s', '%s', '%s', %s, TRUE, 0.1)", uuid, s, uuid_lab, format(value)
+  ))
+  uuid
+}
+
+# An incoming ACIRL water row: no method code, which is what makes it a
+# transcription.
+#
+# The defaults are merged BEFORE the call, not passed alongside `...`. Naming
+# one argument twice in a single `mk_row()` call is silent - `modifyList()`
+# takes `val[[v]]`, the FIRST match - so a caller's override was discarded
+# rather than applied, and the resulting test failed for a reason that had
+# nothing to do with what it was testing. Twice.
+a79_acirl_row <- function(...) {
+  base <- list(
+    org = "ACIRL", adapter = "acirl_field_xlsx/1", analyte_raw = "Fluoride",
+    method_raw = NA_character_, units_raw = "mg/L", value_raw = "0.4",
+    value_num = 0.4, below_detection = FALSE, rl = NA_real_,
+    cas_number = NA_character_
+  )
+  do.call(mk_row, utils::modifyList(base, list(...)))
+}
+
+test_that("R-8.9: an incoming ACIRL transcription whose ALS twin is already committed is dropped, carrying both values", {
+  path <- seed_db()
+  con <- seed_con(path)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+  a79_seed_methods(con)
+
+  # an-0001 is the committed ALS Fluoride at fa-0001 / 2025-05-24 (value 100
+  # after conversion). The incoming ACIRL row is the same measurement, copied.
+  out <- reconcile_event(mk_event(a79_acirl_row(
+    source_ref = "r1", feature_raw = "T.S01", sample_datetime_raw = "24 May 2025"
+  )), con)
+
+  expect_equal(nrow(out$clean), 0)
+  sk <- out$skipped[out$skipped$reason == "transcription_superseded", ]
+  expect_equal(nrow(sk), 1)
+  expect_identical(sk$existing_uuid[[1]], "an-0001")
+  # Both values are on the skip row - without them the discrepancy between what
+  # ACIRL transcribed and what ALS reported is unrecoverable.
+  diag <- jsonlite::fromJSON(sk$payload[[1]])
+  expect_equal(diag$value_existing, 100)
+  expect_equal(diag$value_incoming, 400)
+  expect_equal(nrow(out$supersede), 0)
+})
+
+test_that("R-8.9: an incoming ALS row marks the committed ACIRL transcription for deletion, with both values in the reason", {
+  path <- seed_db()
+  con <- seed_con(path)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+  a79_seed_methods(con)
+  # ACIRL arrived first - the ordinary case, not the rare one.
+  a79_seed_analysis(con, "an-trans", "lmt-trans", 0.42, date = "2025-06-01")
+
+  out <- reconcile_event(mk_event(mk_row(
+    source_ref = "r1", sample_datetime_raw = "1 June 2025"
+  )), con)
+
+  expect_equal(nrow(out$clean), 1)
+  expect_equal(nrow(out$supersede), 1)
+  expect_identical(out$supersede$uuid_analysis[[1]], "an-trans")
+  expect_match(out$supersede$reason[[1]], "0.42")
+  expect_match(out$supersede$reason[[1]], "A79")
+})
+
+test_that("R-8.9: commit_event() performs the deletion and change_log records the transcribed value", {
+  path <- seed_db()
+  con <- seed_con(path)
+  ensure_test_asset_table(con)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::local_options(list("sampletidy.archive_dir" = withr::local_tempdir()))
+  a79_seed_methods(con)
+  a79_seed_analysis(con, "an-trans", "lmt-trans", 0.42, date = "2025-06-01")
+
+  event <- mk_event(mk_row(source_ref = "r1", sample_datetime_raw = "1 June 2025"))
+  event$files <- tibble::tibble(hash = "hash-1", kept = TRUE)
+  resolved <- reconcile_event(event, con)
+  res <- commit_event(event, resolved, con)
+
+  expect_false(isTRUE(res$blocked))
+  gone <- DBI::dbGetQuery(con, "SELECT count(*) AS n FROM analysis WHERE uuid = 'an-trans'")$n
+  expect_equal(gone, 0)
+  # `db_delete()` writes only the uuid into change_log, so the transcribed
+  # number survives ONLY in the reason string. That is the audit trail A79
+  # promises, and this is what pins it.
+  cl <- DBI::dbGetQuery(con,
+    "SELECT reason FROM change_log WHERE action = 'delete' AND tbl = 'analysis' AND uuid_row = 'an-trans'")
+  expect_equal(nrow(cl), 1)
+  expect_match(cl$reason[[1]], "0.42")
+})
+
+test_that("R-8.9: an ACIRL FIELD reading is never superseded - it is a different measurement, not a copy", {
+  path <- seed_db()
+  con <- seed_con(path)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+  a79_seed_methods(con)
+  # The live case: 927 (feature, date, analyte) triples already carry both a
+  # field and a lab value. The sample degasses before the lab sees it, so both
+  # are real; ranking between them is migration 005's business, not a delete.
+  a79_seed_analysis(con, "an-field", "lmt-field", 0.42, date = "2025-06-01")
+
+  out <- reconcile_event(mk_event(mk_row(
+    source_ref = "r1", sample_datetime_raw = "1 June 2025"
+  )), con)
+
+  expect_equal(nrow(out$clean), 1)
+  expect_equal(nrow(out$supersede), 0)
+})
+
+test_that("R-8.9: ACIRL's own DUST lab work is never superseded - it is not a transcription", {
+  path <- seed_db()
+  con <- seed_con(path)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+  a79_seed_methods(con)
+  # All four of ACIRL's non-field lab_methods in the live registry are dust
+  # (`AS3580.10.1-2003`). ALS does not run deposition gauges, so an ACIRL dust
+  # row is ACIRL's OWN measurement - "every other ACIRL row is a transcription"
+  # taken literally would have made it deletable.
+  a79_seed_analysis(con, "an-dust", "lmt-dust", 0.42, date = "2025-06-01")
+
+  out <- reconcile_event(mk_event(mk_row(
+    source_ref = "r1", sample_datetime_raw = "1 June 2025"
+  )), con)
+
+  expect_equal(nrow(out$clean), 1)
+  expect_equal(nrow(out$supersede), 0)
+})
+
+test_that("R-8.9: only an ALS row supersedes - a legacy lab row leaves the transcription alone", {
+  path <- seed_db()
+  con <- seed_con(path)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+  a79_seed_methods(con)
+  a79_seed_analysis(con, "an-trans", "lmt-trans", 0.42, date = "2025-06-01")
+
+  out <- reconcile_event(mk_event(mk_row(
+    source_ref = "r1", org = "legacy", analyte_raw = "Fluoride legacy",
+    method_raw = "LEG001", sample_datetime_raw = "1 June 2025"
+  )), con)
+
+  expect_equal(nrow(out$supersede), 0)
+})
+
+test_that("R-8.9: an ALS `EN67 - Client Supplied Data` row does NOT supersede - it IS the field reading", {
+  path <- seed_db()
+  con <- seed_con(path)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+  a79_seed_methods(con)
+  # EN67 means the CLIENT supplied the number and ALS reported it back, so an
+  # EN67 row is our own field reading round-tripped, not a lab measurement.
+  # A75/A79 name it explicitly, and it is real: exactly one such lab_method
+  # exists in the live registry (`pH`, org ALS). Without this it classifies as
+  # an ordinary ALS lab row and deletes a field reading.
+  DBI::dbExecute(con, "INSERT INTO lab_method
+    (uuid, uuid_analyte, name, method, organisation, units) VALUES
+    ('lmt-en67', 'a-0002', 'Fluoride', 'EN67 - Client Supplied Data', 'ALS', 'mg/L')")
+  a79_seed_analysis(con, "an-trans", "lmt-trans", 0.42, date = "2025-06-01")
+
+  out <- reconcile_event(mk_event(mk_row(
+    source_ref = "r1", analyte_raw = "Fluoride",
+    method_raw = "EN67 - Client Supplied Data", value_raw = "3", value_num = 3,
+    below_detection = FALSE, rl = NA_real_, sample_datetime_raw = "1 June 2025"
+  )), con)
+
+  expect_equal(nrow(out$supersede), 0)
+})
+
+test_that("R-8.9: a committed EN67 row is not an ALS twin either - an incoming transcription survives it", {
+  path <- seed_db()
+  con <- seed_con(path)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+  a79_seed_methods(con)
+  DBI::dbExecute(con, "INSERT INTO lab_method
+    (uuid, uuid_analyte, name, method, organisation, units) VALUES
+    ('lmt-en67', 'a-0002', 'Fluoride', 'EN67 - Client Supplied Data', 'ALS', 'mg/L')")
+  # The same rule seen from the other end: the SQL predicate must exclude EN67
+  # exactly as `.rc_lab_kind()` does, or the two halves disagree.
+  a79_seed_analysis(con, "an-en67", "lmt-en67", 0.42, date = "2025-06-01")
+
+  out <- reconcile_event(mk_event(a79_acirl_row(
+    source_ref = "r1", sample_datetime_raw = "1 June 2025"
+  )), con)
+
+  expect_equal(nrow(out$clean), 1)
+  expect_false("transcription_superseded" %in% out$skipped$reason)
+})
+
+test_that("R-8.9: a DANGLING ACIRL method has no analyte, so nothing twins and nothing is deleted", {
+  path <- seed_db()
+  con <- seed_con(path)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+  a79_seed_methods(con)
+  DBI::dbExecute(con, "INSERT INTO lab_method
+    (uuid, uuid_analyte, name, method, organisation, units) VALUES
+    ('lmt-dang', NULL, 'Fluoride', NULL, 'ACIRL', 'mg/L')")
+  DBI::dbExecute(con, "UPDATE lab_method SET uuid_analyte = NULL WHERE uuid = 'lmt-trans'")
+  a79_seed_analysis(con, "an-dang", "lmt-trans", 0.42, date = "2025-06-01")
+
+  out <- reconcile_event(mk_event(mk_row(
+    source_ref = "r1", sample_datetime_raw = "1 June 2025"
+  )), con)
+
+  # This is not a defect, it is the sequencing fact: 215 of the 218
+  # transcription labels have no ACIRL lab_method at all today, so until the
+  # dangling-method confirmation pass gives them analytes, supersession cannot
+  # fire for them. The confirmation pass has to precede the import, not follow.
+  expect_equal(nrow(out$supersede), 0)
+  expect_equal(nrow(out$clean), 1)
+})
+
+test_that("R-8.9: the twin is found on the ANALYTE, across two different labels", {
+  path <- seed_db()
+  con <- seed_con(path)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+  a79_seed_methods(con)
+  # ACIRL writes `Fluoride`; ALS's row is `Fluoride as F` (lm-0012) - a
+  # different NAME, the same analyte a-0002. Keyed on the label this twin is
+  # invisible, which is the failure that made all 605 real TSS rows read as
+  # "no twin -> field estimate -> import".
+  a79_seed_analysis(con, "an-trans", "lmt-trans", 0.42, date = "2025-06-01")
+
+  out <- reconcile_event(mk_event(mk_row(
+    source_ref = "r1", analyte_raw = "Fluoride as F",
+    method_raw = "EK040P: Fluoride by PC Titrator", value_raw = "3", value_num = 3,
+    below_detection = FALSE, rl = NA_real_, sample_datetime_raw = "1 June 2025"
+  )), con)
+
+  expect_equal(nrow(out$supersede), 1)
+  expect_identical(out$supersede$uuid_analysis[[1]], "an-trans")
+})
+
+test_that("R-8.9: a different analyte at the same feature and date is not a twin", {
+  path <- seed_db()
+  con <- seed_con(path)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+  a79_seed_methods(con)
+  DBI::dbExecute(con, "INSERT INTO lab_method
+    (uuid, uuid_analyte, name, method, organisation, units) VALUES
+    ('lmt-trans-ph', 'a-0001', 'pH', NULL, 'ACIRL', 'pH')")
+  a79_seed_analysis(con, "an-ph", "lmt-trans-ph", 7.1, date = "2025-06-01")
+
+  out <- reconcile_event(mk_event(mk_row(
+    source_ref = "r1", sample_datetime_raw = "1 June 2025"
+  )), con)
+
+  expect_equal(nrow(out$supersede), 0)
+})
+
+test_that("R-8.9: a date-only ACIRL sample twins with a TIMED ALS sample on the same day", {
+  path <- seed_db()
+  con <- seed_con(path)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+  a79_seed_methods(con)
+  # ACIRL samples carry no time at all until the field sheets are OCR'd. A
+  # stricter datetime rule would make the twin test find nothing at all, so
+  # this reuses the A62/R-11.18 "only provably distinct is distinct" predicate.
+  a79_seed_analysis(con, "an-trans", "lmt-trans", 0.42, date = "2025-06-01",
+                    datetime = NA_character_)
+
+  out <- reconcile_event(mk_event(mk_row(
+    source_ref = "r1", sample_datetime_raw = "1 June 2025 09:15"
+  )), con)
+
+  expect_equal(nrow(out$supersede), 1)
+})
+
+test_that("R-8.9: two provably distinct sampling times on one day are NOT twins", {
+  path <- seed_db()
+  con <- seed_con(path)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+  a79_seed_methods(con)
+  a79_seed_analysis(con, "an-trans", "lmt-trans", 0.42, date = "2025-06-01",
+                    datetime = "2025-05-31 23:15:00")   # 09:15 Sydney
+
+  out <- reconcile_event(mk_event(mk_row(
+    source_ref = "r1", sample_datetime_raw = "1 June 2025 14:30"
+  )), con)
+
+  expect_equal(nrow(out$supersede), 0)
+})
+
+test_that("R-8.9: a different date is not a twin", {
+  path <- seed_db()
+  con <- seed_con(path)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+  a79_seed_methods(con)
+  a79_seed_analysis(con, "an-trans", "lmt-trans", 0.42, date = "2025-06-02")
+
+  out <- reconcile_event(mk_event(mk_row(
+    source_ref = "r1", sample_datetime_raw = "1 June 2025"
+  )), con)
+
+  expect_equal(nrow(out$supersede), 0)
+})
+
+test_that("R-8.9: an incoming ACIRL FIELD row is kept even when its ALS twin is already committed", {
+  path <- seed_db()
+  con <- seed_con(path)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+  a79_seed_methods(con)
+  # The mirror of the "field is never superseded" case, from the OTHER
+  # direction - and the one the incoming-row classifier actually decides.
+  # an-0001 (ALS Fluoride, a-0002) is already committed at fa-0001/2025-05-24;
+  # `lmt-field` resolves to the same analyte. The field reading must survive.
+  out <- reconcile_event(mk_event(a79_acirl_row(
+    source_ref = "r1", analyte_raw = "Fluoride field", method_raw = "field",
+    sample_datetime_raw = "24 May 2025"
+  )), con)
+
+  expect_equal(nrow(out$clean), 1)
+  expect_false("transcription_superseded" %in% out$skipped$reason)
+})
+
+test_that("R-8.9: an incoming ACIRL DUST row is kept even when an ALS twin is already committed", {
+  path <- seed_db()
+  con <- seed_con(path)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+  a79_seed_methods(con)
+  # Dust carries a real method code (`AS3580.10.1-2003`), which is what tells
+  # ACIRL's own lab work apart from a hand transcription. Nothing about the
+  # name or the organisation can.
+  out <- reconcile_event(mk_event(a79_acirl_row(
+    source_ref = "r1", analyte_raw = "INSOLUBLE SOLIDS",
+    method_raw = "AS3580.10.1-2003", sample_datetime_raw = "24 May 2025"
+  )), con)
+
+  expect_equal(nrow(out$clean), 1)
+  expect_false("transcription_superseded" %in% out$skipped$reason)
+})
+
+test_that("R-8.9: two rows naming ONE committed transcription yield ONE delete, not two", {
+  path <- seed_db()
+  con <- seed_con(path)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+  a79_seed_methods(con)
+  a79_seed_analysis(con, "an-trans", "lmt-trans", 0.42, date = "2025-06-01")
+  registry <- .rc_load_registry(con)
+
+  # Driven through `.rc_acirl_supersession()` directly, ON PURPOSE. Reaching
+  # this via `reconcile_event()` is not possible today: two rows folding onto
+  # one analysis must share feature+date+analyte, and R-8.6's method preference
+  # drops the loser of any same-analyte method pair before supersession ever
+  # sees it. Routing this through the pipeline instead produced a test that
+  # passed with the dedup REMOVED - vacuous, and mutation testing said so.
+  # The guard is not decorative: `db_delete()` aborts on a key matching no row,
+  # so the second delete would roll the whole commit back.
+  rows <- dplyr::bind_rows(
+    tibble::tibble(source_ref = "r1", source_hash = "hash-1", uuid_lab = "lm-0002",
+                   uuid_feature = "f-0001", uuid_feature_alias = "fa-0001",
+                   feature_pending = FALSE, sample_date = as.Date("2025-06-01"),
+                   sample_datetime = as.POSIXct(NA), value_converted = 100,
+                   value_chr = NA_character_),
+    tibble::tibble(source_ref = "r2", source_hash = "hash-1", uuid_lab = "lm-0012",
+                   uuid_feature = "f-0001", uuid_feature_alias = "fa-0001",
+                   feature_pending = FALSE, sample_date = as.Date("2025-06-01"),
+                   sample_datetime = as.POSIXct(NA), value_converted = 200,
+                   value_chr = NA_character_)
+  )
+  sp <- .rc_acirl_supersession(rows, con, registry)
+
+  expect_equal(nrow(sp$supersede), 1)
+  expect_identical(sp$supersede$uuid_analysis[[1]], "an-trans")
+})
+
+test_that("R-8.9: two incoming ALS rows naming ONE transcription delete it once, not twice", {
+  path <- seed_db()
+  con <- seed_con(path)
+  ensure_test_asset_table(con)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+  withr::local_options(list("sampletidy.archive_dir" = withr::local_tempdir()))
+  a79_seed_methods(con)
+  a79_seed_analysis(con, "an-trans", "lmt-trans", 0.42, date = "2025-06-01")
+
+  # Two ALS labels, both resolving to a-0002 - so both name the same committed
+  # transcription. `db_delete()` aborts on a key matching no row, so an
+  # undeduped list would take the whole commit transaction down.
+  event <- mk_event(mk_rows(
+    mk_row(source_ref = "r1", sample_datetime_raw = "1 June 2025"),
+    mk_row(source_ref = "r2", analyte_raw = "Fluoride as F", value_raw = "3",
+           value_num = 3, below_detection = FALSE, rl = NA_real_,
+           sample_datetime_raw = "1 June 2025")
+  ))
+  event$files <- tibble::tibble(hash = "hash-1", kept = TRUE)
+  resolved <- reconcile_event(event, con)
+  expect_equal(nrow(resolved$supersede), 1)
+
+  expect_false(isTRUE(commit_event(event, resolved, con)$blocked))
+  expect_equal(DBI::dbGetQuery(con, "SELECT count(*) AS n FROM analysis WHERE uuid = 'an-trans'")$n, 0)
+})
+
+test_that("R-8.9: a supersede uuid already deleted by another event is skipped, not an abort", {
+  path <- seed_db()
+  con <- seed_con(path)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+  # `db_delete()` aborts when its key matches nothing, and two events in one
+  # batch can legitimately name the same transcription.
+  supersede <- tibble::tibble(
+    uuid_analysis = "an-never-existed", source_ref = "r1",
+    source_hash = "hash-1", reason = "test"
+  )
+  expect_equal(.ct_delete_superseded(con, supersede, "test"), 0L)
+})
+
+test_that("R-8.9: an already_present ALS row deletes nothing - the delete needs a real commit", {
+  path <- seed_db()
+  con <- seed_con(path)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+  a79_seed_methods(con)
+  # A transcription at the SAME feature/date as the pre-seeded ALS an-0001, so
+  # a twin exists - but the incoming row is byte-identical to an-0001 and is
+  # skipped as already_present before supersession ever sees it.
+  a79_seed_analysis(con, "an-trans", "lmt-trans", 0.42, date = "2025-05-24")
+
+  out <- reconcile_event(mk_event(mk_row(source_ref = "r1")), con)
+
+  expect_equal(nrow(out$clean), 0)
+  expect_true("already_present" %in% out$skipped$reason)
+  expect_equal(nrow(out$supersede), 0)
+})
