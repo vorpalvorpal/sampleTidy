@@ -893,10 +893,13 @@ for lab reports; `sample.organisation ∈ {ACIRL, Internal, ALS}`;
   **Implementation notes added 2026-08-02 (Robin's question: use the
   `lab_method -> analyte` map), all measured over 38,450 real candidate rows**
   (that row count DOUBLE COUNTS — 10 workbooks sit in both `unprocessed/` and
-  `processed/`, so only 34,024 (file, source_ref) pairs are distinct and 34,137
-  is the `unprocessed/` figure a 6c ingest would see; noted 2026-08-03. The
-  RATIOS below were not re-derived, and the duplication is not uniform across
-  labels, so treat them as directional until they are):
+  `processed/`, so only 34,024 (file, source_ref) pairs are distinct, and 34,137
+  is the `unprocessed/` figure a 6c ingest would see. Noted and RE-DERIVED
+  2026-08-03, `scratchpad/m6a_a79_basis.R`: every figure below reproduces
+  exactly on the 38,450 basis as quoted, and shifts only slightly on the
+  deduplicated one — twins by analyte **76.1% → 75.1%**, and the
+  `Total Suspended Solids` case **605 rows / 468 twins → 545 / 413**. The
+  conclusions are unaffected; only the row counts are inflated):
   (a) **The comparison keys on the RESOLVED ANALYTE, not the label.** ACIRL and ALS
   name the same analyte differently — ACIRL writes `Total Suspended Solids`, ALS's
   method is `Suspended Solids (SS)`, canonical `TSS`. Resolving both sides through
