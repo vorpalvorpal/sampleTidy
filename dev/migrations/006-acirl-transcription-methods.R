@@ -61,6 +61,16 @@
 #       field-label set are DISJOINT (0 of 215). The mapping gate below still
 #       refuses a collision rather than trusting that measurement to stay true.
 #
+# LEAVING A LABEL OUT OF THE MAPPING ONLY STOPS IT RESOLVING - IT DOES NOT STOP
+# IT BEING IMPORTED, and reading it the other way round would be a costly
+# mistake. `.rc_resolve_analytes()` (R/reconcile.R:1337) drops a row from `kept`
+# for exactly ONE status: `held`, meaning the analyte label is NA or folds to
+# nothing. `miss` keeps the row with `analyte_pending = TRUE`, and COMMIT then
+# mints a dangling `lab_method` for it. Measured over all 7 excluded labels
+# (scratchpad/m6a_excluded_fate.R): 7 rows in, 7 kept, 6 review items. A label
+# that must genuinely not be imported needs an ADAPTER-level exclusion, the way
+# R-6.7 drops the site-metadata labels - not an omission here.
+#
 # WHAT IT DELIBERATELY DOES NOT DO:
 #   * It does not CREATE analytes. Every `uuid_analyte` must already exist. A
 #     label needing a new analyte (e.g. the `Decachlorobiphenyl` surrogate) is
