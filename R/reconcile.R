@@ -1916,6 +1916,302 @@
   FALSE
 }
 
+# ---- R-8.9: ACIRL transcription supersession (A79) ---------------------------
+#
+# A79 splits every ACIRL row in two, and the split is already encoded in the
+# data - no new column, no migration:
+#
+#   FIELD MEASUREMENT   an ACIRL row on a `method = 'field'` lab_method.
+#                       ACIRL measured it in the field; ALS measured it in the
+#                       lab days later, after the sample degassed and
+#                       re-equilibrated. Two DIFFERENT measurements. Both are
+#                       real, both persist, and neither supersedes the other -
+#                       ranking between them is migration 005's business.
+#   TRANSCRIPTION       every other ACIRL row. ACIRL did not measure it; ACIRL
+#                       copied ALS's number by hand. ONE measurement, two
+#                       records - so "choosing" is incoherent, and keeping both
+#                       would break what `analysis` means (any direct query
+#                       double-counts, any mean is mis-weighted). Provisional:
+#                       deleted when the ALS equivalent commits.
+#
+# MATCHED ON THE RESOLVED ANALYTE UUID, NEVER THE RAW LABEL. Measured over
+# 38,450 real candidate rows: the analyte key finds 76.1% twins against the
+# label's 69.7%, and the whole lift lands where the labels DIVERGE, which is
+# where the danger is - keyed on the label, all 605 `Total Suspended Solids`
+# rows read as "no twin -> field estimate -> import", which is importing
+# transcribed ALS values as field readings, the exact thing this exists to stop.
+#
+# `.rc_find_existing()` (R-8.7) cannot serve: it keys on `a.uuid_lab`, and the
+# whole point here is that the two rows sit on DIFFERENT lab_methods - ACIRL's
+# own and ALS's. Same feature/date/A62-datetime predicate, different join.
+#
+# SCOPE, deliberately narrow: only an `ALS` lab row supersedes, because that is
+# what A79 says. A `legacy`, `Internal` or NULL-organisation lab_method leaves
+# the transcription alone - the safe direction, since keeping a row loses
+# nothing and deleting one does.
+
+# A `lab_method.method` that means "this is a FIELD reading", whatever
+# organisation reported it. `'field'` is the ordinary convention (31 rows:
+# ACIRL 17, legacy 8, Internal 6). `EN67 - Client Supplied Data` is the one
+# that is not obvious and the one A75/A79 name explicitly: it is an ALS row,
+# but EN67 means the CLIENT supplied the number and ALS reported it back - so
+# it is our own field reading round-tripped, not a lab measurement, and it must
+# rank as field. Measured: exactly one such lab_method exists (`pH`, org ALS).
+#
+# This is what makes the `field` branch below load-bearing rather than
+# decorative. Without it an incoming EN67 pH row classifies as `als_lab` and
+# DELETES a committed ACIRL pH transcription - a field reading superseding a
+# field reading. A surviving mutation is what surfaced it.
+.RC_FIELD_METHODS <- c("field", "EN67 - Client Supplied Data")
+
+#' Is this `lab_method.method` a field reading?
+#' @keywords internal
+#' @noRd
+.rc_is_field_method <- function(method) {
+  !is.na(method) && method %in% .RC_FIELD_METHODS
+}
+
+#' Which A79 category a resolved `uuid_lab` puts a row in
+#' @keywords internal
+#' @noRd
+.rc_lab_kind <- function(uuid_lab, registry) {
+  if (is.na(uuid_lab)) {
+    return(NA_character_)
+  }
+  i <- match(uuid_lab, registry$lab_method$uuid)
+  if (is.na(i)) {
+    return(NA_character_)
+  }
+  method <- registry$lab_method$method[[i]]
+  org <- registry$lab_method$organisation[[i]]
+  if (.rc_is_field_method(method)) {
+    return("field")
+  }
+  if (!is.na(org) && identical(org, "ACIRL")) {
+    # A79's table says "every other ACIRL row" is a transcription. MEASURED,
+    # and taken literally it is wrong: all 4 of ACIRL's non-field lab_methods
+    # in the live registry are DUST (`AS3580.10.1-2003` — `INSOLUBLE SOLIDS`,
+    # `*COMBUSTIBLE MATTER`, `INCOMBUSTIBLE MATTER`, `ANALYSIS OBSERVATIONS`,
+    # 310 analyses). Dust is ACIRL's OWN laboratory measurement — ALS does not
+    # run deposition gauges — so it is a third thing: not a field reading, not
+    # a copy of somebody else's number, and never superseded.
+    #
+    # The discriminator is the METHOD CODE, and it is measured, not invented:
+    # ZERO ACIRL lab_methods have a NULL `method` today, and ACIRL's water
+    # sheets carry no method codes at all (the adapter emits
+    # `method_raw = NA`), so the dangling methods the transcription import
+    # will mint are exactly the NULL-method ones. That makes this rule a
+    # provable NO-OP on every row now in the database — it can only ever
+    # classify rows that do not exist yet.
+    if (is.na(method)) {
+      return("acirl_transcription")
+    }
+    return("acirl_own_lab")
+  }
+  if (!is.na(org) && identical(org, "ALS")) {
+    return("als_lab")
+  }
+  "other_lab"
+}
+
+#' The analyte a resolved `uuid_lab` measures, or `NA`
+#'
+#' A DANGLING lab_method (created by first sighting, not yet confirmed) has no
+#' `uuid_analyte`, so it yields NA and no twin is possible. That is correct and
+#' load-bearing: 215 of the 218 transcription labels have no ACIRL lab_method at
+#' all today, so until those dangling methods are confirmed to analytes the
+#' supersession below cannot fire for them. Measured, and it reorders the plan -
+#' the confirmation pass has to precede the transcription import, not follow it.
+#' @keywords internal
+#' @noRd
+.rc_lab_analyte <- function(uuid_lab, registry) {
+  if (is.na(uuid_lab)) {
+    return(NA_character_)
+  }
+  i <- match(uuid_lab, registry$lab_method$uuid)
+  if (is.na(i)) {
+    return(NA_character_)
+  }
+  as.character(registry$lab_method$uuid_analyte[[i]])
+}
+
+#' The committed analysis for this feature/date/ANALYTE on the other side (R-8.9)
+#'
+#' `want` is `"als_lab"` or `"acirl_transcription"`. Mirrors
+#' `.rc_find_existing()`'s feature clause and its A62/R-11.18 datetime
+#' predicate exactly - an incoming date-only ACIRL sample and a committed timed
+#' ALS sample on the same day are NOT provably distinct, so they are the same
+#' sampling event. That matters here more than anywhere: ACIRL samples carry no
+#' time at all until the field sheets are OCR'd, so a stricter datetime rule
+#' would make the twin test find nothing.
+#' @keywords internal
+#' @noRd
+.rc_find_analyte_twin <- function(con, resolved_feature, uuid_feature_alias, feature_pending,
+                                  sample_date, sample_datetime, uuid_analyte, want) {
+  if (is.na(uuid_analyte)) {
+    return(NULL)
+  }
+  if (isTRUE(feature_pending)) {
+    if (is.na(uuid_feature_alias)) {
+      return(NULL)
+    }
+    feat_clause <- "s.uuid_feature_alias = ?"
+    feat_param <- uuid_feature_alias
+  } else {
+    if (is.na(resolved_feature)) {
+      return(NULL)
+    }
+    feat_clause <- "fa.uuid_feature = ?"
+    feat_param <- resolved_feature
+  }
+  org_clause <- switch(
+    want,
+    # Mirrors `.rc_lab_kind()` exactly, and must keep mirroring it. In
+    # particular `lm.method IS NULL` — NOT `<> 'field'` — is what keeps ACIRL's
+    # own DUST lab_methods (a real `AS3580.10.1-2003` code) out of the
+    # supersedable set. Measured: no ALS lab_method has a NULL method, so the
+    # ALS side needs no such guard.
+    als_lab = paste0(
+      "lm.organisation = 'ALS' AND (lm.method IS NULL OR lm.method NOT IN (",
+      paste(sprintf("'%s'", .RC_FIELD_METHODS), collapse = ", "), "))"
+    ),
+    acirl_transcription = "lm.organisation = 'ACIRL' AND lm.method IS NULL",
+    cli::cli_abort("unknown twin side {.val {want}}", class = "sampletidy_error")
+  )
+
+  cand <- DBI::dbGetQuery(
+    con,
+    paste0(
+      'SELECT a.uuid AS analysis_uuid, a.value, a.value_chr, a.uuid_lab,
+              s.datetime AS s_datetime, lm.name AS lab_name, lm.organisation, lm.method
+       FROM "sample" s
+       JOIN analysis a ON a.uuid_sample = s.uuid
+       JOIN feature_alias fa ON fa.uuid = s.uuid_feature_alias
+       JOIN lab_method lm ON lm.uuid = a.uuid_lab
+       WHERE ', feat_clause, ' AND CAST(s.date AS DATE) = ? AND lm.uuid_analyte = ?
+         AND ', org_clause, '
+       ORDER BY a.uuid'
+    ),
+    params = list(feat_param, as.character(sample_date), uuid_analyte)
+  )
+  if (nrow(cand) == 0) {
+    return(NULL)
+  }
+  inc_dt <- as.numeric(sample_datetime)
+  cand_dt <- as.numeric(cand$s_datetime)
+  if (all(.rc_provably_distinct_datetime(inc_dt, cand_dt))) {
+    return(NULL)                       # a genuinely different sampling event
+  }
+  if (!is.na(inc_dt)) {
+    match_dt <- !is.na(cand_dt) & (cand_dt == inc_dt)
+    if (any(match_dt)) cand <- cand[match_dt, , drop = FALSE]
+  }
+  cand[1, , drop = FALSE]
+}
+
+#' The empty `supersede` tibble, for the zero-row paths
+#' @keywords internal
+#' @noRd
+.rc_proto_supersede <- function() {
+  tibble::tibble(uuid_analysis = character(0), source_ref = character(0),
+                 source_hash = character(0), reason = character(0))
+}
+
+#' A79 supersession, both directions (R-8.9)
+#'
+#' The two directions are one rule seen from either end, and BOTH are needed
+#' because ACIRL routinely arrives first:
+#'
+#'   incoming ACIRL transcription, ALS already committed
+#'       -> the incoming row is dropped (`transcription_superseded`). Importing
+#'          it only to delete it on the next ALS commit would be the same
+#'          outcome with a duplicate in between.
+#'   incoming ALS lab row, ACIRL transcription already committed
+#'       -> the committed ACIRL row is marked for deletion; `commit_event()`
+#'          does the delete, inside the same transaction as the insert.
+#'
+#' A FIELD row on either side is never touched.
+#'
+#' The delete reason carries BOTH values, because `db_delete()` writes only the
+#' uuid into `change_log` (`old = uuid_row`) - not the row's content. Without
+#' that string, deleting the transcription would destroy the only evidence of a
+#' discrepancy between what ACIRL transcribed and what ALS actually reported,
+#' which is precisely the audit trail A79 says survives the delete.
+#'
+#' @return `list(kept, skipped, supersede)`.
+#' @keywords internal
+#' @noRd
+.rc_acirl_supersession <- function(rows, con, registry) {
+  n <- nrow(rows)
+  if (n == 0) {
+    return(list(kept = rows, skipped = .rc_proto_skip(), supersede = .rc_proto_supersede()))
+  }
+  keep <- rep(TRUE, n)
+  skipped_list <- list()
+  supersede_list <- list()
+
+  for (i in seq_len(n)) {
+    uuid_lab <- rows$uuid_lab[[i]]
+    kind <- .rc_lab_kind(uuid_lab, registry)
+    if (is.na(kind) || kind %in% c("field", "other_lab", "acirl_own_lab")) {
+      next
+    }
+    uuid_analyte <- .rc_lab_analyte(uuid_lab, registry)
+    want <- if (identical(kind, "acirl_transcription")) "als_lab" else "acirl_transcription"
+    twin <- .rc_find_analyte_twin(
+      con, rows$uuid_feature[[i]], rows$uuid_feature_alias[[i]], rows$feature_pending[[i]],
+      rows$sample_date[[i]], rows$sample_datetime[[i]], uuid_analyte, want
+    )
+    if (is.null(twin)) {
+      next
+    }
+
+    inc_value <- rows$value_converted[[i]]
+    inc_chr <- rows$value_chr[[i]]
+    if (identical(kind, "acirl_transcription")) {
+      keep[[i]] <- FALSE
+      skipped_list[[length(skipped_list) + 1]] <- .rc_skip_row(
+        source_ref = rows$source_ref[[i]], reason = "transcription_superseded",
+        source_hash = rows$source_hash[[i]], existing_uuid = twin$analysis_uuid[[1]],
+        diagnostics = list(
+          value_existing = twin$value[[1]], value_incoming = inc_value,
+          value_chr_existing = twin$value_chr[[1]], value_chr_incoming = inc_chr,
+          lab_method_existing = twin$lab_name[[1]]
+        )
+      )
+      next
+    }
+
+    # kind == "als_lab": the committed ACIRL row is the provisional one.
+    supersede_list[[length(supersede_list) + 1]] <- tibble::tibble(
+      uuid_analysis = twin$analysis_uuid[[1]],
+      source_ref = rows$source_ref[[i]],
+      source_hash = rows$source_hash[[i]],
+      reason = sprintf(
+        paste0("A79: ACIRL transcription superseded by the ALS result. ",
+               "transcribed value=%s value_chr=%s on lab_method '%s'; ",
+               "ALS value=%s value_chr=%s. Deleted, not out-ranked: one ",
+               "measurement, two records."),
+        format(twin$value[[1]]), format(twin$value_chr[[1]]), twin$lab_name[[1]],
+        format(inc_value), format(inc_chr)
+      )
+    )
+  }
+
+  supersede <- if (length(supersede_list) > 0) {
+    s <- dplyr::bind_rows(supersede_list)
+    # Several incoming ALS rows can name the SAME committed transcription (two
+    # source rows folding onto one analysis). `db_delete()` aborts when its key
+    # matches no row, so a second delete of the same uuid would take the whole
+    # transaction down.
+    s[!duplicated(s$uuid_analysis), , drop = FALSE]
+  } else {
+    .rc_proto_supersede()
+  }
+  skipped <- if (length(skipped_list) > 0) dplyr::bind_rows(skipped_list) else .rc_proto_skip()
+  list(kept = rows[keep, , drop = FALSE], skipped = skipped, supersede = supersede)
+}
+
 #' Three-way outcome vs the DB for every surviving row (R-8.7/R-11.7). An
 #' `already_present` skip carries the incoming row's own `source_hash` (A1/S-4).
 #' @return `list(kept, skipped, review)`. `kept` gains a `supersedes` column.
@@ -2179,7 +2475,8 @@ reconcile_event <- function(event, con) {
 
   if (nrow(results) == 0) {
     return(list(clean = results, review = .rc_proto_review()[, review_cols],
-                skipped = .rc_proto_skip()[, skip_cols], counts = c(clean = 0L)))
+                skipped = .rc_proto_skip()[, skip_cols],
+                supersede = .rc_proto_supersede(), counts = c(clean = 0L)))
   }
 
   registry <- .rc_load_registry(con)
@@ -2306,6 +2603,14 @@ reconcile_event <- function(event, con) {
   add_review(bd$review)
   clean <- bd$kept
 
+  # R-8.9 / A79: last, so it sees only rows that have survived every other
+  # check. A row already skipped as `already_present` or held at
+  # `value_conflict` must not also delete a committed transcription - the
+  # deletion is justified by the ALS row ACTUALLY committing, nothing less.
+  sp <- .rc_acirl_supersession(clean, con, registry)
+  add_skip(sp$skipped)
+  clean <- sp$kept
+
   skipped <- if (length(skipped_acc) > 0) dplyr::bind_rows(skipped_acc) else .rc_proto_skip()[, skip_cols]
   review <- if (length(review_acc) > 0) dplyr::bind_rows(review_acc) else .rc_proto_review()[, review_cols]
 
@@ -2321,5 +2626,6 @@ reconcile_event <- function(event, con) {
     counts <- c(stats::setNames(as.integer(tbl), names(tbl)), counts)
   }
 
-  list(clean = clean, review = review, skipped = skipped, counts = counts)
+  list(clean = clean, review = review, skipped = skipped,
+       supersede = sp$supersede, counts = counts)
 }
