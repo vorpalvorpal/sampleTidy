@@ -1161,16 +1161,56 @@ for lab reports; `sample.organisation ∈ {ACIRL, Internal, ALS}`;
      the kind of error (a column offset) that a per-value audit trail catches
      and a whole-file gate never would.
 
-     **What still needs Robin:** treating them as transcriptions is not just
-     retiring `field_analytes_diff_required`. `Total Suspended Solids` + org
-     ACIRL resolves by name to the ACIRL **field** method, and R-8.9 protects
-     field rows from supersession — so the labels would be misfiled as field
-     readings anyway. Either (a) delete or re-point those two unused ACIRL
-     `field` TSS methods (a DB write, the same shape as the EC-@-25 fix, and it
-     forecloses A76's "field-estimated TSS" should ACIRL ever start doing it),
-     or (b) keep an adapter-level route for the pair that forces them down the
-     transcription path. **(a) is cleaner and matches the evidence; it is a
-     write, so it is not done.**
+     **RULED (Robin, 2026-08-02): option (a) — DONE.** The two unused ACIRL
+     `field` TSS `lab_method` rows were deleted from the live database
+     (`29cfea72…`, `c8b85ce2…`; `lab_method` 361 → 359, every other table
+     unchanged, 0 orphans, backup
+     `monitoring_pre-tss-field-methods_20260802T073901.duckdb`, verified by md5
+     *and* row counts). Both carried **zero** analyses and were referenced by
+     nothing. `Total Suspended Solids` can no longer resolve to a field method
+     at all, so an incoming row mints a NULL-method dangling method and R-8.9
+     supersedes it like any other transcription.
+
+     The config key `field_analytes_diff_required` is renamed
+     **`acirl_transcription_labels`** — its old name encoded A75's value
+     comparison, which no longer exists and whose question is now answered.
+     Behaviour is unchanged (the labels still take the ALS-candidate path); the
+     name and the skip reason (`transcription_label`) now say why.
+
+     This does foreclose A76's "field-estimated TSS" should ACIRL ever start
+     doing it. That is deliberate and cheap to reverse: re-registering an ACIRL
+     `field` TSS method restores the old behaviour, and the evidence would be a
+     TSS value that is *not* `<5` and *not* equal to ALS's.
+
+  **"Repair the database where ACIRL disagrees with ALS" — MEASURED, and there
+  is nothing to repair (Claude, 2026-08-02, `scratchpad/repair00_measure.R`,
+  `repair01_identical.R`).** Robin asked for this on the premise that ALS is
+  right and ACIRL is wrong. The premise is correct *for transcriptions* — and
+  the database contains none:
+
+  * **Zero** ACIRL analyses sit on a NULL-method (transcription) `lab_method`.
+    Every one of the 16,420 ACIRL analyses is either a `field` reading (16,110)
+    or ACIRL's own dust lab work (310, `AS3580.10.1*`). Cross-checked two ways:
+    by the triple-collision query (0 pairs) and by enumerating every ACIRL
+    method that carries analyses at all.
+  * The **898** (feature, date, analyte) triples carrying both an ACIRL row and
+    an ALS lab row are all `field`-vs-lab — pH 517, EC 381 — and they are
+    **genuinely different measurements**, exactly as A79 says: median absolute
+    difference **0.52 pH units (7.8% relative)** and **22 µS/cm (8.1%)**.
+    Overwriting them with the lab number would destroy 898 real field readings
+    and do precisely what A79 exists to prevent.
+  * Only **9** of the 898 have identical values (7 EC, 2 pH). They are
+    coincidences, not copies: **every one matches on a single analyte of the
+    two measured on that visit** — not one visit matches on both pH and EC,
+    which is what a copy would look like. The matching EC values are whole
+    numbers (775, 96, 230, 225, 82, 29, 212) and 984 of 1,026 ACIRL pH readings
+    carry one decimal place, so chance agreement across 898 pairs is expected.
+
+  So the repair was not made, because making one would have been the damage.
+  The transcription errors that *do* exist (the TSS transpositions, ~1.9%) are
+  in the ACIRL **workbooks**, which have never been ingested — no ACIRL file has
+  ever reached this database. They will be caught at import by R-8.9, one value
+  at a time, with the discrepancy preserved in `change_log`.
 
   **SEQUENCING, measured and load-bearing: the dangling-method confirmation
   pass must precede the transcription import, not follow it.** 215 of the 218

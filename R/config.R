@@ -37,7 +37,7 @@
   #     uuid_row 9f59b10a). The clean-named row is correct and untouched: org
   #     ALS, method "EA010P: Conductivity by PC Titrator". Either way the label
   #     must never be allowlisted.
-  #   * the TSS pair - see `field_analytes_diff_required` below.
+  #   * the TSS pair - see `acirl_transcription_labels` below.
   # Observation labels are not here either: they take the qualitative
   # Stage/Appearance path in the ACIRL adapter, not the allowlist.
   field_analytes = function() {
@@ -64,16 +64,34 @@
       "Conductivity", "EC"
     )
   },
-  # A76 + A75: labels that ARE field readings but share their name with the ALS
-  # analyte, so the allowlist alone cannot tell the two apart. The ACIRL sheet
-  # carries "Total Suspended Solids" for both its own field estimate and the
-  # transcribed ALS result. These are therefore NEVER imported on the strength
-  # of the name: the adapter routes them to `report$als_candidates` with
-  # `diff_required = TRUE`, and only the value comparison in
-  # assemble/reconcile - which can see the real ALS data - may promote one to a
-  # field result. Both names are already registered as ACIRL `field`
-  # lab_methods against the `TSS` analyte, with zero analyses so far.
-  field_analytes_diff_required = function() {
+  # Labels that share their name with the ALS analyte, so the allowlist alone
+  # cannot tell an ACIRL reading from a transcribed ALS result. They are NEVER
+  # imported on the strength of the name; the adapter routes them to
+  # `report$als_candidates`.
+  #
+  # This was `field_analytes_diff_required` until 2026-08-02, when A75's value
+  # comparison - the mechanism that was supposed to promote one of them to a
+  # field result - was replaced by A79 and the question was settled by
+  # measurement instead. Every ACIRL `Total Suspended Solids` row in the corpus
+  # is a TRANSCRIPTION, not a field estimate:
+  #
+  #   * 284 of 678 are written `<5`, and `<5` is the only `<` value present.
+  #     ALS's TSS method (EA025) has rl_low = 5 and 345 of its recorded
+  #     non-detects sit at exactly that limit. A field estimate cannot produce
+  #     a laboratory reporting limit, let alone ALS's.
+  #   * of the 362 comparable against an ALS TSS row at the same work order and
+  #     feature, 355 (98.1%) are IDENTICAL - and the 7 that differ are
+  #     permutations of ALS's numbers (B.S01/B.S03 hold each other's values,
+  #     B.MW08/B.MW11 likewise), i.e. copy errors, not measurements.
+  #
+  # TSS is gravimetric (filter, dry at 104C, weigh), so the method implies it
+  # too. ACIRL's two `field` TSS lab_methods asserted the opposite; both carried
+  # ZERO analyses and were deleted from the live database on 2026-08-02
+  # (change_log uuid_row 29cfea72, c8b85ce2) on Robin's ruling. So the name can
+  # no longer resolve to a field method at all - this list is the belt to that
+  # braces, keeping the label out of the allowlist path even if someone later
+  # adds it there.
+  acirl_transcription_labels = function() {
     c("Total Suspended Solids", "Suspended Solids (SS)", "TSS")
   },
   # TRUE since 2026-07-23 (Robin): a successfully ingested source file is
@@ -103,7 +121,7 @@
 #'
 #' @keywords internal
 #' @noRd
-.st_config_list_keys <- c("field_analytes", "field_analytes_diff_required")
+.st_config_list_keys <- c("field_analytes", "acirl_transcription_labels")
 
 #' Get or set a sampleTidy configuration value
 #'
