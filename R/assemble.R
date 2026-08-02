@@ -279,6 +279,57 @@
   results
 }
 
+# --- R-7.5b per-file provenance carry-through -----------------------------
+
+#' Collect the per-file parse fields the pipeline needs downstream
+#'
+#' `.st_build_event()` rebuilds the event `report` from scratch, so anything
+#' an adapter put on its own `report` is dropped unless it is named here.
+#' This is the named list.
+#'
+#' Every field is optional and absent-by-default: only the ACIRL adapter sets
+#' any of them, and an entry is emitted for EVERY member hash regardless, so a
+#' caller can iterate the sources without first working out which adapter each
+#' file came from. `NULL` from a parse report becomes the empty vector of the
+#' right type, so downstream code never has to distinguish "this adapter does
+#' not expose the field" from "this file cited nothing" - both mean the same
+#' thing to A80, and conflating them deliberately keeps `length() == 0` as the
+#' one test a caller needs.
+#'
+#' @param hashes the event's member hashes.
+#' @param parsed the full `assemble_events()` input.
+#' @return a named list, one entry per hash.
+#' @keywords internal
+#' @noRd
+.st_event_sources <- function(hashes, parsed) {
+  out <- lapply(hashes, function(h) {
+    rep <- parsed[[h]]$report
+    report_no <- rep$header$report_no
+    if (is.null(report_no) || length(report_no) == 0) report_no <- NA_character_
+    wo <- rep$als_work_orders
+    if (is.null(wo)) wo <- character(0)
+    fa <- rep$feature_aliases
+    cand <- rep$als_candidates
+    list(
+      hash = h,
+      filename = parsed[[h]]$meta$filename,
+      # A80: the front-page `REPORT NO:` cell, never the filename (the ACIRL
+      # filename trap, R-9.12). This is the parent project an ACIRL event
+      # files under.
+      report_no = as.character(report_no[[1]]),
+      # A80: the cited ALS work order(s), which become CHILD projects of it.
+      als_work_orders = wo,
+      # A81: the point-code -> descriptive-name pairs recovered from the
+      # sheets' own site-metadata rows (R-6.7).
+      feature_aliases = fa,
+      # A79: the ALS-looking rows kept WITH their values, so supersession can
+      # tell a transcription from a field reading at reconcile.
+      als_candidates = cand
+    )
+  })
+  stats::setNames(out, hashes)
+}
+
 # --- event construction (R-7.2/R-7.4/R-7.5) -------------------------------
 
 #' Build one event from a group of files sharing a home work order (or a
@@ -476,7 +527,24 @@
 
   report <- list(
     n_results = nrow(final_results), n_by_sample_type = n_by_sample_type,
-    n_ncp_foreign = as.integer(n_ncp_foreign), skipped = skipped, warnings = warnings_acc
+    n_ncp_foreign = as.integer(n_ncp_foreign), skipped = skipped,
+    warnings = warnings_acc,
+    # R-7.5b: per-file provenance, carried through to reconcile/commit.
+    #
+    # The event's `report` is REBUILT here rather than merged from the members'
+    # parse reports, which is right - the fields above are properties of the
+    # event, not of any one file. But it meant three fields the adapter had
+    # deliberately exposed died at this boundary and nothing downstream could
+    # see them: A80 needs the ACIRL report number and the cited ALS work orders
+    # to file an event under a parent/child project pair, and A81 needs the
+    # point-code -> name mapping to resolve descriptive feature names.
+    #
+    # Keyed BY HASH and not merged into one flat set, because which file said
+    # what is the whole question when an event has several members: two ACIRL
+    # workbooks in one event can carry different report numbers, and collapsing
+    # them would make a duplicate report number undetectable (A80) at exactly
+    # the moment it matters.
+    sources = .st_event_sources(hashes, parsed)
   )
 
   event <- list(

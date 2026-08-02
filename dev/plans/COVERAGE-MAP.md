@@ -430,6 +430,12 @@ ambiguity notes referenced below.
 - ACIRL report with no resolvable WO stays quarantined, warns, mints no project → "R-9.12: an ACIRL report whose folder resolves to NO committed work order stays quarantined and warns - inference never invents a target"
 - cruft still neither retained nor warned about (round-3 commit-5 regression guard) → "R-9.12: ordinary non-deliverable cruft is still NOT retained and still draws no warning - widening the gate must not re-open the round-3 noise"
 
+### R-7.5b per-file provenance carry-through (`tests/testthat/test-assemble.R`) - added 2026-08-02
+- an ACIRL file's report number, ALS citation and alias mapping all survive assembly -> "R-7.5b: an ACIRL file's report number, ALS citation and alias mapping survive assembly"
+- every member hash gets an entry, `character(0)` not NULL, whatever its adapter exposes -> "R-7.5b: every member hash gets a source entry, including files whose adapter exposes none of it"
+- two files in ONE event keep their OWN report numbers and citations - what A80's duplicate detection rests on -> "R-7.5b: two files in ONE event keep their OWN report numbers - A80 cannot detect a duplicate otherwise"
+- driven once through the REAL adapter, so a `report$header$report_no` path mismatch cannot hide behind hand-built input -> "R-7.5b: the real ACIRL adapter's report reaches assembly intact - not just a hand-built one"
+
 ### R-9.13 the ALS-source gate: WITHDRAWN by A79 (`tests/testthat/test-ingest.R`) - added 2026-08-01, retargeted 2026-08-02
 A74 quarantined an ACIRL water sheet whose cited ALS report we did not hold. A79
 withdrew that - ACIRL data is NATA-certified and imports on its own; an ALS row

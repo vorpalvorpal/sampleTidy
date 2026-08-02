@@ -112,10 +112,53 @@ event <- list(
   samples = <ir_samples merged/deduped>,
   files   = tibble(hash, filename, adapter, rank, kept = lgl),
   report  = list(n_results, n_by_sample_type, n_ncp_foreign,
-                 skipped = tibble(hash, source_ref, reason), warnings = chr))
+                 skipped = tibble(hash, source_ref, reason), warnings = chr,
+                 sources = list(<hash> = list(hash, filename, report_no,
+                                als_work_orders, feature_aliases,
+                                als_candidates))))
 ```
 
 `assemble_events(parsed)` returns `list(events = …, states = tibble(hash,
 state, reason))`. Criterion: shape validated by a helper
 `expect_valid_event()` used by every test above; states tibble covers every
 input hash exactly once.
+
+## R-7.5b Per-file provenance carry-through (added 2026-08-02)
+
+`.st_build_event()` rebuilds the event `report` from scratch. That is right for
+the fields above, which are properties of the *event* rather than of any one
+file — but it meant three fields the ACIRL adapter deliberately exposed
+(`als_work_orders`, `feature_aliases`, `als_candidates`) and the front-page
+report number died at this boundary, and nothing downstream could see them.
+That blocks three rulings at once:
+
+- **A80** files an ACIRL event under its `REPORT NO:` as the parent project,
+  with each cited ALS work order as a **child** — it needs both.
+- **A81** resolves descriptive feature names (`BORE 11` → `B.MW11`) from the
+  point-code→name pairs R-6.7 recovered from the sheets' own site-metadata rows.
+- **A79** supersedes an ACIRL *transcription* with the ALS row at reconcile, and
+  tells one from a field reading using the kept `als_candidates`.
+
+**Keyed by hash, not merged.** When an event has several members, which file
+said what is the whole question: two ACIRL workbooks in one event can carry
+different report numbers, and collapsing them makes a duplicate report number
+(A80's data-entry error, returned to ACIRL for reissue) undetectable at exactly
+the moment it matters.
+
+**Every member hash gets an entry**, whatever its adapter, and a `NULL` from a
+parse report becomes the empty vector. A caller can then iterate the sources
+without first working out which adapter each file came from, and "this adapter
+exposes no citation" reads the same as "this file cited nothing" — which is what
+A80 wants, since both mean no child project.
+
+### Criteria
+
+- an ACIRL file's `report_no`, `als_work_orders` and `feature_aliases` all
+  survive assembly, reachable as `event$report$sources[[hash]]`;
+- a file whose adapter sets none of them still gets an entry, with
+  `character(0)` rather than `NULL` for the citation;
+- two files in ONE event keep their **own** report numbers and their **own**
+  citations — the property A80's duplicate detection rests on;
+- driven once through the **real adapter**, not only hand-built `parsed` input,
+  because the carry-through names `report$header$report_no` and a hand-built
+  fixture cannot catch a path mismatch there.

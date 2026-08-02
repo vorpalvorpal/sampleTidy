@@ -799,3 +799,121 @@ test_that("R-7.3a: an event with results but no sample metadata AND no feature_r
   )
   expect_no_warning(assemble_events(paired))
 })
+
+# ---- R-7.5b: per-file provenance carry-through ---------------------------
+#
+# `.st_build_event()` rebuilds the event `report` from scratch, which is right
+# for its own fields but silently dropped three the ACIRL adapter had
+# deliberately exposed. Nothing downstream could see them, so A80 (file an
+# event under its ACIRL report number, with the cited ALS work order as a child
+# project) and A81 (resolve descriptive feature names) had no input at all.
+#
+# The carry-through is keyed BY HASH rather than merged into one flat set: when
+# an event has several members, which file said what is the whole question, and
+# a duplicate report number is undetectable once they are collapsed.
+
+test_that("R-7.5b: an ACIRL file's report number, ALS citation and alias mapping survive assembly", {
+  aliases <- tibble::tibble(
+    source_ref = "Sampling Sites 1", feature_raw = "B.MW11",
+    label = "OTHER SITE NAME", alias = "BORE 11"
+  )
+  parsed <- list(h1 = mk_parsed_entry(
+    results = mk_result(source_hash = "h1", work_order = "2400-7399-01", org = "ACIRL",
+                        adapter = "acirl_field_xlsx/1"),
+    samples = mk_sample(source_hash = "h1", work_order = "2400-7399-01", org = "ACIRL",
+                        adapter = "acirl_field_xlsx/1"),
+    report = list(header = list(report_no = "2400-7399-01"),
+                  als_work_orders = c("ES2402158", "ES2402482"),
+                  feature_aliases = aliases),
+    meta = list(filename = "2400-7399-01 January 2024 Monthly Blaxland WMF.xls")
+  ))
+
+  ev <- assemble_events(parsed)$events[[1]]
+  src <- ev$report$sources[["h1"]]
+
+  expect_identical(src$report_no, "2400-7399-01")
+  expect_identical(src$als_work_orders, c("ES2402158", "ES2402482"))
+  expect_identical(src$feature_aliases, aliases)
+  expect_identical(src$filename, "2400-7399-01 January 2024 Monthly Blaxland WMF.xls")
+})
+
+test_that("R-7.5b: every member hash gets a source entry, including files whose adapter exposes none of it", {
+  # An ESdat report sets none of these fields. It must still appear, with the
+  # empty vector rather than NULL, so a caller can iterate the sources without
+  # first working out which adapter each file came from - and so that "this
+  # adapter has no citation" and "this file cited nothing" read the same, which
+  # is what A80 wants.
+  parsed <- list(
+    esdat = mk_parsed_entry(
+      results = mk_result(source_hash = "esdat"),
+      samples = mk_sample(source_hash = "esdat"),
+      report = list(), meta = list(filename = "PROJ_A.Chemistry.csv",
+                                   work_order_guess = "XX1234567")
+    )
+  )
+
+  ev <- assemble_events(parsed)$events[[1]]
+
+  expect_named(ev$report$sources, "esdat")
+  expect_identical(ev$report$sources[["esdat"]]$als_work_orders, character(0))
+  expect_true(is.na(ev$report$sources[["esdat"]]$report_no))
+  expect_null(ev$report$sources[["esdat"]]$feature_aliases)
+})
+
+test_that("R-7.5b: two files in ONE event keep their OWN report numbers - A80 cannot detect a duplicate otherwise", {
+  # The reason the carry-through is keyed by hash. Both files land in the same
+  # event (same home work order), and a merge would leave one report number
+  # standing for both - which is exactly the case A80 must flag, since a
+  # repeated ACIRL number covering two different sampling events is a
+  # data-entry error to be sent back for reissue.
+  parsed <- list(
+    a = mk_parsed_entry(
+      results = mk_result(source_hash = "a", work_order = "XX1234567", org = "ACIRL",
+                          adapter = "acirl_field_xlsx/1", feature_raw = "B.MW01"),
+      samples = mk_sample(source_hash = "a", work_order = "XX1234567", org = "ACIRL",
+                          adapter = "acirl_field_xlsx/1", feature_raw = "B.MW01"),
+      report = list(header = list(report_no = "2400-7430-01"),
+                    als_work_orders = "ES2417748"),
+      meta = list(filename = "may-2024.xls", work_order_guess = "XX1234567")
+    ),
+    b = mk_parsed_entry(
+      results = mk_result(source_hash = "b", work_order = "XX1234567", org = "ACIRL",
+                          adapter = "acirl_field_xlsx/1", feature_raw = "B.MW02"),
+      samples = mk_sample(source_hash = "b", work_order = "XX1234567", org = "ACIRL",
+                          adapter = "acirl_field_xlsx/1", feature_raw = "B.MW02"),
+      report = list(header = list(report_no = "2400-7430-01"),
+                    als_work_orders = "ES2515829"),
+      meta = list(filename = "may-2025.xls", work_order_guess = "XX1234567")
+    )
+  )
+
+  ev <- assemble_events(parsed)$events[[1]]
+  src <- ev$report$sources
+
+  expect_setequal(names(src), c("a", "b"))
+  # the same number on both...
+  expect_identical(vapply(src, function(s) s$report_no, character(1)),
+                   c(a = "2400-7430-01", b = "2400-7430-01"))
+  # ...but citing DIFFERENT ALS work orders, which is A80's discriminator
+  # between an innocent re-save and a true collision.
+  expect_identical(unlist(lapply(src, function(s) s$als_work_orders), use.names = FALSE),
+                   c("ES2417748", "ES2515829"))
+})
+
+test_that("R-7.5b: the real ACIRL adapter's report reaches assembly intact - not just a hand-built one", {
+  # The carry-through names fields by the path the ADAPTER writes them to
+  # (`report$header$report_no`, not `report$report_no`). A hand-built `parsed`
+  # cannot catch a mismatch there, so this drives the real adapter once.
+  path <- testthat::test_path("fixtures", "acirl", "2400-9999-13_AlsRefs_WMF.xlsx")
+  fm <- sampleTidy:::file_meta(path)
+  out <- adapter_registry()[["acirl_field_xlsx"]]$parse(path, fm)
+  parsed <- list(h = list(ir = list(results = out$results, samples = out$samples),
+                          report = out$report, meta = fm))
+
+  ev <- assemble_events(parsed)$events[[1]]
+  src <- ev$report$sources[["h"]]
+
+  expect_identical(src$report_no, out$report$header$report_no)
+  expect_false(is.na(src$report_no))
+  expect_setequal(src$als_work_orders, c("ES9999001", "ES9999002"))
+})
