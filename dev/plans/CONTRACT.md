@@ -1114,6 +1114,30 @@ for lab reports; `sample.organisation ∈ {ACIRL, Internal, ALS}`;
   Dust-only workbooks cite no ALS order and attach to the parent directly.
   The report number is read from the front-page `REPORT NO:` cell, **never from the
   filename** — the ACIRL filename trap is untouched.
+
+  **A repeated report number is an ACIRL DATA-ENTRY ERROR and must be FLAGGED (user,
+  2026-08-02)** — not quietly absorbed by the hierarchy. A report arriving with a
+  number already used for a different sampling event goes **back to ACIRL to be
+  reissued**. Review item: `duplicate_report_number`.
+
+  **The discriminator is (sample date, cited ALS work order) — not repetition of the
+  number, and not the content hash.** Of 16 numbers appearing on more than one file,
+  **13 are one report re-saved or revised** and are NOT errors; flagging those would
+  bury the real ones. Only a *different* sampling event under the same number is the
+  defect. Under the A80 hierarchy the trigger is exact and cheap: this ACIRL parent
+  already has a child ALS work order, and the incoming workbook cites a different one.
+
+  **The data still imports.** Because samples attach to the CHILD (the ALS work order),
+  a reused parent number cannot corrupt the data — the events stay separate either way.
+  The flag exists so ACIRL fixes their process, not to withhold the results.
+
+  The three in the corpus as at 2026-08-02:
+
+  | report no. | events it was used for | note |
+  |---|---|---|
+  | `2400-7222-12-05` | 2022-12-21 / `ES2246501` and 2022-12-28 / `ES2246801` | two consecutive "Special Wednesday" reports |
+  | `2400-7286-01-03` | 2023-01-11 / `ES2301026` and 2023-01-18 / `ES2301817` | the second file is *named* `…-01-04` — the FILENAME is right and the front-page `REPORT NO:` cell is stale |
+  | `2400-7430-01` | 2024-05-29 / `ES2417748` and 2025-05-27 / `ES2515829` | worst of the three: the second is the **May 2025** report carrying both the 2024 filename and the 2024 report number; only its sample date and ALS order are correct |
 - **A81** **Feature-alias rulings (user, 2026-08-02).** `BORE 11` → `B.MW11`.
   `CRIPPLE CREEK INLET` → **`B.S04`**, confirmed against the registry rather than
   assumed: `B.S04` already carries the aliases `B.CRIPPLE` and `Diversion pipe inlet`,
