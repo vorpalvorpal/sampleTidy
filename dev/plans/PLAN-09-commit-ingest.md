@@ -410,77 +410,29 @@ report that errors on a missing file is a report nobody runs. Criteria:
 - runs against a DB whose quarantined files no longer exist on disk;
 - opens read-only and writes nothing (row counts across all tables unchanged).
 
-## R-9.13 The ALS-source gate (A74) — `ingest_dir()`
+## R-9.13 The ALS-source gate — **WITHDRAWN by A79** (2026-08-02)
 
-**Ruled by Robin, 2026-08-01 (A74).** Most of an ACIRL water sheet is ALS lab
-data copied by hand; we do not trust the transcription and it drops reporting
-limits. So a water sheet may only be imported when we hold the ALS report it
-cites. Dust is exempt (A73) — it is ACIRL's own AS3580.10.1 analysis, with no
-ALS counterpart.
+**This section described a rule that no longer exists.** It is kept, rather than
+deleted, because the measurement in it is the reason the rule was withdrawn and
+because the fields it introduced are still live — they are now A80's inputs.
 
-The adapter cannot enforce this: `parse(path, file_meta)` sees one file and no
-database (R-6.5). The gate therefore runs in `ingest_dir()`, in its own pass
-**after** every file is parsed and **before** `assemble_events()` — after,
-because "held" includes an ALS sibling arriving in the same batch and the parse
-order within a batch is arbitrary; before, because a gated file must contribute
-no rows, no events and no review items.
+### What it was, and why it went
 
-### The rule
+**A74 (Robin, 2026-08-01)** held that most of an ACIRL water sheet is ALS lab
+data copied by hand, so a water sheet could only be imported when we held the
+ALS report it cited (dust exempt per A73). `.ig_als_gate()` implemented that in
+`ingest_dir()`, between parse and `assemble_events()`, quarantining the file
+with reason `als_source_missing`.
 
-For each parsed file exposing an `als_work_orders` field (i.e. an ACIRL
-workbook — no other adapter sets it):
+**A79 (Robin, 2026-08-02) withdrew it.** The ACIRL report is NATA certified: its
+data is fine to import on its own, and withholding it means holding back real
+measurements in exchange for nothing. The distrust A74 encoded is real but
+belongs one stage later and one row at a time — at reconcile, where an ACIRL
+*transcription* is superseded by the ALS row when that arrives (A79), rather
+than at the door, where it withheld the whole workbook.
 
-1. `n_water_sheets == 0` → **exempt**. Dust-only, per A73.
-2. otherwise, every cited `ES#######` must be **held**, and there must be at
-   least one. Not held, or nothing cited → the file is dropped from `parsed`
-   and moved to `quarantined` with reason **`als_source_missing`**.
-
-"Held" means either a `project` row named `ES#######` already exists (an
-earlier run committed it), or another file in **this** batch parsed with that
-work order as its home work order (`.st_home_work_order()`). A `project` row is the
-right proxy and not merely the convenient one: `commit_event()` step 1 is the
-only thing that mints one, and R-9.8/R-9.10 already pin that work-order
-*inference* never creates one — so the row's existence means that work order's
-data actually committed. It is also the same lookup R-9.8 and R-9.12 use for
-"do we hold this work order", which keeps one definition rather than two.
-
-A file may **not** vouch for itself: its own home work order is excluded from
-the same-batch set before its citations are checked. Today this is unreachable
-(an ACIRL workbook's home work order is always `NA` — `2400-*` is never parsed
-into a work order, the ACIRL trap), but the rule should be true because it is
-true, not because a naming convention happens to hold. The same-batch arm
-is not a convenience: ACIRL and ALS routinely arrive in one PowerAutomate
-folder, and without it the natural case would need two runs. It is also exactly
-the case A75's `assemble_events()` comparison is written for — if the sibling is
-in the batch, assemble can see its values.
-
-Quarantine is **per file, never a run abort**: the rest of the batch proceeds.
-A gated file makes zero core-table writes, so nothing has to be undone.
-
-### Re-processing when the ALS report arrives
-
-`quarantined` is terminal, and `als_source_missing` is not a registry verdict —
-it is a fact about the *world* that changes when new data lands. So it gets its
-own re-decision path in `route_files()`, **unconditional**, not gated on
-`reconsider = TRUE`: A74 says the file "re-processes naturally when the ALS
-report arrives", and requiring a flag would mean it never does. This is safe
-because a gated file committed nothing — re-routing it cannot duplicate data —
-and self-limiting, because once the source is held the file passes and leaves
-the state. Note ACIRL routinely arrives **first**, so this is the normal path,
-not an edge case.
-
-`parsed -> quarantined` is added to the legal transition graph. It was absent
-because until A74 no post-parse decision could quarantine.
-
-Under `ingest_inbox()` the batch is one *folder*, so an ACIRL workbook whose ALS
-report sits in a different folder is gated even when both folders are processed
-in the same inbox run and the ALS one happens to come later. That is not a hole:
-the ALS report commits, and the very next inbox run re-decides the quarantined
-workbook and imports it. R-9.9's folder cleanup already keeps a folder holding a
-quarantined file alive, so the workbook is still there to retry.
-
-### Measured cost (all 154 claimed workbooks, against the live DB's 423 held
-### `ES#######` projects)
+The measured cost of the gate, over all 154 claimed workbooks against the live
+DB's 423 held `ES#######` projects, is what made the case:
 
 | | workbooks | rows withheld |
 |---|---|---|
@@ -489,30 +441,61 @@ quarantined file alive, so the workbook is still there to retry.
 | exempt: dust-only | 7 | — |
 | pass | 130 | — |
 
-13 distinct work orders are missing; 11 are pre-2025 and out of scope by
-Robin's ruling, leaving `ES2503724` and `ES2522505` worth chasing.
+### What was removed
 
-### Criteria
+- `.ig_als_gate()` and its call site in `ingest_dir()`;
+- `report$als_gated` and the withheld-count clause in the run summary line — a
+  permanently-zero count reads as a live check that keeps passing;
+- `.st_is_retryable_verdict()` in `route_files()`, the flagless re-decision that
+  let a gated file re-process when its ALS report landed. `als_source_missing`
+  was its only reason, and no `ingest_file` row in the live database has ever
+  carried it (the gate never ran against the real corpus), so there is nothing
+  left to un-quarantine. `reconsider = TRUE` is again the only way back out of a
+  router verdict;
+- `parsed -> quarantined` from the legal transition graph. It was added for this
+  gate and no stage after parse withholds a file now.
 
-- an ACIRL workbook citing a held work order imports; the identical workbook
-  against a DB without that `project` row is `quarantined`/`als_source_missing`
-  and contributes **zero** rows, events and review items;
-- a workbook citing **two** orders with only one held is gated — A74 requires
-  all of them;
-- a **dust-only** workbook (no water sheet) is never gated, whatever the DB
-  holds — the A73 exemption, pinned;
-- a workbook with water sheets that cites **nothing** is gated, not exempted
-  (the `2400-7483-01` case; the one criterion that separates this design from
-  the naive "empty citation → exempt");
-- an ALS file for the cited order **in the same batch** satisfies the gate,
-  in one run, in either file order;
-- gating one file does not stop the rest of the batch: a sibling ESdat file in
-  the same directory still commits;
-- non-ACIRL adapters are untouched — a file whose report has no
-  `als_work_orders` field is never gated;
-- `dry_run = TRUE` reports the verdict and makes **zero** writes: the file's
-  stored state is unchanged;
-- a gated file is re-decided on the **next ordinary run** without
-  `reconsider = TRUE`, and imports once its ALS report is committed;
-- gating alone triggers no snapshot and no source removal (a quarantined file
-  has no asset row).
+### What was KEPT
+
+`report$als_work_orders` and `report$n_water_sheets` (R-6.5/R-6.5b). A79 removed
+the gate, not the citation: **A80** files ACIRL data against the ACIRL report
+number and makes the cited ALS work order a **child** project of it, so the
+citation is now load-bearing for filing rather than for admission, and
+`n_water_sheets` still separates a dust-only workbook (no child) from a water
+one that cites nothing.
+
+The layering argument also survives unchanged and applies to A80: the adapter
+cannot do any of this, because `parse(path, file_meta)` sees one file and no
+database (R-6.5). Anything needing the DB or the whole batch belongs in
+`ingest_dir()`.
+
+### Criteria (retargeted — the suite now proves the opposite outcome)
+
+The tests were retargeted rather than deleted: each owned a fixture reaching a
+distinct corner of the citation logic, those corners became A80's filing inputs,
+and a gate is exactly the kind of rule that grows back.
+
+- an ACIRL workbook citing a held work order imports — unchanged;
+- **the headline**: the identical workbook against a DB *without* that `project`
+  row imports **identically** — same events, rows, review items, `analysis` and
+  `sample` counts — and **quietly**, with no warning naming the unheld order;
+- a workbook citing **two** orders imports with **neither** held, and both
+  citations still parse out for A80;
+- a **dust-only** workbook imports and cites nothing (`n_water_sheets == 0`, so
+  A80 gives it no child);
+- a workbook with water sheets that cites **nothing** imports too (the
+  `2400-7483-01` bare-`ES` case) — it is neither withheld nor mistaken for dust;
+- an ACIRL workbook and an ALS file for its cited order in the **same batch**
+  both import, in either file order;
+- an ACIRL workbook with no held source does not hold up the rest of the batch;
+- non-ACIRL adapters carry no `als_work_orders` field, so A80's ACIRL filing
+  must not claim them;
+- `dry_run = TRUE` previews the import and makes **zero** writes;
+- the anti-regression sweep: every ACIRL shape A74 governed, one DB each, none
+  quarantined, and the report carries **no** `als_gated` field;
+- re-running does not double-import;
+- an ACIRL workbook has **no home work order** (R-9.12's filename trap) — the
+  property that made A74's self-vouching rule unreachable, and precisely why A80
+  files by report number instead;
+- the inversion of "gating takes no snapshot": an imported workbook **is**
+  snapshotted and its source removed.

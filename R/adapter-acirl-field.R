@@ -166,10 +166,12 @@ acirl_field_xlsx_adapter <- function() {
 
   results_rows <- list()
   samples_rows <- list()
-  # A75/A74 (R-6.3b, R-6.5): carried on `report`, NOT on ir_results, whose
-  # columns are pinned by the IR contract. `report` reaches
-  # `assemble_events(parsed)`, which is where the value comparison against the
-  # real ALS data can actually run.
+  # R-6.3b/R-6.5: carried on `report`, NOT on ir_results, whose columns are
+  # pinned by the IR contract. `report` reaches `assemble_events(parsed)`,
+  # which is the first stage that can see the rest of the batch. Written for
+  # A75's value comparison; A79 replaced that with supersession at reconcile
+  # and A80 consumes the citation for filing, but the routing is the same -
+  # the adapter cannot act on any of it.
   als_candidate_rows <- list()
   alias_rows_all <- list()
   als_work_orders <- character(0)
@@ -386,16 +388,21 @@ acirl_field_xlsx_adapter <- function() {
       skipped = skipped,
       header = header,
       warnings = warnings_vec,
-      # R-6.5: exposed for PLAN-09's gate (A74). The adapter takes NO action
-      # on this - it cannot see which work orders are held.
+      # R-6.5: exposed for PLAN-09. The adapter takes NO action on this - it
+      # cannot see which work orders are held. Written for A74's gate, which
+      # A79 withdrew; A80 now files the cited order as a CHILD project of the
+      # ACIRL report number, so the field is still load-bearing.
       als_work_orders = als_work_orders,
-      # R-6.5b: how many sheets this file treated as WATER sheets. The gate
-      # needs this because an empty `als_work_orders` is ambiguous on its own:
-      # it means "dust-only workbook, exempt per A73" for 5 real files and
-      # "water workbook that cites no ALS report at all" for 1 (`2400-7483-01
-      # May 2025 Lawson Landfill.xls`, whose ALS row literally reads `ES` with
-      # no number). Keyed on sheets ATTEMPTED, not sheets that yielded rows, so
-      # a future parser bug closes the gate rather than opening it.
+      # R-6.5b: how many sheets this file treated as WATER sheets. Needed
+      # because an empty `als_work_orders` is ambiguous on its own: it means
+      # "dust-only workbook" for 5 real files and "water workbook that cites no
+      # ALS report at all" for 1 (`2400-7483-01 May 2025 Lawson Landfill.xls`,
+      # whose ALS row literally reads `ES` with no number). Both import under
+      # A79, but they are not the same thing to A80 - the first correctly has
+      # no ALS child project, the second has water data whose lab report we
+      # cannot name. Keyed on sheets ATTEMPTED, not sheets that yielded rows,
+      # so a parser bug reads as "water we failed to parse", not "never had
+      # any".
       n_water_sheets = length(water_idx),
       # R-6.3b: ALS-looking rows kept WITH their values for A75's comparison
       # in assemble/reconcile.

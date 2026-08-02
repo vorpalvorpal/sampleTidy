@@ -153,17 +153,20 @@ Two criteria are **RETIRED** by this rewrite:
 Mutation-verified: reverting `label_col` to the hardcoded `1L`, or searching for
 the date row only *below* the header, each turns 12 tests red.
 
-### Layer note — A74/A75 are NOT adapter concerns
+### Layer note — cross-report concerns are NOT adapter concerns
 
 An adapter's `parse(path, file_meta)` sees **one file and no database**, so it
-cannot decide whether an ALS work order is held (A74) nor compare a value against
-ALS results (A75). Enforcement is split, and this plan owns only the first row:
+cannot decide whether an ALS work order is held, file a workbook under a parent
+project, or compare a value against ALS results. Enforcement is split, and this
+plan owns only the first row. (A74 and A75 were the original occupants of rows 2
+and 3; both have been superseded — A79/A80 — but the *layering* is unchanged,
+which is the point of this note.)
 
 | concern | where it can see what it needs | plan |
 |---|---|---|
 | extract the ALS reference; classify rows; drop headings | per-file — **adapter** | R-6.3b below |
-| decide the ALS source is missing → quarantine | needs the DB + batch — **`ingest_dir()`** | PLAN-09 |
-| compare ACIRL values against ALS results | batch: `assemble_events(parsed)`; already-committed: `reconcile(con)` | PLAN-07 / PLAN-08 |
+| file ACIRL data under its report number, the cited ALS order as a child (A80) | needs the DB + batch — **`ingest_dir()`** | PLAN-09 |
+| supersede an ACIRL transcription with the ALS row (A79) | batch: `assemble_events(parsed)`; already-committed: `reconcile(con)` | PLAN-07 / PLAN-08 |
 
 The adapter therefore **defers, never guesses**: it emits every candidate row
 tagged with its classification and lets a later stage that can see the ALS data
@@ -190,11 +193,13 @@ Criteria: a heading row yields nothing; a `----` cell is skipped not valued; bot
 respectively; `report$als_work_orders` is exact for a two-order citation
 (`ES2110541/ES2111935`) and empty for a bare `ES`.
 
-### R-6.5b What the A74 gate needs from the adapter (MEASURED 2026-08-01)
+### R-6.5b What the ALS citation needs from the adapter (MEASURED 2026-08-01)
 
-Written while implementing PLAN-09's gate. Two things the adapter exposed were
-not enough, and both were found by measuring the corpus rather than by reading
-this plan.
+Written while implementing PLAN-09's A74 gate. **A79 withdrew that gate, but not
+these two fields** — A80 now files an ACIRL workbook against its report number
+with the cited ALS work order as a *child* project, so the citation is still
+load-bearing, for filing rather than for admission. Both defects below were
+found by measuring the corpus rather than by reading this plan.
 
 **1. Every `ALS … Report No` row is scanned, not just the first.** The extractor
 took the first label row matching `ALS.*report\s*no` and stopped. `2400-7223-12-01
@@ -207,8 +212,9 @@ ALS Sydney Report No. | ES2246297            <- never reached
 ```
 
 so the file reported citing **nothing**. Harmless while nobody acted on the
-field; under the gate it is the difference between importing its 57 rows and
-quarantining them. All matching rows are now scanned — a row with no `ES#######`
+field; under the gate it was the difference between importing its 57 rows and
+quarantining them, and under A80 it is the difference between filing them under
+the right ALS child project and filing them under none. All matching rows are now scanned — a row with no `ES#######`
 contributes nothing, so this costs only the loop. Pinned by a shadowing
 `ALS Lithogw Report No` row on `2400-9999-13_AlsRefs`'s first sheet; restoring
 the `break` turns that test red with `als_work_orders` empty.
@@ -217,19 +223,22 @@ the `break` turns that test red with `als_work_orders` empty.
 ambiguous on its own, and the two readings need opposite treatment. Measured
 over the 154 claimed workbooks, 8 cite nothing:
 
-| | count | correct treatment |
-|---|---|---|
-| no water sheet at all — dust-only | 7 | **exempt** (A73) |
-| water sheets, but the ALS row reads a bare `ES` | 1 | **quarantine** |
+| | count | treatment under A74 (withdrawn) | treatment under A80 |
+|---|---|---|---|
+| no water sheet at all — dust-only | 7 | **exempt** (A73) | attaches to the ACIRL parent, no child |
+| water sheets, but the ALS row reads a bare `ES` | 1 | **quarantine** | imports, attaches to the parent, no child |
 
 The one is `2400-7483-01 May 2025 Lawson Landfill.xls`, whose eight water sheets
-each carry `ALS Sydney Report No. | ES` — the number was never filled in. Had
-the gate read "cites nothing → exempt", that file's 30 rows would have imported
-with no traceable ALS source, which is precisely what A74 exists to stop.
+each carry `ALS Sydney Report No. | ES` — the number was never filled in. The
+distinction outlived the gate: a dust-only workbook *correctly* has no ALS child,
+whereas this one has water data whose lab report we simply cannot name, and
+collapsing the two would lose that.
 
 `n_water_sheets` counts sheets **attempted** as water sheets, not sheets that
-yielded rows. That direction is deliberate: a future parser bug then closes the
-gate (quarantine, loud) instead of opening it (silent import).
+yielded rows. Under the gate that direction failed closed (a parser bug meant
+quarantine, loud, not silent import); it is retained because the same reasoning
+holds for filing — a workbook that fails to parse its water sheets must not be
+mistaken for one that never had any.
 
 ### R-6.7 Site-metadata labels are not analytes (MEASURED 2026-08-01)
 
@@ -323,7 +332,11 @@ routing to review.
 
 - `Electrical Conductivity @ 25°C` is the ALS value transcribed into the sheet,
   never a field reading. Allowlisting it would import ALS data as a field
-  reading, exactly what A74/A75 exist to prevent.
+  reading. That mattered under A74/A75; under **A79 it matters more**, because
+  `method = 'field'` is now the whole discriminator — a field row is kept
+  permanently and ranked *above* the lab value, while a transcription is
+  provisional and deleted when the ALS row commits. Mislabelling a transcription
+  as field would make the copy outrank the original.
 
   The registry defect behind this was **narrower than first reported, and is now
   fixed.** The row ACIRL owned as `method = 'field'` was the **mojibake**

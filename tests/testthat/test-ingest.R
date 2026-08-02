@@ -2550,15 +2550,26 @@ test_that("R-9.11: quarantine_report() works when the quarantined files no longe
   expect_identical(rep$work_order_guess[[1]], "ES2699999")
 })
 
-# ---- R-9.13: the ALS-source gate (A74) -------------------------------------
+# ---- R-9.13 / A79: ACIRL imports unconditionally ---------------------------
 #
-# Robin's ruling, 2026-08-01: an ACIRL water sheet may only be imported when we
-# hold the ALS report it cites, because most of the sheet is ALS data copied by
-# hand and the transcription drops reporting limits. Dust is exempt (A73).
+# THIS BLOCK USED TO TEST THE OPPOSITE. A74 (Robin, 2026-08-01) held that an
+# ACIRL water sheet could only be imported when we hold the ALS report it
+# cites, and `.ig_als_gate()` quarantined the file `als_source_missing` when we
+# did not. A79 (Robin, 2026-08-02) withdrew that: the ACIRL report is
+# NATA-certified, so its data imports on its own, and an ALS row supersedes an
+# ACIRL transcription later at reconcile instead of at the door. Measured over
+# the 154 real workbooks, A74 was withholding 16 files citing an unheld order
+# (614 rows) plus 1 with water sheets citing nothing at all (30 rows).
 #
-# Measured over the 154 real workbooks the adapter claims: 16 cite a work order
-# the live DB does not hold (614 rows), 1 has water sheets but cites nothing at
-# all (30 rows), 7 are dust-only and exempt.
+# The tests were RETARGETED rather than deleted, for two reasons. Each one
+# already owned a fixture that reaches a distinct corner of the citation logic,
+# and those corners did not go away - they became A80's filing inputs
+# (`report$als_work_orders` names the ALS work order that becomes a CHILD
+# project of the ACIRL report number; `n_water_sheets` distinguishes a
+# dust-only workbook, which has no child, from a water one). And the gate is
+# exactly the kind of rule that grows back: a suite asserting these files
+# IMPORT is what fails loudly if any future stage starts withholding them
+# again.
 
 acirl_fx <- function(name) {
   testthat::test_path("fixtures", "acirl", name)
@@ -2623,7 +2634,21 @@ state_of <- function(db_path, hash) {
   list(state = s$state[[1]], reason = s$state_reason[[1]])
 }
 
-test_that("R-9.13: an ACIRL workbook whose cited ALS work order IS held imports", {
+# What an ACIRL workbook contributed, in the terms A79 is about. `project` is
+# deliberately absent: `hold_work_order()` inserts a project row itself, so
+# including it would make the held and not-held runs differ for a reason that
+# has nothing to do with the import.
+acirl_yield <- function(report, db_path) {
+  list(
+    n_events = report$n_events,
+    rows_new = report$rows_new,
+    review_items_opened = report$review_items_opened,
+    n_analysis = count_rows(db_path, "analysis"),
+    n_sample = count_rows(db_path, "sample")
+  )
+}
+
+test_that("A79: an ACIRL workbook whose cited ALS work order IS held imports", {
   setup <- ingest_test_setup()
   input_dir <- withr::local_tempdir()
   fx <- seed_acirl(input_dir, "2400-9999-11_Real_WMF.xlsx")
@@ -2631,106 +2656,101 @@ test_that("R-9.13: an ACIRL workbook whose cited ALS work order IS held imports"
 
   report <- ingest_dir(input_dir, db = setup$db_path)
 
-  expect_identical(report$als_gated, character(0))
   expect_gt(report$rows_new, 0)
   expect_gt(count_rows(setup$db_path, "analysis"), 0)
   expect_identical(state_of(setup$db_path, fx$hash)$state, "archived")
 })
 
-test_that("R-9.13: the SAME workbook is quarantined als_source_missing when the work order is not held, and contributes nothing", {
-  setup <- ingest_test_setup()
-  input_dir <- withr::local_tempdir()
-  fx <- seed_acirl(input_dir, "2400-9999-11_Real_WMF.xlsx")
-  # deliberately NO hold_work_order() - this is the only difference from the
-  # test above, so anything that differs in the outcome is the gate's doing.
-  before <- all_core_counts(setup$db_path)
+test_that("A79: the SAME workbook imports IDENTICALLY when the ALS report is NOT held", {
+  # The headline of A79, stated as a difference of one variable. Under A74 this
+  # pair was the gate's proof: same file, opposite outcomes. It is now the
+  # proof that the gate is gone - holding the source must change NOTHING about
+  # what gets imported.
+  held_setup <- ingest_test_setup()
+  held_dir <- withr::local_tempdir()
+  seed_acirl(held_dir, "2400-9999-11_Real_WMF.xlsx")
+  hold_work_order(held_setup$db_path, "ES9999001")
+  held <- acirl_yield(ingest_dir(held_dir, db = held_setup$db_path),
+                      held_setup$db_path)
 
-  expect_warning(
-    report <- ingest_dir(input_dir, db = setup$db_path),
-    regexp = "ES9999001"
+  unheld_setup <- ingest_test_setup()
+  unheld_dir <- withr::local_tempdir()
+  fx <- seed_acirl(unheld_dir, "2400-9999-11_Real_WMF.xlsx")
+  # precondition: nothing vouches for this workbook's cited source.
+  expect_false(holds_work_order(unheld_setup$db_path, "ES9999001"))
+
+  # ...and it is not merely imported but imported QUIETLY: the gate's warning
+  # naming the unheld order must be gone too, or an operator would still be
+  # told to chase a report that is no longer needed.
+  expect_no_warning(
+    report <- ingest_dir(unheld_dir, db = unheld_setup$db_path)
   )
 
-  st <- state_of(setup$db_path, fx$hash)
-  expect_identical(st$state, "quarantined")
-  expect_identical(st$reason, "als_source_missing")
-  expect_identical(report$als_gated, fx$hash)
-
-  # zero rows, zero events, zero review items - the file must not reach
-  # assemble at all, not merely fail to commit.
-  expect_identical(report$n_events, 0L)
-  expect_identical(report$rows_new, 0L)
-  expect_identical(report$review_items_opened, 0L)
-  expect_equal(all_core_counts(setup$db_path), before)
+  expect_identical(acirl_yield(report, unheld_setup$db_path), held)
+  expect_gt(held$rows_new, 0)   # non-vacuous: both sides really did import
+  expect_identical(state_of(unheld_setup$db_path, fx$hash)$state, "archived")
 })
 
-test_that("R-9.13: A74 requires ALL cited work orders - one of two held is still gated", {
+test_that("A79/A80: a workbook citing TWO ALS orders imports with NEITHER held, and both citations survive", {
   setup <- ingest_test_setup()
   input_dir <- withr::local_tempdir()
-  # 2400-9999-13 cites ES9999001/ES9999002 on its first sheet.
+  # 2400-9999-13 cites ES9999001/ES9999002 on its first sheet. Under A74 this
+  # was the "all cited orders required" case; the citations themselves are
+  # still what A80 turns into child projects, so they stay under test.
   fx <- seed_acirl(input_dir, "2400-9999-13_AlsRefs_WMF.xlsx")
   expect_setequal(
     adapter_registry()[["acirl_field_xlsx"]]$parse(fx$path, sampleTidy:::file_meta(fx$path))$report$als_work_orders,
     c("ES9999001", "ES9999002")
   )
-  hold_work_order(setup$db_path, "ES9999001")
 
-  expect_warning(
-    report <- ingest_dir(input_dir, db = setup$db_path),
-    regexp = "ES9999002"
-  )
-  expect_identical(state_of(setup$db_path, fx$hash)$reason, "als_source_missing")
-  expect_identical(report$rows_new, 0L)
+  report <- ingest_dir(input_dir, db = setup$db_path)
 
-  # ...and holding the second one too lets it through, so the gate is keyed on
-  # the missing order and not on "this fixture always fails".
-  hold_work_order(setup$db_path, "ES9999002")
-  report2 <- ingest_dir(input_dir, db = setup$db_path)
-  expect_identical(report2$als_gated, character(0))
-  expect_gt(report2$rows_new, 0)
+  expect_gt(report$rows_new, 0)
+  expect_identical(state_of(setup$db_path, fx$hash)$state, "archived")
 })
 
-test_that("R-9.13/A73: a dust-only workbook is NEVER gated, whatever the DB holds", {
+test_that("A73/A80: a dust-only workbook imports and cites nothing", {
   setup <- ingest_test_setup()
   input_dir <- withr::local_tempdir()
   fx <- seed_acirl(input_dir, "2400-9999-12_DustOnly_WMF.xlsx")
-  # precondition: it really does cite nothing and really has no water sheet -
-  # otherwise this test would pass for the wrong reason.
+  # These two fields are A80's discriminator: no cited order means no child
+  # project, so a dust-only workbook attaches to the ACIRL report directly.
   rep_parse <- adapter_registry()[["acirl_field_xlsx"]]$parse(fx$path, sampleTidy:::file_meta(fx$path))$report
   expect_identical(rep_parse$als_work_orders, character(0))
   expect_identical(rep_parse$n_water_sheets, 0L)
 
   report <- ingest_dir(input_dir, db = setup$db_path)
 
-  expect_identical(report$als_gated, character(0))
-  expect_false(identical(state_of(setup$db_path, fx$hash)$reason, "als_source_missing"))
+  expect_gt(report$rows_new, 0)
+  expect_identical(state_of(setup$db_path, fx$hash)$state, "archived")
 })
 
-test_that("R-9.13: water sheets that cite NOTHING are gated, not exempted", {
+test_that("A79/A80: a WATER workbook that cites NO ALS report imports too", {
   setup <- ingest_test_setup()
   input_dir <- withr::local_tempdir()
   # The `2400-7483-01 May 2025 Lawson Landfill.xls` shape: real water data, ALS
-  # cell reads a bare "ES". This is the one criterion separating the gate's
-  # design from the naive "cites nothing -> must be dust -> exempt".
+  # cell reads a bare "ES". Under A74 this was the one case separating the gate
+  # from "cites nothing -> must be dust -> exempt", and it was quarantined.
+  # It now imports, and A80 files it against the ACIRL report with no child.
   fx <- seed_acirl(input_dir, "2400-9999-15_Uncited_WMF.xlsx")
   rep_parse <- adapter_registry()[["acirl_field_xlsx"]]$parse(fx$path, sampleTidy:::file_meta(fx$path))$report
   expect_identical(rep_parse$als_work_orders, character(0))
   expect_gt(rep_parse$n_water_sheets, 0)
 
-  expect_warning(
-    report <- ingest_dir(input_dir, db = setup$db_path),
-    regexp = "cites no ALS report"
-  )
-  expect_identical(state_of(setup$db_path, fx$hash)$reason, "als_source_missing")
-  expect_identical(report$rows_new, 0L)
+  expect_no_warning(report <- ingest_dir(input_dir, db = setup$db_path))
+
+  expect_gt(report$rows_new, 0)
+  expect_identical(state_of(setup$db_path, fx$hash)$state, "archived")
 })
 
-test_that("R-9.13: an ALS sibling in the SAME batch satisfies the gate, in one run", {
+test_that("A79: an ACIRL workbook and its ALS sibling in one batch both import, in either order", {
   for (acirl_first in c(TRUE, FALSE)) {
     setup <- ingest_test_setup()
     input_dir <- withr::local_tempdir()
     # File order within the directory is what `fs::dir_ls()` returns, so seed
-    # the two in both orders: the gate must not depend on parse order, which is
-    # the whole reason it is a separate pass after parsing.
+    # the two in both orders. ACIRL and ALS routinely arrive in one
+    # PowerAutomate folder with ACIRL first, and neither file's fate may depend
+    # on which the batch happens to reach first.
     if (acirl_first) {
       fx <- seed_acirl(input_dir, "2400-9999-11_Real_WMF.xlsx")
       seed_esdat_as(input_dir, "ES9999001")
@@ -2738,145 +2758,143 @@ test_that("R-9.13: an ALS sibling in the SAME batch satisfies the gate, in one r
       seed_esdat_as(input_dir, "ES9999001")
       fx <- seed_acirl(input_dir, "2400-9999-11_Real_WMF.xlsx")
     }
-    # precondition: the work order is NOT already in the DB, so the same-batch
-    # arm is the only thing that can be satisfying the gate here.
     expect_false(holds_work_order(setup$db_path, "ES9999001"),
                  info = "precondition: ES9999001 must not be pre-held")
 
     report <- ingest_dir(input_dir, db = setup$db_path)
 
-    expect_identical(report$als_gated, character(0),
-                     info = paste("acirl_first =", acirl_first))
     expect_identical(state_of(setup$db_path, fx$hash)$state, "archived",
                      info = paste("acirl_first =", acirl_first))
+    expect_true(holds_work_order(setup$db_path, "ES9999001"),
+                info = paste("acirl_first =", acirl_first))
+    expect_gt(report$rows_new, 0)
   }
 })
 
-test_that("R-9.13: gating one file does not stop the rest of the batch", {
+test_that("A79: an ACIRL workbook with no held ALS source does not hold up the rest of the batch", {
   setup <- ingest_test_setup()
   input_dir <- withr::local_tempdir()
-  fx <- seed_acirl(input_dir, "2400-9999-11_Real_WMF.xlsx")   # will be gated
-  seed_esdat_as(input_dir, "XX7777777")                        # unrelated, must commit
+  fx <- seed_acirl(input_dir, "2400-9999-11_Real_WMF.xlsx")   # was gated
+  seed_esdat_as(input_dir, "XX7777777")                        # unrelated
 
-  expect_warning(report <- ingest_dir(input_dir, db = setup$db_path), regexp = "ES9999001")
+  report <- ingest_dir(input_dir, db = setup$db_path)
 
-  expect_identical(state_of(setup$db_path, fx$hash)$reason, "als_source_missing")
+  # Both, now - under A74 only the second of these held.
+  expect_identical(state_of(setup$db_path, fx$hash)$state, "archived")
+  expect_true(holds_work_order(setup$db_path, "XX7777777"))
   expect_gt(report$rows_new, 0)
-  con <- DBI::dbConnect(duckdb::duckdb(), setup$db_path, read_only = TRUE)
-  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
-  expect_equal(
-    nrow(DBI::dbGetQuery(con, "SELECT 1 FROM project WHERE name = 'XX7777777'")), 1
-  )
 })
 
-test_that("R-9.13: a non-ACIRL adapter family is never gated", {
+test_that("A80: an ESdat report carries no als_work_orders, so ACIRL filing must not claim it", {
   setup <- ingest_test_setup()
   input_dir <- withr::local_tempdir()
   seed_esdat_as(input_dir, "ES9999001")
-  # An ESdat report's own `report` list carries no `als_work_orders` field, so
-  # the gate must not look at it at all - not even to conclude "cites nothing".
+  # The field's ABSENCE is what marks a report as not-ACIRL. A74 used it to
+  # decide what to govern; A80 uses it to decide what to file by report number.
+  # Either way, reading it off an ESdat report would be a category error.
+  esdat <- list.files(input_dir, pattern = "Chemistry", full.names = TRUE)[[1]]
+  rep_parse <- adapter_registry()[["esdat"]]$parse(esdat, sampleTidy:::file_meta(esdat))$report
+  expect_null(rep_parse$als_work_orders)
+
   report <- ingest_dir(input_dir, db = setup$db_path)
-  expect_identical(report$als_gated, character(0))
   expect_gt(report$rows_new, 0)
 })
 
-test_that("R-9.13: dry_run reports the verdict and writes nothing", {
+test_that("A79: a dry run of an ACIRL workbook with no held source writes nothing", {
   setup <- ingest_test_setup()
   input_dir <- withr::local_tempdir()
   fx <- seed_acirl(input_dir, "2400-9999-11_Real_WMF.xlsx")
   before <- all_core_counts(setup$db_path)
 
-  expect_warning(
-    report <- ingest_dir(input_dir, db = setup$db_path, dry_run = TRUE),
-    regexp = "ES9999001"
-  )
+  report <- ingest_dir(input_dir, db = setup$db_path, dry_run = TRUE)
 
-  # the verdict IS reported...
-  expect_identical(report$als_gated, fx$hash)
-  expect_identical(report$rows_new, 0L)
-  # ...and nothing is persisted: no core-table write, and the file is NOT left
-  # sitting in a terminal `quarantined` state a later real run cannot leave.
+  # The preview counts what a real run WOULD import - which, since A79, is the
+  # whole workbook rather than nothing.
+  expect_gt(report$rows_new, 0)
   expect_equal(all_core_counts(setup$db_path), before)
   expect_false(identical(state_of(setup$db_path, fx$hash)$state, "quarantined"))
 })
 
-test_that("R-9.13: a gated file re-processes on the NEXT ordinary run once its ALS report lands - no reconsider flag", {
+test_that("A79: nothing is withheld for a missing ALS source, and the report says nothing about gating", {
+  # The direct anti-regression assertion, swept over every ACIRL shape A74
+  # governed: none may come out quarantined, and the report may not grow back a
+  # gating field a future reader could mistake for a live check that keeps
+  # passing.
+  #
+  # One database EACH, not one batch. Fixtures 11 and 12 carry the same
+  # `Dust Results` sheet by construction, so batching them raises a genuine
+  # `batch_duplicate` and sends the second to review - a correct verdict from a
+  # different rule, which would mask the one being tested here.
+  fixtures <- c("2400-9999-11_Real_WMF.xlsx", "2400-9999-13_AlsRefs_WMF.xlsx",
+                "2400-9999-15_Uncited_WMF.xlsx", "2400-9999-12_DustOnly_WMF.xlsx")
+  for (f in fixtures) {
+    setup <- ingest_test_setup()
+    input_dir <- withr::local_tempdir()
+    fx <- seed_acirl(input_dir, f)
+
+    report <- ingest_dir(input_dir, db = setup$db_path)
+
+    expect_null(report$als_gated, info = f)
+    st <- state_of(setup$db_path, fx$hash)
+    expect_identical(st$state, "archived", info = f)
+    expect_false(identical(st$reason, "als_source_missing"), info = f)
+    expect_gt(report$rows_new, 0)
+  }
+})
+
+test_that("A79: re-running does not import the same workbook twice", {
   setup <- ingest_test_setup()
   input_dir <- withr::local_tempdir()
   fx <- seed_acirl(input_dir, "2400-9999-11_Real_WMF.xlsx")
 
-  expect_warning(ingest_dir(input_dir, db = setup$db_path), regexp = "ES9999001")
-  expect_identical(state_of(setup$db_path, fx$hash)$state, "quarantined")
+  first <- ingest_dir(input_dir, db = setup$db_path)
+  after_first <- all_core_counts(setup$db_path)
+  expect_gt(first$rows_new, 0)
 
-  # ACIRL routinely arrives BEFORE ALS, so this is the normal sequence: the
-  # source report shows up later and the workbook must import itself without
-  # anyone remembering to pass `reconsider = TRUE`.
-  hold_work_order(setup$db_path, "ES9999001")
-  report <- ingest_dir(input_dir, db = setup$db_path)
+  # The file is `archived` and stays there: a second pass over the same folder
+  # must not re-commit rows the first pass already committed.
+  second <- ingest_dir(input_dir, db = setup$db_path)
 
-  expect_identical(report$als_gated, character(0))
-  expect_gt(report$rows_new, 0)
+  expect_identical(second$rows_new, 0L)
+  expect_equal(all_core_counts(setup$db_path), after_first)
   expect_identical(state_of(setup$db_path, fx$hash)$state, "archived")
 })
 
-test_that("R-9.13: a still-unheld gated file stays quarantined on re-run and imports nothing twice", {
-  setup <- ingest_test_setup()
-  input_dir <- withr::local_tempdir()
-  fx <- seed_acirl(input_dir, "2400-9999-11_Real_WMF.xlsx")
+test_that("A80: an ACIRL workbook has no home work order - it must be filed by report number", {
+  # This was A74's self-vouching test: a file may not satisfy its own citation.
+  # The property it rested on is the one A80 now depends on - an ACIRL
+  # workbook's home work order is ALWAYS NA, because `2400-*` is never parsed
+  # into one (R-9.12's ACIRL filename trap). That is precisely why A80 files
+  # ACIRL data by the front-page `REPORT NO:` cell instead.
+  path <- acirl_fx("2400-9999-11_Real_WMF.xlsx")
+  fm <- sampleTidy:::file_meta(path)
+  parsed <- adapter_registry()[["acirl_field_xlsx"]]$parse(path, fm)
 
-  expect_warning(ingest_dir(input_dir, db = setup$db_path), regexp = "ES9999001")
-  after_first <- all_core_counts(setup$db_path)
-
-  # The unconditional re-decision must not turn into a loop that accretes
-  # state: a second run re-parses, re-gates, and changes nothing.
-  expect_warning(report <- ingest_dir(input_dir, db = setup$db_path), regexp = "ES9999001")
-  expect_identical(state_of(setup$db_path, fx$hash)$reason, "als_source_missing")
-  expect_identical(report$rows_new, 0L)
-  expect_equal(all_core_counts(setup$db_path), after_first)
+  expect_true(is.na(sampleTidy:::.st_home_work_order(parsed$report, fm)))
+  # ...while the ALS order it cites is present and is a DIFFERENT thing: the
+  # citation is data about someone else's report, never this file's own name.
+  expect_identical(parsed$report$als_work_orders, "ES9999001")
 })
 
-test_that("R-9.13: a file may not vouch for ITSELF - its own work order does not satisfy its own citation", {
-  # Unreachable through ingest_dir() today: an ACIRL workbook's home work order
-  # is always NA because `2400-*` is never parsed into one (R-9.12's ACIRL
-  # trap). So this drives `.ig_als_gate()` directly, with a file whose home work
-  # order IS the order it cites - the shape a mis-named workbook would have.
-  setup <- ingest_test_setup()
-
-  self_citing <- list(
-    ir = list(results = NULL, samples = NULL),
-    report = list(als_work_orders = "ES9999001", n_water_sheets = 2L,
-                  header = list(work_order = "ES9999001")),
-    meta = list(filename = "ES9999001_mislabelled.xlsx",
-                work_order_guess = "ES9999001")
-  )
-  # precondition: it really does look like its own source, so a gate that
-  # naively unioned the batch's work orders WOULD pass it.
-  expect_identical(
-    sampleTidy:::.st_home_work_order(self_citing$report, self_citing$meta),
-    "ES9999001"
-  )
-
-  out <- with_db_write(function(con) {
-    sampleTidy:::.ig_als_gate(con, list(h1 = self_citing), dry_run = TRUE)
-  }, db = setup$db_path)
-
-  expect_identical(out$gated, "h1")
-  expect_length(out$parsed, 0)
-})
-
-test_that("R-9.13: gating alone takes no snapshot and removes no source", {
+test_that("A79: an imported ACIRL workbook IS snapshotted and its source removed", {
   setup <- ingest_test_setup()
   input_dir <- withr::local_tempdir()
   fx <- seed_acirl(input_dir, "2400-9999-11_Real_WMF.xlsx")
   withr::local_options(list("sampletidy.remove_ingested" = TRUE))
 
-  expect_warning(report <- ingest_dir(input_dir, db = setup$db_path), regexp = "ES9999001")
+  report <- ingest_dir(input_dir, db = setup$db_path)
 
-  # A quarantined file has no asset row, so there is nothing verified to remove
-  # and nothing committed to snapshot. Both must stay untriggered, or a gated
-  # run would delete the very source it is waiting to re-process.
-  expect_true(is.na(report$snapshot_path))
-  expect_identical(report$removed_files, character(0))
-  expect_true(file.exists(fx$path))
-  expect_equal(length(list.files(setup$snapshot_dir)), 0)
+  # The exact inversion of A74's "gating alone takes no snapshot and removes no
+  # source": a gated file had no asset row, so there was nothing to snapshot or
+  # remove. It commits now, so both must happen - retention is what stops the
+  # input folder growing without bound.
+  expect_false(is.na(report$snapshot_path))
+  # Collapse repeated separators on both sides rather than `normalizePath()`:
+  # on macOS `withr::local_tempdir()` hands back a path containing `//` while
+  # the reported one comes back collapsed, and `normalizePath()` cannot fix
+  # that here because the file it would resolve has just been removed.
+  collapse_sep <- function(x) gsub("/{2,}", "/", x)
+  expect_identical(collapse_sep(report$removed_files), collapse_sep(fx$path))
+  expect_false(file.exists(fx$path))
 })
+

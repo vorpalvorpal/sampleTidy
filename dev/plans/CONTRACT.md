@@ -820,12 +820,23 @@ for lab reports; `sample.organisation ∈ {ACIRL, Internal, ALS}`;
 - **A73** **A10 IS REVERSED (user, 2026-08-01): ACIRL dust sheets are parsed, not
   ignored.** Both `Dust Results` and `Dust Observations`. Dust has no ALS counterpart
   (every `lab_method` ever recorded against `B.D07`/`B.D08` is ACIRL, method
-  AS3580.10.1), so dust is **exempt from the ALS-linkage gate (A74)** — 6 workbooks
+  AS3580.10.1), so dust was **exempt from the ALS-linkage gate (A74)** — which A79
+  has since withdrawn entirely, making the exemption moot — 6 workbooks
   are dust-only and have no water sheet at all. Analytes already exist:
   `dust-total` ← `INSOLUBLE SOLID`, `dust-combustible` ← `*COMBUSTIBLE MATTER`,
   `dust-incombustible` ← `INCOMBUSTIBLE MATTER`, and `Appearance` ←
   `ANALYSIS OBSERVATIONS` for the observation text.
-- **A74** **ACIRL water sheets require their ALS source (user, 2026-08-01).** Most of
+- **A74** ⚠️ **WITHDRAWN by A79 on 2026-08-02 — do not implement.** The gate was
+  built (PLAN-09 R-9.13), measured, and then removed: `.ig_als_gate()`,
+  `report$als_gated`, the `als_source_missing` retry path and the
+  `parsed -> quarantined` transition are all gone. The distrust it encoded is real
+  but now acts one stage later and one row at a time — an ACIRL *transcription* is
+  superseded at reconcile when the ALS row arrives. The citation it introduced
+  (`report$als_work_orders`, `report$n_water_sheets`) is KEPT and is now A80's
+  filing input. The original ruling and its measurements follow, because they are
+  why A79 went the way it did.
+
+  **ACIRL water sheets require their ALS source (user, 2026-08-01).** Most of
   an ACIRL water sheet is ALS lab data copied by hand; we do not trust the transcription,
   and it drops reporting limits. Every water sheet declares an `ALS Sydney Report No.`
   (present in 640/640 real sheets). **If any cited `ES#######` work order is not held,
