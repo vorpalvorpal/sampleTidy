@@ -1126,15 +1126,51 @@ for lab reports; `sample.organisation ∈ {ACIRL, Internal, ALS}`;
      round-tripped. Treated as an ordinary ALS lab row it would delete a
      committed ACIRL pH transcription: a field reading superseding a field
      reading.
-  3. **OPEN — the TSS pair.** `Total Suspended Solids` is both the ACIRL sheet
-     label and the ALS analyte name, so no name test separates a field estimate
-     from a transcription; A75's value comparison was the mechanism and A79
-     removed it without a replacement. Measured over the 678 real rows: **532
-     have an ALS twin** at the same feature and analyte, **146 do not**. As
-     transcriptions all 678 become deletable and the 146 genuine field
-     estimates go with them; as field readings the 532 become duplicate records
-     of one ALS measurement. Not guessed — the adapter still routes them to
-     `als_candidates` and the question is Robin's.
+  3. **The TSS pair — MEASURED AND SETTLED as transcription; the remaining
+     question is only what to do about the registry.** `Total Suspended Solids`
+     is both the ACIRL sheet label and the ALS analyte name, so no name test
+     separates a field estimate from a transcription. A75's value comparison
+     was the mechanism and A79 removed it as a *runtime* rule — but nothing
+     stopped running it **once**, off the saved corpus measurement, to settle
+     the classification. Two independent lines of evidence, and they agree
+     (`scratchpad/a79_tss_verdict2.R`):
+
+     * **These values carry ALS's own reporting limit.** 284 of the 678 rows
+       (41.9%) are written `<5`, and `<5` is the *only* `<` value that appears.
+       ALS's TSS method (`EA025: Total Suspended Solids dried at 104 ± 2°C`)
+       has `rl_low = 5`, and 345 of its recorded non-detects sit at exactly
+       that limit. A field estimate cannot produce "<5 mg/L" — that is a
+       laboratory reporting limit, and it is *ALS's*.
+     * **Where the values can be compared they are identical.** 362 of the 678
+       have an ALS TSS row at the same cited work order and feature;
+       **355 (98.1%) match exactly**. And the 7 that do not are not
+       independent measurements — they are *permutations of the ALS numbers*:
+       `B.S01`/`B.S03` carry each other's values (`<5`/`68` against ALS's
+       `68`/`5`), as do `B.MW08`/`B.MW11` (`30`/`118` against `118`/`30`), plus
+       one single-digit misread (`6` for `8`). Even the mismatches prove
+       copying.
+
+     TSS is gravimetric — filter a known volume, dry at 104°C, weigh — so this
+     is also what the method implies. And the registry already agrees: ACIRL's
+     `Total Suspended Solids` and `Suspended Solids (SS)` **`field`** methods
+     both carry **zero analyses**, so the legacy import never treated an ACIRL
+     TSS row as a field measurement either.
+
+     **Incidental, and worth keeping: this is the first measurement of ACIRL's
+     transcription error rate — 7 of 362, ~1.9%** — and every one of them is
+     the kind of error (a column offset) that a per-value audit trail catches
+     and a whole-file gate never would.
+
+     **What still needs Robin:** treating them as transcriptions is not just
+     retiring `field_analytes_diff_required`. `Total Suspended Solids` + org
+     ACIRL resolves by name to the ACIRL **field** method, and R-8.9 protects
+     field rows from supersession — so the labels would be misfiled as field
+     readings anyway. Either (a) delete or re-point those two unused ACIRL
+     `field` TSS methods (a DB write, the same shape as the EC-@-25 fix, and it
+     forecloses A76's "field-estimated TSS" should ACIRL ever start doing it),
+     or (b) keep an adapter-level route for the pair that forces them down the
+     transcription path. **(a) is cleaner and matches the evidence; it is a
+     write, so it is not done.**
 
   **SEQUENCING, measured and load-bearing: the dangling-method confirmation
   pass must precede the transcription import, not follow it.** 215 of the 218
