@@ -1070,6 +1070,58 @@ for lab reports; `sample.organisation ∈ {ACIRL, Internal, ALS}`;
 
   Measurement: `scratchpad/feature_misspell3.R` → `feature_misspell.rds`.
 
+- **A79** **ACIRL data imports unconditionally; ALS supersedes transcriptions (user,
+  2026-08-02).** Supersedes A75's drop/review scheme and **relaxes A74**.
+  * **A74's whole-file quarantine is withdrawn.** A missing ALS source no longer holds
+    back a workbook (17 files / 644 rows). ACIRL data is NATA-certified and is imported
+    on its own; the ALS citation is still recorded, it just no longer gates.
+  * **Two categories, already encoded in the data — no new column, no migration:**
+    an ACIRL row on a `method = 'field'` lab_method is a **field measurement** (kept
+    permanently, ranked ABOVE lab — the sample degasses before the lab sees it); every
+    other ACIRL row is a **transcription** of an ALS-reported value (one measurement,
+    two records) and is **provisional — deleted when the ALS equivalent commits**.
+    `db_delete()` writes the old row to `change_log`, so a transcription discrepancy
+    stays auditable without duplicate rows in `analysis`.
+  * "Calculated" values are NOT a third category (user): SAR, Ionic Balance, the
+    alkalinity speciation trio and calculated TDS are all reported BY ALS under ALS
+    method codes (`EA006`, `EN055`, `ED037P`, `EA016`), so ACIRL copying them is an
+    ordinary transcription.
+  * **Matching keys on feature + datetime + resolved ANALYTE UUID, never the raw
+    label** (ACIRL writes `Total Suspended Solids`, ALS `Suspended Solids (SS)`, both
+    → `TSS`). Exactly one folded `lab_method` name is ambiguous
+    (`>C10 - C16 Fraction` → `TRH-C11-C16` / `TRH-F2`); ambiguous keys go to review.
+  * **Read-time ranking**, one ordering for both levels:
+    `ORDER BY (lm.method = 'field') DESC, (lm.organisation = 'ALS') DESC`.
+    `EN67 - Client Supplied Data` ranks as field. Only six analytes have both a field
+    and a lab method — pH, EC, DO, TDS, TSS, Appearance — so it is a no-op elsewhere.
+  * Note the **legacy system already implemented A75's policy**: zero existing
+    (feature, date, analyte) triples carry both an ALS row and a non-field ACIRL row.
+    So this is a deliberate change of policy, starting from a base with no duplicates.
+- **A80** **ACIRL data is filed against the ACIRL REPORT NUMBER; the ALS work order
+  becomes a CHILD project of it (user, 2026-08-02).** The ACIRL report is the parent
+  engagement; the ALS job is the lab work within it. `project` already supports this
+  via `uuid_parent`/`uuid_root`.
+  **The report number is not unique, and the hierarchy is what makes that safe.**
+  Measured over 154 workbooks: 132 distinct `REPORT NO:` values, none missing. Of the
+  16 numbers appearing on more than one file, **13 are one report re-saved or revised**
+  (same sample date and same cited ALS work order — byte-difference alone is NOT a
+  discriminator) and **3 are TRUE collisions** — different sampling events sharing a
+  number. The clearest is `2400-7430-01`: May 2024 (`ES2417748`) and a year later
+  (`ES2515829`).
+  So samples must attach to the **child** (the ALS work order) wherever one is cited,
+  and to the parent only when none is — a reused ACIRL number then yields one parent
+  with two children and the events stay separate, instead of silently merging.
+  Dust-only workbooks cite no ALS order and attach to the parent directly.
+  The report number is read from the front-page `REPORT NO:` cell, **never from the
+  filename** — the ACIRL filename trap is untouched.
+- **A81** **Feature-alias rulings (user, 2026-08-02).** `BORE 11` → `B.MW11`.
+  `CRIPPLE CREEK INLET` → **`B.S04`**, confirmed against the registry rather than
+  assumed: `B.S04` already carries the aliases `B.CRIPPLE` and `Diversion pipe inlet`,
+  while `B.S12` carries `B.SPURWOOD` and `Upstream Spurwood Creek` — a different
+  watercourse. It pairs with `CRIPPLE CREEK OUTLET` → `B.S05`.
+  The ~212 dangling ACIRL `lab_method` confirmations are to be done as **one batch
+  pass**, not spread across ingests.
+
 ## Gates
 
 - Per-plan: `testthat::test_file()` green for the plan's own test file(s).
