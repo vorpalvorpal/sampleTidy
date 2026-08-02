@@ -38,22 +38,17 @@ e2e_setup <- function() {
     "sampletidy.remove_ingested" = FALSE
   ), .local_envir = env)
 
-  # R-9.13/A74. The ACIRL fixtures cite ES9999001 (and ES9999002 on
-  # `-13_AlsRefs`); without a `project` row for each, the ALS-source gate
-  # quarantines them and no ACIRL data reaches the pipeline at all. Holding the
-  # cited report is the ORDINARY state of the world - ACIRL arrives first, ALS
-  # follows, and by the time the workbook imports we have both - so seeding it
-  # here is what makes this corpus representative, not a way around the gate.
-  # The gate's own behaviour is pinned in test-ingest.R (R-9.13), including the
-  # `-15_Uncited` fixture in this very corpus, which cites nothing and is
-  # therefore gated here too, exactly as its real counterpart should be.
-  with_db_write(function(con) {
-    for (wo in c("ES9999001", "ES9999002")) {
-      db_append(con, "project", tibble::tibble(
-        uuid = uuid::UUIDgenerate(), name = wo, type = "Work order"
-      ), actor = "test", reason = "e2e corpus: the ALS source ACIRL cites")
-    }
-  }, db = db_path)
+  # The ACIRL fixtures cite ES9999001 (and ES9999002 on `-13_AlsRefs`). Until
+  # A79 this helper seeded a `project` row for each, because A74's ALS-source
+  # gate quarantined the workbooks otherwise and no ACIRL data reached the
+  # pipeline at all. A79 withdrew the gate, so the seeding went with it -
+  # verified by removing it and re-running this file, which stayed green.
+  #
+  # Removed rather than kept: it made the corpus represent the RARER state (we
+  # already hold the lab report), when the ordinary one is ACIRL arriving first
+  # with the ALS report still to come. That is now the state this corpus
+  # exercises end to end. A80 will mint the ALS work order as a CHILD project of
+  # the ACIRL report number from the citation itself, so nothing needs seeding.
 
   db_path
 }
