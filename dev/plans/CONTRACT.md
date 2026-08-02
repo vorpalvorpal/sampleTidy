@@ -1343,6 +1343,58 @@ for lab reports; `sample.organisation ∈ {ACIRL, Internal, ALS}`;
   The ~212 dangling ACIRL `lab_method` confirmations are to be done as **one batch
   pass**, not spread across ingests.
 
+- **A82** **The read-time preference is a `preference_rank` COLUMN, not a filter
+  and not an `ORDER BY`** (`dev/migrations/005-preference-rank.R`, 2026-08-02).
+  A75/A79 settled the *rule* — field beats lab; among lab, ALS beats ACIRL — but
+  not the mechanism. Three implementation-time decisions, each forced by
+  measurement rather than argued:
+
+  1. **Every row is kept; `preference_rank = 1` marks the canonical one.** The
+     alternative (dedupe in the view) would drop 972 of `v_measurement`'s 97,118
+     rows. `v_measurement*` has **no in-repo consumer** —
+     `dev/epa-monitoring-report.R` builds its own base query and says so at its
+     assumption C — so every consumer is external and invisible to us; a column
+     is additive for all of them, a row drop silently changes an answer some
+     spreadsheet already produces. Both rows are also real data: the out-ranked
+     lab pH is not wrong, it is a lab pH. Keeping cardinality identical is
+     additionally what lets the verify gate assert "the window function changed
+     no view's row count" as a hard failure. Consumers opt in with
+     `WHERE preference_rank = 1`.
+  2. **The partition is keyed on the SYDNEY CALENDAR DATE, not `datetime`.** The
+     design as recorded said "per (feature, datetime, analyte)". Measured
+     (`scratchpad/m005_partition_probe.R`): that key finds only **916** of the
+     **931** contested partitions, because **54** of them have the field row and
+     the lab row at different datetimes on the same day — the observed shape is
+     a field reading at 00:00 and its lab twin at 00:01, one visit written by
+     two clocks. Keyed on `datetime` those become partitions of one and the
+     ranking silently does nothing for exactly the rows a human most expects it
+     to. The date expression is 004's `.mig004_sydney_date_expr`, reused from
+     one constant so the partition and the projected `date` cannot drift.
+  3. **`a.uuid` is a required third ordering key.** **74** live partitions hold
+     TWO field rows, which `is_field`/`is_als` cannot separate, so without it
+     `preference_rank` is whatever the scan order was — a consumer could get a
+     different "canonical" pH on two runs of the same query, which is worse than
+     the ambiguity this migration removes. Arbitrary, but the same arbitrary
+     answer every time.
+
+  Two corrections to earlier records, both measured:
+  - **931, not 898.** The 898 figure was ACIRL-field-vs-ALS-lab joined on the raw
+    `sample.date`; 931 is field-vs-lab regardless of organisation, keyed on the
+    Sydney date the views actually report — the population the views see. pH 560
+    field / 541 lab, EC 406 / 396, nothing else.
+  - **`.mig004_base_n()` over-constrained the four mask views**, requiring a
+    resolvable `lab_method` they never joined. It has never fired (zero such rows
+    live) — a gate correct only because its failing case is empty. `005`'s oracle
+    models each view's real join semantics instead; the mask views' new
+    `lab_method` join is a **LEFT** join for the same reason, so cardinality
+    preservation is structural rather than lucky.
+
+  `EN67 - Client Supplied Data` ranks as field, read from `.RC_FIELD_METHODS`
+  (`R/reconcile.R`) rather than copied — the views and R-8.9's supersession test
+  must never disagree about what a field reading is. Mutation-confirmed: a
+  mutation to that list changes the view AND the migration's own rank oracle
+  together, so only the fixture tests catch it.
+
 ## Gates
 
 - Per-plan: `testthat::test_file()` green for the plan's own test file(s).
