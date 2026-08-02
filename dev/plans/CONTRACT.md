@@ -1395,6 +1395,67 @@ for lab reports; `sample.organisation ∈ {ACIRL, Internal, ALS}`;
   mutation to that list changes the view AND the migration's own rank oracle
   together, so only the fixture tests catch it.
 
+- **A83** **Every ACIRL transcription label gets its own ACIRL `lab_method`,
+  minted BEFORE the import, with `method = NULL` and `units = NULL`**
+  (`dev/migrations/006-acirl-transcription-methods.R`, 2026-08-02). A79 settled
+  that a transcription is superseded by its ALS twin; A83 is what makes that
+  reachable.
+
+  **Why it must precede the import.** Analyte resolution is **per organisation** —
+  `.rc_resolve_one_analyte()` filters on `organisation == org` in both its exact
+  and its folded branch, so an ALS `Calcium` method does not resolve an ACIRL
+  `Calcium` row (verified empirically, `scratchpad/m6a_verify_acirl.R`, not read
+  off the source). Of the **215** distinct transcription labels the adapter
+  emits, exactly **one** has an ACIRL method today. Importing first would mint
+  214 dangling methods; a dangling method has no `uuid_analyte`; and A79's twin
+  test keys on the resolved analyte uuid — so all **34,137** candidate rows in
+  `unprocessed/` would commit as permanent silent duplicates.
+
+  1. **`method = NULL` is the transcription marker, not an omission.**
+     `.rc_lab_kind()` returns `acirl_transcription` iff an ACIRL method's
+     `method` is NULL; any code makes it `acirl_own_lab` (ACIRL's dust work) and
+     exempt from supersession forever. The water sheets carry no method codes —
+     `als_candidates` has no `method_raw` column at all — so NULL is also what
+     the import itself would have written.
+  2. **`units = NULL`, against the first instinct, because measurement said so.**
+     `lab_method.units` is INERT for value conversion: `.rc_resolve_units_values()`
+     converts from the incoming ROW's `units_raw` to the ANALYTE's units and never
+     reads the method's. Its only other use is the units-drift sighting, which
+     fires only for DANGLING methods. **358 of the 359 live `lab_method` rows
+     carry NULL units**, including all 19 existing ACIRL ones. Recording the
+     corpus units would have invented a convention the database does not have,
+     for a column nothing reads.
+  3. **The mapping is reviewable DATA, not code** — a CSV carrying `label`,
+     `analyte`, `uuid_analyte`. The `analyte` NAME is redundant with the uuid
+     **deliberately**: it is what a human reviews, and checking the two against
+     each other is the only way to catch a hand-edited row whose name and uuid
+     drifted apart, which would link a label nobody reviewed.
+  4. **The SUCCESS gate asks the PRODUCTION resolver, not the rows it inserted.**
+     "Did the INSERT store what I passed it" is not the property that matters;
+     "will the import now resolve this label to this analyte, and classify it as
+     a transcription" is. `.rc_resolve_one_analyte()` + `.rc_lab_kind()` share no
+     mechanism with the INSERT, so the two cannot be wrong together.
+
+  Three findings recorded because they cost real measurement:
+  - **A shared folded key is only a defect when the analytes DISAGREE.** The
+    obvious gate — refuse any two labels folding to one `.rc_method_key()` — is
+    too strict: `.rc_resolve_one_analyte()` returns `ambiguous` only when the
+    folded survivors span more than one analyte. The live corpus has exactly one
+    such pair (`Azinphos Methyl` / `Azinphos-methyl`, one analyte), and the
+    strict gate would have dropped a real label for a danger that is not there.
+  - **A "this label already resolves" gate is UNREACHABLE** and was deleted
+    rather than shipped. Resolving under ACIRL requires an ACIRL method whose
+    folded key equals the label's — which the collision gate already refuses.
+    "Already resolved" is a strict subset of "already collides".
+  - **`Total Dissolved Solids` is the third unused ACIRL `field` method whose
+    name is really a transcription label** (0 analyses, not on the A76
+    allowlist, 382 corpus rows), after the mojibake EC (deleted 2026-08-01) and
+    the two TSS (deleted 2026-08-02). Its 382 rows would import as FIELD
+    readings: never superseded, and ranked ABOVE the real ALS value by 005. A
+    sweep of every ACIRL `field` method (`scratchpad/m6a_field_sweep.R`) shows
+    it is the **only** one left — the family is closed. Awaiting Robin's ruling;
+    not applied.
+
 ## Gates
 
 - Per-plan: `testthat::test_file()` green for the plan's own test file(s).
