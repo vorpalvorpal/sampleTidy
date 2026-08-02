@@ -20,6 +20,7 @@ random_xlsx_path <- test_path("fixtures", "acirl", "random.xlsx")
 real_path       <- test_path("fixtures", "acirl", "2400-9999-11_Real_WMF.xlsx")
 dustonly_path   <- test_path("fixtures", "acirl", "2400-9999-12_DustOnly_WMF.xlsx")
 alsrefs_path    <- test_path("fixtures", "acirl", "2400-9999-13_AlsRefs_WMF.xlsx")
+dustconflict_path <- test_path("fixtures", "acirl", "2400-9999-14_DustDateConflict_WMF.xlsx")
 xtab_xlsx_path  <- test_path("fixtures", "crosstab", "XX1234567_0_XTAB.xlsx")
 
 fake_als_labels <- c("Fluoride", "Sulphate", "Total Dissolved Solids", "Alkalinity")
@@ -237,13 +238,96 @@ test_that("R-6.3a: a sheet with no Site Name row is skipped as no_site_row", {
 
 # ---- R-6.4 dust sheets (A10) -----------------------------------------------------
 
-test_that("R-6.4: dust sheet is detected and skipped, no dust-derived rows", {
-  meta <- sampleTidy:::file_meta(main_path)
-  out <- acirl_adapter()$parse(main_path, meta)
-  dust_skips <- out$report$skipped[out$report$skipped$reason == "dust_sheet_ignored", ]
-  expect_equal(nrow(dust_skips), 1)
-  expect_false(any(out$results$value_num == 12.4, na.rm = TRUE))
-  expect_false(any(grepl("PM10", out$results$analyte_raw, ignore.case = TRUE)))
+# ---- R-6.4 dust sheets are PARSED (A73 reversed A10) ----------------------
+#
+# The old test here asserted `dust_sheet_ignored` - the A10 behaviour A73
+# REVERSED on 2026-08-01. It is replaced, not patched: asserting the old
+# contract would now be asserting the opposite of the ruling.
+#
+# Geometry re-measured over all 50 real dust-results and 50 dust-observations
+# sheets (PLAN-06 R-6.4a); the fixture reproduces it, including the one-column
+# INCOMBUSTIBLE shift and a `<0.1` below-detection value.
+
+dust_rows_of <- function(out) {
+  out$results[out$results$analyte_raw %in%
+                c("INSOLUBLE SOLIDS", "*COMBUSTIBLE MATTER",
+                  "INCOMBUSTIBLE MATTER"), ]
+}
+
+test_that("R-6.4: a 3-block quarterly dust sheet yields 3 x 2 gauges x 3 analytes", {
+  out <- acirl_adapter()$parse(real_path, sampleTidy:::file_meta(real_path))
+  d <- dust_rows_of(out)
+  expect_equal(nrow(d), 18)
+  expect_setequal(unique(d$feature_raw), c("T.D01", "T.D02"))
+  # `Exposure Days` closes a month-block and is never a result
+  expect_false(any(grepl("Exposure", d$analyte_raw, ignore.case = TRUE)))
+  expect_true(all(d$units_raw == "g/m2/month"))
+})
+
+test_that("R-6.4: the column-SHIFTED incombustible value is read from the right cell", {
+  # Measured: 49 of 50 real sheets put INCOMBUSTIBLE's values one column right
+  # of its header, 1 puts them beneath it - so the reader COALESCEs. The
+  # fixture writes col 13 against a col-12 header; a constant +1 offset would
+  # pass here but break the other sheet, and reading only the header column
+  # would yield nothing at all.
+  out <- acirl_adapter()$parse(real_path, sampleTidy:::file_meta(real_path))
+  inc <- out$results[out$results$analyte_raw == "INCOMBUSTIBLE MATTER", ]
+  expect_equal(nrow(inc), 6)
+  expect_setequal(inc$value_num, c(1.8, 0.2, 0.3, 0.2, 0.4, 3.1))
+})
+
+test_that("R-6.4: a `<0.1` dust value sets below_detection", {
+  out <- acirl_adapter()$parse(real_path, sampleTidy:::file_meta(real_path))
+  bd <- out$results[out$results$analyte_raw == "*COMBUSTIBLE MATTER" &
+                      out$results$below_detection, ]
+  # both gauges in block 2, plus T.D01 in block 3
+  expect_equal(nrow(bd), 3)
+  expect_true(all(bd$value_raw == "<0.1"))
+  expect_true(all(bd$value_num == 0.1))
+})
+
+test_that("R-6.4: the observation text becomes an ANALYSIS OBSERVATIONS result AND a sample comment", {
+  out <- acirl_adapter()$parse(real_path, sampleTidy:::file_meta(real_path))
+  obs <- out$results[out$results$analyte_raw == "ANALYSIS OBSERVATIONS", ]
+  expect_equal(nrow(obs), 6)
+  expect_true(all(!is.na(obs$value_chr)))
+  # `ANALYSIS OBSERVATIONS` is a registered ACIRL lab_method against the
+  # `Appearance` analyte, so the RAW header text must survive as analyte_raw
+  # for reconcile to resolve it.
+  expect_true(any(grepl("bird droppings", obs$value_chr)))
+  dust_samp <- out$samples[out$samples$matrix_raw == "Dust", ]
+  expect_equal(nrow(dust_samp), 6)
+  expect_true(any(grepl("bird droppings", dust_samp$comments)))
+})
+
+test_that("R-6.4/A77: Month contradicting EXPOSURE DATE is routed to review, never silently resolved", {
+  out <- acirl_adapter()$parse(dustconflict_path, sampleTidy:::file_meta(dustconflict_path))
+  expect_true(any(out$report$skipped$reason == "dust_exposure_date_conflict"))
+  # neither sheet is authoritative (A77), so the disagreement is SURFACED and
+  # the row is still emitted - it is a review item, not a silent drop
+  expect_gt(nrow(dust_rows_of(out)), 0)
+})
+
+test_that("R-6.4: the main fixture's Month and EXPOSURE DATE AGREE, so no conflict fires", {
+  # Reachability guard: without this the A77 test above could pass merely
+  # because the detector fires on everything.
+  out <- acirl_adapter()$parse(real_path, sampleTidy:::file_meta(real_path))
+  expect_false(any(out$report$skipped$reason == "dust_exposure_date_conflict"))
+})
+
+test_that("R-6.7 extends to dust: `Other Sample Id` on a dust sheet is an alias, not an analyte", {
+  out <- acirl_adapter()$parse(real_path, sampleTidy:::file_meta(real_path))
+  expect_false("Other Sample Id" %in% out$results$analyte_raw)
+  al <- out$report$feature_aliases
+  expect_true(all(c("T.D01", "T.D02") %in% al$feature_raw))
+  expect_true(all(c("DG #1", "DG #2") %in% al$alias))
+})
+
+test_that("R-6.4: a DUST-ONLY workbook yields dust rows and needs no water sheet", {
+  out <- acirl_adapter()$parse(dustonly_path, sampleTidy:::file_meta(dustonly_path))
+  expect_equal(nrow(dust_rows_of(out)), 6)          # 1 block x 2 gauges x 3
+  expect_equal(nrow(out$samples), 2)
+  expect_identical(out$report$n_water_sheets, 0L)   # and stays A74-exempt
 })
 
 # ---- R-11.15 ACIRL synthetic per-column lab_sample_id ---------------------
@@ -329,8 +413,11 @@ test_that("R-6.3a: real geometry parses - Units marker off the header row, label
   expect_gt(nrow(out$results), 0)
   # the old failure mode must be gone entirely
   expect_false(any(out$report$skipped$reason == "no_field_block"))
-  # features come from the Site Name row, not the Units row (which is blank)
-  expect_setequal(unique(out$results$feature_raw), c("T.S01", "T.S02"))
+  # features come from the Site Name row, not the Units row (which is blank).
+  # Scoped to WATER rows: dust gauges (T.D*) now parse too (R-6.4/A73), and
+  # this test is about water-sheet geometry.
+  water <- out$results[!grepl("^T[.]D[0-9]", out$results$feature_raw), ]
+  expect_setequal(unique(water$feature_raw), c("T.S01", "T.S02"))
   # both field analytes on the current allowlist are recovered
   expect_true(all(c("pH", "Temperature") %in% out$results$analyte_raw))
 })
@@ -338,8 +425,10 @@ test_that("R-6.3a: real geometry parses - Units marker off the header row, label
 test_that("R-6.3a: the date row ABOVE the header row is used", {
   meta <- sampleTidy:::file_meta(real_path)
   out <- acirl_adapter()$parse(real_path, meta)
-  # fixture dates are 24/05/2025 (visit 1) and 25/05/2025 (visit 2)
-  expect_setequal(unique(out$samples$sample_datetime_raw),
+  # fixture dates are 24/05/2025 (visit 1) and 25/05/2025 (visit 2). Scoped to
+  # the WATER samples - dust samples carry their own exposure dates (R-6.4).
+  water <- out$samples[out$samples$matrix_raw == "Water", ]
+  expect_setequal(unique(water$sample_datetime_raw),
                   c("24/05/2025", "25/05/2025"))
 })
 
