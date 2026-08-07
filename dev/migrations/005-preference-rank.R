@@ -197,6 +197,28 @@
 # is NULL for any analysis whose lab_method is missing.
 .mig005_is_als_sql <- "COALESCE(lm.organisation = 'ALS', FALSE)"
 
+# The NEUTRAL preference. A `lab_method.preference` is an EXPLICIT, per-analyte
+# ruling by the data owner - "for TDS, the gravimetric method beats the one
+# calculated from EC" - and it has to be able to say things the generic keys
+# cannot: both TDS methods are ALS lab rows, so `is_field`/`is_als` tie and only
+# an explicit key can separate them. That is why it sorts FIRST, ahead of even
+# the field-beats-lab rule: an explicit ruling should beat a heuristic.
+#
+# NULL means "no opinion", and COALESCEing it to a mid-range constant is what
+# makes this migration ADDITIVE: every one of the 359 live lab_methods starts
+# NULL, so the key is constant across every partition and the ordering falls
+# straight through to `is_field`/`is_als` exactly as before. Nothing changes
+# until somebody sets a value.
+#
+# 500 rather than 0 or 1 so values can be inserted on BOTH sides of neutral
+# later - a method can be promoted above the default or demoted below it
+# without renumbering everything else.
+.mig005_neutral_preference <- 500L
+
+.mig005_preference_sql <- sprintf(
+  "COALESCE(lm.preference, %d)", .mig005_neutral_preference
+)
+
 # The partition a row competes within: one sampling visit's reading of one
 # analyte at one point.
 #
@@ -240,9 +262,29 @@
 #' @return length-1 character SQL expression.
 .mig005_rank_sql <- function(field_methods) {
   sprintf(
-    "ROW_NUMBER() OVER (PARTITION BY %s ORDER BY %s DESC, %s DESC, s.uuid, a.uuid)",
-    .mig005_partition_sql, .mig005_is_field_sql(field_methods), .mig005_is_als_sql
+    "ROW_NUMBER() OVER (PARTITION BY %s ORDER BY %s ASC, %s DESC, %s DESC, s.uuid, a.uuid)",
+    .mig005_partition_sql, .mig005_preference_sql,
+    .mig005_is_field_sql(field_methods), .mig005_is_als_sql
   )
+}
+
+#' Add `lab_method.preference` if it is not already there
+#'
+#' Schema only - the column arrives NULL on every row and this migration never
+#' writes a value into it. Populating it is a DATA decision and belongs in its
+#' own reviewable migration; the views read the column live, so changing the
+#' values later needs no view rebuild.
+#'
+#' Runs BEFORE `mig005_counts_checksum()` is first taken, so the before/after
+#' comparison is like-for-like: the checksum SELECTs `preference` by name and
+#' would simply fail against a table that lacks it.
+#' @keywords internal
+.mig005_ensure_preference_column <- function(con) {
+  cols <- DBI::dbListFields(con, "lab_method")
+  if (!("preference" %in% cols)) {
+    DBI::dbExecute(con, "ALTER TABLE lab_method ADD COLUMN preference INTEGER")
+  }
+  invisible(TRUE)
 }
 
 .mig005_ensure_icu <- function(con) {
@@ -286,10 +328,19 @@ mig005_counts_checksum <- function(con) {
   # the checksum should cover every column the ranking reads, so "the ranking
   # changed because the registry changed underneath it" cannot be mistaken for
   # "the migration touched a base table".
-  lab_method_vals <- DBI::dbGetQuery(
-    con,
+  # `preference` is included WHEN IT EXISTS. It has to be conditional because
+  # this same function is called on databases that predate the column - the dry
+  # run opens a read-only connection before any ALTER, and the pre-migration
+  # fixtures have no column at all - and a bare SELECT would fail there rather
+  # than report a checksum.
+  lm_cols <- DBI::dbListFields(con, "lab_method")
+  lab_method_sql <- if ("preference" %in% lm_cols) {
+    "SELECT uuid, uuid_analyte, name, method, organisation, preference
+       FROM lab_method ORDER BY uuid"
+  } else {
     "SELECT uuid, uuid_analyte, name, method, organisation FROM lab_method ORDER BY uuid"
-  )
+  }
+  lab_method_vals <- DBI::dbGetQuery(con, lab_method_sql)
 
   checksum <- digest::digest(
     list(feature_vals, alias_vals, mask_vals, sample_vals, analysis_vals, lab_method_vals),
@@ -588,7 +639,8 @@ mig005_backup <- function(db, snapshot_dir, .now = NULL) {
            strftime(s.datetime, '%Y-%m-%d %H:%M:%S') AS dt_utc,
            lm.uuid_analyte AS uuid_analyte,
            lm.method AS method,
-           lm.organisation AS organisation
+           lm.organisation AS organisation,
+           lm.preference AS preference
     FROM analysis a
     JOIN \"sample\" s ON a.uuid_sample = s.uuid
     JOIN feature_alias fa ON fa.uuid = s.uuid_feature_alias
@@ -620,7 +672,11 @@ mig005_backup <- function(db, snapshot_dir, .now = NULL) {
   # C-locale byte order for character, which is what DuckDB's VARCHAR
   # comparison does. `uuid_sample` before `uuid_analysis` mirrors `s.uuid,
   # a.uuid` - see the note on `.mig005_rank_sql()`.
-  o <- order(key, !is_field, !is_als, rows$uuid_sample, rows$uuid_analysis,
+  # `preference` first, mirroring the view - reached independently: R's own
+  # NA-coalesce and radix order, not a re-run of the view's SQL.
+  pref <- ifelse(is.na(rows$preference), .mig005_neutral_preference, rows$preference)
+
+  o <- order(key, pref, !is_field, !is_als, rows$uuid_sample, rows$uuid_analysis,
              method = "radix")
   ranks <- integer(length(key))
   ranks[o] <- sequence(rle(key[o])$lengths)
@@ -745,7 +801,33 @@ mig005_backup <- function(db, snapshot_dir, .now = NULL) {
     )
   }
 
-  # ---- D. non-vacuity ----
+  # ---- D. the preference column exists and is usable ----
+  # Checked, not assumed: every rank in this migration reads it, and a view
+  # built against a missing column would have failed loudly, but a column of
+  # the wrong TYPE would sort as text and be silently wrong (10 before 9).
+  lm_cols <- DBI::dbListFields(con, "lab_method")
+  if (!("preference" %in% lm_cols)) {
+    cli::cli_abort(
+      "005-preference-rank verify failed: `lab_method.preference` is missing
+       after the rebuild - the ranking's first ordering key does not exist.",
+      class = "sampletidy_error"
+    )
+  }
+  pref_type <- DBI::dbGetQuery(
+    con,
+    "SELECT data_type FROM information_schema.columns
+      WHERE table_name = 'lab_method' AND column_name = 'preference'"
+  )$data_type
+  if (!isTRUE(grepl("INT", toupper(pref_type)))) {
+    cli::cli_abort(
+      "005-preference-rank verify failed: `lab_method.preference` is
+       {pref_type}, not an integer type - a text column would order 10 before
+       9 and rank silently wrong.",
+      class = "sampletidy_error"
+    )
+  }
+
+  # ---- E. non-vacuity ----
   contested <- as.integer(DBI::dbGetQuery(
     con, "SELECT COUNT(*) n FROM v_measurement WHERE preference_rank > 1"
   )$n)
@@ -864,6 +946,8 @@ mig005_run <- function(db, snapshot_dir, dry_run = FALSE, .now = NULL) {
   result <- with_db_write(
     function(con) {
       .mig005_ensure_icu(con)
+      # Before the first checksum: it SELECTs `preference` by name.
+      .mig005_ensure_preference_column(con)
       counts_before <- mig005_counts_checksum(con)
 
       body <- db_transaction(con, function(con) {

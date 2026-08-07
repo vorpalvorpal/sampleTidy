@@ -95,7 +95,8 @@
     ('lm-lab-als',    'a-901', 'Analyte X by IC',  'EK-X',                        'ALS',   0.1),
     ('lm-lab-acirl',  'a-901', 'Analyte X ACIRL',  'EK-X-ACIRL',                  'ACIRL', 0.1),
     ('lm-en67-als',   'a-901', 'Analyte X client', 'EN67 - Client Supplied Data', 'ALS',   NULL),
-    ('lm-null-acirl', 'a-901', 'Analyte X (na)',   NULL,                          'ACIRL', NULL)")
+    ('lm-null-acirl', 'a-901', 'Analyte X (na)',   NULL,                          'ACIRL', NULL),
+    ('lm-lab-acirl2', 'a-901', 'Analyte X ACIRL 2', 'EK-X-ACIRL-B',               'ACIRL', 0.1)")
 
   # ---- P1: one visit, two clocks. 00:00 and 00:01 UTC are 10:00 and 10:01
   # Sydney on 2024-07-01 - the live shape (measured: 54 of the 931 contested
@@ -227,6 +228,27 @@
     ('an-374', 's-371', 'lm-lab-acirl',   2.20, TRUE, 0.1),
     ('an-372', 's-371', 'lm-lab-acirl-y', 3.30, TRUE, 0.1),
     ('an-373', 's-372', 'lm-lab-acirl-y', 4.40, TRUE, 0.1)")
+
+  # ---- P8: the PREFERENCE fixture. Two lab rows, same feature, same date,
+  # same analyte, SAME SAMPLE and the same organisation - so `is_field`,
+  # `is_als` and the sample key all tie and the ONLY thing that can separate
+  # them is `lab_method.preference`, falling back to `a.uuid`.
+  #
+  # `an-381` sorts before `an-382`, so with no preference set an-381 ranks 1.
+  # The test then sets a preference on an-382's METHOD and expects the rank to
+  # flip - which also pins the property that makes this design worth having:
+  # the views read `preference` LIVE, so changing a value needs no view
+  # rebuild. ----
+  DBI::dbExecute(con, "INSERT INTO feature
+    (uuid, name, site, flow, matrix, lon, lat, cypher) VALUES
+    ('f-307', 'PM-RANK-7', 'PreMigSite', 'surface', 'water', 150.3007, -33.3007, NULL)")
+  DBI::dbExecute(con, "INSERT INTO \"sample\"
+    (uuid, uuid_feature, date, datetime, organisation) VALUES
+    ('s-381', 'f-307', TIMESTAMP '2024-07-08 00:00:00', TIMESTAMP '2024-07-08 01:00:00', 'ACIRL')")
+  DBI::dbExecute(con, "INSERT INTO analysis
+    (uuid, uuid_sample, uuid_lab, value, quantified, rl_low) VALUES
+    ('an-381', 's-381', 'lm-lab-acirl',  1.10, TRUE, 0.1),
+    ('an-382', 's-381', 'lm-lab-acirl2', 2.20, TRUE, 0.1)")
 
   invisible(NULL)
 }
@@ -462,18 +484,54 @@ test_that("005: every column 004 restored survives, and exactly two are added", 
   }
 })
 
-test_that("005: base tables are untouched - the safety checksum is identical before and after", {
+test_that("005: no base-table ROW changes - only the new `preference` column", {
+  # 005 now makes ONE base-table change: it adds a nullable
+  # `lab_method.preference` column, the first key its ranking orders on. That
+  # is a schema change, not a data change, and the test says so precisely
+  # rather than asserting a blanket "nothing moved" that is no longer true:
+  # every row count identical, every pre-existing column identical, and the
+  # new column present and entirely NULL (005 never writes a value - that is a
+  # separate, reviewable migration's job).
   mig1 <- .mig005_load_001(); mig4 <- .mig005_load_004(); mig5 <- .mig005_load()
   path <- .run_001_004_005(mig1, mig4, mig5, run_005 = FALSE)
 
-  sums <- function(p) {
+  OLD_COLS <- paste(
+    "SELECT uuid, uuid_analyte, name, method, organisation",
+    "FROM lab_method ORDER BY uuid"
+  )
+  probe <- function(p) {
     con <- DBI::dbConnect(duckdb::duckdb(), p, read_only = TRUE)
     on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
-    mig5$mig005_counts_checksum(con)
+    list(
+      counts = mig5$mig005_counts_checksum(con),
+      has_pref = "preference" %in% DBI::dbListFields(con, "lab_method"),
+      # The PRE-EXISTING columns only, hashed separately, so "the column was
+      # added" and "an existing value moved" are distinguishable.
+      old_digest = digest::digest(DBI::dbGetQuery(con, OLD_COLS), algo = "sha1"),
+      n_set = if ("preference" %in% DBI::dbListFields(con, "lab_method")) {
+        as.integer(DBI::dbGetQuery(
+          con, "SELECT COUNT(*) n FROM lab_method WHERE preference IS NOT NULL")$n)
+      } else {
+        NA_integer_
+      }
+    )
   }
-  before <- sums(path)
+
+  before <- probe(path)
+  expect_false(before$has_pref)          # non-vacuity: the column really is new
+
   mig5$mig005_run(db = path, snapshot_dir = withr::local_tempdir(), dry_run = FALSE)
-  expect_identical(sums(path), before)
+  after <- probe(path)
+
+  # Every row COUNT identical.
+  for (k in setdiff(names(before$counts), "checksum")) {
+    expect_identical(after$counts[[k]], before$counts[[k]], info = k)
+  }
+  # Every PRE-EXISTING lab_method value byte-identical.
+  expect_identical(after$old_digest, before$old_digest)
+  # The column exists, and 005 wrote no value into it.
+  expect_true(after$has_pref)
+  expect_identical(after$n_set, 0L)
 })
 
 # =============================================================================
@@ -666,4 +724,48 @@ test_that("005: a successful run writes a verified backup that restores the pre-
   con <- DBI::dbConnect(duckdb::duckdb(), res$backup_path, read_only = TRUE)
   on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
   expect_false("preference_rank" %in% DBI::dbListFields(con, "v_measurement"))
+})
+
+test_that("005: `lab_method.preference` decides where every other key ties", {
+  # P8. Both rows are ACIRL, both non-field, both on the SAME sample, same
+  # analyte and date - so preference is the only thing that can separate them.
+  # This is the TDS shape: two ALS lab methods measuring one quantity, where
+  # `is_field`/`is_als` are useless and only an explicit ruling helps.
+  mig1 <- .mig005_load_001(); mig4 <- .mig005_load_004(); mig5 <- .mig005_load()
+  path <- .run_001_004_005(mig1, mig4, mig5)
+
+  # Baseline: nothing set, so the uuid tiebreak decides and an-381 wins.
+  v <- .mig005_read_view(path)
+  expect_equal(.rank_of(v, "an-381"), 1L)
+  expect_equal(.rank_of(v, "an-382"), 2L)
+
+  # Now express the ruling, WITHOUT rebuilding the views.
+  con <- DBI::dbConnect(duckdb::duckdb(), path, read_only = FALSE)
+  DBI::dbExecute(con, "UPDATE lab_method SET preference = 100 WHERE uuid = 'lm-lab-acirl2'")
+  DBI::dbDisconnect(con, shutdown = TRUE)
+
+  v2 <- .mig005_read_view(path)
+  expect_equal(.rank_of(v2, "an-382"), 1L)   # the ruling flipped it...
+  expect_equal(.rank_of(v2, "an-381"), 2L)
+  expect_identical(nrow(v2), nrow(v))        # ...and dropped nothing
+
+  # A LOWER number wins, so a competing weaker preference must not overtake.
+  con <- DBI::dbConnect(duckdb::duckdb(), path, read_only = FALSE)
+  DBI::dbExecute(con, "UPDATE lab_method SET preference = 900 WHERE uuid = 'lm-lab-acirl'")
+  DBI::dbDisconnect(con, shutdown = TRUE)
+  expect_equal(.rank_of(.mig005_read_view(path), "an-382"), 1L)
+})
+
+test_that("005: an unset preference leaves the field-over-lab ordering untouched", {
+  # NON-VACUITY for the whole design: `preference` sorts FIRST, ahead of
+  # `is_field`. If the COALESCE default were wrong - or applied per-row rather
+  # than uniformly - it would silently outrank the A75 rule everywhere. Every
+  # method in this fixture is NULL, so P1's field row must still win.
+  mig1 <- .mig005_load_001(); mig4 <- .mig005_load_004(); mig5 <- .mig005_load()
+  path <- .run_001_004_005(mig1, mig4, mig5)
+  v <- .mig005_read_view(path)
+
+  expect_equal(.rank_of(v, "an-312"), 1L)   # field beats lab, as before
+  expect_equal(.rank_of(v, "an-311"), 2L)
+  expect_equal(.rank_of(v, "an-332"), 1L)   # ALS beats ACIRL among lab, as before
 })
