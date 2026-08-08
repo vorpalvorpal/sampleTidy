@@ -1520,6 +1520,196 @@
   rows
 }
 
+# ---- RULING-8 (Robin, 2026-08-08): the units plausibility gate -------------
+#
+# WHY THIS EXISTS AT ALL. `unify_value()` (R/units.R) converts from the
+# INCOMING ROW's `units_raw` to the ANALYTE's registered units. It is a pure
+# unit engine: it can tell you that `µg/L` and `mg/L` differ by 1000, and it
+# aborts on a unit it does not recognise. What it structurally CANNOT tell you
+# is whether the units string on the row is the units the NUMBER is actually
+# in. Two measured populations in the ACIRL transcription corpus turn on
+# exactly that gap (re-measured 2026-08-08 over the 34,137 `unprocessed` rows,
+# `scratchpad/m6b_ruling8_0*.R`):
+#
+#  (a) 81 rows whose `units_raw` disagrees IN SCALE with the units every other
+#      row for that same analyte carries - 35 `Biochemical Oxygen Demand` +
+#      35 `Total Organic Carbon` + 5 `Chemical Oxygen Demand` rows typed
+#      `µg/L` against mg/L analytes (they convert cleanly at x0.001 and land
+#      1000x LOW, no error possible), and 6 `C6 - C10 Fraction` rows typed
+#      `mg/L` against a `mg/L` analyte whose every sibling row is `µg/L` (they
+#      land 1000x HIGH). Those last 6 are the case no units library can ever
+#      catch: `units_from` and `units_to` are the IDENTICAL STRING, so
+#      `unify_value()` short-circuits before udunits is even consulted.
+#  (b) 344 rows carrying NA `units_raw` against an analyte that HAS registered
+#      units. `unify_value()` is asymmetric by design (R/units.R:116-121): a
+#      missing `units_to` aborts, a missing `units_from` returns the value
+#      UNCHANGED, with no error and no review item. The number is stored on an
+#      unstated assumption about what it was measured in.
+#
+# WHY THIS IS NOT THE "MODAL UNITS" GATE THAT WAS PROPOSED. The 2026-08-02
+# design note proposed "flag a row whose `units_raw` disagrees with the modal
+# `units_raw` for that analyte". Two measurements killed that formulation:
+#
+#   * There is NO stored units history to take a mode over. `analysis` has no
+#     units column at all (its `value` is already in the analyte's units), and
+#     `lab_method.units` is NULL on 358 of 359 live rows. The mode is not
+#     computable from anything the database holds.
+#   * Taking the mode over the INCOMING BATCH instead catches 22 of the 81.
+#     The defect is a whole-column transcription error, so the offending rows
+#     are usually the ONLY rows for that analyte in their workbook: 2 of the 4
+#     BOD files, 2 of 2 COD files and 2 of 2 `C6 - C10 Fraction` files hold no
+#     correctly-typed sibling row to be the mode.
+#
+# A string mode would also have fired on 114 corpus rows that are not wrong at
+# all: `µg/L` appears under BOTH U+00B5 (MICRO SIGN, 8,954 rows) and U+03BC
+# (GREEK SMALL LETTER MU, 114 rows), which `normalise_lab_text()` does not
+# fold together. Both are valid udunits and both convert identically, so the
+# rule below - which compares SCALE, never spelling - is silent on all 114.
+#
+# WHAT THIS GATE ACTUALLY TESTS. The one thing the database does hold a rich
+# history of is the analyte's own VALUES, already in its canonical units:
+# 96,376 positive `analysis.value` rows across 222 analytes. A units mistake
+# of the kind above is a value that lands one or more decades outside
+# everything that analyte has ever measured, and that IS checkable.
+#
+# THE RULE, in one sentence: a resolved row is held for review when the value
+# it would store - AFTER conversion into the analyte's registered units -
+# falls more than `.RC_UNITS_GATE_DECADES` decades outside the full observed
+# range of that analyte's stored history, and only for analytes carrying at
+# least `.RC_UNITS_GATE_MIN_HISTORY` stored values.
+#
+# MEASURED, over the corpus and over the live database:
+#   * catches 79 of the 81 (the 2 misses are one BOD and one TOC row whose
+#     x0.001 value still lands inside the widened envelope),
+#   * catches 27 of the 344 NA-units rows - the ones demonstrably wrong,
+#     including every `C6/C10/C15/C29` TRH fraction and Pentachlorophenol,
+#   * fires on 0 of the 33,484 corpus rows whose units DO agree, and
+#   * fires on 2 of 84,206 live `analysis` values under a LEAVE-ONE-OUT
+#     replay (0.0024%) - i.e. re-deciding every value the database already
+#     holds against the range of its analyte's OTHER values. In-sample the
+#     count is trivially zero, which would prove nothing; leave-one-out is the
+#     honest false-positive measure and it is 2 rows (one `Cations-total`, one
+#     `AmsPAF`).
+#
+# The `units_missing` arm below is separate and deliberately NOT value-gated:
+# it is not a claim that the number is wrong, it is the observation that
+# nobody ever said what the number was in. Measured false-positive load on
+# ordinary lab imports: 0 of 4,525 ESdat chemistry rows across the real
+# 261-file corpus carry a blank `Result_Unit`.
+#
+# WHY HELD RATHER THAN PASSED THROUGH FLAGGED: this file's own header states
+# the disposition rule - "a resolved row that fails units/value or datetime"
+# is HELD. The sibling `unknown_unit` item three stages down this very
+# function holds. A row we believe is 1000x wrong is at least as untrustworthy
+# as one whose unit string we cannot parse, so it takes the same disposition.
+# The BATCH is never aborted: these are per-row review items, exactly like
+# every other producer in this file.
+
+#' Minimum number of stored values an analyte must already carry before the
+#' plausibility gate is allowed to speak about it.
+#'
+#' 30 is not a statistical threshold - the rule uses min/max, not a
+#' distribution - it is a "have we seen this analyte enough to know its
+#' magnitude" threshold. Measured on the live database: 160 of 246 analytes
+#' clear it, and those 160 carry 84,206 of the 96,376 stored values. Below it
+#' the gate is MUTE (no review item, no hold), because a brand-new analyte's
+#' first few values ARE its envelope and testing a value against a range it
+#' defines is circular.
+#' @keywords internal
+#' @noRd
+.RC_UNITS_GATE_MIN_HISTORY <- 30L
+
+#' Decades of headroom allowed OUTSIDE the analyte's observed value range
+#' before a row is flagged.
+#'
+#' 1, i.e. the accepted window is `[min/10, max*10]`. The defect being caught
+#' is a factor of 1000, so one decade leaves two decades of margin while still
+#' admitting a genuine new extreme up to 10x beyond anything on record.
+#' Measured: at 1 decade the leave-one-out false-positive count over the live
+#' database is 2 of 84,206; the 81 known-bad corpus rows still produce 79
+#' hits. Widening to 2 decades drops the catch without buying anything the
+#' 0.0024% false-positive rate needed.
+#' @keywords internal
+#' @noRd
+.RC_UNITS_GATE_DECADES <- 1
+
+#' Per-analyte magnitude envelope from the stored `analysis` history.
+#'
+#' Deliberately NOT folded into `.rc_load_registry()`: that function's
+#' contract is the small CORE REGISTRY tables, and it is called against
+#' databases that have no `analysis` table at all (the migration-003 fixture,
+#' `tests/testthat/helper-migration-003-db.R`, is one). Taking `con` here
+#' instead follows `.rc_three_way()`, the existing precedent in this file for
+#' a stage that needs the DB rather than the registry snapshot.
+#'
+#' Only POSITIVE values enter the envelope: the rule is a decade test, and a
+#' stored 0 (or a negative, which `Ionic Balance` and friends legitimately
+#' carry) has no meaningful log magnitude. Excluding them cannot make the gate
+#' fire where it otherwise would not - it can only shrink `n` below the
+#' history threshold, which mutes the gate.
+#'
+#' @param con an open DBI connection (read-only use; CONTRACT A32).
+#' @return data.frame(uuid_analyte, n, v_min, v_max); zero rows if the
+#'   database holds no analyses.
+#' @keywords internal
+#' @noRd
+.rc_analyte_value_range <- function(con) {
+  out <- DBI::dbGetQuery(
+    con,
+    "SELECT m.uuid_analyte AS uuid_analyte,
+            count(*)       AS n,
+            min(a.value)   AS v_min,
+            max(a.value)   AS v_max
+       FROM analysis a
+       JOIN lab_method m ON m.uuid = a.uuid_lab
+      WHERE a.value IS NOT NULL AND a.value > 0 AND m.uuid_analyte IS NOT NULL
+      GROUP BY m.uuid_analyte"
+  )
+  # The duckdb R driver hands `count(*)` back as a DOUBLE, not an integer
+  # (checked, not assumed: `dbGetQuery(con, "SELECT count(*) AS n ...")$n` is
+  # class "numeric" under this package's `st_connect()`, which takes the
+  # driver's default `bigint` handling). `n` is a row count and is compared
+  # against an integer threshold and published into a review payload, so type
+  # it once here rather than letting a float count propagate. An earlier
+  # version of this comment claimed the driver returned a bit64::integer64
+  # that `jsonlite` would render as a quoted string; that was wrong, and the
+  # mutation run that proved it (M17 survived, because on this driver the
+  # coercion changed nothing observable) is why the assertion in
+  # test-reconcile.R now pins the R-level type directly instead of trying to
+  # see the difference through the JSON.
+  out$n <- as.integer(out$n)
+  out
+}
+
+#' Is `value` implausible for `uuid_analyte` given the stored envelope?
+#'
+#' @param value the value that WOULD be stored, already converted into the
+#'   analyte's registered units.
+#' @param uuid_analyte the resolved analyte.
+#' @param ranges the `.rc_analyte_value_range()` frame.
+#' @return `FALSE` whenever the gate has nothing to say (unknown analyte, too
+#'   little history, a NA/non-positive value); `TRUE` only on a positive
+#'   finding. Never `NA` - the caller branches on it directly.
+#' @keywords internal
+#' @noRd
+.rc_units_implausible <- function(value, uuid_analyte, ranges) {
+  if (is.na(value) || value <= 0 || is.na(uuid_analyte)) return(FALSE)
+  # An EMPTY envelope (a database with no analyses yet) and an ABSENT one
+  # take the same path as an analyte simply not present in it: `match()`
+  # against `character(0)` - or against NULL - returns NA, so the guard below
+  # already answers all three. An earlier version carried an explicit
+  # `is.null(ranges) || nrow(ranges) == 0` line above this; mutation testing
+  # showed it was unreachable dead code (deleting it changed no behaviour and
+  # failed no test, M22), so it is gone rather than left as an untestable
+  # branch. The empty-database case is still pinned end to end - see the
+  # "on a database holding NO analyses at all" test.
+  hit <- match(uuid_analyte, ranges$uuid_analyte)
+  if (is.na(hit)) return(FALSE)
+  if (ranges$n[[hit]] < .RC_UNITS_GATE_MIN_HISTORY) return(FALSE)
+  headroom <- 10^.RC_UNITS_GATE_DECADES
+  value < ranges$v_min[[hit]] / headroom || value > ranges$v_max[[hit]] * headroom
+}
+
 # ---- R-8.4/R-11.6: units & value -------------------------------------------
 
 #' Convert `value_num`/`rl` to the resolved analyte's canonical units, route
@@ -1527,14 +1717,30 @@
 #' (R-8.4). ANALYTE-PENDING rows are NOT converted (no analyte -> no
 #' canonical units): the value passes through unconverted and `units_raw` is
 #' left set (S-5); an unconvertible unit is NOT an error for them.
+#'
+#' RULING-8 (2026-08-08): also runs the units plausibility gate over every
+#' fully resolved row - see the long block above `.RC_UNITS_GATE_MIN_HISTORY`
+#' for the two measured defect populations it exists for, and why it tests the
+#' converted VALUE rather than the units STRING.
+#'
+#' @param con an open DBI connection, used read-only for the analyte value
+#'   envelope the plausibility gate needs (`.rc_analyte_value_range()`).
+#'   Taken as an argument rather than read off `registry` because
+#'   `.rc_load_registry()` is called against databases with no `analysis`
+#'   table; `.rc_three_way()` sets the same precedent in this file.
 #' @return `list(kept, skipped, review)`.
 #' @keywords internal
 #' @noRd
-.rc_resolve_units_values <- function(rows, registry) {
+.rc_resolve_units_values <- function(rows, registry, con) {
   n <- nrow(rows)
   if (n == 0) {
     return(list(kept = rows, skipped = .rc_proto_skip(), review = .rc_proto_review()))
   }
+
+  # One aggregate query per event, not one per row. Hoisted above the loop
+  # deliberately: inside it, an event with 5,000 rows would issue 5,000
+  # identical GROUP BYs.
+  value_ranges <- .rc_analyte_value_range(con)
 
   parsed <- parse_value(rows$value_raw)
 
@@ -1609,6 +1815,60 @@
       )
       next
     }
+
+    # RULING-8 arm 1, `units_missing`: `units_from` is NA while the analyte
+    # DOES carry units, so `unify_value()` has just returned the number
+    # unchanged (R/units.R's documented "units_from NA -> value passes through
+    # unchanged" branch) and stored it as though it were already in the
+    # analyte's units. Nobody ever said it was. Checked BEFORE arm 2 so a row
+    # that is both unit-less and out of range raises ONE item naming the more
+    # specific fact, not two.
+    if (is.na(units_from) && !is.na(units_to)) {
+      keep[[i]] <- FALSE
+      review_list[[length(review_list) + 1]] <- .rc_review_row(
+        source_ref = rows$source_ref[[i]], kind = "units_implausible", n_rows = 1L,
+        source_hash = rows$source_hash[[i]], subkind = "units_missing",
+        diagnostics = list(units_raw = rows$units_raw[[i]], analyte = analyte_row$name[[1]],
+                           analyte_units = analyte_row$units[[1]],
+                           value_raw = rows$value_raw[[i]])
+      )
+      next
+    }
+
+    # RULING-8 arm 2, `value`: the conversion succeeded and the units string
+    # is unremarkable, but the number it produces is a decade or more outside
+    # everything this analyte has ever measured. This is the ONLY arm that can
+    # see the `mg/L` -> `mg/L` case, where `units_from` and `units_to` are the
+    # identical string and `unify_value()` never consults udunits at all.
+    #
+    # TESTED ON THE NUMBER THAT WILL BE STORED, WHICH FOR A NON-DETECT IS THE
+    # REPORTING LIMIT, NOT `value`. `parse_value()` leaves `value_num` NA on a
+    # `<20` and puts 20 in `rl`; commit then stores the RL as the row's value
+    # (which is why `.rc_analyte_value_range()`'s envelope already contains
+    # non-detect RLs - checked: `quantified = FALSE` rows carry
+    # `value == rl_low`). Testing `conv[[1]]` alone therefore skipped every
+    # non-detect, and that is not a rare corner: of the six `C6 - C10 Fraction`
+    # rows this arm exists for - the `mg/L` -> `mg/L` case no units library can
+    # see - FIVE are `<20` non-detects and only one carries a number. The
+    # headline case was 5/6 unguarded.
+    to_check <- if (!is.na(conv[[1]])) conv[[1]] else conv[[2]]
+    if (.rc_units_implausible(to_check, rows$uuid_analyte[[i]], value_ranges)) {
+      keep[[i]] <- FALSE
+      rng <- value_ranges[match(rows$uuid_analyte[[i]], value_ranges$uuid_analyte), , drop = FALSE]
+      review_list[[length(review_list) + 1]] <- .rc_review_row(
+        source_ref = rows$source_ref[[i]], kind = "units_implausible", n_rows = 1L,
+        source_hash = rows$source_hash[[i]], subkind = "value",
+        diagnostics = list(units_raw = rows$units_raw[[i]], analyte = analyte_row$name[[1]],
+                           analyte_units = analyte_row$units[[1]],
+                           value_raw = rows$value_raw[[i]],
+                           value_converted = to_check,
+                           history_n = rng$n[[1]],
+                           history_min = rng$v_min[[1]],
+                           history_max = rng$v_max[[1]])
+      )
+      next
+    }
+
     value_converted[[i]] <- conv[[1]]
     rl_converted[[i]] <- conv[[2]]
     rl_high[[i]] <- conv[[3]]
@@ -2576,7 +2836,7 @@ reconcile_event <- function(event, con) {
   active <- .rc_resolve_existing_pending(active, registry)
 
   # R-8.4 / R-11.6 (units & value; pending rows pass through unconverted)
-  uv <- .rc_resolve_units_values(active, registry)
+  uv <- .rc_resolve_units_values(active, registry, con)
   add_skip(uv$skipped)
   add_review(uv$review)
   active <- uv$kept

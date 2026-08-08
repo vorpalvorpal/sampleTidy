@@ -679,6 +679,492 @@ test_that("FD4/R-16.20: a text-vs-text value_conflict carries BOTH text values i
   expect_identical(d$value_chr_incoming, "turbid, brown")
 })
 
+# ---- RULING-8 (Robin, 2026-08-08): the units plausibility gate ------------
+#
+# THE DEFECT THESE PIN. `unify_value()` is a pure unit engine: it knows that
+# `µg/L` and `mg/L` differ by 1000 and it aborts on a unit string it cannot
+# parse. It has no way to know whether the units string on a row is the units
+# the NUMBER is actually in. Two populations in the ACIRL transcription corpus
+# turn on exactly that, re-measured 2026-08-08 over its 34,137 `unprocessed`
+# rows (`scratchpad/m6b_ruling8_01_corpus.R` / `_03_modal.R`):
+#
+#   * 81 rows whose units disagree IN SCALE with every sibling row for the
+#     same analyte - 35 BOD + 35 TOC + 5 COD rows typed `µg/L` against mg/L
+#     analytes (they convert cleanly at x0.001 and land 1000x LOW, so no
+#     error is possible), and 6 `C6 - C10 Fraction` rows typed `mg/L` against
+#     a `mg/L` analyte whose 124 sibling rows are all `µg/L`.
+#   * 344 rows with NA `units_raw` against an analyte that HAS units, which
+#     `unify_value()` passes through unconverted and unremarked (R/units.R's
+#     documented asymmetry: NA `units_to` aborts, NA `units_from` does not).
+#
+# The 6 `C6 - C10 Fraction` rows are the reason this gate tests the VALUE and
+# not the units string: `units_from` and `units_to` are the IDENTICAL STRING
+# `mg/L`, so `unify_value()` short-circuits before udunits is consulted at
+# all. No units library, however good, can raise anything there. The
+# `identical string` test below is that exact case.
+#
+# The rule: hold a resolved row when the value it would store - AFTER
+# conversion into the analyte's registered units - falls more than
+# `.RC_UNITS_GATE_DECADES` decades outside the entire observed range of that
+# analyte's stored history, for analytes with at least
+# `.RC_UNITS_GATE_MIN_HISTORY` stored values. Measured: 79 of the 81, 27 of
+# the 344, ZERO of the 33,484 corpus rows whose units agree, and 2 of 84,206
+# live `analysis` values under a leave-one-out replay (0.0024%).
+#
+# WHY THE HISTORY IS SEEDED EXPLICITLY IN EACH TEST. `seed_db()` ships 5
+# analysis rows, which is below `.RC_UNITS_GATE_MIN_HISTORY` - so the gate is
+# MUTE across the entire pre-existing suite by construction, and a test that
+# wants it to speak must say so. That is deliberate, not an accident of the
+# fixture: it is also why adding this gate changed no existing test.
+
+#' Give Fluoride (a-0002, canonical units `µg/L`, reached via lm-0002 / 'EK040P:
+#' Fluoride by PC Titrator') `n` stored values evenly spanning `lo`..`hi`, on a
+#' sample at T.S01 in 2020 - far from every incoming fixture row's
+#' (feature, date, uuid_lab) key, so the seeded history can never itself
+#' collide with the row under test in the R-8.7 three-way.
+#'
+#' NOTE the EFFECTIVE envelope is 100..`hi`, not `lo`..`hi`: `seed_db()` already
+#' ships `an-0001` = 100 on lm-0002, which is the same analyte and therefore
+#' part of the same range. Left in place rather than deleted - the gate must
+#' work off whatever the database actually holds, and a helper that quietly
+#' curated the history would be testing a cleaner world than the real one.
+rg8_seed_history <- function(con, n = 40L, lo = 120, hi = 900) {
+  DBI::dbExecute(con, "INSERT INTO sample (uuid, uuid_feature_alias, date)
+                       VALUES ('s-rg8', 'fa-0001', DATE '2020-01-01')")
+  vals <- seq(lo, hi, length.out = n)
+  for (k in seq_len(n)) {
+    DBI::dbExecute(con, sprintf(
+      "INSERT INTO analysis (uuid, uuid_sample, uuid_lab, value, quantified, rl_low)
+       VALUES ('an-rg8-%03d', 's-rg8', 'lm-0002', %.10f, TRUE, 1)", k, vals[[k]]))
+  }
+  invisible(NULL)
+}
+
+#' One incoming Fluoride row at T.S02 (a feature with no seeded analysis, so
+#' anything that survives the gate lands visibly in `clean` rather than being
+#' swallowed by the three-way).
+rg8_row <- function(source_ref, units_raw, value) {
+  mk_row(source_ref = source_ref, lab_sample_id = "XX1234567002", feature_raw = "T.S02",
+         analyte_raw = "Fluoride", method_raw = "EK040P: Fluoride by PC Titrator",
+         units_raw = units_raw, value_raw = as.character(value), value_num = value,
+         below_detection = FALSE, rl = NA_real_)
+}
+
+test_that("RULING-8: a value 1000x high whose units_raw is the IDENTICAL STRING to the analyte's units is held - the one case no units library can catch (the 6 corpus `C6 - C10 Fraction` rows)", {
+  path <- seed_db()
+  con <- seed_con(path)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+  rg8_seed_history(con)
+
+  # `µg/L` in, `µg/L` on the analyte. `unify_value()` short-circuits on
+  # `canon_from == canon_to` (R/units.R) and returns the number untouched, so
+  # there is no conversion, no udunits call, and no error path at all. Only a
+  # test against the analyte's own measured magnitude can see this.
+  event <- mk_event(rg8_row("r1", "µg/L", 300000))
+  out <- reconcile_event(event, con)
+
+  expect_false("r1" %in% out$clean$source_ref)
+  hit <- out$review[out$review$source_ref == "r1", ]
+  expect_equal(nrow(hit), 1)
+  expect_identical(hit$kind, "units_implausible")
+  expect_identical(hit$subkind, "value")
+
+  # Sanity: the units string really is identical on both sides, so nothing
+  # about the units themselves is anomalous. If a future refactor made this
+  # test pass because the units disagreed, the test would stop pinning the
+  # thing it exists for.
+  an_units <- DBI::dbGetQuery(con, "SELECT units FROM analyte WHERE uuid = 'a-0002'")$units
+  expect_identical(an_units, "µg/L")
+})
+
+test_that("RULING-8: a NON-DETECT whose reporting limit is implausible is held - the arm tests the number that will be STORED", {
+  # THE GAP THIS CLOSES WAS 5 OF THE 6 ROWS THE ARM ABOVE EXISTS FOR.
+  # `parse_value()` leaves `value_num` NA on a `<20` and puts 20 in `rl`, so an
+  # arm testing only the converted VALUE skipped every non-detect. Of the six
+  # `C6 - C10 Fraction` corpus rows - the `mg/L` -> `mg/L` case no units
+  # library can see - FIVE are `<20` and only one carries a number. The
+  # headline case was 5/6 unguarded.
+  #
+  # Comparing an incoming RL against the value envelope is apples-to-apples,
+  # and that is measured rather than assumed: of the 47,227 non-detects in the
+  # live database, 34,942 carry `value == rl_low` exactly and only 427 have a
+  # NULL value. Commit stores a non-detect's RL as the row's value, so the
+  # envelope already contains non-detect RLs.
+  path <- seed_db()
+  con <- seed_con(path)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+  rg8_seed_history(con)
+
+  r <- rg8_row("r1", "µg/L", NA_real_)
+  r$value_raw <- "<300000"
+  r$value_num <- NA_real_
+  r$below_detection <- TRUE
+  r$rl <- 300000
+  out <- reconcile_event(mk_event(r), con)
+
+  expect_false("r1" %in% out$clean$source_ref)
+  hit <- out$review[out$review$source_ref == "r1", ]
+  expect_equal(nrow(hit), 1)
+  expect_identical(hit$kind, "units_implausible")
+  expect_identical(hit$subkind, "value")
+  # the reviewer is shown the RL, since that is the number that was judged
+  d <- jsonlite::fromJSON(hit$payload[[1]])
+  expect_equal(as.numeric(d$value_converted), 300000)
+})
+
+test_that("RULING-8: a DETECT is judged on its value, not on its reporting limit", {
+  # Both numbers are present here, and only one of them is what gets stored.
+  # A stated RL well below the analyte's range is ordinary - it is the
+  # instrument's sensitivity, not a measurement - so judging the row on it
+  # would hold a perfectly good result. (Mutation testing found this: swapping
+  # the arm to prefer the RL whenever one exists killed no test.)
+  path <- seed_db()
+  con <- seed_con(path)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+  rg8_seed_history(con)                       # envelope 100..900, so 10..9000 passes
+
+  r <- rg8_row("r1", "µg/L", 300)             # plausible value
+  r$rl <- 0.5                                 # RL an order of magnitude below the envelope
+  out <- reconcile_event(mk_event(r), con)
+
+  expect_false("units_implausible" %in% out$review$kind)
+  expect_true("r1" %in% out$clean$source_ref)
+})
+
+test_that("RULING-8: a non-detect's RL is judged AFTER conversion, not as it arrived", {
+  # `<0.5 mg/L` is 500 µg/L, comfortably inside the analyte's range; the raw
+  # 0.5 is a decade below it. Testing the number as it arrived would hold a
+  # correct row. This is the whole point of putting the arm downstream of
+  # `unify_value()`, and without this test the distinction is invisible -
+  # every other non-detect fixture uses µg/L on both sides, where converted
+  # and unconverted are the same number.
+  path <- seed_db()
+  con <- seed_con(path)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+  rg8_seed_history(con)
+
+  r <- rg8_row("r1", "mg/L", NA_real_)
+  r$value_raw <- "<0.5"
+  r$value_num <- NA_real_
+  r$below_detection <- TRUE
+  r$rl <- 0.5
+  out <- reconcile_event(mk_event(r), con)
+
+  expect_false("units_implausible" %in% out$review$kind)
+})
+
+test_that("RULING-8: a non-detect at a PLAUSIBLE reporting limit is NOT held", {
+  # The other side of the same coin, and the one that stops the arm above being
+  # a blanket "hold every non-detect". A non-detect at an ordinary RL is the
+  # commonest row in the database - 47,227 of them - so a gate that flagged
+  # them would be unusable.
+  path <- seed_db()
+  con <- seed_con(path)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+  rg8_seed_history(con)
+
+  r <- rg8_row("r1", "µg/L", NA_real_)
+  r$value_raw <- "<150"
+  r$value_num <- NA_real_
+  r$below_detection <- TRUE
+  r$rl <- 150
+  out <- reconcile_event(mk_event(r), con)
+
+  expect_false("units_implausible" %in% out$review$kind)
+})
+
+test_that("RULING-8: a units mistake that CONVERTS CLEANLY and lands 1000x low is held (the 35 BOD + 35 TOC + 5 COD corpus rows)", {
+  path <- seed_db()
+  con <- seed_con(path)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+  rg8_seed_history(con)
+
+  # The corpus shape: the workbook's units column says one thing, the number
+  # is in another. `mg/L` -> `µg/L` is a perfectly valid conversion, so
+  # `unify_value()` succeeds and stores 0.3 µg/L where the analyte has never
+  # measured below 120. No units error is possible here either - the units
+  # ARE convertible; they are simply not the units the number is in.
+  event <- mk_event(rg8_row("r1", "mg/L", 0.0003))
+  out <- reconcile_event(event, con)
+
+  expect_false("r1" %in% out$clean$source_ref)
+  hit <- out$review[out$review$source_ref == "r1", ]
+  expect_identical(hit$kind, "units_implausible")
+  expect_identical(hit$subkind, "value")
+
+  d <- jsonlite::fromJSON(hit$payload[[1]])
+  # The reviewer needs all four facts to adjudicate without re-running
+  # anything: what arrived, what it became, and what the analyte's own record
+  # says. `history_n` must be a JSON NUMBER - the duckdb driver returns
+  # `count(*)` as a BIGINT column and `jsonlite` renders integer64 as a
+  # QUOTED STRING, which is why `.rc_analyte_value_range()` coerces it.
+  expect_identical(d$units_raw, "mg/L")
+  expect_identical(d$analyte, "Fluoride")
+  expect_equal(d$value_converted, 0.3, tolerance = 1e-9)
+  expect_equal(d$history_n, 41)                        # 40 seeded + an-0001
+  expect_equal(d$history_min, 100, tolerance = 1e-9)   # seed_db()'s own an-0001
+  expect_equal(d$history_max, 900, tolerance = 1e-9)
+})
+
+test_that("RULING-8: a NA units_raw against an analyte that HAS units is held as subkind `units_missing` - closing unify_value()'s documented asymmetry (the 344 corpus rows)", {
+  path <- seed_db()
+  con <- seed_con(path)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+  rg8_seed_history(con)
+
+  # 300 is a PERFECTLY PLAUSIBLE Fluoride value (dead centre of the seeded
+  # 120..900 envelope), so the value arm has nothing to say. The finding is
+  # not "this number is wrong", it is "nobody said what this number is in" -
+  # `unify_value(300, NA, 'µg/L')` returns 300 with no error and no warning.
+  # Choosing an in-range value is what makes this test pin the `units_missing`
+  # arm specifically rather than accidentally re-testing the value arm.
+  event <- mk_event(rg8_row("r1", NA_character_, 300))
+  out <- reconcile_event(event, con)
+
+  expect_false("r1" %in% out$clean$source_ref)
+  hit <- out$review[out$review$source_ref == "r1", ]
+  expect_equal(nrow(hit), 1)
+  expect_identical(hit$kind, "units_implausible")
+  expect_identical(hit$subkind, "units_missing")
+})
+
+test_that("RULING-8: a row that is BOTH unit-less and out of range raises exactly ONE review item, naming the more specific `units_missing` fact", {
+  path <- seed_db()
+  con <- seed_con(path)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+  rg8_seed_history(con)
+
+  # 27 of the corpus's 344 NA-units rows are ALSO out of range (measured:
+  # every C6/C10/C15/C29 TRH fraction, plus Pentachlorophenol). Both arms are
+  # true of them. A reviewer must get one item, not two, and it must be the
+  # one that names the cause (no units) rather than the symptom (odd number).
+  event <- mk_event(rg8_row("r1", NA_character_, 300000))
+  out <- reconcile_event(event, con)
+
+  hit <- out$review[out$review$source_ref == "r1", ]
+  expect_equal(nrow(hit), 1)
+  expect_identical(hit$subkind, "units_missing")
+})
+
+test_that("RULING-8: a NA units_raw against an analyte with NO registered units is NOT flagged - there was no conversion owed (the 40 corpus rows the gate must stay silent on)", {
+  path <- seed_db()
+  con <- seed_con(path)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+  rg8_seed_history(con)
+
+  # Strip a-0002's units. `unify_value(300, NA, NA)` passes the value through
+  # - correctly, because there is no target to convert INTO. Flagging here
+  # would make the gate fire on every analyte whose units the registry has
+  # simply never recorded, which is a registry gap, not an import defect.
+  DBI::dbExecute(con, "UPDATE analyte SET units = NULL WHERE uuid = 'a-0002'")
+
+  event <- mk_event(rg8_row("r1", NA_character_, 300))
+  out <- reconcile_event(event, con)
+
+  expect_true("r1" %in% out$clean$source_ref)
+  expect_false("units_implausible" %in% out$review$kind)
+})
+
+test_that("RULING-8: the two `µg/L` code points (U+00B5 MICRO SIGN and U+03BC GREEK SMALL LETTER MU) are treated as one unit - the 114-row false positive a units-STRING rule would have produced", {
+  path <- seed_db()
+  con <- seed_con(path)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+  rg8_seed_history(con)
+
+  # Measured over the corpus: `µg/L` appears as U+00B5 on 8,954 rows and as
+  # U+03BC on 114. `normalise_lab_text()` does NOT fold them together, so the
+  # originally-proposed "disagrees with the modal units string" rule would
+  # have flagged all 114 - rows that are not wrong in any way. Both spellings
+  # are valid udunits and convert identically (verified:
+  # `unify_value(1, "μg/L", "mg/L")` and the U+00B5 form both give
+  # 0.001), and this gate never compares spellings at all.
+  expect_false(identical("µg/L", "μg/L"))
+  event <- mk_event(rg8_row("r1", "μg/L", 300))
+  out <- reconcile_event(event, con)
+
+  expect_true("r1" %in% out$clean$source_ref)
+  expect_false("units_implausible" %in% out$review$kind)
+})
+
+test_that("RULING-8: a genuine new extreme WITHIN one decade of the analyte's observed range still commits - the gate's headroom (.RC_UNITS_GATE_DECADES) is real, not decorative", {
+  path <- seed_db()
+  con <- seed_con(path)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+  rg8_seed_history(con)          # effective envelope 100..900 µg/L
+
+  # 8,000 is nearly 9x the highest Fluoride ever recorded and is still
+  # admitted; 9,001 (just past 900 x 10) is not. This pair is what stops the
+  # rule quietly degenerating into "flag anything outside min/max", which
+  # would fire on every legitimate new record high or low - and, measured
+  # leave-one-out over the live database, on far more than the 2 rows the
+  # one-decade window costs.
+  out_in <- reconcile_event(mk_event(rg8_row("r1", "µg/L", 8000)), con)
+  expect_true("r1" %in% out_in$clean$source_ref)
+
+  out_out <- reconcile_event(mk_event(rg8_row("r2", "µg/L", 9001)), con)
+  expect_false("r2" %in% out_out$clean$source_ref)
+  expect_identical(out_out$review$kind[out_out$review$source_ref == "r2"], "units_implausible")
+
+  # The mirror image at the bottom of the range: 10.0 is 100/10 exactly and
+  # admitted; 9.9 is below it and held. Without this half, an implementation
+  # testing only the upper bound passes every assertion above.
+  out_lo_in <- reconcile_event(mk_event(rg8_row("r3", "µg/L", 10.0)), con)
+  expect_true("r3" %in% out_lo_in$clean$source_ref)
+  out_lo_out <- reconcile_event(mk_event(rg8_row("r4", "µg/L", 9.9)), con)
+  expect_false("r4" %in% out_lo_out$clean$source_ref)
+  expect_identical(out_lo_out$review$kind[out_lo_out$review$source_ref == "r4"],
+                   "units_implausible")
+})
+
+test_that("RULING-8: the gate is MUTE for an analyte below .RC_UNITS_GATE_MIN_HISTORY stored values, and speaks at exactly that count", {
+  path <- seed_db()
+  con <- seed_con(path)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  # seed_db() already carries ONE a-0002 value (an-0001, 100 on lm-0002), so
+  # 28 more makes 29 - one short. A brand-new analyte's first handful of
+  # values ARE its envelope; testing a value against a range it defines is
+  # circular, which is what the threshold exists to prevent.
+  rg8_seed_history(con, n = 28L, lo = 120, hi = 900)
+  out_mute <- reconcile_event(mk_event(rg8_row("r1", "µg/L", 300000)), con)
+  expect_true("r1" %in% out_mute$clean$source_ref)
+  expect_false("units_implausible" %in% out_mute$review$kind)
+
+  # One more value takes the analyte to exactly 30 and the same row is held.
+  # The boundary is asserted from BOTH sides on purpose: a test that only
+  # showed the gate firing at 40 would pass under any threshold <= 40.
+  DBI::dbExecute(con, "INSERT INTO analysis (uuid, uuid_sample, uuid_lab, value, quantified, rl_low)
+                       VALUES ('an-rg8-x', 's-rg8', 'lm-0002', 500, TRUE, 1)")
+  out_live <- reconcile_event(mk_event(rg8_row("r2", "µg/L", 300000)), con)
+  expect_false("r2" %in% out_live$clean$source_ref)
+  expect_identical(out_live$review$kind[out_live$review$source_ref == "r2"], "units_implausible")
+})
+
+test_that("RULING-8: a held row does not take its batch down with it - the sibling rows of the same event still commit", {
+  path <- seed_db()
+  con <- seed_con(path)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+  rg8_seed_history(con)
+
+  # The whole disposition ruling in one assertion: this is a per-row review
+  # item on the same footing as `unknown_unit`, NOT a batch abort. An import
+  # of 34,137 rows carrying 81 bad ones must still deliver the other 34,056.
+  event <- mk_event(mk_rows(
+    rg8_row("good1", "µg/L", 300),
+    rg8_row("bad", "µg/L", 300000),
+    rg8_row("good2", "mg/L", 0.4)          # 400 µg/L, in range
+  ))
+  out <- reconcile_event(event, con)
+
+  # good1/good2 differ only in the units they arrived in, so R-8.6/R-12.13
+  # would treat them as one key; assert on the HELD row and on the fact that
+  # the batch produced clean rows at all, not on an exact clean count.
+  expect_false("bad" %in% out$clean$source_ref)
+  expect_gt(nrow(out$clean), 0)
+  expect_equal(sum(out$review$kind == "units_implausible"), 1)
+  expect_identical(out$review$source_ref[out$review$kind == "units_implausible"], "bad")
+  # And it is counted under its own key, not folded into another kind's.
+  expect_true("units_implausible" %in% names(out$counts))
+})
+
+test_that("RULING-8: an ANALYTE-PENDING row is never gated - with no analyte there is no envelope and no conversion", {
+  path <- seed_db()
+  con <- seed_con(path)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+  rg8_seed_history(con)
+
+  # PLAN-11's conveyor: an unresolvable analyte does not stop the row, it
+  # rides through carrying `analyte_pending` and commits dangling with
+  # `units_raw` intact. The gate must not intercept that path - it has no
+  # analyte to look the envelope up by, and a wild-looking number in unknown
+  # units is not evidence of anything.
+  event <- mk_event(mk_row(source_ref = "r1", lab_sample_id = "XX1234567002",
+                           feature_raw = "T.S02", analyte_raw = "Unobtainium",
+                           method_raw = "ZZ999: Unobtainium by wishing",
+                           cas_number = NA_character_,
+                           units_raw = NA_character_, value_raw = "300000",
+                           value_num = 300000, below_detection = FALSE, rl = NA_real_))
+  out <- reconcile_event(event, con)
+  expect_false("units_implausible" %in% out$review$kind)
+})
+
+test_that("RULING-8: a text-only (qualitative) result is never gated, and a non-positive value is not either", {
+  path <- seed_db()
+  con <- seed_con(path)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+  rg8_seed_history(con)
+
+  # A qualitative observation has no magnitude to compare, and the rule is a
+  # DECADE test, so a zero or negative value has no log magnitude either -
+  # both must fall through untouched rather than being flagged on a
+  # comparison that is not defined for them. (Live analytes legitimately
+  # store negatives: `Ionic Balance` is one.)
+  ev_text <- mk_event(mk_row(source_ref = "r1", lab_sample_id = "XX1234567003",
+                             analyte_raw = "Fluoride",
+                             method_raw = "EK040P: Fluoride by PC Titrator",
+                             units_raw = NA_character_, value_raw = "not sampled - dry",
+                             value_num = NA_real_, value_chr = "not sampled - dry",
+                             below_detection = NA, rl = NA_real_))
+  out_text <- reconcile_event(ev_text, con)
+  expect_false("units_implausible" %in% out_text$review$kind)
+
+  out_zero <- reconcile_event(mk_event(rg8_row("r2", "µg/L", 0)), con)
+  expect_false("units_implausible" %in% out_zero$review$kind)
+})
+
+test_that("RULING-8: .rc_analyte_value_range() counts only POSITIVE stored values and only analyte-resolved methods", {
+  path <- seed_db()
+  con <- seed_con(path)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+  rg8_seed_history(con, n = 40L, lo = 120, hi = 900)
+
+  # A stored 0 and a stored negative must not drag `v_min` to or below zero -
+  # `v_min / 10` would then admit every under-reported value ever, silently
+  # switching the lower arm off for that analyte. Assert on the envelope
+  # itself, not through reconcile: a range function that quietly widened
+  # would otherwise only show up as a gate that stopped firing.
+  DBI::dbExecute(con, "INSERT INTO analysis (uuid, uuid_sample, uuid_lab, value, quantified) VALUES
+    ('an-rg8-z', 's-rg8', 'lm-0002', 0, TRUE),
+    ('an-rg8-n', 's-rg8', 'lm-0002', -5, TRUE)")
+  # lm-0008 is a DANGLING method (uuid_analyte NULL, helper-db.R) carrying
+  # an-0002 = 965. It belongs to no analyte, so it must not appear at all.
+  rng <- .rc_analyte_value_range(con)
+  a2 <- rng[rng$uuid_analyte == "a-0002", ]
+  expect_equal(a2$v_min, 100, tolerance = 1e-9)   # an-0001, the seed's own row
+  expect_equal(a2$v_max, 900, tolerance = 1e-9)
+  expect_false(any(is.na(rng$uuid_analyte)))
+
+  # `n` is a row COUNT and is both compared against an integer threshold and
+  # published into the review payload, so it must come back typed as one. The
+  # duckdb driver hands `count(*)` back as a DOUBLE; without the coercion in
+  # `.rc_analyte_value_range()` this is `"double"`. Asserted at the R level
+  # rather than through the JSON because `jsonlite` renders a whole double
+  # and an integer identically - a mutation run proved the JSON assertion
+  # could not tell them apart.
+  expect_type(rng$n, "integer")
+})
+
+test_that("RULING-8: on a database holding NO analyses at all the gate is silent - an empty envelope means no evidence, never a finding", {
+  path <- seed_db()
+  con <- seed_con(path)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  # The first-ever import into a fresh database. `.rc_analyte_value_range()`
+  # returns ZERO rows, and the empty-frame guard in `.rc_units_implausible()`
+  # must read as "nothing to say", not as "everything is suspicious" - the
+  # latter would hold every row of the very first batch and make the pipeline
+  # unusable on a new database. This case is otherwise unreachable through
+  # `seed_db()`, which always ships 5 analyses; a mutation run found the guard
+  # completely untested (M21 survived) and this test is what closes it.
+  DBI::dbExecute(con, "DELETE FROM analysis")
+  expect_equal(nrow(.rc_analyte_value_range(con)), 0L)
+  expect_false(.rc_units_implausible(300000, "a-0002", .rc_analyte_value_range(con)))
+
+  out <- reconcile_event(mk_event(rg8_row("r1", "µg/L", 300000)), con)
+  expect_true("r1" %in% out$clean$source_ref)
+  expect_false("units_implausible" %in% out$review$kind)
+})
+
 # ---- R-11.16: quantified from parse_value(); write rl_high (F4) -----------
 # Producer-side pins: unlike test-commit.R's R-11.16 tests (which hand-build
 # `clean` and so only exercise the consumer), these drive the real
