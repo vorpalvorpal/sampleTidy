@@ -51,6 +51,13 @@
     ('lm-9001', 'a-9001', 'Calcium', 'ED093F: Dissolved Major Cations', 'ALS', 0.1, NULL, NULL),
     ('lm-9002', 'a-9003', 'Suspended Solids (SS)', 'EA025: Total Suspended Solids', 'ALS', 5, NULL, NULL)")
 
+  # The 1007 marker. This migration's mapping links two labels to analytes 007
+  # CREATES and a third is unblocked by an ACIRL method 007 DELETES, so 006 now
+  # refuses to run without it. The dependency has its own test below; every
+  # other test seeds it so it is not silently under examination.
+  DBI::dbExecute(con, "INSERT INTO schema_version (version, applied_at)
+                       VALUES (1007, TIMESTAMP '2026-08-08 00:00:00')")
+
   invisible(NULL)
 }
 
@@ -719,4 +726,105 @@ test_that("a mapping path that does not exist is refused", {
   mig <- .mig006_load()
   e <- .mig006_env()
   .expect_006_refused(mig, e, file.path(tempdir(), "no-such-mapping.csv"))
+})
+
+# ======================================================================
+# the 007 dependency and the conversion constant (2026-08-08 rulings)
+# ======================================================================
+
+test_that("006 REFUSES to run before 007", {
+  # Without this gate the missing dependency surfaces as three separate
+  # confusing failures - two "mapped analyte uuid does not exist" and one label
+  # collision - none of which names the cause. Rehearsed against a copy of the
+  # live database (scratchpad/m6b_rehearse_all.R): the shipped mapping really is
+  # unrunnable until 007 has been applied.
+  mig <- .mig006_load(); e <- .mig006_env()
+  con <- DBI::dbConnect(duckdb::duckdb(), e$db, read_only = FALSE)
+  DBI::dbExecute(con, "DELETE FROM schema_version WHERE version = 1007")
+  DBI::dbDisconnect(con, shutdown = TRUE)
+
+  before <- .mig006_state(e$db)
+  expect_error(
+    mig$mig006_run(db = e$db, snapshot_dir = e$snapshot_dir, mapping = .mig006_map()),
+    class = "sampletidy_error")
+  expect_identical(.mig006_state(e$db), before)
+  expect_identical(length(list.files(e$snapshot_dir)), 0L)
+})
+
+test_that("a mapped conversion_constant lands on the minted method", {
+  # THE ONLY COLUMN IN THIS MAPPING THAT CHANGES A COMMITTED VALUE.
+  # `.ct_method_conversion()` (R/commit.R) reads it off the matched method and
+  # multiplies value/rl_low/rl_high, so a transcription minted without the
+  # constant its ALS twin carries commits the lab's raw number as if it were
+  # already in the analyte's basis. Measured over all 215 labels
+  # (scratchpad/m6b_cc_sweep.R): exactly one needs it - `Nitrite as NO2`, whose
+  # 7 rows would land 3.28x high in NO2-N.
+  mig <- .mig006_load(); e <- .mig006_env()
+  map <- .mig006_map()
+  map$conversion_constant <- c("", "0.3044669", "")
+  map$reported_as <- c("", "NO2", "")
+
+  mig$mig006_run(db = e$db, snapshot_dir = e$snapshot_dir, mapping = map)
+
+  con <- DBI::dbConnect(duckdb::duckdb(), e$db, read_only = TRUE)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
+  got <- DBI::dbGetQuery(
+    con, "SELECT name, conversion_constant, reported_as FROM lab_method
+           WHERE organisation = 'ACIRL' AND method IS NULL AND name IN ('Calcium','Arsenic')
+           ORDER BY name")
+  expect_identical(got$name, c("Arsenic", "Calcium"))
+  expect_equal(got$conversion_constant, c(0.3044669, NA_real_))
+  expect_identical(got$reported_as, c("NO2", NA_character_))
+})
+
+test_that("a conversion_constant that does not parse is refused", {
+  # A silently-NA constant is the failure that matters: it looks applied and
+  # does nothing.
+  mig <- .mig006_load(); e <- .mig006_env()
+  map <- .mig006_map()
+  map$conversion_constant <- c("", "0.30 (approx)", "")
+  expect_error(
+    mig$mig006_run(db = e$db, snapshot_dir = e$snapshot_dir, mapping = map),
+    class = "sampletidy_error")
+})
+
+test_that("the SHIPPED mapping carries the nitrite constant and nothing else", {
+  # Pins the actual reviewed file, not a fixture. If a rebuild of the CSV ever
+  # drops the constant, or scatters constants onto labels that do not need one,
+  # this is what says so.
+  path <- testthat::test_path("..", "..", "dev", "migrations",
+                              "006-acirl-transcription-methods.csv")
+  skip_if_not(file.exists(path))
+  map <- utils::read.csv(path, stringsAsFactors = FALSE, colClasses = "character",
+                         na.strings = character(0), encoding = "UTF-8")
+  expect_true("conversion_constant" %in% names(map))
+  with_cc <- map$label[nzchar(trimws(map$conversion_constant))]
+  expect_identical(with_cc, "Nitrite as NO2")
+  expect_equal(as.numeric(map$conversion_constant[map$label == "Nitrite as NO2"]),
+               14.007 / 46.005, tolerance = 1e-9)
+})
+
+test_that(".mig006_verify_methods() itself catches a constant that did not land", {
+  # THE GATE, TESTED DIRECTLY. Mutation testing found that neutering the
+  # conversion-constant check inside the SUCCESS half killed nothing: the test
+  # above reads the constant straight out of `lab_method`, so it already fails
+  # any mutation to the WRITE, and the verify never gets a chance to be the
+  # thing that notices. A verify gate is protection for the OPERATOR at
+  # runtime, so it has to be exercised against a database that is wrong in
+  # exactly the way it exists to catch.
+  mig <- .mig006_load(); e <- .mig006_env()
+  map <- .mig006_map()
+  map$conversion_constant <- c("", "0.3044669", "")
+  mig$mig006_run(db = e$db, snapshot_dir = e$snapshot_dir, mapping = map)
+
+  con <- DBI::dbConnect(duckdb::duckdb(), e$db, read_only = FALSE)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
+  n_before <- as.integer(DBI::dbGetQuery(con, "SELECT COUNT(*) n FROM lab_method")$n) - nrow(map)
+
+  # non-vacuous: it passes on the state the migration actually produced
+  expect_true(mig$.mig006_verify_methods(con, map, n_before))
+
+  DBI::dbExecute(con, "UPDATE lab_method SET conversion_constant = NULL
+                        WHERE organisation = 'ACIRL' AND method IS NULL AND name = 'Arsenic'")
+  expect_error(mig$.mig006_verify_methods(con, map, n_before), class = "sampletidy_error")
 })

@@ -346,3 +346,80 @@ test_that("the SAFETY half catches a stray change to `analysis`", {
   )
   expect_length(.mig007_state(e$db)$marker, 0L)
 })
+
+test_that("(4) the two new analytes land on their PINNED uuids", {
+  # The uuids in `.mig007_new_analytes` are literals, and that is deliberate:
+  # migration 006's mapping CSV names them, so they must be knowable before any
+  # of this is applied. If ruling (4) ever went back to generating them, 006
+  # would refuse every label pointing at those analytes - and the failure would
+  # surface two migrations later, with nothing to say why.
+  mig <- .mig007_load(); e <- .mig007_env()
+  mig$mig007_run(db = e$db, snapshot_dir = e$snapshot_dir)
+
+  con <- DBI::dbConnect(duckdb::duckdb(), e$db, read_only = TRUE)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
+  for (spec in mig$.mig007_new_analytes) {
+    got <- DBI::dbGetQuery(con, "SELECT uuid, units, type, CAS FROM analyte WHERE name = ?",
+                           params = list(spec$name))
+    expect_identical(nrow(got), 1L)
+    expect_identical(got$uuid[[1]], spec$uuid)
+    expect_identical(got$units[[1]], spec$units)
+  }
+})
+
+test_that("(4) is REFUSED when a pinned uuid is already taken", {
+  # A literal uuid is only safe if a collision is impossible to miss. Without
+  # this gate the INSERT would fail on the primary key with duckdb's own message
+  # rather than one naming the actual problem.
+  mig <- .mig007_load(); e <- .mig007_env()
+  con <- DBI::dbConnect(duckdb::duckdb(), e$db, read_only = FALSE)
+  DBI::dbExecute(con, "INSERT INTO analyte (uuid, name, units, type, CAS)
+                       VALUES (?, 'Something Else', 'mg/L', 'organic', NULL)",
+                 params = list(mig$.mig007_new_analytes[[1]]$uuid))
+  DBI::dbDisconnect(con, shutdown = TRUE)
+
+  before <- .mig007_state(e$db)
+  expect_error(mig$mig007_run(db = e$db, snapshot_dir = e$snapshot_dir),
+               class = "sampletidy_error")
+  expect_identical(.mig007_state(e$db), before)
+  expect_identical(length(list.files(e$snapshot_dir)), 0L)
+})
+
+test_that("the pinned uuids are exactly the ones 006's mapping names", {
+  # THE CROSS-FILE PIN. 007 creates these analytes and 006 links labels to them
+  # by uuid; nothing else in either file connects the two. Without this test the
+  # pair can drift silently - edit one literal and both files still pass their
+  # own suites.
+  mig <- .mig007_load()
+  path <- testthat::test_path("..", "..", "dev", "migrations",
+                              "006-acirl-transcription-methods.csv")
+  skip_if_not(file.exists(path))
+  map <- utils::read.csv(path, stringsAsFactors = FALSE, colClasses = "character",
+                         na.strings = character(0), encoding = "UTF-8")
+  for (spec in mig$.mig007_new_analytes) {
+    rows <- map[map$analyte == spec$name, , drop = FALSE]
+    expect_gt(nrow(rows), 0L)                      # 006 must actually use it
+    expect_identical(unique(rows$uuid_analyte), spec$uuid)
+  }
+})
+
+test_that(".mig007_verify_rulings() itself catches an analyte created under the WRONG uuid", {
+  # THE GATE, TESTED DIRECTLY, because no end-to-end fixture can reach it.
+  # Mutation testing found this: neutering the pinned-uuid check in the verify
+  # killed nothing, since the test above reads the uuid straight out of the
+  # database and so is already failed by any mutation to the WRITE. A verify
+  # gate is protection for the OPERATOR at runtime - it must be exercised on
+  # its own, against a database that is wrong in exactly the way it exists to
+  # notice. (Same reason 008 unit-tests `mig008_verify()`.)
+  mig <- .mig007_load(); e <- .mig007_env()
+  mig$mig007_run(db = e$db, snapshot_dir = e$snapshot_dir)
+
+  con <- DBI::dbConnect(duckdb::duckdb(), e$db, read_only = FALSE)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
+  expect_true(mig$.mig007_verify_rulings(con))     # non-vacuous: it passes first
+
+  spec <- mig$.mig007_new_analytes[[1]]
+  DBI::dbExecute(con, "UPDATE analyte SET uuid = 'some-other-uuid' WHERE name = ?",
+                 params = list(spec$name))
+  expect_error(mig$.mig007_verify_rulings(con), class = "sampletidy_error")
+})

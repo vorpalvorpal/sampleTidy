@@ -111,7 +111,18 @@
 # join `analysis`, and this migration creates no analyses, so every view's row
 # count is unchanged whether or not they have been rebuilt. Requiring a 1005
 # marker would be a false dependency that blocks this pass if Robin chooses not
-# to apply 005.
+# to apply 005. Proved on two copies of the live database
+# (scratchpad/m6a_order_independence.R): 005 and 006 commute, byte-identical
+# end states either way.
+#
+# DEPENDS ON 007, HOWEVER, and that one is real - it is why the 1007 marker is
+# checked below. Three of the mapping's rows cannot exist without it:
+#   * `Decachlorobiphenyl` and `Volume Purged` link to analytes 007 CREATES.
+#     Their uuids are PINNED in 007 for exactly this reason, so the mapping can
+#     be written and reviewed before either migration runs.
+#   * `Total Dissolved Solids` is refused by this file's own collision gate
+#     until 007 deletes the unused ACIRL `field` method of that name.
+# Run 005 -> 007 -> 006.
 #
 # The verify gate has the same TWO halves 004 established.
 # `mig006_verify()` proves the SAFETY property (every base table this migration
@@ -137,6 +148,21 @@
 
 #' The mapping columns required of the CSV / data frame
 .mig006_required_cols <- c("label", "analyte", "uuid_analyte")
+
+#' Optional mapping columns, and the `lab_method` column each one writes
+#'
+#' `conversion_constant` IS NOT DECORATION - it is the one column here that
+#' changes a committed VALUE. `.ct_method_conversion()` (R/commit.R:1540) reads
+#' it off the MATCHED method at commit time and multiplies `value`/`rl_low`/
+#' `rl_high` by it, so a transcription minted without the constant its ALS twin
+#' carries commits the lab's raw number as if it were already in the analyte's
+#' basis. Measured over all 215 labels (scratchpad/m6b_cc_sweep.R): exactly ONE
+#' needs it - `Nitrite as NO2`, 7 rows, which would land 3.28x high in `NO2-N`.
+#'
+#' `reported_as` is documentation only - no package code reads it (grepped) -
+#' but it is what MADE the nitrite gap findable, so a method carrying an
+#' otherwise unexplained 0.3045 should carry the basis marker that explains it.
+.mig006_optional_cols <- c("conversion_constant", "reported_as")
 
 .mig006_default <- function(x, default) if (is.null(x)) default else x
 
@@ -260,6 +286,26 @@
        mint methods the import cannot hit. Fix the mapping, do not trim here.",
       class = "sampletidy_error"
     )
+  }
+
+  # `conversion_constant` arrives as TEXT (the whole CSV is read as character,
+  # so a label literally named "NA" survives - see the reader above) and must
+  # parse as a finite number where it is filled in. A silently-NA constant is
+  # the failure mode that matters: it looks applied and does nothing.
+  if ("conversion_constant" %in% names(map)) {
+    raw <- trimws(as.character(map$conversion_constant))
+    filled <- nzchar(raw) & !(raw %in% c("NA", "na"))
+    num <- suppressWarnings(as.numeric(raw[filled]))
+    if (any(is.na(num) | !is.finite(num) | num <= 0)) {
+      i <- which(filled)[which(is.na(num) | !is.finite(num) | num <= 0)[[1]]]
+      cli::cli_abort(
+        "006-acirl-transcription-methods: `conversion_constant` on row {i}
+         ({sQuote(map$label[i])}) is {sQuote(raw[i])}, which is not a positive
+         finite number. A constant that silently reads NA looks applied and does
+         nothing.",
+        class = "sampletidy_error"
+      )
+    }
   }
 
   dup <- duplicated(map$label)
@@ -407,6 +453,13 @@
 #' @param uuids character vector of row uuids, same length as `nrow(map)`.
 #' @return a data.frame ready for `db_append()`.
 .mig006_rows <- function(map, uuids) {
+  chr_col <- function(nm) {
+    if (!(nm %in% names(map))) return(rep(NA_character_, nrow(map)))
+    v <- trimws(as.character(map[[nm]]))
+    v[!nzchar(v) | v %in% c("NA", "na")] <- NA_character_
+    v
+  }
+  cc <- chr_col("conversion_constant")
   data.frame(
     uuid = uuids,
     uuid_analyte = map$uuid_analyte,
@@ -416,7 +469,8 @@
     rl_low = NA_real_,
     rl_high = NA_real_,
     units = NA_character_,           # header note (b) - deliberately not the corpus units
-    conversion_constant = NA_real_,
+    conversion_constant = as.numeric(cc),
+    reported_as = chr_col("reported_as"),
     stringsAsFactors = FALSE
   )
 }
@@ -560,6 +614,29 @@ mig006_verify <- function(before, after) {
       class = "sampletidy_error"
     )
   }
+  # THE CONSTANT IS CHECKED, because it is the only thing in this mapping that
+  # changes a committed value and the only thing whose absence is silent. Asked
+  # against the stored row rather than through the resolver: the resolver
+  # answers "which analyte", which is true with or without the constant.
+  if ("conversion_constant" %in% names(map)) {
+    raw <- trimws(as.character(map$conversion_constant))
+    want <- suppressWarnings(as.numeric(raw))
+    for (i in which(!is.na(want))) {
+      got <- DBI::dbGetQuery(
+        con, "SELECT conversion_constant FROM lab_method
+               WHERE name = ? AND organisation = ? AND method IS NULL",
+        params = list(map$label[[i]], .mig006_org))$conversion_constant
+      if (length(got) != 1L || is.na(got) || !isTRUE(all.equal(got, want[[i]]))) {
+        cli::cli_abort(
+          "006-acirl-transcription-methods verify failed: {sQuote(map$label[[i]])}
+           has conversion_constant {got}, expected {want[[i]]}. Without it the
+           lab's raw number commits as if it were already in the analyte's basis.",
+          class = "sampletidy_error"
+        )
+      }
+    }
+  }
+
   if (length(bad_kind) > 0) {
     cli::cli_abort(
       "006-acirl-transcription-methods verify failed: {length(bad_kind)} minted
@@ -669,13 +746,24 @@ mig006_run <- function(db, snapshot_dir, mapping, dry_run = FALSE,
       class = "sampletidy_error"
     )
   }
-  marker <- tryCatch(
-    DBI::dbGetQuery(
-      marker_con, "SELECT version, applied_at FROM schema_version WHERE version = ?",
-      params = list(.mig006_marker_version)
-    ),
+  markers <- tryCatch(
+    DBI::dbGetQuery(marker_con, "SELECT version, applied_at FROM schema_version"),
     finally = DBI::dbDisconnect(marker_con, shutdown = TRUE)
   )
+  # The 007 dependency, checked BEFORE anything else touches the database. Its
+  # absence would otherwise surface as three separate confusing failures - two
+  # "mapped analyte uuid does not exist" and one label collision - none of which
+  # names the actual cause.
+  if (!(1007L %in% markers$version)) {
+    cli::cli_abort(
+      "{db}: migration 007 has not been applied (no 1007 marker in
+       schema_version). This mapping links two labels to analytes 007 creates,
+       and a third is blocked by an ACIRL method 007 deletes. Run 005, then 007,
+       then this one - see the file header.",
+      class = "sampletidy_error"
+    )
+  }
+  marker <- markers[markers$version == .mig006_marker_version, , drop = FALSE]
 
   if (nrow(marker) > 0) {
     recorded_at <- marker$applied_at[[1]]
