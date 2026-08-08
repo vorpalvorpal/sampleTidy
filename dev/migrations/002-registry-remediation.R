@@ -475,6 +475,23 @@ mig002_backup <- function(db, snapshot_dir, .now = NULL) {
 #' makes a torn re-run ABORT LOUDLY (`class = "sampletidy_error"`) rather
 #' than silently reporting `status = "migrated"`.
 #'
+#' NEVER RUN THIS AFTER 006 (ordering constraint, measured 2026-08-08 on a copy
+#' of the live DB, `scratchpad/mig_full_chain.R`). The idempotence claim above
+#' holds only while the REGISTRY IS UNCHANGED, and `006-acirl-transcription-
+#' methods` adds 211 `lab_method` rows. Re-run after 006, R-14.2 writes 15
+#' fields it did not write before - 13 harmless `reported_as` back-fills onto
+#' the new ACIRL methods, and TWO DESTRUCTIVE ONES:
+#'
+#'     lab_method.conversion_constant  0.304466905771112 -> NA
+#'
+#' on BOTH `Nitrite as NO2` methods (ACIRL `5acbaa02-...`, ALS `9caf31da-...`).
+#' That constant is precisely what 006 exists to establish. R-14.2 derives
+#' `conversion_constant` from the `reported_as` pairing, and once 006 has set
+#' `reported_as` on those rows it no longer recognises the combination and
+#' nulls the constant rather than leaving it alone. Run 002 BEFORE 005/007/006
+#' or not at all; on a registry that already carries the 2026-07-23 backfill it
+#' is a verified no-op (0 rows written).
+#'
 #' @param db path to the live DuckDB file.
 #' @param snapshot_dir directory for the pre-migration backup.
 #' @param actor who is making this change (recorded on every `change_log`
