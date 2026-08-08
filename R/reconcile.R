@@ -1796,6 +1796,41 @@
     units_to <- normalise_lab_text(analyte_row$units[[1]])
     units_from <- normalise_lab_text(rows$units_raw[[i]])
 
+    # RULING-8 arm 0, `units_numeric`: A BARE NUMBER IN THE UNITS COLUMN IS
+    # NEVER A UNIT - IT IS A VALUE THAT LANDED IN THE WRONG CELL.
+    #
+    # udunits disagrees, and that is the whole danger: it reads a bare number
+    # as a DIMENSIONLESS SCALE FACTOR, so `1.89` is a perfectly valid unit
+    # meaning "times 1.89". Measured on the corpus (scratchpad/m6c_units_vocab.R):
+    # 17 `Sodium Adsorption Ratio` rows carry `units_raw = 1.89` while their
+    # values are 1.84 / 2.18 / 2.03 - the same magnitude as the thing in the
+    # units cell. Against today's registry (`SAR` units `mg/L`) those rows
+    # ERROR and get reviewed. The moment `SAR` is corrected to the
+    # dimensionless `1` they would start CONVERTING - silently multiplied by
+    # 1.89 - and ruling 8's value arm cannot see it, because 1.84 x 1.89 = 3.48
+    # is a perfectly ordinary SAR number. Fixing one defect would have created
+    # a worse one.
+    #
+    # `1` itself is exempt: it is the genuine dimensionless unit, it is what
+    # `NTMI` already uses, and it multiplies by nothing. Everything else that
+    # parses as a number is refused. The corpus's whole units vocabulary is 13
+    # strings and exactly one of them is numeric, so this refuses 17 rows and
+    # nothing else.
+    if (!is.na(units_from)) {
+      as_num <- suppressWarnings(as.numeric(units_from))
+      if (!is.na(as_num) && !isTRUE(all.equal(as_num, 1))) {
+        keep[[i]] <- FALSE
+        review_list[[length(review_list) + 1]] <- .rc_review_row(
+          source_ref = rows$source_ref[[i]], kind = "units_implausible", n_rows = 1L,
+          source_hash = rows$source_hash[[i]], subkind = "units_numeric",
+          diagnostics = list(units_raw = rows$units_raw[[i]], analyte = analyte_row$name[[1]],
+                             analyte_units = analyte_row$units[[1]],
+                             value_raw = rows$value_raw[[i]])
+        )
+        next
+      }
+    }
+
     conv <- tryCatch(
       unify_value(
         c(rows$value_num[[i]], rows$rl[[i]], parsed$rl_high[[i]]),
