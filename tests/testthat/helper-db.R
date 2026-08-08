@@ -207,6 +207,23 @@
     )"
 )
 
+# Indexes that live databases carry once the operator-run migrations have been
+# applied. Kept SEPARATE from `.st_test_core_ddl` rather than appended to the
+# `sample` CREATE TABLE, because they are not part of the table's declaration:
+# duckdb 1.4.1 cannot express this as a table constraint at all
+# (`ALTER TABLE ... ADD CONSTRAINT ... UNIQUE` -> "No support for that ALTER
+# TABLE option yet!"), so an index is the only form it has, and the separation
+# keeps that fact visible instead of hiding it inside a DDL string.
+#
+# 009's key is (uuid_feature_alias, datetime, uuid_project) - one sample per
+# alias per instant per work order. NB duckdb treats NULLs in a unique index as
+# DISTINCT, so a fixture row with a NULL `datetime` or `uuid_project` is never
+# constrained by this; that is the same exemption the live data has (2 rows).
+.st_test_core_indexes <- c(
+  "CREATE UNIQUE INDEX ux_sample_identity
+     ON \"sample\" (uuid_feature_alias, datetime, uuid_project)"
+)
+
 #' Create a throwaway seed DuckDB for tests (FIXTURES.md "Seed DB")
 #'
 #' Creates a DuckDB file in `dir`, runs `ensure_schema()` (the plan-01 ops
@@ -236,6 +253,17 @@ seed_db <- function(dir = NULL) {
   # NOT in ensure_schema() either (A50: ops-tables-only); it is declared here
   # for tests and created live by the plan-11 migration.
   for (ddl in .st_test_core_ddl) DBI::dbExecute(con, ddl)
+
+  # Migration 009's unique index, so a seeded database matches a migrated live
+  # one. Created BEFORE the seed rows below, not after, and that ordering is
+  # load-bearing: created after, a fixture that violated the key would fail at
+  # CREATE INDEX time with a duckdb error naming one duplicate; created before,
+  # the offending INSERT itself fails and points at the row that is wrong.
+  #
+  # See dev/migrations/009-sample-identity-index.R for why the key is
+  # (uuid_feature_alias, datetime, uuid_project) rather than the
+  # (uuid_feature, datetime, lab_reference) that was first proposed.
+  for (ddl in .st_test_core_indexes) DBI::dbExecute(con, ddl)
 
   # feature. f-0001..f-0003 are the original three (unchanged uuids/names).
   # f-0004..f-0007 are added for the plan-11 alias-narrowing fixtures below:
