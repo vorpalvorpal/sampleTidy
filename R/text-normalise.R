@@ -13,7 +13,10 @@
 #     MacRoman/latin-1 degree byte (0xA1, which decodes as U+00A1, an
 #     inverted exclamation mark, when misread as latin-1) and the classic
 #     cp1252 pairs from the old `unify_value()` unit_dictionary, where a lost
-#     multibyte sequence collapses to a single U+FFFD replacement character.
+#     multibyte sequence collapses to a single U+FFFD replacement character;
+#     plus (2026-08-08) the "UTF-8 read as latin-1" pairs `U+00C2 U+00B0` and
+#     `U+00C2 U+00B5`, where a correctly-UTF-8-encoded degree/micro sign is
+#     decoded one byte at a time and so gains a spurious leading A-circumflex.
 #
 # Substitutions are applied with `fixed = TRUE` (literal string matching, no
 # regex metacharacters).
@@ -41,7 +44,38 @@
   # U+FFFD = a micro/degree sign lost in a cp1252 misroute
   "\ufffdS/cm"   = "\u00b5S/cm",
   "\ufffdg/L"    = "\u00b5g/L",
-  "\ufffdC"      = "\u00b0C"
+  "\ufffdC"      = "\u00b0C",
+  # U+00C2 U+00B0 / U+00C2 U+00B5 - the "UTF-8 read as latin-1" pair (Robin's
+  # ruling, 2026-08-08). A degree sign encoded correctly in UTF-8 is the two
+  # bytes C2 B0; decode those bytes as latin-1 and each becomes its own
+  # character - A-circumflex (U+00C2) followed by the degree sign (U+00B0) -
+  # which renders as the familiar "A-hat degree". Same story for the micro
+  # sign, whose UTF-8 bytes are C2 B5.
+  #
+  # This is NOT the same defect as `<c2><b0>` above. That key is the
+  # byte-by-byte *escape spelling* a tool prints when it refuses to decode at
+  # all (7 literal ASCII characters); this one is a real 2-character string
+  # that has already been (mis)decoded. Both spellings must be listed.
+  #
+  # Measured in the ACIRL corpus (scratchpad/m6a_corpus_candidates.rds,
+  # 2026-08-08): 150 rows carry the analyte label
+  # `Electrical Conductivity @ 25<C2><B0>C` (97 of them in `unprocessed`),
+  # across 10 distinct 2400-* workbooks; the two-character sequence really is
+  # in the .xls stream, it is not an artefact of how R read the file. The
+  # clean spelling `Electrical Conductivity @ 25<B0>C` is ALREADY a registered
+  # lab_method resolving to analyte EC, and 12 further corpus rows already
+  # carry it - so repairing the text here collapses the corrupt label onto the
+  # existing registry row. The alternative (minting a second lab_method named
+  # after the corrupt bytes) would bake the defect into the registry
+  # permanently; a prior orphan of exactly that shape had to be deleted by
+  # hand (see the change_log entry for lab_method 9f59b10a).
+  #
+  # The micro entry has ZERO corpus hits today (every `units_raw` in the
+  # corpus already carries a clean U+00B5). It is included because it is the
+  # identical corruption of the identical byte pattern in the identical
+  # producer, and units strings are exactly where it would surface.
+  "\u00c2\u00b0" = "\u00b0",
+  "\u00c2\u00b5" = "\u00b5"
 )
 
 #' Normalise mojibaked text from lab data files
