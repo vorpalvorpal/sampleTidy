@@ -1491,6 +1491,97 @@ for lab reports; `sample.organisation ∈ {ACIRL, Internal, ALS}`;
     it is the **only** one left — the family is closed. Awaiting Robin's ruling;
     not applied.
 
+- **A83 AMENDED 2026-08-08** — the mapping is now **212 labels, not 208**, and
+  it **DEPENDS ON 007** (1007 marker checked). Robin's rulings freed four of the
+  seven excluded labels: `Total Dissolved Solids` (007 deletes the ACIRL `field`
+  method blocking it), `>C10 - C16 Fraction` (007 repoints its ALS twin off
+  TRH-F2), and `Decachlorobiphenyl` / `Volume Purged` (analytes 007 creates).
+  Three remain excluded and each now has a ruling rather than a question: the
+  two stale-template Fe labels drop at the ADAPTER, and the mojibake EC label is
+  fixed in `normalise_lab_text()` — omitting either from the mapping does not
+  stop it importing.
+
+  The mapping gained a **`conversion_constant` column**, and it is the only
+  column here that changes a committed value. `.ct_method_conversion()`
+  (R/commit.R:1540) reads the constant off the MATCHED method at commit and
+  multiplies `value`/`rl_low`/`rl_high`, so a transcription minted without the
+  constant its ALS twin carries commits the lab's raw number as if it were
+  already in the analyte's basis. Swept over all 215 labels
+  (`scratchpad/m6b_cc_sweep.R`): exactly ONE needs it — `Nitrite as NO2`, 7
+  rows, which would otherwise land **3.28× high** in `NO2-N`. A `reported_as`
+  column rides along as documentation, because that column is what made the gap
+  findable at all.
+
+  A `preference` column was considered and **deliberately not added**. Measured
+  over the 34,137-row corpus: the labels that would contest one analyte
+  (`Total Dissolved Solids` vs `(Calc.)`; `Nitrite as N` vs `as NO2` vs
+  `Nitrite`) **never co-occur on one sample — zero times**. An unreachable
+  ordering key is decoration.
+
+- **A82 AMENDED 2026-08-08** — the two analyte uuids ruling (4) creates are
+  **PINNED literals**, and that is the one place a literal uuid belongs in a
+  migration. The no-uuids rule is about LOOKUPS: a uuid used to find an existing
+  row is unreviewable and can silently select the wrong one. These find nothing
+  — they are the value a new row is created WITH, and pinning them is what lets
+  006's mapping name those analytes before either migration runs, so the whole
+  005 → 007 → 006 sequence is reviewable in advance and reproducible on a
+  restored backup. 007 refuses if either uuid is already taken, and a test
+  cross-pins them against 006's CSV so the pair cannot drift.
+
+- **A84** **A sample is identified by (feature, datetime), and where two samples
+  share that key the pipeline REFUSES rather than choosing**
+  (`.ct_existing_sample_uuid()`, R/commit.R; `dev/migrations/008-duplicate-samples.R`,
+  2026-08-08). Robin's ruling: "there should never be two samples at the same
+  feature at the same datetime ... fix the existing data and quarantine any
+  incoming data where this is true."
+
+  **The import half.** `.ct_existing_sample_uuid()` used to end `cand$uuid[[1]]`
+  — pick the first survivor. PLAN-7b's D6 `ORDER BY uuid` made that pick
+  *stable*, which is worth having, but stable is not right: every row of the
+  batch then attaches to whichever of several real samples sorted first.
+  Measured (`scratchpad/r008_postfix.R`): re-ingesting one date-only B.L01 XTAB
+  would have collapsed **13 separate ALS work orders** onto one sample, 179
+  conflicting analyses landing on top of each other. It now aborts
+  `sampletidy_error`, naming the candidates. `commit_event()` runs inside a
+  transaction, so refusing IS the quarantine. Only the already-guessing path
+  changes: one candidate still reuses, and a separating datetime still narrows.
+
+  **The data half is TWO unrelated errors**, and one fix applied to both would
+  destroy real data:
+  - Five samples at site L, 2024-11-28: a second load of the same field
+    readings under a different `person`. Every one of their 13 analyses is an
+    exact (method, value) twin on the survivor, re-proved at run time.
+    Deleted.
+  - Forty-six at B.L01, Feb–Mar 2026: **not duplicates.** Different physical
+    samples (pH 7.95–8.20, BOD 192–583), each its own work order. The error is
+    the FEATURE — the lab's `Client sample ID` splits the 103 B.L01 samples 27
+    `Discharge Point - Lawson STP` / 27 `Trade Waste Dam` / 1 `T/W Pump` / 48
+    with no XTAB. Both named aliases are confirmed by hand, and the Lawson one
+    points at **B.L05, which held zero samples**. The 27 are reassigned.
+
+  **THE INVARIANT CANNOT BE ENFORCED IN THE DATABASE, and that is a measurement
+  not an opinion.** After both fixes, 14 groups holding **44** samples still
+  share a (feature, datetime) — and in every group every sample comes from a
+  DISTINCT work order (44 samples, 44 work orders, no exceptions). They are real
+  separate field samples taken at one discharge point on one day, all stamped
+  00:00 because the XTAB format carries no time field, and their true times
+  exist nowhere: `datetime_start` identical, no `change_log` rows, and 1 of 47
+  work orders with a timed chain-of-custody. A `UNIQUE (feature, datetime)`
+  index would require inventing 44 clock times. `sample` also has no
+  `uuid_feature` and no work-order column, so even the weaker alias-level index
+  is not the stated invariant. Enforcement therefore lives in code.
+
+  **Two things the rehearsal caught that reading could not.** duckdb refuses to
+  DELETE *or* UPDATE a `sample` while any `analysis` references it — the same
+  F.14 limitation A82's migration hit on `lab_method`, and on a column that is
+  not part of any key — so both rulings run as separately-committed pre-passes.
+  And moving samples to B.L05 silently dropped **522 measurements out of
+  `v_measurement_epa` and `v_measurement_long`**, because both views INNER JOIN
+  `feature_mask` and B.L05 has no mask rows while B.L01 carries EPA `21`. The
+  migration now refuses until the destination is as visible as the source —
+  whether the Lawson STP tanker discharge belongs in the EPA return at all is a
+  ruling, not a migration's decision.
+
 ## Gates
 
 - Per-plan: `testthat::test_file()` green for the plan's own test file(s).

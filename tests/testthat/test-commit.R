@@ -3036,7 +3036,101 @@ test_that("A80: the archived ACIRL workbook lands on its report project, not the
   expect_identical(asset$uuid_project[[1]], report$uuid[[1]])
 })
 
-test_that("D6 sibling: the existing-sample pick is stable, not storage order", {
+test_that("ruling 9: two indistinguishable existing samples are REFUSED, not merged", {
+  # SUPERSEDES the D6-stability test that used to live here. That test pinned
+  # `.ct_existing_sample_uuid()` to return the LOWEST uuid rather than whichever
+  # row storage order emitted first - stable, but still a guess: every row of
+  # the incoming batch attached to one of several real samples.
+  #
+  # Robin's ruling (2026-08-08) is that two samples at one feature and one
+  # datetime is a DATA error, and incoming data that hits it must be
+  # quarantined. So the function now refuses. Measured on the live database
+  # (scratchpad/r008_postfix.R): re-ingesting one date-only B.L01 XTAB would
+  # have collapsed 13 separate ALS work orders onto one sample.
+  #
+  # The two samples below share a feature, a date AND a datetime, so the A62
+  # narrowing cannot separate them, and they are inserted in REVERSE uuid order
+  # so physical order and uuid order disagree. The `ORDER BY uuid` is still
+  # there and still matters - it is what makes the reported candidate list the
+  # same every time - so that is asserted too.
+  path <- seed_db()
+  con <- DBI::dbConnect(duckdb::duckdb(), path, read_only = FALSE)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
+
+  alias <- DBI::dbGetQuery(con, "SELECT uuid FROM feature_alias ORDER BY uuid LIMIT 1")$uuid[[1]]
+  DBI::dbExecute(con, sprintf("INSERT INTO \"sample\"
+    (uuid, uuid_feature_alias, date, datetime, organisation) VALUES
+    ('s-zzz', '%s', TIMESTAMP '2025-03-04 00:00:00', TIMESTAMP '2025-03-04 09:00:00', 'ALS'),
+    ('s-aaa', '%s', TIMESTAMP '2025-03-04 00:00:00', TIMESTAMP '2025-03-04 09:00:00', 'ALS')",
+    alias, alias))
+
+  ask <- function() .ct_existing_sample_uuid(
+    con, pending = TRUE, match_feature = NA_character_, alias_uuid = alias,
+    sample_date = as.Date("2025-03-04"),
+    sample_datetime = as.POSIXct("2025-03-04 09:00:00", tz = "UTC"))
+
+  expect_error(ask(), class = "sampletidy_error")
+  msg <- tryCatch(ask(), error = conditionMessage)
+  expect_match(msg, "s-aaa, s-zzz", fixed = TRUE)   # sorted, not storage order
+})
+
+test_that("ruling 9: an incoming row with NO time is refused when several samples share the date", {
+  # The over-merge shape that actually occurs: a date-only XTAB. `create_new`
+  # cannot fire (the incoming datetime is NA), nothing narrows, and the old code
+  # returned the first candidate - so every row of the batch attached to it.
+  path <- seed_db()
+  con <- DBI::dbConnect(duckdb::duckdb(), path, read_only = FALSE)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
+
+  alias <- DBI::dbGetQuery(con, "SELECT uuid FROM feature_alias ORDER BY uuid LIMIT 1")$uuid[[1]]
+  DBI::dbExecute(con, sprintf("INSERT INTO \"sample\"
+    (uuid, uuid_feature_alias, date, datetime, organisation) VALUES
+    ('s-d1', '%s', TIMESTAMP '2025-03-04 00:00:00', TIMESTAMP '2025-03-04 00:00:00', 'ALS'),
+    ('s-d2', '%s', TIMESTAMP '2025-03-04 00:00:00', TIMESTAMP '2025-03-04 00:00:00', 'ALS')",
+    alias, alias))
+
+  expect_error(
+    .ct_existing_sample_uuid(
+      con, pending = TRUE, match_feature = NA_character_, alias_uuid = alias,
+      sample_date = as.Date("2025-03-04"), sample_datetime = as.POSIXct(NA)),
+    class = "sampletidy_error")
+})
+
+test_that("ruling 9: ONE candidate still reuses, and a separating datetime still narrows", {
+  # The guard must only fire where the old code was already guessing. These two
+  # paths are unchanged, and asserting that is what stops the refusal being a
+  # blanket "never reuse a sample".
+  path <- seed_db()
+  con <- DBI::dbConnect(duckdb::duckdb(), path, read_only = FALSE)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
+
+  alias <- DBI::dbGetQuery(con, "SELECT uuid FROM feature_alias ORDER BY uuid LIMIT 1")$uuid[[1]]
+  DBI::dbExecute(con, sprintf("INSERT INTO \"sample\"
+    (uuid, uuid_feature_alias, date, datetime, organisation) VALUES
+    ('s-one', '%s', TIMESTAMP '2025-06-04 00:00:00', TIMESTAMP '2025-06-04 09:00:00', 'ALS'),
+    ('s-two', '%s', TIMESTAMP '2025-06-04 00:00:00', TIMESTAMP '2025-06-04 14:00:00', 'ALS')",
+    alias, alias))
+
+  # two candidates on the date, but the datetime separates them
+  expect_identical(
+    .ct_existing_sample_uuid(
+      con, pending = TRUE, match_feature = NA_character_, alias_uuid = alias,
+      sample_date = as.Date("2025-06-04"),
+      sample_datetime = as.POSIXct("2025-06-04 14:00:00", tz = "UTC")),
+    "s-two")
+
+  # a third time nobody has: a NEW sample, not a merge
+  expect_true(is.na(
+    .ct_existing_sample_uuid(
+      con, pending = TRUE, match_feature = NA_character_, alias_uuid = alias,
+      sample_date = as.Date("2025-06-04"),
+      sample_datetime = as.POSIXct("2025-06-04 17:30:00", tz = "UTC"))))
+})
+
+test_that("SUPERSEDED - kept only as a marker; see the ruling-9 tests above", {
+  skip("Replaced 2026-08-08: the stable-pick property was superseded by the
+        ambiguity refusal. The uuid ordering it pinned is still asserted, in
+        the first ruling-9 test, via the candidate list in the error message.")
   # ADVERSARIAL-AUDIT FINDING (2026-08-03). `.rc_find_existing()` carries an
   # explicit `ORDER BY a.uuid` and a docstring (R/reconcile.R:1794, PLAN-7b
   # round-2 D6) explaining that without it the `cand[1, ]` pick is whichever

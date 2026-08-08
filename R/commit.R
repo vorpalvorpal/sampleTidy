@@ -1421,6 +1421,40 @@
     match_dt <- !is.na(cand_dt) & (cand_dt == inc_dt)
     if (any(match_dt)) cand <- cand[match_dt, , drop = FALSE]
   }
+  # A76/ruling-9: MORE THAN ONE SURVIVOR IS AMBIGUOUS, AND AMBIGUOUS IS REFUSED.
+  #
+  # Until 2026-08-08 this line was `cand$uuid[[1]]` - "pick one and carry on".
+  # The `ORDER BY uuid` above (PLAN-7b D6) made that pick STABLE, which is worth
+  # having, but stable is not the same as right: every row of the incoming batch
+  # then attaches to whichever of several real samples sorted first. Measured on
+  # the live database (scratchpad/r008_*.R), re-ingesting one date-only B.L01
+  # XTAB would have collapsed 13 distinct samples - 13 separate ALS work orders,
+  # pH 7.95-8.20, BOD 192-583 - onto one, with 179 conflicting analyses landing
+  # on top of each other.
+  #
+  # Robin's ruling (2026-08-08): "there should never be two samples at the same
+  # feature at the same datetime ... quarantine any incoming data where this is
+  # true." Refusing IS the quarantine: `commit_event()` runs inside a
+  # transaction, so nothing lands and the operator is told exactly which samples
+  # cannot be told apart.
+  #
+  # This can only fire where the old code was already guessing. One candidate
+  # still reuses it, and a datetime that separates the candidates still narrows
+  # to one - both unchanged.
+  if (nrow(cand) > 1) {
+    cli::cli_abort(
+      c("commit_event(): {nrow(cand)} existing samples cannot be told apart from
+         the incoming one, so it is refused rather than merged onto a guess.",
+        "i" = "feature/alias {.val {if (isTRUE(pending)) alias_uuid else match_feature}},
+               date {.val {as.character(sample_date)}}, datetime
+               {.val {if (is.na(inc_dt)) 'NA' else format(sample_datetime)}}",
+        "i" = "candidates: {paste(cand$uuid, collapse = ', ')}",
+        "x" = "Two samples at one feature and one datetime is a DATA error. Give
+               the samples their real times, or separate them onto the features
+               they actually belong to, before importing this batch."),
+      class = "sampletidy_error"
+    )
+  }
   cand$uuid[[1]]
 }
 
