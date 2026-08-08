@@ -647,6 +647,14 @@ acirl_field_xlsx_adapter <- function() {
   # choice - it is a fact about the sheet layout, and a site name is never an
   # analyte under any ruling.
   meta_norm <- c("OTHER SAMPLE ID", "OTHER SITE NAME", "OTHER SITE ID")
+  # RULING 2026-08-08 (Robin): the two STALE-TEMPLATE Fe labels. Pinned beside
+  # `meta_norm` and matched the same way, for the same reason - this is a fact
+  # about the sheet, not a policy choice. See the block below for the
+  # measurement.
+  stale_norm <- c(
+    "FERROUS IRON BY DISCRETE ANALYSER",
+    "DISSOLVED FERRIC IRON BY ICPMS AND DA"
+  )
   allowed_norm <- toupper(stringr::str_squish(field_analytes))
   trans_norm <- toupper(stringr::str_squish(transcription_labels))
 
@@ -739,6 +747,51 @@ acirl_field_xlsx_adapter <- function() {
       )
       next
     }
+
+    # STALE-TEMPLATE rows are not readings (RULING 2026-08-08, Robin). Two Fe
+    # labels in the Lawson Landfill workbooks are an uncleared spreadsheet row
+    # frozen at the May-2024 numbers, and they were never re-measured:
+    #
+    #     Ferrous Iron by Discrete Analyser        20 rows, 4 files
+    #     Dissolved Ferric Iron by ICPMS and DA    20 rows, 4 files
+    #
+    # Measured over the unprocessed corpus (`scratchpad/m6a_corpus_candidates.rds`):
+    #
+    #   * The stale block sits ONE ROW ABOVE the real row it shadows - the
+    #     Ferrous pair is r30/r31 and the Ferric pair r32/r33 on every sheet
+    #     that carries both.
+    #   * Its values are byte-identical across all four workbooks, spanning
+    #     May-2024, Nov-2024 and May-2025 (Ferrous: 0.14 / 0.14 / 7.18 / <0.05
+    #     / <0.05 per point; Ferric: `<0.05` on all 20 rows). Three sampling
+    #     rounds a year apart cannot produce the same five numbers; this is a
+    #     template that was copied forward and never cleared.
+    #   * 13 of the 20 Ferrous rows collide with the REAL `Ferrous Iron` row on
+    #     the same (file, sampling point), and 7 of those 13 contradict it -
+    #     only the May-2024 workbook the template was frozen from agrees.
+    #     Ferric collides on 13 of 20 the same way.
+    #   * All 40 rows carry NO units, where the real Fe rows are `mg/L`.
+    #
+    # The identity is certain - these ARE Fe(II) and Fe(III) - so this is not a
+    # naming problem that a mapping could fix. The numbers are known-wrong, so
+    # the rows must not be imported at all. That has to happen HERE, at the
+    # adapter, and not by omission from migration 006's label -> analyte
+    # mapping: `.rc_resolve_analytes()` drops a row from `kept` only for status
+    # `held` (label NA, or folding to nothing). An unmapped label gets status
+    # `miss`, which KEEPS the row with `analyte_pending = TRUE` and mints a
+    # dangling `lab_method` at commit. Measured over all 7 labels excluded from
+    # 006: 7 rows in, 7 kept, 6 review items - a mapping omission stops a label
+    # RESOLVING, never IMPORTING (`scratchpad/m6a_excluded_fate.R`).
+    #
+    # Match is exact on the normalised label, exactly as `meta_norm` above, so
+    # the real `Ferrous Iron` / `Ferric Iron` / `Iron` labels are untouched -
+    # they are the rows this ruling exists to protect.
+    if (analyte_norm %in% stale_norm) {
+      skipped_rows[[length(skipped_rows) + 1]] <- tibble::tibble(
+        source_ref = sprintf("%s!r%d", sheet_name, r), reason = "stale_template_label"
+      )
+      next
+    }
+
     # The TSS pair: a label whose NAME is indistinguishable from the ALS
     # analyte's - `Total Suspended Solids` is both the ACIRL sheet label and the
     # ALS analyte name, so no name test can separate a reading from a copy.

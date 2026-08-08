@@ -663,3 +663,199 @@ test_that("R-6.7: an ordinary analyte label is untouched by the metadata rule", 
   expect_true(nrow(out$report$als_candidates) > 0)
   expect_true("pH" %in% out$results$analyte_raw)
 })
+
+# ---- RULING 2026-08-08: the stale-template Fe labels ----------------------
+#
+# Two Fe labels in the Lawson Landfill workbooks are an UNCLEARED TEMPLATE ROW,
+# not a reading. Measured over the unprocessed corpus
+# (`scratchpad/m6a_corpus_candidates.rds`, 34,137 candidate rows):
+#
+#     Ferrous Iron by Discrete Analyser        20 rows, 4 files
+#     Dissolved Ferric Iron by ICPMS and DA    20 rows, 4 files
+#
+# What makes them stale rather than merely oddly named:
+#
+#   * The stale row sits ONE ROW ABOVE the real row it shadows - r30 `Ferrous
+#     Iron by Discrete Analyser` / r31 `Ferrous Iron`, r32 `Dissolved Ferric
+#     Iron by ICPMS and DA` / r33 `Ferric Iron`.
+#   * Its values are BYTE-IDENTICAL across all four workbooks, which span
+#     May-2024, Nov-2024 and May-2025. Ferrous is 0.14 / 0.14 / 7.18 / <0.05 /
+#     <0.05 per sampling point in every one of them; Ferric is `<0.05` on all
+#     20 rows. Three sampling rounds a year apart do not repeat five numbers.
+#   * 13 of the 20 Ferrous rows share a (file, sampling point) with the real
+#     `Ferrous Iron` row, and 7 of those 13 DISAGREE with it - only the
+#     May-2024 workbook the template was frozen from agrees, which is what
+#     dates the freeze. Ferric collides on 13 of 20 the same way.
+#   * All 40 rows carry no units; the real Fe rows carry `mg/L`.
+#
+# So the identity is not in doubt (they ARE Fe(II) and Fe(III)) - the VALUES
+# are known-wrong, and linking the labels would commit them.
+#
+# WHY THE ADAPTER AND NOT A MAPPING. Leaving a label out of migration 006's
+# label -> analyte mapping only stops it RESOLVING, never IMPORTING.
+# `.rc_resolve_analytes()` drops a row from `kept` for exactly one status,
+# `held`; an unmapped label gets `miss`, which keeps the row with
+# `analyte_pending = TRUE` and mints a dangling `lab_method` at commit.
+# Measured over all 7 labels excluded from 006: 7 rows in, 7 kept, 6 review
+# items (`scratchpad/m6a_excluded_fate.R`). A label that must not be imported
+# needs an adapter-level exclusion, so these ride the same exact-label path
+# R-6.7 built for the site-metadata labels.
+
+# Builds a water-sheet-only workbook in the MEASURED real geometry (R-6.3a:
+# units_col = site_col + 1, first feature col = site_col + 2, date row ABOVE
+# the site row) carrying the Lawson Fe block in its real vertical order, with
+# the stale row immediately above the real one it shadows.
+acirl_fe_workbook <- function(env = parent.frame()) {
+  skip_if_not_installed("openxlsx")
+  path <- withr::local_tempfile(fileext = ".xlsx", .local_envir = env)
+  site_col <- 2L; units_col <- 3L; feat_col <- 4L
+  site_row <- 10L; date_row <- 9L
+  features <- c("L.MW06", "L.MW07", "L.MW08")
+
+  wb <- openxlsx::createWorkbook()
+  openxlsx::addWorksheet(wb, "Groundwater Sites 2")
+  put <- function(r, c, v) {
+    openxlsx::writeData(wb, "Groundwater Sites 2", x = v, startRow = r,
+                        startCol = c, colNames = FALSE, rowNames = FALSE)
+  }
+  put(site_row - 4L, units_col, "Units")            # R-6.1 fingerprint
+  put(date_row, site_col, "Date of Sample")
+  for (i in seq_along(features)) put(date_row, feat_col + i - 1L, 45802)
+  put(site_row, site_col, "Site Name")
+  for (i in seq_along(features)) put(site_row, feat_col + i - 1L, features[[i]])
+
+  # The real vertical order, from `2400-7430-01 May 2024 Lawson Landfill.xls`.
+  # `Iron` is on the field allowlist below and so must emit RESULTS; the four
+  # Fe(II)/Fe(III) labels are not, so the two survivors must emit ALS
+  # CANDIDATES. Both survival routes are therefore exercised.
+  rows <- list(
+    list("Iron",                                  "mg/L", c("<0.05", "0.07", "6.33")),
+    list("Ferrous Iron by Discrete Analyser",     NA,     c("0.14", "0.14", "7.18")),
+    list("Ferrous Iron",                          "mg/L", c("0.14", "0.40", "0.05")),
+    list("Dissolved Ferric Iron by ICPMS and DA", NA,     c("<0.05", "<0.05", "<0.05")),
+    list("Ferric Iron",                           "mg/L", c("<0.05", "0.12", "<0.05"))
+  )
+  for (k in seq_along(rows)) {
+    r <- site_row + k
+    put(r, site_col, rows[[k]][[1]])
+    if (!is.na(rows[[k]][[2]])) put(r, units_col, rows[[k]][[2]])
+    for (i in seq_along(features)) put(r, feat_col + i - 1L, rows[[k]][[3]][[i]])
+  }
+  openxlsx::saveWorkbook(wb, path, overwrite = TRUE)
+  path
+}
+
+# `Iron` stands in for the field allowlist so the sheet has a real result row;
+# the Fe(II)/Fe(III) labels are deliberately absent from both vectors, which is
+# the state they are in today.
+acirl_fe_parse <- function(path) {
+  sampleTidy:::.st_acirl_parse_water_sheet(
+    path, "Groundwater Sites 2",
+    field_analytes = c("Iron", "pH"),
+    transcription_labels = character(0)
+  )
+}
+
+acirl_fe_labels <- function(ws) {
+  c(vapply(ws$results, function(x) x$analyte_raw, character(1)),
+    vapply(ws$als_candidates, function(x) x$analyte_raw, character(1)))
+}
+
+test_that("RULING 2026-08-08: the stale-template Fe labels emit no row at all", {
+  # Not "no result" - NO ROW. The als_candidate path is the one that would have
+  # carried these values forward into the transcription population, so it is
+  # the path that has to be empty, and the skip has to be recorded rather than
+  # silent so the drop is auditable from the report.
+  path <- acirl_fe_workbook()
+  ws <- acirl_fe_parse(path)
+
+  stale <- c("Ferrous Iron by Discrete Analyser",
+             "Dissolved Ferric Iron by ICPMS and DA")
+  for (lab in stale) {
+    expect_false(lab %in% vapply(ws$results, function(x) x$analyte_raw, character(1)),
+                 info = lab)
+    expect_false(lab %in% vapply(ws$als_candidates, function(x) x$analyte_raw, character(1)),
+                 info = lab)
+  }
+  # One skip row per stale LABEL row (the metadata rule's granularity), not per
+  # cell: two labels, one sheet.
+  reasons <- vapply(ws$skipped, function(x) x$reason, character(1))
+  expect_equal(sum(reasons == "stale_template_label"), 2L)
+})
+
+test_that("RULING 2026-08-08: the stale labels are not carried as feature aliases", {
+  # The site-metadata rule keeps its rows as point-code -> name evidence. This
+  # rule must NOT: the stale values are `0.14` and `<0.05`, which are numbers,
+  # not alternative site names, and would poison the alias domain.
+  path <- acirl_fe_workbook()
+  ws <- acirl_fe_parse(path)
+  expect_length(ws$feature_aliases, 0L)
+})
+
+test_that("RULING 2026-08-08: the REAL Ferrous/Ferric Iron labels still survive", {
+  # The whole point of the ruling. The stale rows shadow real rows with the
+  # same element in the same workbook, so an over-broad match ("anything with
+  # Ferrous in it") destroys the data the ruling exists to protect - and it
+  # would do so silently, because the real rows are ALS candidates, not
+  # results, so no result count would move.
+  path <- acirl_fe_workbook()
+  ws <- acirl_fe_parse(path)
+
+  cand <- vapply(ws$als_candidates, function(x) x$analyte_raw, character(1))
+  expect_true("Ferrous Iron" %in% cand)
+  expect_true("Ferric Iron" %in% cand)
+  # 2 surviving Fe labels x 3 sampling points, and nothing else.
+  expect_equal(length(cand), 6L)
+  expect_setequal(unique(cand), c("Ferrous Iron", "Ferric Iron"))
+
+  # Values arrive intact - the survivors are the real row's numbers, not the
+  # frozen template's (0.14 / 0.14 / 7.18).
+  ferrous <- vapply(ws$als_candidates[cand == "Ferrous Iron"],
+                    function(x) x$value_raw, character(1))
+  expect_setequal(ferrous, c("0.14", "0.40", "0.05"))
+})
+
+test_that("RULING 2026-08-08: the allowlisted `Iron` row is untouched", {
+  # `Iron` is 155 rows across 43 files in the corpus - far more than the Fe(II)
+  # and Fe(III) rows combined - and shares the substring with neither stale
+  # label but DOES share it with the word the exclusion is written around. A
+  # match written on "Iron" rather than the full label takes it out.
+  path <- acirl_fe_workbook()
+  ws <- acirl_fe_parse(path)
+  res <- vapply(ws$results, function(x) x$analyte_raw, character(1))
+  expect_equal(sum(res == "Iron"), 3L)
+})
+
+test_that("RULING 2026-08-08: the stale match is exact, and case/whitespace-blind", {
+  # Two directions at once. (a) The labels are matched on the NORMALISED label,
+  # so the same row in ALL CAPS or with the double space real spreadsheets pick
+  # up is still excluded. (b) The match is exact, so a longer label that merely
+  # CONTAINS a stale one is not swept up with it - the corpus has no such
+  # label today, which is exactly why an over-broad match would go unnoticed.
+  skip_if_not_installed("openxlsx")
+  path <- withr::local_tempfile(fileext = ".xlsx")
+  wb <- openxlsx::createWorkbook()
+  openxlsx::addWorksheet(wb, "Groundwater Sites 2")
+  put <- function(r, c, v) {
+    openxlsx::writeData(wb, "Groundwater Sites 2", x = v, startRow = r,
+                        startCol = c, colNames = FALSE, rowNames = FALSE)
+  }
+  put(6L, 3L, "Units")
+  put(9L, 2L, "Date of Sample"); put(9L, 4L, 45802)
+  put(10L, 2L, "Site Name");     put(10L, 4L, "L.MW06")
+  variants <- c(
+    "FERROUS IRON BY  DISCRETE ANALYSER",      # (a) case + doubled space
+    "Total Ferrous Iron by Discrete Analyser", # (b) stale label as a suffix
+    "Ferrous Iron by Discrete Analyser (Field)" # (b) stale label as a prefix
+  )
+  for (k in seq_along(variants)) {
+    put(10L + k, 2L, variants[[k]])
+    put(10L + k, 4L, "0.14")
+  }
+  openxlsx::saveWorkbook(wb, path, overwrite = TRUE)
+
+  ws <- acirl_fe_parse(path)
+  cand <- vapply(ws$als_candidates, function(x) x$analyte_raw, character(1))
+  expect_false("FERROUS IRON BY DISCRETE ANALYSER" %in% cand)
+  expect_setequal(cand, variants[2:3])
+})
