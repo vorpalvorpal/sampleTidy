@@ -66,11 +66,12 @@
                                      n_seen, auto_assign, confirmed_by)
           VALUES ('fa8-lawson', 'f8-7', 'Discharge Point - Lawson STP',
                   'discharge point - lawson stp', 'descriptive', 0, TRUE, 'R. Shannon')")
-  # Masks on BOTH B.L01 and B.L05, so the destination is as visible as the
-  # source. The gate that requires this has its own test below.
+  # Masks on the SOURCE only. The destination starts with NONE, exactly as the
+  # live database has it - ruling (3) creates the `long` one and the `EPA`
+  # variant is a declared exemption. A fixture that pre-seeded the destination
+  # would have made ruling (3) untestable and the exemption invisible.
   DBI::dbExecute(con, "INSERT INTO feature_mask (uuid_feature, variant, name) VALUES
-    ('f8-6', 'EPA', '21'), ('f8-6', 'long', 'Main dam'),
-    ('f8-7', 'EPA', '22'), ('f8-7', 'long', 'Lawson STP discharge')")
+    ('f8-6', 'EPA', '21'), ('f8-6', 'long', 'Main dam')")
 
   # ---- ruling (1): five loser/winner pairs ----
   for (i in seq_along(.MIG008_PAIRS)) {
@@ -178,7 +179,10 @@
               JOIN feature f        ON f.uuid = fa.uuid_feature
              GROUP BY 1 ORDER BY 1'),
     persons = DBI::dbGetQuery(
-      con, 'SELECT person, COUNT(*) n FROM "sample" GROUP BY 1 ORDER BY 1')
+      con, 'SELECT person, COUNT(*) n FROM "sample" GROUP BY 1 ORDER BY 1'),
+    masks = DBI::dbGetQuery(
+      con, "SELECT uuid_feature, variant, name FROM feature_mask
+             ORDER BY uuid_feature, variant")
   )
 }
 
@@ -387,13 +391,56 @@ test_that("(1) is REFUSED when the doomed sample carries no analyses at all", {
 # ruling (2) gates
 # ======================================================================
 
-test_that("(2) is REFUSED when the destination feature lacks a mask the source has", {
-  # Found by rehearsal against a copy of the live DB: without this gate the
-  # move silently deleted 522 measurements from v_measurement_epa, because that
-  # view INNER JOINs feature_mask and B.L05 had no rows.
+test_that("(3) the destination gets its `long` mask, and deliberately NO EPA mask", {
+  # Found by rehearsal against a copy of the live DB: `v_measurement_epa` and
+  # `v_measurement_long` INNER JOIN feature_mask, so a destination missing a
+  # variant does not merely look different in that report - the rows VANISH.
+  # Unguarded, the move deleted 522 measurements from BOTH views.
+  #
+  # Robin ruled the Lawson STP tanker discharge is a Sydney Water trade-waste
+  # point, not an EPA licensed discharge: so it gets a `long` mask (it must
+  # stay in ordinary reporting) and NO EPA mask (leaving the EPA return is the
+  # correction). Both halves are asserted - the presence AND the absence.
+  mig <- .mig008_load(); e <- .mig008_env()
+  mig$mig008_run(db = e$db, snapshot_dir = e$snapshot_dir, reassign = .mig008_reassign_df())
+
+  con <- DBI::dbConnect(duckdb::duckdb(), e$db, read_only = TRUE)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
+  m <- DBI::dbGetQuery(con, "SELECT variant, name FROM feature_mask
+                              WHERE uuid_feature = 'f8-7' ORDER BY variant")
+  expect_identical(m$variant, "long")
+  expect_identical(m$name, "Discharge Point - Lawson STP")
+})
+
+test_that("(3) is idempotent - a destination that already has the mask gains no duplicate", {
+  # `feature_mask` is keyed by (uuid_feature, variant) with no uuid column, so a
+  # second append would be a duplicate key, not a harmless no-op. This is the
+  # re-run-after-a-partial-failure path.
   mig <- .mig008_load(); e <- .mig008_env()
   con <- DBI::dbConnect(duckdb::duckdb(), e$db, read_only = FALSE)
-  DBI::dbExecute(con, "DELETE FROM feature_mask WHERE uuid_feature = 'f8-7' AND variant = 'EPA'")
+  DBI::dbExecute(con, "INSERT INTO feature_mask (uuid_feature, variant, name)
+                       VALUES ('f8-7', 'long', 'Discharge Point - Lawson STP')")
+  DBI::dbDisconnect(con, shutdown = TRUE)
+
+  res <- mig$mig008_run(db = e$db, snapshot_dir = e$snapshot_dir,
+                        reassign = .mig008_reassign_df())
+  expect_identical(res$status, "migrated")
+
+  con <- DBI::dbConnect(duckdb::duckdb(), e$db, read_only = TRUE)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
+  expect_identical(
+    as.integer(DBI::dbGetQuery(con, "SELECT COUNT(*) n FROM feature_mask
+                                      WHERE uuid_feature = 'f8-7'")$n), 1L)
+})
+
+test_that("a source variant that is neither created NOR exempt is REFUSED", {
+  # The gate is an exemption list, not a weaker check: a variant the source has
+  # that ruling (3) does not create and no ruling excuses must still stop the
+  # migration, or the next reporting view added silently loses its rows.
+  mig <- .mig008_load(); e <- .mig008_env()
+  con <- DBI::dbConnect(duckdb::duckdb(), e$db, read_only = FALSE)
+  DBI::dbExecute(con, "INSERT INTO feature_mask (uuid_feature, variant, name)
+                       VALUES ('f8-6', 'gas_report', 'Main dam gas')")
   DBI::dbDisconnect(con, shutdown = TRUE)
 
   before <- .mig008_state(e$db)
@@ -401,6 +448,7 @@ test_that("(2) is REFUSED when the destination feature lacks a mask the source h
     mig$mig008_run(db = e$db, snapshot_dir = e$snapshot_dir, reassign = .mig008_reassign_df()),
     class = "sampletidy_error")
   expect_identical(.mig008_state(e$db), before)
+  expect_identical(length(list.files(e$snapshot_dir)), 0L)
 })
 
 test_that("(2) is REFUSED when the destination alias is not human-confirmed", {
@@ -541,7 +589,7 @@ test_that("mig008_verify() fires when a table it must not touch has moved", {
   after$tables$feature_checksum <- "bb"
   after$tables$sample <- 5L
   after$tables$analysis <- 7L
-  expect_error(mig$mig008_verify(before, after, 5L, 13L), class = "sampletidy_error")
+  expect_error(mig$mig008_verify(before, after, 5L, 13L, 0L), class = "sampletidy_error")
 })
 
 test_that("mig008_verify() fires on the wrong sample/analysis delta", {
@@ -552,7 +600,7 @@ test_that("mig008_verify() fires on the wrong sample/analysis delta", {
   after <- before
   after$tables$sample <- 6L         # lost 4, not 5
   after$tables$analysis <- 7L
-  expect_error(mig$mig008_verify(before, after, 5L, 13L), class = "sampletidy_error")
+  expect_error(mig$mig008_verify(before, after, 5L, 13L, 0L), class = "sampletidy_error")
 })
 
 test_that("mig008_verify() fires when v_measurement and analysis disagree - the orphan check", {
@@ -563,7 +611,7 @@ test_that("mig008_verify() fires when v_measurement and analysis disagree - the 
   after <- list(tables = list(sample = 5L, sample_checksum = "s2",
                               analysis = 7L, analysis_checksum = "x2"),
                 views = list(v_measurement = 6L))   # one row orphaned
-  expect_error(mig$mig008_verify(before, after, 5L, 13L), class = "sampletidy_error")
+  expect_error(mig$mig008_verify(before, after, 5L, 13L, 0L), class = "sampletidy_error")
 })
 
 test_that("mig008_verify() passes on the shape the migration actually produces", {
@@ -576,7 +624,7 @@ test_that("mig008_verify() passes on the shape the migration actually produces",
                               sample = 5L, sample_checksum = "s2",
                               analysis = 7L, analysis_checksum = "x2"),
                 views = list(v_measurement = 7L))
-  expect_true(mig$mig008_verify(before, after, 5L, 13L))
+  expect_true(mig$mig008_verify(before, after, 5L, 13L, 0L))
 })
 
 test_that("mig008_counts_checksum() separates base tables from views", {

@@ -655,6 +655,10 @@ acirl_field_xlsx_adapter <- function() {
     "FERROUS IRON BY DISCRETE ANALYSER",
     "DISSOLVED FERRIC IRON BY ICPMS AND DA"
   )
+  # RULING 2026-08-08 (Robin): the Aroclor SURROGATE-RECOVERY rows. Unlike
+  # `meta_norm` and `stale_norm` above, this one is keyed on (label, UNITS) -
+  # see the block below for why a label-only rule would destroy real data.
+  aroclor_re <- "\\bAROCLOR"
   allowed_norm <- toupper(stringr::str_squish(field_analytes))
   trans_norm <- toupper(stringr::str_squish(transcription_labels))
 
@@ -792,6 +796,72 @@ acirl_field_xlsx_adapter <- function() {
       next
     }
 
+    # The units cell is a property of the LABEL ROW, not of a sample column, so
+    # it is available to a row-level exclusion. Hoisted above the Aroclor rule
+    # below, which is the first rule that needs it; the two per-cell uses
+    # further down read the same repaired value.
+    units_cell <- cell(r, units_col)
+    units_repaired <- .st_acirl_repair_units(analyte_raw_val, units_cell)
+
+    # AROCLOR SURROGATE-RECOVERY rows (RULING 2026-08-08, Robin). The Lawson
+    # Landfill workbooks carry a `PAH Surrogates` heading with three rows under
+    # it labelled `Aroclor 1242`, `Aroclor 1248` and `Aroclor 1254` whose units
+    # are `%` and whose values run 58.5-93.8. Those are SURROGATE RECOVERY
+    # PERCENTAGES filed under the names of the PCB CONCENTRATION analytes.
+    # Importing them commits a recovery percentage as a PCB concentration.
+    #
+    # Measured over the unprocessed corpus (34,137 candidate rows,
+    # `scratchpad/m6a_corpus_candidates.rds`): 22 Aroclor rows in total, and
+    # they split cleanly on UNITS, not on label:
+    #
+    #     units `%`     15 rows  Aroclor 1242/1248/1254, values 58.5 - 93.8
+    #                            (2400-7430-01 May 2024 Lawson x2 copies,
+    #                             2400-7430-02 Nov 2024 Lawson)
+    #     units `ug/L`   7 rows  Aroclor 1016/1221/1232/1242/1248/1254/1260,
+    #                            every one `<0.10` - REAL PCB results
+    #                            (2400-7346-02 November 2023 Lawson)
+    #
+    # WHY THIS RULE IS UNITS-AWARE AND `meta_norm`/`stale_norm` ARE NOT. Three
+    # labels - `Aroclor 1242`, `1248`, `1254` - appear on BOTH sides of that
+    # split. A label-only exclusion built the way the two lists above are built
+    # would delete 7 real PCB measurements to remove 15 recovery percentages.
+    # The units cell is what separates them and nothing else does: the
+    # `PAH Surrogates` heading that gives the block its meaning carries no
+    # values in any sample column, so it is dropped as a `heading` before any
+    # row under it is read - the adapter cannot see the section a row sits in.
+    #
+    # WHY NOT "ANY ROW WHOSE UNITS ARE `%`", which would generalise further.
+    # Because `%` is a legitimate unit here. Measured: 1,395 rows carry `%`
+    # across 16 labels, and 247 of them (95 files) are `Ionic Balance`, whose
+    # values run 0.02 - 18.0 - the anion/cation balance error, a real reported
+    # quantity, not a recovery. A blanket `%` rule silently deletes it.
+    #
+    # WHAT THIS RULE DOES NOT CATCH, deliberately. The other 13 `%` labels are
+    # all deuterated/labelled surrogates and DO look like recoveries by name
+    # and by range: 1.2-Dichloroethane-D4 (123), 4-Bromofluorobenzene (123),
+    # Toluene-D8 (123), Phenol-d6 (94), 2-Chlorophenol-D4 (94),
+    # 2-Fluorobiphenyl (94), 2.4.6-Tribromophenol (94), 4-Terphenyl-d14 (94),
+    # Anthracene-d10 (94), DEF (91), Dibromo-DDE (82), Decachlorobiphenyl (27).
+    # Robin ruled on AROCLOR. Those 1,133 rows are reported, not swept up -
+    # widening the ruling to them is a separate decision, and four of them
+    # (the D4/D8/DDE labels) also appear with `ug/L`, so widening would have to
+    # be units-aware in exactly this way too.
+    #
+    # The match is on the label PREFIX with a leading word boundary rather than
+    # the exact three names, so a fourth congener appearing under the same
+    # surrogate heading (`Aroclor 1260`, `Aroclors`) is caught on the day it
+    # appears instead of being imported as a PCB concentration. It cannot
+    # over-reach: an Aroclor CONCENTRATION is never reported in `%`, so the
+    # units half of the key is doing the protecting either way.
+    if (grepl(aroclor_re, analyte_norm) &&
+        !is.na(units_repaired) && identical(units_repaired, "%")) {
+      skipped_rows[[length(skipped_rows) + 1]] <- tibble::tibble(
+        source_ref = sprintf("%s!r%d", sheet_name, r),
+        reason = "aroclor_surrogate_percent"
+      )
+      next
+    }
+
     # The TSS pair: a label whose NAME is indistinguishable from the ALS
     # analyte's - `Total Suspended Solids` is both the ACIRL sheet label and the
     # ALS analyte name, so no name test can separate a reading from a copy.
@@ -806,7 +876,6 @@ acirl_field_xlsx_adapter <- function() {
     # transcription, and R-8.9 supersedes it once its analyte is known.
     is_transcription_label <- analyte_norm %in% trans_norm
     is_allowed <- !is_transcription_label && analyte_norm %in% allowed_norm
-    units_cell <- cell(r, units_col)
 
     # A row with no value in ANY sample column is a section heading
     # ("Dissolved Major Cations", "Dissolved Metals by ICP-MS"), not an
@@ -839,7 +908,7 @@ acirl_field_xlsx_adapter <- function() {
             source_ref = source_ref,
             feature_raw = feature_by_col[[as.character(j)]],
             analyte_raw = analyte_raw_val,
-            units_raw = .st_acirl_repair_units(analyte_raw_val, units_cell),
+            units_raw = units_repaired,
             value_raw = value_raw_cell,
             transcription_label = is_transcription_label
           )
@@ -870,7 +939,7 @@ acirl_field_xlsx_adapter <- function() {
         lab_sample_id = sprintf("%s!c%d", sheet_name, j),
         feature_raw = feature_by_col[[as.character(j)]],
         analyte_raw = analyte_raw_val,
-        units_raw = .st_acirl_repair_units(analyte_raw_val, units_cell),
+        units_raw = units_repaired,
         value_raw = value_raw_cell,
         value_num = pv$value_num,
         value_chr = pv$value_chr,

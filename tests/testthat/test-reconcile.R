@@ -750,6 +750,48 @@ rg8_row <- function(source_ref, units_raw, value) {
          below_detection = FALSE, rl = NA_real_)
 }
 
+test_that("RULING-8: a BARE NUMBER in the units column is refused - udunits would read it as a scale factor", {
+  # THE DEFECT THIS PREVENTS DOES NOT EXIST YET; this guard is what stops a
+  # different fix from creating it. udunits reads a bare number as a
+  # DIMENSIONLESS SCALE FACTOR, so `1.89` is a valid unit meaning "times 1.89".
+  # Measured: 17 `Sodium Adsorption Ratio` corpus rows carry `units_raw = 1.89`
+  # while their values are 1.84 / 2.18 / 2.03 - the same magnitude as the thing
+  # in the units cell, i.e. a value that landed in the wrong column.
+  #
+  # Against the registry as it stands (`SAR` units `mg/L`) those rows ERROR and
+  # get reviewed. The moment `SAR` is corrected to the dimensionless `1` -
+  # which Robin has ruled - they would start CONVERTING, silently multiplied by
+  # 1.89. Ruling 8's value arm cannot see that: 1.84 x 1.89 = 3.48 is an
+  # ordinary SAR number. Fixing one defect would have created a worse one.
+  path <- seed_db()
+  con <- seed_con(path)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+  rg8_seed_history(con)
+
+  out <- reconcile_event(mk_event(rg8_row("r1", "1.89", 300)), con)
+
+  expect_false("r1" %in% out$clean$source_ref)
+  hit <- out$review[out$review$source_ref == "r1", ]
+  expect_equal(nrow(hit), 1)
+  expect_identical(hit$kind, "units_implausible")
+  expect_identical(hit$subkind, "units_numeric")
+})
+
+test_that("RULING-8: the dimensionless unit `1` is NOT refused as a bare number", {
+  # `1` is the genuine dimensionless unit - it is what `NTMI` already uses in
+  # this registry, and it multiplies by nothing. A guard that refused it would
+  # break every dimensionless analyte, which is the opposite of the point.
+  path <- seed_db()
+  con <- seed_con(path)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+  DBI::dbExecute(con, "UPDATE analyte SET units = '1' WHERE uuid = 'a-0002'")
+
+  out <- reconcile_event(mk_event(rg8_row("r1", "1", 3)), con)
+
+  expect_false("units_implausible" %in% out$review$kind)
+  expect_true("r1" %in% out$clean$source_ref)
+})
+
 test_that("RULING-8: a value 1000x high whose units_raw is the IDENTICAL STRING to the analyte's units is held - the one case no units library can catch (the 6 corpus `C6 - C10 Fraction` rows)", {
   path <- seed_db()
   con <- seed_con(path)

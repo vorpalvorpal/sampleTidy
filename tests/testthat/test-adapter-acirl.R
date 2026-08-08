@@ -859,3 +859,251 @@ test_that("RULING 2026-08-08: the stale match is exact, and case/whitespace-blin
   expect_false("FERROUS IRON BY DISCRETE ANALYSER" %in% cand)
   expect_setequal(cand, variants[2:3])
 })
+
+# ---- RULING 2026-08-08: the Aroclor surrogate-recovery `%` rows -----------
+#
+# The Lawson Landfill workbooks file SURROGATE RECOVERY PERCENTAGES under the
+# names of the PCB CONCENTRATION analytes. Measured over the unprocessed corpus
+# (`scratchpad/m6a_corpus_candidates.rds`, 34,137 candidate rows) there are 22
+# Aroclor rows in total, and they split on UNITS, not on label:
+#
+#     units `%`      15 rows  Aroclor 1242 / 1248 / 1254, values 58.5 - 93.8
+#                             2400-7430-01 May 2024 Lawson Landfill.xls   (3)
+#                             2400-7430-01 May 2024 Lawson Landfill[1].xls(6)
+#                             2400-7430-02 Nov 2024 Lawson Landfill.xls   (6)
+#     units `ug/L`    7 rows  Aroclor 1016/1221/1232/1242/1248/1254/1260,
+#                             every one `<0.10` - REAL PCB results
+#                             2400-7346-02 November 2023 Lawson Landfill.xls
+#
+# Read off the real workbooks, `Groundwater Sites 6 (2)`, label column 1:
+#
+#     2400-7430-02   r35 [PAH Surrogates]  (no value in any sample column)
+#                    r36 [Aroclor 1242] [%] ... c9=59.4  c10=63.9
+#                    r37 [Aroclor 1248] [%] ... c9=74.1  c10=78.7
+#                    r38 [Aroclor 1254] [%] ... c9=74.3  c10=76.2
+#     2400-7346-02   r33 [Polychlorinated Biphenyls] (no values - a heading)
+#                    r34 [Total Polychlorinated biphenyls] [ug/L] c9=<0.10
+#                    r35 [Aroclor 1016] [ug/L] ... c9=<0.10
+#                    ...  r41 [Aroclor 1260] [ug/L] ... c9=<0.10
+#
+# So THREE labels - Aroclor 1242, 1248 and 1254 - appear on both sides of the
+# split. That is why this exclusion is keyed on (label, units) where R-6.7's
+# `meta_norm` and the stale-Fe `stale_norm` are keyed on the label alone: a
+# label-only rule here deletes 7 real PCB measurements to remove 15 recovery
+# percentages, and does it silently, because Aroclor rows are ALS candidates
+# rather than results so no result count moves.
+#
+# The `PAH Surrogates` heading that gives the block its meaning is NOT usable
+# as the key: it carries no value in any sample column, so it is dropped as a
+# `heading` before any row beneath it is read. The adapter has no notion of
+# which section a row sits in - only the row's own units cell.
+#
+# NOT WIDENED TO ALL `%` ROWS, by measurement. 1,395 corpus rows carry `%`
+# across 16 labels. 247 of them (95 files) are `Ionic Balance`, values 0.02 -
+# 18.0 - the anion/cation balance error, a real reported quantity. The other 13
+# labels ARE recovery-shaped (Toluene-D8 123, 1.2-Dichloroethane-D4 123,
+# 4-Bromofluorobenzene 123, Phenol-d6 94, 2-Chlorophenol-D4 94,
+# 2-Fluorobiphenyl 94, 2.4.6-Tribromophenol 94, 4-Terphenyl-d14 94,
+# Anthracene-d10 94, DEF 91, Dibromo-DDE 82, Decachlorobiphenyl 27) but Robin
+# ruled on AROCLOR; they are reported, not swept up.
+
+# One sheet carrying BOTH Aroclor blocks. No real workbook does - the `%` block
+# and the `ug/L` block are in different files - which is exactly why a
+# label-only exclusion would pass unnoticed on any single-file test. Putting
+# them side by side is the only arrangement that can catch it.
+acirl_aroclor_workbook <- function(env = parent.frame()) {
+  skip_if_not_installed("openxlsx")
+  path <- withr::local_tempfile(fileext = ".xlsx", .local_envir = env)
+  site_col <- 2L; units_col <- 3L; feat_col <- 4L
+  site_row <- 10L; date_row <- 9L
+  features <- c("L.MW06", "L.MW07", "L.MW08")
+
+  wb <- openxlsx::createWorkbook()
+  openxlsx::addWorksheet(wb, "Groundwater Sites 6 (2)")
+  put <- function(r, c, v) {
+    openxlsx::writeData(wb, "Groundwater Sites 6 (2)", x = v, startRow = r,
+                        startCol = c, colNames = FALSE, rowNames = FALSE)
+  }
+  put(site_row - 4L, units_col, "Units")            # R-6.1 fingerprint
+  put(date_row, site_col, "Date of Sample")
+  for (i in seq_along(features)) put(date_row, feat_col + i - 1L, 45802)
+  put(site_row, site_col, "Site Name")
+  for (i in seq_along(features)) put(site_row, feat_col + i - 1L, features[[i]])
+
+  # `NA` units and `NULL` values are both real shapes: the surrogate heading
+  # rows carry neither. Values are the measured ones - the `%` block from
+  # 2400-7430-02 Nov 2024, the `ug/L` block from 2400-7346-02 November 2023.
+  rows <- list(
+    list("pH",                              "pH Units", c("6.4", "5.9", "7.1")),
+    list("Ionic Balance",                   "%",        c("5.2", "0.02", "18.0")),
+    list("Phenolic Compound Surrogates",    NA,         NULL),
+    list("Phenol-d6",                       "%",        c("26.6", "25.9", "22.4")),
+    list("PAH Surrogates",                  NA,         NULL),
+    list("Aroclor 1242",                    "%",        c("59.4", "63.9", "58.5")),
+    list("Aroclor 1248",                    "%",        c("74.1", "78.7", "61.9")),
+    list("Aroclor 1254",                    "%",        c("74.3", "76.2", "67.5")),
+    list("Polychlorinated Biphenyls",       NA,         NULL),
+    list("Total Polychlorinated biphenyls", "µg/L", c("<0.10", "<0.10", "<0.10")),
+    list("Aroclor 1016",                    "µg/L", c("<0.10", "<0.10", "<0.10")),
+    list("Aroclor 1242",                    "µg/L", c("<0.10", "<0.10", "<0.10")),
+    list("Aroclor 1248",                    "µg/L", c("<0.10", "<0.10", "<0.10")),
+    list("Aroclor 1254",                    "µg/L", c("<0.10", "<0.10", "<0.10")),
+    list("Aroclor 1260",                    "µg/L", c("<0.10", "<0.10", "<0.10"))
+  )
+  for (k in seq_along(rows)) {
+    r <- site_row + k
+    put(r, site_col, rows[[k]][[1]])
+    if (!is.na(rows[[k]][[2]])) put(r, units_col, rows[[k]][[2]])
+    if (!is.null(rows[[k]][[3]])) {
+      for (i in seq_along(features)) put(r, feat_col + i - 1L, rows[[k]][[3]][[i]])
+    }
+  }
+  openxlsx::saveWorkbook(wb, path, overwrite = TRUE)
+  path
+}
+
+acirl_aroclor_parse <- function(path, sheet = "Groundwater Sites 6 (2)") {
+  # `pH` stands in for the field allowlist so the sheet still yields results;
+  # no Aroclor label is on it, or ever will be - PCBs are a lab analysis.
+  sampleTidy:::.st_acirl_parse_water_sheet(
+    path, sheet,
+    field_analytes = c("pH"),
+    transcription_labels = character(0)
+  )
+}
+
+acirl_aroclor_cands <- function(ws) {
+  if (length(ws$als_candidates) == 0) {
+    return(tibble::tibble(analyte_raw = character(0), units_raw = character(0),
+                          value_raw = character(0)))
+  }
+  dplyr::bind_rows(ws$als_candidates)
+}
+
+test_that("RULING 2026-08-08: the Aroclor `%` rows emit no row at all", {
+  # Not "no result" - NO ROW. Aroclor is not on the field allowlist, so these
+  # never were results; the path that would carry a recovery percentage into
+  # the transcription population (and, under A79, into `analysis` as a PCB
+  # concentration) is `als_candidates`, so that is the list that has to be
+  # empty of them.
+  ws <- acirl_aroclor_parse(acirl_aroclor_workbook())
+  cand <- acirl_aroclor_cands(ws)
+
+  expect_equal(nrow(cand[cand$units_raw == "%" &
+                           grepl("^Aroclor", cand$analyte_raw), ]), 0L)
+  expect_false(any(grepl("^Aroclor", vapply(ws$results, function(x) x$analyte_raw,
+                                            character(1)))))
+  # None of the recovery VALUES survives anywhere, under any label - the check
+  # above would still pass if the rows were relabelled rather than dropped.
+  expect_false(any(cand$value_raw %in% c("59.4", "63.9", "74.1", "78.7",
+                                         "74.3", "76.2")))
+
+  # One skip per excluded LABEL ROW - the granularity `meta_norm` and
+  # `stale_norm` use - not one per cell: 3 labels x 1 sheet.
+  reasons <- vapply(ws$skipped, function(x) x$reason, character(1))
+  expect_equal(sum(reasons == "aroclor_surrogate_percent"), 3L)
+})
+
+test_that("RULING 2026-08-08: the `ug/L` Aroclor rows survive ON THE SAME SHEET", {
+  # THE CRUX. Aroclor 1242/1248/1254 appear with BOTH units, so any exclusion
+  # keyed on the label alone - the shape `meta_norm` and `stale_norm` use -
+  # deletes 7 real PCB measurements here. All seven congeners must come through
+  # with their `<0.10` values intact.
+  ws <- acirl_aroclor_parse(acirl_aroclor_workbook())
+  cand <- acirl_aroclor_cands(ws)
+  ar <- cand[grepl("^Aroclor", cand$analyte_raw), ]
+
+  expect_setequal(unique(ar$analyte_raw),
+                  paste("Aroclor", c(1016, 1242, 1248, 1254, 1260)))
+  expect_setequal(unique(ar$units_raw), "µg/L")
+  expect_equal(nrow(ar), 15L)                      # 5 congeners x 3 points
+  expect_setequal(unique(ar$value_raw), "<0.10")
+  expect_true("Total Polychlorinated biphenyls" %in% cand$analyte_raw)
+})
+
+test_that("RULING 2026-08-08: `Ionic Balance` at `%` is untouched", {
+  # The reason the rule is not simply "drop any row whose units are `%`".
+  # Measured: 247 Ionic Balance rows across 95 files carry `%`, values 0.02 to
+  # 18.0 - the anion/cation balance error, a real reported quantity. A blanket
+  # `%` exclusion deletes all of them, and (being ALS candidates) silently.
+  ws <- acirl_aroclor_parse(acirl_aroclor_workbook())
+  cand <- acirl_aroclor_cands(ws)
+  ib <- cand[cand$analyte_raw == "Ionic Balance", ]
+  expect_equal(nrow(ib), 3L)
+  expect_setequal(ib$units_raw, "%")
+  expect_setequal(ib$value_raw, c("5.2", "0.02", "18.0"))
+})
+
+test_that("RULING 2026-08-08: the other `%` surrogates are NOT swept up with Aroclor", {
+  # Deliberate non-widening. Phenol-d6 stands for the 12 deuterated/labelled
+  # surrogate labels (1,133 rows) that also carry `%` and also look like
+  # recoveries. Robin ruled on AROCLOR; widening to them is a separate
+  # decision, so this test pins the scope rather than the outcome - if the
+  # ruling is later widened, this expectation is the thing that must change,
+  # visibly, rather than the corpus quietly losing rows.
+  ws <- acirl_aroclor_parse(acirl_aroclor_workbook())
+  cand <- acirl_aroclor_cands(ws)
+  pd <- cand[cand$analyte_raw == "Phenol-d6", ]
+  expect_equal(nrow(pd), 3L)
+  expect_setequal(pd$units_raw, "%")
+})
+
+test_that("RULING 2026-08-08: the `%` rows are also absent from a full parse()", {
+  # `.st_acirl_parse_water_sheet()` is the unit under test above; this pins the
+  # same behaviour through the public adapter surface, where the exclusion also
+  # has to reach `report$skipped` and `report$als_candidates`.
+  path <- acirl_aroclor_workbook()
+  out <- acirl_adapter()$parse(path, sampleTidy:::file_meta(path))
+
+  ac <- out$report$als_candidates
+  expect_equal(sum(grepl("^Aroclor", ac$analyte_raw) & ac$units_raw == "%"), 0L)
+  expect_equal(sum(grepl("^Aroclor", ac$analyte_raw)), 15L)
+  expect_true(any(out$report$skipped$reason == "aroclor_surrogate_percent"))
+  # The dropped rows leave no trace in the alias domain either: `58.5` is a
+  # number, not an alternative site name.
+  expect_equal(nrow(out$report$feature_aliases), 0L)
+})
+
+test_that("RULING 2026-08-08: the (label, units) key is case- and whitespace-blind", {
+  # Both halves of the key are normalised, in both directions.
+  #  (a) label - matched on the NORMALISED, upper-cased label, so ALL CAPS and
+  #      the doubled space real spreadsheets pick up are still excluded;
+  #  (b) units - matched after `.st_acirl_repair_units()`, which trims, so a
+  #      padded `%` cell is still `%`;
+  #  (c) a label that merely CONTAINS "Aroclor" mid-word must NOT match, and a
+  #      units cell that merely contains `%` must NOT match either - the corpus
+  #      has neither today, which is precisely why an over-broad key would go
+  #      unnoticed.
+  skip_if_not_installed("openxlsx")
+  path <- withr::local_tempfile(fileext = ".xlsx")
+  wb <- openxlsx::createWorkbook()
+  openxlsx::addWorksheet(wb, "Groundwater Sites 6 (2)")
+  put <- function(r, c, v) {
+    openxlsx::writeData(wb, "Groundwater Sites 6 (2)", x = v, startRow = r,
+                        startCol = c, colNames = FALSE, rowNames = FALSE)
+  }
+  put(6L, 3L, "Units")
+  put(9L, 2L, "Date of Sample"); put(9L, 4L, 45802)
+  put(10L, 2L, "Site Name");     put(10L, 4L, "L.MW06")
+  rows <- list(
+    list("AROCLOR  1242",  "%",          "59.4"),  # (a) excluded
+    list("aroclor 1248",   " % ",        "74.1"),  # (a)+(b) excluded
+    list("Aroclors",       "%",          "74.3"),  # prefix match, excluded
+    list("Paroclor 1242",  "%",          "12.3"),  # (c) kept - not a word start
+    list("Aroclor 1254",   "% Recovery", "76.2"),  # (c) kept - units not `%`
+    list("Aroclor 1260",   "µg/L",  "<0.10")  # kept - real concentration
+  )
+  for (k in seq_along(rows)) {
+    put(10L + k, 2L, rows[[k]][[1]])
+    put(10L + k, 3L, rows[[k]][[2]])
+    put(10L + k, 4L, rows[[k]][[3]])
+  }
+  openxlsx::saveWorkbook(wb, path, overwrite = TRUE)
+
+  ws <- acirl_aroclor_parse(path)
+  cand <- acirl_aroclor_cands(ws)
+  expect_setequal(cand$analyte_raw,
+                  c("Paroclor 1242", "Aroclor 1254", "Aroclor 1260"))
+  reasons <- vapply(ws$skipped, function(x) x$reason, character(1))
+  expect_equal(sum(reasons == "aroclor_surrogate_percent"), 3L)
+})

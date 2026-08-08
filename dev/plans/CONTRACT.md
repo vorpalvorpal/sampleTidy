@@ -1528,6 +1528,65 @@ for lab reports; `sample.organisation ∈ {ACIRL, Internal, ALS}`;
   restored backup. 007 refuses if either uuid is already taken, and a test
   cross-pins them against 006's CSV so the pair cannot drift.
 
+- **A86** **`SAR` is dimensionless (`units = '1'`), and the `%`-typed Aroclor
+  rows are surrogate recoveries that never import** (2026-08-08 rulings).
+
+  SAR is a ratio and carries no units; the registry had `mg/L` with **253
+  committed analyses** under that label whose NUMBERS are right (0.1–152 are
+  ordinary SAR values). 007 ruling (6) relabels and re-values nothing. `1`
+  rather than NULL because the database already has the convention (`NTMI`).
+  It is also the entire real-world load of A85's `units_missing` arm — 485 of
+  48,752 crosstab rows, all SAR — which goes quiet once the registry is right.
+  **It could only ship alongside A85's bare-number guard**; see A85.
+
+  The Aroclor exclusion is keyed on **(label-family AND units)**, not on either
+  alone, and measurement is why. Label-only — the shape the Fe and
+  site-metadata exclusions use — would delete the 7 real `<0.10 µg/L` PCB
+  measurements, because the same three labels sit on both sides of the split.
+  Units-only (`any % row`) would delete **247 legitimate `Ionic Balance` rows**
+  plus 1,133 rows nobody has ruled on. Workbook geometry confirms the reading:
+  a valueless `PAH Surrogates` heading followed by three `%` rows in one file,
+  a `Polychlorinated Biphenyls` heading followed by seven `µg/L` rows in
+  another.
+
+  **Of the 1,395 `%` rows, only these 15 are miscategorised.** The other 12
+  labels (1,353 rows) already resolve to QC analytes registered in `%` and
+  import correctly — the alarm about them was unfounded, checked label by
+  label.
+
+- **OPEN, NOT ACTED ON: four Aroclor labels resolve to single PCB CONGENERS.**
+  ALS `Aroclor 1016` → `3,3',5-Trichlorobiphenyl`, `1248` →
+  `3,3',5,5'-Tetrachlorobiphenyl`, `1254` → `2,2',3,3',4-Pentachlorobiphenyl`,
+  `1260` → `2,2',3,3',4,4'-Hexachlorobiphenyl` — with those congeners' CAS
+  numbers. An Aroclor is a commercial PCB *mixture*; a congener is one
+  compound. `1221`/`1232` map to correctly-named Aroclor analytes, and `1242` →
+  `Chlorodiphenyl` carries Aroclor 1242's own CAS, so it is a naming oddity
+  rather than a wrong link. The 006 mapping inherited these links faithfully
+  from the registry (`basis = lab_method(ALS)`), so this is a REGISTRY defect
+  of the same shape as A82's `>C10 - C16 Fraction` repoint. Needs a ruling.
+
+- **A85** **A bare number in a units column is never a unit** — refused as
+  `units_implausible / units_numeric` (`R/reconcile.R`, 2026-08-08). udunits
+  disagrees, and that is the danger: it reads a bare number as a DIMENSIONLESS
+  SCALE FACTOR, so `1.89` is a valid unit meaning "× 1.89". Measured: 17
+  `Sodium Adsorption Ratio` corpus rows carry `units_raw = 1.89` while their
+  values are 1.84 / 2.18 / 2.03 — a value that landed in the units cell. Against
+  the registry as it stood (`SAR` units `mg/L`) they ERROR and get reviewed;
+  the moment SAR is corrected to the dimensionless `1` (A86) they would have
+  CONVERTED, silently multiplied by 1.89, and A85's *value* arm could not see it
+  because 1.84 × 1.89 = 3.48 is an ordinary SAR number. **Fixing one defect
+  would have created a worse one.** `1` itself is exempt — it is the genuine
+  dimensionless unit, and `NTMI` already uses it. The corpus's whole units
+  vocabulary is 13 strings and exactly one is numeric.
+
+  The value arm also tests **the number that will be STORED, which for a
+  non-detect is the reporting limit**. `parse_value()` leaves `value_num` NA on
+  a `<20` and puts 20 in `rl`, so testing `value` alone skipped every
+  non-detect — and of the six `C6 - C10 Fraction` rows the arm exists for (the
+  `mg/L` → `mg/L` case no units library can see), **five are non-detects**. That
+  comparison is apples-to-apples: of 47,227 live non-detects, 34,942 carry
+  `value == rl_low` exactly.
+
 - **A84** **A sample is identified by (feature, datetime), and where two samples
   share that key the pipeline REFUSES rather than choosing**
   (`.ct_existing_sample_uuid()`, R/commit.R; `dev/migrations/008-duplicate-samples.R`,

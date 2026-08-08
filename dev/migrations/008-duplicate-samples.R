@@ -27,6 +27,27 @@
 # and therefore in `change_log`, because it is the one fact the delete destroys
 # that is not duplicated elsewhere.
 #
+# ---- (3) GIVE B.L05 THE `long` MASK IT NEEDS, AND DELIBERATELY NO EPA ONE ----
+#
+# Found only by rehearsal. `v_measurement_epa` and `v_measurement_long` INNER
+# JOIN `feature_mask` on a variant, so a destination missing a variant the
+# source has does not merely look different in that report - the rows VANISH
+# from it. Run without this, ruling (2) silently removed 522 measurements from
+# BOTH views, because B.L01 carries EPA `21` and long `Main dam` while B.L05
+# carried nothing at all.
+#
+# Robin's ruling (2026-08-08): the Lawson STP tanker discharge is a Sydney Water
+# TRADE-WASTE point, not an EPA licensed discharge. So B.L05 gets a `long` mask,
+# because it must stay visible in ordinary reporting - and deliberately NO EPA
+# mask. Those 522 measurements leaving the EPA return is the CORRECTION, not
+# collateral damage: B.L01 has been carrying another point's trade-waste under
+# EPA point 21.
+#
+# The gate is an EXEMPTION LIST rather than a weaker check: the destination must
+# still be as visible as the source in every OTHER variant, so a future third
+# variant is caught rather than waved through, and the one deliberate hole is
+# named in one place with its reason.
+#
 # ---- (2) REASSIGN 27 Lawson STP samples from B.L01 to B.L05 ----
 #
 # The other eight groups are at B.L01, Feb-Mar 2026, and are NOT duplicates.
@@ -144,6 +165,32 @@
 .mig008_to_feature <- "B.L05"
 .mig008_to_alias <- "Discharge Point - Lawson STP"
 .mig008_reassign_cols <- c("uuid_sample", "client_sample_id")
+
+#' Mask rows the destination feature needs before the move is safe
+#'
+#' `v_measurement_epa` and `v_measurement_long` INNER JOIN `feature_mask` on a
+#' variant, so a destination missing a variant the source has does not merely
+#' look different in that report - the rows VANISH from it. Rehearsed against a
+#' copy of the live database before this existed: the move silently removed 522
+#' measurements from BOTH views, because B.L01 carries EPA `21` and long
+#' `Main dam` while B.L05 carried nothing.
+#'
+#' Robin's ruling (2026-08-08): the Lawson STP tanker discharge is a Sydney
+#' Water TRADE-WASTE point, NOT an EPA licensed discharge. So it gets a `long`
+#' mask - it must stay visible in ordinary reporting - and deliberately NO EPA
+#' mask. Those 522 measurements leaving the EPA return is the CORRECTION, not
+#' collateral damage: B.L01 has been carrying them under EPA point 21.
+.mig008_dest_masks <- list(
+  list(variant = "long", name = "Discharge Point - Lawson STP")
+)
+
+#' Variants the destination is allowed to lack, with the reason recorded
+#'
+#' An exemption list rather than a weaker gate. The gate below still requires
+#' the destination to be as visible as the source in every OTHER variant, so a
+#' future third variant is caught rather than silently waved through - and the
+#' one deliberate hole is named, in one place, with why.
+.mig008_mask_exempt <- c(EPA = "ruled 2026-08-08: not an EPA licensed discharge point")
 
 #' Guard: this migration is run from a `devtools::load_all(".")` session
 #' @keywords internal
@@ -386,6 +433,34 @@
   list(n_analyses = length(kids), pair = p)
 }
 
+#' Ruling (3): give the destination the mask rows it needs BEFORE the move
+#'
+#' Idempotent by construction - it appends only variants the destination does
+#' not already carry - so a re-run after a partial failure is a no-op rather
+#' than a duplicate-key error. `feature_mask` has no `uuid` column (it is keyed
+#' by (uuid_feature, variant), R-14.1), so this appends the natural key.
+#'
+#' @return the number of mask rows appended.
+#' @keywords internal
+#' @noRd
+.mig008_create_dest_masks <- function(con) {
+  uuid_dest <- .mig008_one_feature(con, .mig008_to_feature)
+  have <- DBI::dbGetQuery(
+    con, "SELECT variant FROM feature_mask WHERE uuid_feature = ?",
+    params = list(uuid_dest))$variant
+  todo <- Filter(function(spec) !(spec$variant %in% have), .mig008_dest_masks)
+  for (spec in todo) {
+    db_append(con, "feature_mask", data.frame(
+      uuid_feature = uuid_dest, variant = spec$variant, name = spec$name,
+      stringsAsFactors = FALSE),
+      actor = .mig008_actor,
+      reason = sprintf(
+        "008 ruling (3): %s needs a `%s` mask before ruling (2) moves samples onto it, or those rows vanish from that view instead of moving",
+        .mig008_to_feature, spec$variant))
+  }
+  length(todo)
+}
+
 #' Ruling (2) as a pre-pass: move one sample onto another alias
 #'
 #' MUST be called with `con` OUTSIDE any open transaction - see the FK note in
@@ -527,18 +602,23 @@
   )
   src <- sort(unique(m$variant[m$feature == .mig008_from_feature]))
   dst <- sort(unique(m$variant[m$feature == .mig008_to_feature]))
-  missing <- setdiff(src, dst)
+  # What the destination WILL carry once ruling (3) has run - this gate is
+  # checked before the backup, i.e. before ruling (3) writes anything, so
+  # asking about the state on disk would refuse the migration for a gap the
+  # migration itself closes two steps later.
+  will_have <- union(dst, vapply(.mig008_dest_masks, function(x) x$variant, character(1)))
+  missing <- setdiff(setdiff(src, will_have), names(.mig008_mask_exempt))
   if (length(missing) > 0) {
     have <- m[m$feature == .mig008_from_feature & m$variant %in% missing, , drop = FALSE]
     cli::cli_abort(
-      "008-duplicate-samples ruling (2): {sQuote(.mig008_to_feature)} has no
-       feature_mask row for variant(s) {paste(sQuote(missing), collapse = ', ')},
-       which {sQuote(.mig008_from_feature)} does have
+      "008-duplicate-samples: {sQuote(.mig008_to_feature)} would still have no
+       feature_mask row for variant(s) {paste(sQuote(missing), collapse = ', ')}
+       after ruling (3), and {sQuote(.mig008_from_feature)} does have
        ({paste(sprintf('%s = %s', have$variant, sQuote(have$name)), collapse = '; ')}).
-       Those views INNER JOIN feature_mask, so moving the samples would delete
-       them from the report rather than move them. Add the destination's mask
-       rows first - and decide deliberately whether the Lawson STP tanker
-       discharge belongs in the EPA return at all.",
+       Those views INNER JOIN feature_mask, so moving the samples would DELETE
+       them from that report rather than move them. Either add the variant to
+       `.mig008_dest_masks`, or declare it in `.mig008_mask_exempt` with the
+       ruling that says it does not belong there - the way `EPA` is.",
       class = "sampletidy_error"
     )
   }
@@ -650,7 +730,8 @@ mig008_counts_checksum <- function(con) {
 #' @param n_deleted_samples,n_deleted_analyses expected deltas (both negative
 #'   in effect - passed as positive counts).
 #' @return invisible(TRUE); throws otherwise.
-mig008_verify <- function(before, after, n_deleted_samples, n_deleted_analyses) {
+mig008_verify <- function(before, after, n_deleted_samples, n_deleted_analyses,
+                          n_masks_created = 0L) {
   if (!identical(names(before$tables), names(after$tables)) ||
       !identical(names(before$views), names(after$views))) {
     cli::cli_abort(
@@ -662,7 +743,11 @@ mig008_verify <- function(before, after, n_deleted_samples, n_deleted_analyses) 
   # `analysis` loses rows, so both are excluded from the equality sweep and
   # checked by delta immediately below. Every other BASE TABLE must be
   # byte-identical.
-  moved <- c("sample", "sample_checksum", "analysis", "analysis_checksum")
+  # `feature_mask` joins the moved set as of ruling (3): the destination gains
+  # the mask rows without which ruling (2) would delete 522 measurements from
+  # two reporting views rather than move them. Checked by exact delta below.
+  moved <- c("sample", "sample_checksum", "analysis", "analysis_checksum",
+             "feature_mask", "feature_mask_checksum")
   names_to_check <- setdiff(names(before$tables), moved)
   bad <- names_to_check[!vapply(
     names_to_check, function(n) identical(before$tables[[n]], after$tables[[n]]), logical(1))]
@@ -674,7 +759,8 @@ mig008_verify <- function(before, after, n_deleted_samples, n_deleted_analyses) 
     )
   }
   for (spec in list(list(t = "sample", n = n_deleted_samples),
-                    list(t = "analysis", n = n_deleted_analyses))) {
+                    list(t = "analysis", n = n_deleted_analyses),
+                    list(t = "feature_mask", n = -n_masks_created))) {
     want <- before$tables[[spec$t]] - spec$n
     if (!identical(as.integer(after$tables[[spec$t]]), as.integer(want))) {
       cli::cli_abort(
@@ -935,6 +1021,12 @@ mig008_run <- function(db, snapshot_dir, reassign, dry_run = FALSE, .now = NULL)
       # the database can move between the two moments. Ruling (1)'s
       # preconditions are deliberately NOT re-asked - the pre-pass has already
       # made them false by design.
+      # ---- ruling (3): the destination's mask rows, BEFORE ruling (2) ----
+      n_masks <- .mig008_create_dest_masks(con)
+      if (n_masks > 0) {
+        logf("Ruling (3): created %d feature_mask row(s) for %s.", n_masks, .mig008_to_feature)
+      }
+
       .mig008_check_preconditions_reassign(con, rea)
       dest <- .mig008_dest_alias(con)
       n_moved_an <- 0L
@@ -956,7 +1048,8 @@ mig008_run <- function(db, snapshot_dir, reassign, dry_run = FALSE, .now = NULL)
         counts_after <- mig008_counts_checksum(con)
         mig008_verify(counts_before, counts_after,
                       n_deleted_samples = length(.mig008_dup_features),
-                      n_deleted_analyses = n_an_deleted)
+                      n_deleted_analyses = n_an_deleted,
+                      n_masks_created = n_masks)
         .mig008_verify_rulings(con, rea, winners)
 
         list(counts_after = counts_after, n_an_deleted = n_an_deleted)

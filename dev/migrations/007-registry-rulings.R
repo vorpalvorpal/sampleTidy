@@ -1,16 +1,16 @@
 # Operator-run migration: apply Robin's 2026-08-08 registry rulings.
 #
-# Five small, unrelated corrections to the REGISTRY (analyte / lab_method).
-# They are one migration rather than five because each is a handful of rows,
+# Six small, unrelated corrections to the REGISTRY (analyte / lab_method).
+# They are one migration rather than six because each is a handful of rows,
 # they were all ruled at once, and one backup + one transaction + one marker is
-# safer than five of each. Every step is separately verified, so a failure names
+# safer than six of each. Every step is separately verified, so a failure names
 # the ruling that failed rather than "007 failed".
 #
 # NOT ONE `analysis` ROW CHANGES VALUE. Step 5 transiently NULLs and restores
 # `analysis.uuid_lab` on three rows to get past a duckdb FK limitation, and the
 # safety gate proves the end state is byte-identical.
 #
-# ---- THE FIVE RULINGS ----
+# ---- THE SIX RULINGS ----
 #
 # (1) DELETE the ACIRL `field` `Total Dissolved Solids` lab_method.
 #     It has ZERO analyses, is not on the A76 field allowlist, and its name is a
@@ -85,6 +85,30 @@
 #     real NEPM band - the `analyte_mask` EPA variant already renders it
 #     "Total Recoverable Hydrocarbons (C10 - C16)", and the same convention
 #     shows in TRH-F3 -> "c17-c34" and TRH-F4 -> "c35-c40".)
+#
+# (6) CORRECT `SAR`'s UNITS from `mg/L` to the dimensionless `1`.
+#     Sodium Adsorption Ratio is a RATIO - (Na) / sqrt((Ca + Mg) / 2) in
+#     milliequivalents - and carries no units at all. The registry has it as
+#     `mg/L`, which is simply wrong, and 253 committed analyses sit under that
+#     label. Their NUMBERS are right (0.1 to 152 are ordinary SAR values); only
+#     the label is wrong, so this relabels them and re-values nothing.
+#     `1` rather than NULL or `_`: the database already has the convention -
+#     `NTMI` uses `units = '1'` - and udunits accepts `1` as dimensionless.
+#
+#     WHY IT MATTERS BEYOND TIDINESS. It is the entire real-world load of
+#     ruling 8's `units_missing` review arm: 485 of 48,752 crosstab rows on the
+#     real corpus, all of them SAR, about two per file. The arm goes quiet the
+#     moment the registry is right.
+#
+#     AND IT IS ONLY SAFE BECAUSE OF A GUARD ADDED ALONGSIDE IT. udunits reads
+#     a BARE NUMBER as a dimensionless scale factor, and 17 corpus SAR rows
+#     carry `units_raw = 1.89` - a value that landed in the units cell.
+#     Against `mg/L` those rows ERROR and get reviewed. Against `1` they would
+#     have CONVERTED, silently multiplied by 1.89, and ruling 8's value arm
+#     could not see it (1.84 x 1.89 = 3.48 is an ordinary SAR number). So this
+#     ruling shipped together with the `units_numeric` guard in
+#     `.rc_resolve_units_values()`. Fixing this without that guard would have
+#     replaced a caught error with a silent corruption.
 #
 # ---- DEPENDS ON 005 ----
 # Step 2 writes `lab_method.preference`, a column 005 creates. Enforced by the
@@ -173,6 +197,12 @@
        name = "Decachlorobiphenyl", units = "%", type = "QC", CAS = "2051-24-3"),
   list(uuid = "3eb6fc65-dbe1-4a7d-ab28-2e01dc752a94",
        name = "Volume Purged", units = "L", type = "quality", CAS = NA_character_)
+)
+
+#' Analyte units corrections. `from` is checked, not just overwritten: if the
+#' registry has moved since the ruling, refuse rather than clobber.
+.mig007_analyte_units <- list(
+  list(name = "SAR", from = "mg/L", to = "1")
 )
 
 .mig007_repoints <- list(
@@ -284,6 +314,26 @@
          ({spec$uuid}) is already in use by another analyte. Migration 006's
          mapping names that uuid, so it cannot simply be changed here - work out
          why it collided.",
+        class = "sampletidy_error"
+      )
+    }
+  }
+  # (6) the analyte must exist and still carry the units the ruling names.
+  for (spec in .mig007_analyte_units) {
+    got <- DBI::dbGetQuery(con, "SELECT units FROM analyte WHERE name = ?",
+                           params = list(spec$name))$units
+    if (length(got) != 1L) {
+      cli::cli_abort(
+        "007-registry-rulings: analyte {sQuote(spec$name)} matches {length(got)}
+         rows, not exactly 1.",
+        class = "sampletidy_error"
+      )
+    }
+    if (!identical(got[[1]], spec$from)) {
+      cli::cli_abort(
+        "007-registry-rulings: analyte {sQuote(spec$name)} has units
+         {sQuote(got[[1]])}, not {sQuote(spec$from)} as the ruling assumes.
+         Refusing - the registry moved since the ruling was made.",
         class = "sampletidy_error"
       )
     }
@@ -423,6 +473,21 @@ mig007_verify <- function(before, after) {
       fail("(4) analyte {sQuote(spec$name)} was created as {got$uuid[[1]]}, not the
             pinned {spec$uuid} that 006's mapping names.")
     }
+  }
+
+  for (spec in .mig007_analyte_units) {
+    got <- DBI::dbGetQuery(con, "SELECT units FROM analyte WHERE name = ?",
+                           params = list(spec$name))$units
+    if (length(got) != 1L || !identical(got[[1]], spec$to)) {
+      fail("(6) analyte {sQuote(spec$name)} has units {got}, expected {spec$to}.")
+    }
+    # NOT re-checked here: that the 253 committed analyses were RELABELLED
+    # rather than re-valued. `mig007_verify()`'s SAFETY half already proves
+    # `analysis` is byte-identical end to end, which is a strictly stronger
+    # statement than any count this function could take, and it is proved by a
+    # different mechanism. (It would also have needed a before-count threaded
+    # into a function that takes only `con` - and a cli `{}` expression
+    # starting with a dot, which reads as a style name, not a value.)
   }
 
   # (5) asked through the PRODUCTION resolver, not by re-reading the UPDATE:
@@ -590,6 +655,15 @@ mig007_run <- function(db, snapshot_dir, dry_run = FALSE, .now = NULL,
                   actor = .mig007_actor,
                   reason = sprintf("007 ruling (2): preference %d", spec$preference))
       }
+      # (6) analyte units corrections
+      for (spec in .mig007_analyte_units) {
+        db_update(con, "analyte", uuid = .mig007_one_analyte(con, spec$name),
+                  changes = list(units = spec$to),
+                  actor = .mig007_actor,
+                  reason = sprintf(
+                    "007 ruling (6): %s is a dimensionless ratio; units %s -> %s (relabel only, no value changes)",
+                    spec$name, spec$from, spec$to))
+      }
       # (3) conversion constants
       for (spec in .mig007_conversions) {
         db_update(con, "lab_method", uuid = .mig007_one_method(con, spec),
@@ -606,7 +680,7 @@ mig007_run <- function(db, snapshot_dir, dry_run = FALSE, .now = NULL,
       NULL
     })
 
-    logf("Verify passed: all five rulings applied; no analysis row changed.")
+    logf("Verify passed: all six rulings applied; no analysis row changed.")
     invisible(TRUE)
   }, db = db)
 

@@ -24,7 +24,7 @@
   env
 }
 
-#' Seed exactly the rows the five rulings name, plus the `preference` column
+#' Seed exactly the rows the six rulings name, plus the `preference` column
 #' 005 would have added.
 .seed_007_fixture <- function(con) {
   DBI::dbExecute(con, "ALTER TABLE lab_method ADD COLUMN preference INTEGER")
@@ -33,7 +33,16 @@
     ('a-tds',  'TDS',         'mg/L', 'physical', NULL),
     ('a-no2n', 'NO2-N',       'mg/L', 'nitrogen', NULL),
     ('a-c11',  'TRH-C11-C16', 'mg/L', 'organic',  NULL),
-    ('a-f2',   'TRH-F2',      'mg/L', 'organic',  NULL)")
+    ('a-f2',   'TRH-F2',      'mg/L', 'organic',  NULL),
+    ('a-sar',  'SAR',         'mg/L', 'quality',  NULL)")
+
+  # A committed analysis on SAR, so ruling (6) is a RELABEL of live data rather
+  # than an edit to an unused row - which is the only version of it that can go
+  # wrong.
+  DBI::dbExecute(con, "INSERT INTO lab_method (uuid, uuid_analyte, name, method, organisation)
+                       VALUES ('lm-sar', 'a-sar', 'Sodium Adsorption Ratio', 'EA', 'ALS')")
+  DBI::dbExecute(con, "INSERT INTO analysis (uuid, uuid_sample, uuid_lab, value, quantified)
+                       VALUES ('an-sar1', 's-0001', 'lm-sar', 1.84, TRUE)")
 
   DBI::dbExecute(con, "INSERT INTO lab_method
     (uuid, uuid_analyte, name, method, organisation) VALUES
@@ -95,7 +104,7 @@
 
 # ======================================================================
 
-test_that("mig007_run() applies all five rulings", {
+test_that("mig007_run() applies all six rulings", {
   mig <- .mig007_load()
   e <- .mig007_env()
   before <- .mig007_state(e$db)
@@ -421,5 +430,60 @@ test_that(".mig007_verify_rulings() itself catches an analyte created under the 
   spec <- mig$.mig007_new_analytes[[1]]
   DBI::dbExecute(con, "UPDATE analyte SET uuid = 'some-other-uuid' WHERE name = ?",
                  params = list(spec$name))
+  expect_error(mig$.mig007_verify_rulings(con), class = "sampletidy_error")
+})
+
+test_that("(6) SAR's units are corrected to the dimensionless `1`, relabelling and not re-valuing", {
+  # SAR is a RATIO and carries no units; the registry had it as `mg/L` with 253
+  # committed analyses under that label. Their numbers are right - 0.1 to 152
+  # are ordinary SAR values - so this must change the label and nothing else.
+  # `1` rather than NULL or `_` because the database already has the
+  # convention (`NTMI` uses `units = '1'`) and udunits accepts it.
+  mig <- .mig007_load(); e <- .mig007_env()
+  before <- .mig007_state(e$db)
+  mig$mig007_run(db = e$db, snapshot_dir = e$snapshot_dir)
+
+  con <- DBI::dbConnect(duckdb::duckdb(), e$db, read_only = TRUE)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
+  expect_identical(
+    DBI::dbGetQuery(con, "SELECT units FROM analyte WHERE name = 'SAR'")$units, "1")
+  # relabel, not re-value
+  after <- .mig007_state(e$db)
+  expect_identical(after$n_analysis, before$n_analysis)
+  expect_equal(
+    DBI::dbGetQuery(con, "SELECT value FROM analysis WHERE uuid = 'an-sar1'")$value, 1.84)
+})
+
+test_that("(6) is REFUSED if SAR no longer carries the units the ruling names", {
+  # The ruling says `mg/L` -> `1`. If the registry has moved, overwriting
+  # blindly would clobber whatever someone else decided.
+  mig <- .mig007_load(); e <- .mig007_env()
+  con <- DBI::dbConnect(duckdb::duckdb(), e$db, read_only = FALSE)
+  DBI::dbExecute(con, "UPDATE analyte SET units = 'meq/L' WHERE name = 'SAR'")
+  DBI::dbDisconnect(con, shutdown = TRUE)
+
+  before <- .mig007_state(e$db)
+  expect_error(mig$mig007_run(db = e$db, snapshot_dir = e$snapshot_dir),
+               class = "sampletidy_error")
+  expect_identical(.mig007_state(e$db), before)
+  expect_identical(length(list.files(e$snapshot_dir)), 0L)
+})
+
+test_that(".mig007_verify_rulings() itself catches units that did not land", {
+  # THE GATE, TESTED DIRECTLY - third instance of the same lesson today. The
+  # end-to-end ruling-(6) test reads `analyte.units` straight out of the
+  # database, so it already fails any mutation to the WRITE and the verify
+  # never gets to be the thing that notices. Neutering the check killed no
+  # test until this existed. A verify gate is protection for the OPERATOR at
+  # runtime; it has to be exercised against a database wrong in exactly the way
+  # it exists to catch.
+  mig <- .mig007_load(); e <- .mig007_env()
+  mig$mig007_run(db = e$db, snapshot_dir = e$snapshot_dir)
+
+  con <- DBI::dbConnect(duckdb::duckdb(), e$db, read_only = FALSE)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
+  expect_true(mig$.mig007_verify_rulings(con))      # non-vacuous: passes first
+
+  DBI::dbExecute(con, "UPDATE analyte SET units = 'mg/L' WHERE name = 'SAR'")
   expect_error(mig$.mig007_verify_rulings(con), class = "sampletidy_error")
 })
