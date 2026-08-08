@@ -1514,8 +1514,92 @@
     datetime_start = as.POSIXct(NA), organisation = organisation, person = person,
     purpose = NA_character_, comments = NA_character_
   )
-  db_append(con, "sample", row, actor = .ct_actor, reason = reason)
+  .ct_append_sample(con, row, reason = reason, pending = pending,
+                    match_feature = match_feature, alias_uuid = alias_uuid,
+                    sample_date = sample_date, sample_datetime = sample_datetime)
   new_uuid
+}
+
+# Does this error come from migration 009's UNIQUE index on `sample`?
+#
+# Matched on duckdb's own text rather than on a code, because the driver
+# surfaces constraint violations as a generic `duckdb_error` / `rlang_error`
+# with no machine-readable field to key off. Both halves are required: a bare
+# "Constraint Error" is also what a PRIMARY KEY or FK violation says, and those
+# are different bugs that must not be relabelled as this one.
+.ct_is_sample_identity_violation <- function(e) {
+  msg <- paste(conditionMessage(e), collapse = " ")
+  grepl("Constraint Error", msg, fixed = TRUE) &&
+    (grepl("ux_sample_identity", msg, fixed = TRUE) ||
+       grepl("Duplicate key", msg, fixed = TRUE))
+}
+
+#' Insert the new `sample` row, translating migration 009's index violation
+#' into the quarantine message the caller already understands.
+#'
+#' WHY THIS EXISTS. `.ct_existing_sample_uuid()` above decides "reuse or
+#' create" by looking for candidates at the same feature/alias AND
+#' `CAST(date AS DATE)`. Migration 009's unique index keys on
+#' `(uuid_feature_alias, datetime, uuid_project)` - it does not consult `date`
+#' at all. So the two can disagree: the predicate can conclude "no candidate,
+#' create a new sample" while the database already holds a row with the same
+#' alias, instant and project. When it does, the INSERT is rejected by the
+#' index and the raw driver error - "Constraint Error: Duplicate key ..." -
+#' says nothing about samples, features or what the operator should do.
+#'
+#' The disagreement is REACHABLE, and not rare. `sample.date` is stored as AEST
+#' midnight converted to UTC (13:00/14:00 on the previous calendar day) for
+#' 14,456 of 15,149 live rows, while this function writes naive UTC midnight -
+#' only 36 rows use this pipeline's convention. Measured by calling
+#' `.ct_existing_sample_uuid()` on 400 real samples at their own AEST calendar
+#' day: it found 0 of them, and found 400 of 400 when asked with the day
+#' `CAST(date AS DATE)` reads back (scratchpad/m6c_schema_reach.R). So a
+#' re-ingest of legacy data reaches this branch every time.
+#'
+#' Translating rather than fixing is deliberate. Correcting the `date`
+#' convention is a larger, separate change that needs its own ruling - see the
+#' header of dev/migrations/009-sample-identity-index.R. Until then the index
+#' turns silent duplication into a refusal, and this function makes the refusal
+#' legible. The wording deliberately mirrors the ruling-9 ambiguity abort in
+#' `.ct_existing_sample_uuid()`: same "refused rather than ..." framing, same
+#' "DATA error" closing instruction, so an operator meets one voice.
+#'
+#' NOTE the transaction is already dead by the time this runs. A duckdb
+#' constraint error poisons its transaction irrecoverably (no savepoints in
+#' 1.4.1), so there is nothing to recover to and no cheaper option than
+#' aborting - which is what `commit_event()` wants anyway: nothing lands.
+#' @keywords internal
+#' @noRd
+.ct_append_sample <- function(con, row, reason, pending, match_feature, alias_uuid,
+                              sample_date, sample_datetime) {
+  tryCatch(
+    db_append(con, "sample", row, actor = .ct_actor, reason = reason),
+    error = function(e) {
+      # Anything that is not this index's violation is re-thrown UNCHANGED.
+      # Relabelling a PK clash, an FK failure or a driver fault as "duplicate
+      # sample" would send the operator hunting for data that is not wrong.
+      if (!.ct_is_sample_identity_violation(e)) {
+        stop(e)
+      }
+      where <- if (isTRUE(pending)) alias_uuid else match_feature
+      when <- if (is.na(sample_datetime)) "NA" else format(sample_datetime)
+      cli::cli_abort(
+        c("commit_event(): this measurement's sample already exists at the same
+           alias, instant and work order, so it is refused rather than stored a
+           second time.",
+          "i" = "feature/alias {.val {where}}, date {.val {as.character(sample_date)}},
+                 datetime {.val {when}}",
+          "i" = "the database rejected the insert on the {.field ux_sample_identity}
+                 unique index over (uuid_feature_alias, datetime, uuid_project).",
+          "x" = "Two samples at one alias, one instant and one work order is a
+                 DATA error. This usually means the existing row was written
+                 under the legacy AEST `date` convention, so the reuse lookup
+                 could not find it - check it before re-importing this batch."),
+        class = "sampletidy_error",
+        parent = e
+      )
+    }
+  )
 }
 
 #' Resolve every `clean` row's sample uuid (step 2)
