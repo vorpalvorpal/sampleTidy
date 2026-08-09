@@ -1,5 +1,10 @@
 # PLAN 13 — the alias-indirection migration (operator-run, one-off)
 
+_Status: **CLOSED** 2026-07-23 — signed off through Phase 10. History, not a live plan. Owns migration 001 only._
+
+_The build finished 2026-07-28. For rules in force today see_
+_`dev/plans/OPERATING-RULES.md`; for run state see `dev/STATE.md`._
+
 **Owns:** `dev/migrations/001-alias-indirection.R` (new),
 `tests/testthat/test-migration-001.R` (new).
 **Amends:** nothing. This plan adds no package code and changes no package

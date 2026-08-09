@@ -1,5 +1,10 @@
 # PLAN 12 — whole-package code-review remediation
 
+_Status: **CLOSED** 2026-07-23 — signed off through Phase 10. History, not a live plan._
+
+_The build finished 2026-07-28. For rules in force today see_
+_`dev/plans/OPERATING-RULES.md`; for run state see `dev/STATE.md`._
+
 **Owns:** no new `R/` module — this plan is a set of adjudicated fixes to landed
 code. `dev/CODE-REVIEW-2026-07-19-TRIAGE.md` is its rationale of record.
 **Amends (adjudicated cross-plan edits, not ownership transfers — like A52):**

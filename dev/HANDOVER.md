@@ -1,5 +1,11 @@
 # sampleTidy — build handover
 
+> ⚠️ **SUPERSEDED — this file is a snapshot of 2026-07-22 and is history.**
+> For current state read **`dev/STATE.md`**. Everything below describes a branch
+> that no longer exists (`tdd-mvp-implementation`), a deliberately-red test suite,
+> and plans that have all since closed. Kept for the build record only; do not
+> act on it.
+
 _Last updated: **2026-07-22**. Branch: `tdd-mvp-implementation`._
 
 ## Read this first (2026-07-22 session)

@@ -1,9 +1,17 @@
 # PLAN-16 — Structured `review_queue` payload
 
-Status: PLANNED (2026-07-24). Authorised by Robin's **RULING 1** and **RULING 3** of
-2026-07-24, taken while PLAN-15 was between Phase 5 and Phase 6. PLAN-15 Phase 6 is
-suspended until this plan lands, because PLAN-15's own criteria assert against the payload
-format this plan replaces.
+_Status: **CLOSED** 2026-07-25 at `fb26d98` — signed off through Phase 10. History, not a
+live plan._
+
+_The build finished 2026-07-28. For rules in force today see_
+_`dev/plans/OPERATING-RULES.md`; for run state see `dev/STATE.md`._
+
+_As originally recorded (2026-07-24): "Authorised by Robin's **RULING 1** and
+**RULING 3** of 2026-07-24, taken while PLAN-15 was between Phase 5 and Phase 6.
+PLAN-15 Phase 6 is suspended until this plan lands, because PLAN-15's own criteria
+assert against the payload format this plan replaces."_
+
+
 
 Evidence base, all measured rather than assumed:
 `dev/tdd-run/p16-live-db-evidence.md` (live DB, `read_only = TRUE`),

@@ -1,5 +1,10 @@
 # PLAN 05 — ALS crosstab adapters: `als_xtab`, `als_enmrg`
 
+_Status: **CLOSED** 2026-07-23 — signed off through Phase 10. History, not a live plan._
+
+_The build finished 2026-07-28. For rules in force today see_
+_`dev/plans/OPERATING-RULES.md`; for run state see `dev/STATE.md`._
+
 **Owns:** `R/adapter-crosstab.R` (shared core + both adapters),
 `tests/testthat/test-adapter-crosstab.R`, `tests/testthat/fixtures/crosstab/…`.
 **Depends on:** 01–03. Parallel-safe with 04/06.

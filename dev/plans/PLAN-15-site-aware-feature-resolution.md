@@ -1,9 +1,16 @@
 # PLAN-15 — Site-aware feature (sampling-point) resolution
 
-Status: PLANNED (2026-07-23). Post-mandate interactive work, agreed with the user.
-Supersedes the reconcile feature-key behaviour probed in the input/ dry-run
-(scratchpad/{analyze_review,investigate_names,investigate_alias_key,collision_test,
-site_point_meta}.R; migrated dry-run DB /private/tmp/claude-501/qc-dryrun/).
+_Status: **CLOSED** 2026-07-28 at `a16a9bd` — signed off through Phase 10. History, not a
+live plan. Its F.10 re-ingest guard IS built (`.ct_reingest_guard()`, R/commit.R)._
+
+_The build finished 2026-07-28. For rules in force today see_
+_`dev/plans/OPERATING-RULES.md`; for run state see `dev/STATE.md`._
+
+_As originally recorded (2026-07-23): "Post-mandate interactive work, agreed with
+the user. Supersedes the reconcile feature-key behaviour probed in the input/
+dry-run (scratchpad/{analyze_review,investigate_names,investigate_alias_key,
+collision_test,site_point_meta}.R; migrated dry-run DB
+/private/tmp/claude-501/qc-dryrun/)."_
 
 <!-- block: B-15.problem -->
 ## Problem (evidence-based)

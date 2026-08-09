@@ -1,5 +1,10 @@
 # PLAN 07 — Event assembly & source preference
 
+_Status: **CLOSED** 2026-07-23 — signed off through Phase 10. History, not a live plan._
+
+_The build finished 2026-07-28. For rules in force today see_
+_`dev/plans/OPERATING-RULES.md`; for run state see `dev/STATE.md`._
+
 **Owns:** `R/assemble.R`, `tests/testthat/test-assemble.R`. **Depends on:**
 03–06 (uses their IR outputs as inputs; fixtures reuse theirs).
 

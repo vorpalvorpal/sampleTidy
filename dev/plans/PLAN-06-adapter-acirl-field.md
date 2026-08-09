@@ -1,5 +1,12 @@
 # PLAN 06 — `acirl_field_xlsx` adapter
 
+_Status: **CLOSED** 2026-07-23 — signed off through Phase 10. History, not a live plan. Its ACIRL behaviour has since been
+substantially rewritten by A73–A86 — read `OPERATING-RULES.md`, not this file, for
+what the adapter does today._
+
+_The build finished 2026-07-28. For rules in force today see_
+_`dev/plans/OPERATING-RULES.md`; for run state see `dev/STATE.md`._
+
 **Owns:** `R/adapter-acirl-field.R`, `tests/testthat/test-adapter-acirl.R`,
 `tests/testthat/fixtures/acirl/…`. **Depends on:** 01–03. Parallel-safe with
 04/05.

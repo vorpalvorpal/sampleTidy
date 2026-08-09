@@ -1,5 +1,10 @@
 # PLAN 02 — Ported primitives: text, units, values, dates, spreadsheet tools
 
+_Status: **CLOSED** 2026-07-23 — signed off through Phase 10. History, not a live plan._
+
+_The build finished 2026-07-28. For rules in force today see_
+_`dev/plans/OPERATING-RULES.md`; for run state see `dev/STATE.md`._
+
 **Owns:** `R/text-normalise.R`, `R/units.R`, `R/values.R`, `R/dates.R`,
 `R/spreadsheet-tools.R` + matching test files. **Depends on:** 01.
 **Blocks:** 04–08.

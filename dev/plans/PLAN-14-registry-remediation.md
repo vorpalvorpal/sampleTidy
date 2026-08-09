@@ -1,5 +1,10 @@
 # PLAN 14 — live-DB registry data remediation (operator-run, one-off)
 
+_Status: **CLOSED** 2026-07-23 — signed off through Phase 10. History, not a live plan. Owns migration 002 only._
+
+_The build finished 2026-07-28. For rules in force today see_
+_`dev/plans/OPERATING-RULES.md`; for run state see `dev/STATE.md`._
+
 **Owns:** `dev/migrations/002-registry-remediation.R` (new),
 `tests/testthat/test-migration-002.R` (new).
 **Amends:** nothing in `R/`.

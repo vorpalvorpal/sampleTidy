@@ -1,5 +1,10 @@
 # PLAN 08 — Reconciler
 
+_Status: **CLOSED** 2026-07-23 — signed off through Phase 10. History, not a live plan._
+
+_The build finished 2026-07-28. For rules in force today see_
+_`dev/plans/OPERATING-RULES.md`; for run state see `dev/STATE.md`._
+
 **Owns:** `R/reconcile.R`, `tests/testthat/test-reconcile.R`. **Depends on:**
 01, 02, 07. Tests use the plan-01 `helper-db.R` throwaway DB seeded with a
 small synthetic registry: 3 features (+1 mask alias), 3 analytes with units,

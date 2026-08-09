@@ -1,5 +1,10 @@
 # PLAN 11 — commit-everything, resolve unknown feature & analyte names later
 
+_Status: **CLOSED** 2026-07-23 — signed off through Phase 10. History, not a live plan._
+
+_The build finished 2026-07-28. For rules in force today see_
+_`dev/plans/OPERATING-RULES.md`; for run state see `dev/STATE.md`._
+
 **Owns:** `R/feature-alias.R` (new — the resolve API), `R/pending.R` (new —
 backlog readers), `tests/testthat/test-feature-alias.R` (new),
 `tests/testthat/test-pending.R` (new).

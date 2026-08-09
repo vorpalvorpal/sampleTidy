@@ -1,5 +1,10 @@
 # PLAN 04 — `esdat` adapter
 
+_Status: **CLOSED** 2026-07-23 — signed off through Phase 10. History, not a live plan._
+
+_The build finished 2026-07-28. For rules in force today see_
+_`dev/plans/OPERATING-RULES.md`; for run state see `dev/STATE.md`._
+
 **Owns:** `R/adapter-esdat.R`, `tests/testthat/test-adapter-esdat.R`,
 `tests/testthat/fixtures/esdat/…` (synthetic; A3). **Depends on:** 01–03.
 

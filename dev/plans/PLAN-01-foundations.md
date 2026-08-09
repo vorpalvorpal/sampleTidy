@@ -1,5 +1,10 @@
 # PLAN 01 — Foundations: config, DB connection, ops schema, hashing
 
+_Status: **CLOSED** 2026-07-23 — signed off through Phase 10. History, not a live plan._
+
+_The build finished 2026-07-28. For rules in force today see_
+_`dev/plans/OPERATING-RULES.md`; for run state see `dev/STATE.md`._
+
 **Owns:** `R/config.R`, `R/db-connect.R`, `R/db-schema.R`, `R/hash.R`,
 `tests/testthat/test-config.R`, `test-db-connect.R`, `test-db-schema.R`,
 `test-hash.R`. **Depends on:** nothing. **Blocks:** everything.

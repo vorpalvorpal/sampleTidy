@@ -1,5 +1,10 @@
 # PLAN 10 — End-to-end, idempotency, router matrix, real-corpus gates
 
+_Status: **CLOSED** 2026-07-23 — signed off through Phase 10. History, not a live plan._
+
+_The build finished 2026-07-28. For rules in force today see_
+_`dev/plans/OPERATING-RULES.md`; for run state see `dev/STATE.md`._
+
 **Owns:** `tests/testthat/test-e2e-pipeline.R`, `test-e2e-corpus.R`,
 `tests/testthat/helper-corpus.R`. **Depends on:** all previous plans landed
 and green. This plan writes tests only — any production defect it finds goes

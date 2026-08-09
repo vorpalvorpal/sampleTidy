@@ -1,5 +1,10 @@
 # PLAN 09 — Mutation API, commit, archive, snapshot, `ingest_dir()`
 
+_Status: **CLOSED** 2026-07-23 — signed off through Phase 10. History, not a live plan._
+
+_The build finished 2026-07-28. For rules in force today see_
+_`dev/plans/OPERATING-RULES.md`; for run state see `dev/STATE.md`._
+
 **Owns:** `R/mutate.R`, `R/commit.R`, `R/archive.R`, `R/snapshot.R`,
 `R/ingest.R` + test files. **Depends on:** 01, 07, 08.
 
