@@ -133,6 +133,64 @@ test_that("R-6.3: EC mojibake unit variant and Temperature 'oC' both normalise c
   expect_true(all(temp_rows$units_raw == "°C"))   # 'oC' repaired to the real degree sign
 })
 
+# ---- RULING 2026-08-09: ACIRL's DIMENSIONLESS units placeholders ------------
+#
+# ACIRL writes the units cell of a dimensionless analyte as `-` or `_`.
+# `unify_value()` rejects both as invalid units, so before this mapping every
+# such row quarantined as `unknown_unit` instead of importing. Measured on the
+# 2026-08-01 corpus (38,450 candidate rows): `_` 156 rows, `-` 6 rows, both
+# carried by exactly one analyte - `Sodium Adsorption Ratio` - which is the one
+# analyte in the corpus that genuinely has no units.
+
+test_that("A87: `-` and `_` become the dimensionless unit `1`", {
+  f <- sampleTidy:::.st_acirl_repair_units
+  expect_identical(f("Sodium Adsorption Ratio", "-"), "1")
+  expect_identical(f("Sodium Adsorption Ratio", "_"), "1")
+  # trimmed before matching, like every other arm of this function
+  expect_identical(f("Sodium Adsorption Ratio", " - "), "1")
+  expect_identical(f("Sodium Adsorption Ratio", "_ "), "1")
+})
+
+test_that("A87: the mapping yields a unit `unify_value()` can actually convert", {
+  # NON-VACUOUS FIRST: the raw strings really are rejected today. Without this
+  # the test below would pass just as well if the mapping did nothing.
+  expect_error(unify_value(2, units_from = "-", units_to = "1"))
+  expect_error(unify_value(2, units_from = "_", units_to = "1"))
+
+  f <- sampleTidy:::.st_acirl_repair_units
+  expect_equal(
+    as.numeric(unify_value(2, units_from = f("Sodium Adsorption Ratio", "-"), units_to = "1")),
+    2
+  )
+  expect_equal(
+    as.numeric(unify_value(2, units_from = f("Sodium Adsorption Ratio", "_"), units_to = "1")),
+    2
+  )
+})
+
+test_that("A87: a BLANK units cell is left alone, so ruling 8's units_missing arm still sees it", {
+  # `-` and `_` positively assert "this quantity has no units". A blank cell
+  # asserts nothing. They are not the same fact, and only the first is mapped.
+  f <- sampleTidy:::.st_acirl_repair_units
+  expect_true(is.na(f("Sodium Adsorption Ratio", NA_character_)))
+  expect_identical(f("Sodium Adsorption Ratio", ""), "")
+})
+
+test_that("A87: the mapping touches no other units string and no other arm", {
+  f <- sampleTidy:::.st_acirl_repair_units
+  # the rest of the corpus's units vocabulary passes through untouched
+  for (u in c("mg/L", "µg/L", "%", "meq/L", "µS/cm", "pH", "L", "l")) {
+    expect_identical(f("Sulfate", u), u)
+  }
+  # a DOUBLE dash is not a placeholder and is not mapped
+  expect_identical(f("Sodium Adsorption Ratio", "--"), "--")
+  # pre-existing arms still win where they apply
+  expect_identical(f("Temperature", "-"), "°C")
+  expect_identical(f("pH", "pH Units"), "pH")
+  # and a bare number is still left for ruling 8's `units_numeric` arm to refuse
+  expect_identical(f("Sodium Adsorption Ratio", "1.89"), "1.89")
+})
+
 # NOTE (orchestrator fix): date fill-down is a `samples`-level property -
 # `sample_datetime_raw` is a samples-only IR column (R/ir.R), not on `results`.
 # The original test read `out$results$sample_datetime_raw` (always NULL), a
