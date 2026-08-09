@@ -47,6 +47,19 @@
        old_long = "2,2',3,3',4,4'-hexachlorobiphenyl")
 )
 
+# The two MASK-ONLY fixes (Robin, 2026-08-09), also verbatim from the live
+# registry and also repeated rather than read out of the migration. `analyte`
+# is CORRECT on both and must not move; only the `long` display name is wrong,
+# and what it names - `Aroclor 1222`, `Aroclor 1233` - is not a real Aroclor.
+.MIG010_MASK_FIXES <- list(
+  list(uuid = "fda36258-7c29-4d1d-953a-597f14667c42",
+       name = "Aroclor 1221", cas = "11104-28-2",
+       old_long = "Aroclor 1222", new_long = "Aroclor 1221"),
+  list(uuid = "bb4f58ec-7d96-4c72-b0ca-8f617c6267d9",
+       name = "Aroclor 1232", cas = "11141-16-5",
+       old_long = "Aroclor 1233", new_long = "Aroclor 1232")
+)
+
 .MIG010_ALS_METHOD <- "EP131B: Polychlorinated Biphenyls (as Aroclors)"
 
 #' Seed exactly the rows the ruling names, plus `analyte_mask` (which
@@ -90,23 +103,48 @@
                     sprintf("an-%d-b", i), sprintf("lm-als-%d", i)))
   }
 
-  # A CONTROL: `Aroclor 1221` is already correct and is explicitly out of scope.
-  # It shares the reporting block, the method and the mask shape with the four,
-  # so if the migration ever widened to "everything under EP131B" this is the
-  # row that says so.
+  # The two MASK-ONLY fixes, seeded exactly as live: a CORRECT analyte carrying
+  # a `long` mask that names an Aroclor which does not exist. The `EPA` variant
+  # is seeded too, with a NULL name, so a migration that rewrote the wrong
+  # variant is caught here as well as on the four renames.
+  for (i in seq_along(.MIG010_MASK_FIXES)) {
+    f <- .MIG010_MASK_FIXES[[i]]
+    DBI::dbExecute(con,
+      "INSERT INTO analyte (uuid, name, units, type, CAS)
+         VALUES (?, ?, 'mg/L', 'organic', ?)",
+      params = list(f$uuid, f$name, f$cas))
+    DBI::dbExecute(con,
+      "INSERT INTO analyte_mask (uuid_analyte, variant, name, units, conversion_constant)
+         VALUES (?, 'long', ?, NULL, NULL), (?, 'EPA', NULL, NULL, 1)",
+      params = list(f$uuid, f$old_long, f$uuid))
+    DBI::dbExecute(con,
+      "INSERT INTO lab_method (uuid, uuid_analyte, name, method, organisation)
+         VALUES (?, ?, ?, ?, 'ALS')",
+      params = list(sprintf("lm-als-fix-%d", i), f$uuid, f$name, .MIG010_ALS_METHOD))
+    DBI::dbExecute(con,
+      "INSERT INTO analysis (uuid, uuid_sample, uuid_lab, value, quantified, rl_low)
+         VALUES (?, 's-0001', ?, 1e-04, FALSE, 1e-04)",
+      params = list(sprintf("an-fix-%d", i), sprintf("lm-als-fix-%d", i)))
+  }
+
+  # A CONTROL: `Aroclor 1242` is recorded under its archaic OSHA trade name
+  # `Chlorodiphenyl` with the CORRECT Aroclor 1242 CAS, and is explicitly out of
+  # scope - right substance, old name. It shares the reporting block, the method
+  # and the mask shape with the six rows above, so if the migration ever widened
+  # to "everything under EP131B" this is the row that says so.
   DBI::dbExecute(con,
     "INSERT INTO analyte (uuid, name, units, type, CAS)
-       VALUES ('a-1221', 'Aroclor 1221', 'mg/L', 'organic', '11104-28-2')")
+       VALUES ('a-1242', 'Chlorodiphenyl', 'mg/L', 'organic', '53469-21-9')")
   DBI::dbExecute(con,
     "INSERT INTO analyte_mask (uuid_analyte, variant, name, units, conversion_constant)
-       VALUES ('a-1221', 'long', 'Aroclor 1222', NULL, NULL)")
+       VALUES ('a-1242', 'long', 'chlorodiphenyl', NULL, NULL)")
   DBI::dbExecute(con,
     "INSERT INTO lab_method (uuid, uuid_analyte, name, method, organisation)
-       VALUES ('lm-als-1221', 'a-1221', 'Aroclor 1221', ?, 'ALS')",
+       VALUES ('lm-als-1242', 'a-1242', 'Aroclor 1242', ?, 'ALS')",
     params = list(.MIG010_ALS_METHOD))
   DBI::dbExecute(con,
     "INSERT INTO analysis (uuid, uuid_sample, uuid_lab, value, quantified, rl_low)
-       VALUES ('an-1221', 's-0001', 'lm-als-1221', 1e-04, FALSE, 1e-04)")
+       VALUES ('an-1242', 's-0001', 'lm-als-1242', 1e-04, FALSE, 1e-04)")
 
   invisible(NULL)
 }
@@ -223,16 +261,16 @@ test_that("NOT ONE NUMBER MOVES - every analysis row is byte-identical", {
   expect_identical(after$lab, before$lab)          # lab_method.name is ALS's, already right
 })
 
-test_that("the out-of-scope Aroclor 1221 is left completely alone", {
+test_that("the out-of-scope Chlorodiphenyl (Aroclor 1242) is left completely alone", {
   mig <- .mig010_load(); e <- .mig010_env()
   before <- .mig010_state(e$db)
   mig$mig010_run(db = e$db, snapshot_dir = e$snapshot_dir)
   after <- .mig010_state(e$db)
 
-  expect_identical(after$analyte[after$analyte$uuid == "a-1221", ],
-                   before$analyte[before$analyte$uuid == "a-1221", ])
-  expect_identical(after$mask[after$mask$uuid_analyte == "a-1221", ],
-                   before$mask[before$mask$uuid_analyte == "a-1221", ])
+  expect_identical(after$analyte[after$analyte$uuid == "a-1242", ],
+                   before$analyte[before$analyte$uuid == "a-1242", ])
+  expect_identical(after$mask[after$mask$uuid_analyte == "a-1242", ],
+                   before$mask[before$mask$uuid_analyte == "a-1242", ])
 })
 
 test_that("no label's resolution moves - asked through the production resolver", {
@@ -263,12 +301,161 @@ test_that("the rename is recorded in change_log, twice per analyte", {
   con <- DBI::dbConnect(duckdb::duckdb(), e$db, read_only = TRUE)
   on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
   got <- DBI::dbGetQuery(con,
-    "SELECT tbl, field, old, new FROM change_log
+    "SELECT tbl, field, old, new, uuid_row FROM change_log
       WHERE actor = '010-aroclor-mixture-names' ORDER BY tbl, field, old")
   expect_identical(sum(got$tbl == "analyte" & got$field == "name"), 4L)
   expect_identical(sum(got$tbl == "analyte" & got$field == "CAS"), 4L)
-  expect_identical(sum(got$tbl == "analyte_mask" & got$field == "name"), 4L)
+  # SIX mask rows, not four: the four renames plus the two display-name-only
+  # fixes. And still only four `analyte` rows either side, which is the half
+  # that says the two fixes did not touch their analyte.
+  expect_identical(sum(got$tbl == "analyte_mask" & got$field == "name"), 6L)
   expect_true(all(.MIG010_TARGETS[[1]]$old_cas %in% got$old))
+  expect_true(all(c("Aroclor 1222", "Aroclor 1233") %in% got$old))
+  expect_false(any(got$tbl == "analyte" &
+                     got$uuid_row %in% vapply(.MIG010_MASK_FIXES, `[[`, character(1), "uuid")))
+})
+
+# ======================================================================
+# the two MASK-ONLY fixes (Robin, 2026-08-09)
+# ======================================================================
+
+test_that("both long masks naming a non-existent Aroclor are corrected", {
+  mig <- .mig010_load(); e <- .mig010_env()
+
+  con <- DBI::dbConnect(duckdb::duckdb(), e$db, read_only = TRUE)
+  before <- DBI::dbGetQuery(con,
+    "SELECT uuid_analyte, name FROM analyte_mask WHERE variant = 'long' ORDER BY uuid_analyte")
+  DBI::dbDisconnect(con, shutdown = TRUE)
+  # NON-VACUOUS: the wrong names really are there to start with
+  expect_true(all(c("Aroclor 1222", "Aroclor 1233") %in% before$name))
+
+  mig$mig010_run(db = e$db, snapshot_dir = e$snapshot_dir)
+
+  con <- DBI::dbConnect(duckdb::duckdb(), e$db, read_only = TRUE)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
+  for (f in .MIG010_MASK_FIXES) {
+    got <- DBI::dbGetQuery(con,
+      "SELECT name FROM analyte_mask WHERE uuid_analyte = ? AND variant = 'long'",
+      params = list(f$uuid))
+    expect_identical(got$name[[1]], f$new_long)
+  }
+  after <- DBI::dbGetQuery(con, "SELECT name FROM analyte_mask WHERE variant = 'long'")
+  expect_false(any(c("Aroclor 1222", "Aroclor 1233") %in% after$name))
+})
+
+test_that("a MASK-ONLY fix does not touch the analyte underneath it", {
+  # The half that matters. A fix that "corrected" the display name by renaming
+  # the analyte would satisfy the assertion above perfectly.
+  mig <- .mig010_load(); e <- .mig010_env()
+
+  con <- DBI::dbConnect(duckdb::duckdb(), e$db, read_only = TRUE)
+  uuids <- vapply(.MIG010_MASK_FIXES, `[[`, character(1), "uuid")
+  q <- "SELECT uuid, name, CAS, units, type FROM analyte WHERE uuid IN (?, ?) ORDER BY uuid"
+  before <- DBI::dbGetQuery(con, q, params = as.list(uuids))
+  DBI::dbDisconnect(con, shutdown = TRUE)
+  expect_identical(nrow(before), 2L)                    # non-vacuous
+
+  mig$mig010_run(db = e$db, snapshot_dir = e$snapshot_dir)
+
+  con <- DBI::dbConnect(duckdb::duckdb(), e$db, read_only = TRUE)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
+  expect_identical(DBI::dbGetQuery(con, q, params = as.list(uuids)), before)
+})
+
+test_that("the EPA mask variant of a mask-fix analyte is untouched", {
+  mig <- .mig010_load(); e <- .mig010_env()
+  mig$mig010_run(db = e$db, snapshot_dir = e$snapshot_dir)
+
+  con <- DBI::dbConnect(duckdb::duckdb(), e$db, read_only = TRUE)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
+  for (f in .MIG010_MASK_FIXES) {
+    got <- DBI::dbGetQuery(con,
+      "SELECT name FROM analyte_mask WHERE uuid_analyte = ? AND variant = 'EPA'",
+      params = list(f$uuid))
+    expect_identical(nrow(got), 1L)
+    expect_true(is.na(got$name[[1]]))
+  }
+})
+
+test_that("it is refused if a mask-fix analyte has been renamed", {
+  mig <- .mig010_load(); e <- .mig010_env()
+  .mig010_exec(e$db, "UPDATE analyte SET name = 'Aroclor 1221 (edited)' WHERE uuid = ?",
+               params = list(.MIG010_MASK_FIXES[[1]]$uuid))
+  .expect_010_refused(mig, e, regexp = "must not have moved it|not .*Aroclor 1221")
+})
+
+test_that("it is refused if a mask-fix analyte's CAS has moved", {
+  mig <- .mig010_load(); e <- .mig010_env()
+  .mig010_exec(e$db, "UPDATE analyte SET CAS = '00000-00-0' WHERE uuid = ?",
+               params = list(.MIG010_MASK_FIXES[[2]]$uuid))
+  .expect_010_refused(mig, e, regexp = "carries CAS")
+})
+
+test_that("it is refused if a mask-fix long mask does not hold the name the ruling assumes", {
+  mig <- .mig010_load(); e <- .mig010_env()
+  .mig010_exec(e$db,
+    "UPDATE analyte_mask SET name = 'something else'
+      WHERE uuid_analyte = ? AND variant = 'long'",
+    params = list(.MIG010_MASK_FIXES[[1]]$uuid))
+  .expect_010_refused(mig, e, regexp = "not .*Aroclor 1222")
+})
+
+test_that("it is refused if a mask-fix analyte has no long mask row at all", {
+  mig <- .mig010_load(); e <- .mig010_env()
+  .mig010_exec(e$db,
+    "DELETE FROM analyte_mask WHERE uuid_analyte = ? AND variant = 'long'",
+    params = list(.MIG010_MASK_FIXES[[2]]$uuid))
+  .expect_010_refused(mig, e, regexp = "analyte_mask rows, not exactly 1")
+})
+
+test_that("the checksum excuses the mask-fix long names and NOTHING else about them", {
+  mig <- .mig010_load(); e <- .mig010_env()
+  con <- DBI::dbConnect(duckdb::duckdb(), e$db, read_only = FALSE)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
+  a <- mig$mig010_counts_checksum(con)
+  f <- .MIG010_MASK_FIXES[[1]]
+
+  # the `long` name IS excused - that is the cell this fix writes
+  DBI::dbExecute(con, "UPDATE analyte_mask SET name = 'x'
+                        WHERE uuid_analyte = ? AND variant = 'long'", params = list(f$uuid))
+  expect_identical(mig$mig010_counts_checksum(con)$analyte_mask, a$analyte_mask)
+
+  # its ANALYTE is not excused, unlike the four renames
+  b <- mig$mig010_counts_checksum(con)
+  DBI::dbExecute(con, "UPDATE analyte SET name = 'x' WHERE uuid = ?", params = list(f$uuid))
+  expect_false(identical(mig$mig010_counts_checksum(con)$analyte, b$analyte))
+
+  c0 <- mig$mig010_counts_checksum(con)
+  DBI::dbExecute(con, "UPDATE analyte SET CAS = 'x' WHERE uuid = ?", params = list(f$uuid))
+  expect_false(identical(mig$mig010_counts_checksum(con)$analyte, c0$analyte))
+})
+
+test_that(".mig010_verify_renames() catches a mask fix that did not land", {
+  mig <- .mig010_load(); e <- .mig010_env()
+  mig$mig010_run(db = e$db, snapshot_dir = e$snapshot_dir)
+
+  con <- DBI::dbConnect(duckdb::duckdb(), e$db, read_only = FALSE)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
+  expect_true(mig$.mig010_verify_renames(con))          # non-vacuous: passes first
+
+  DBI::dbExecute(con, "UPDATE analyte_mask SET name = 'Aroclor 1222'
+                        WHERE uuid_analyte = ? AND variant = 'long'",
+                 params = list(.MIG010_MASK_FIXES[[1]]$uuid))
+  expect_error(mig$.mig010_verify_renames(con), class = "sampletidy_error")
+})
+
+test_that(".mig010_verify_renames() catches a mask fix that moved its analyte", {
+  # The gate has to notice the WRONG way of making the display name agree.
+  mig <- .mig010_load(); e <- .mig010_env()
+  mig$mig010_run(db = e$db, snapshot_dir = e$snapshot_dir)
+
+  con <- DBI::dbConnect(duckdb::duckdb(), e$db, read_only = FALSE)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
+  expect_true(mig$.mig010_verify_renames(con))          # non-vacuous
+
+  DBI::dbExecute(con, "UPDATE analyte SET name = 'Aroclor 1222' WHERE uuid = ?",
+                 params = list(.MIG010_MASK_FIXES[[1]]$uuid))
+  expect_error(mig$.mig010_verify_renames(con), class = "sampletidy_error")
 })
 
 # ======================================================================
@@ -522,7 +709,7 @@ test_that("the checksum does NOT excuse a name change on a non-target analyte", 
   on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
   a <- mig$mig010_counts_checksum(con)
 
-  DBI::dbExecute(con, "UPDATE analyte SET name = 'Aroclor 1221 (renamed)' WHERE uuid = 'a-1221'")
+  DBI::dbExecute(con, "UPDATE analyte SET name = 'Chlorodiphenyl (renamed)' WHERE uuid = 'a-1242'")
   expect_false(identical(mig$mig010_counts_checksum(con)$analyte, a$analyte))
 })
 
@@ -544,7 +731,7 @@ test_that("the checksum freezes the EPA mask variant and every non-target mask r
   expect_false(identical(mig$mig010_counts_checksum(con)$analyte_mask, a$analyte_mask))
 
   b <- mig$mig010_counts_checksum(con)
-  DBI::dbExecute(con, "UPDATE analyte_mask SET name = 'x' WHERE uuid_analyte = 'a-1221'")
+  DBI::dbExecute(con, "UPDATE analyte_mask SET name = 'x' WHERE uuid_analyte = 'a-1242'")
   expect_false(identical(mig$mig010_counts_checksum(con)$analyte_mask, b$analyte_mask))
 })
 
@@ -577,7 +764,7 @@ test_that("the SAFETY half catches a stray change to a NON-target analyte", {
   mig$db_update <- function(con, table, ...) {
     out <- real(con, table, ...)
     if (identical(table, "analyte")) {
-      DBI::dbExecute(con, "UPDATE analyte SET CAS = 'clobbered' WHERE uuid = 'a-1221'")
+      DBI::dbExecute(con, "UPDATE analyte SET CAS = 'clobbered' WHERE uuid = 'a-1242'")
     }
     out
   }

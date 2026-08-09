@@ -67,6 +67,34 @@
 # set `conversion_constant = 1`), so `v_analyte_epa` already falls through to
 # `analyte.name` and needs no change. Verified read-only before this was written.
 #
+# MEASURED CORRECTION to the justification above, made before this migration was
+# ever applied: those 8 `analysis` rows do NOT currently reach
+# `v_measurement_long` AT ALL - the view returns 0 rows for them - so the LIVE
+# publication exposure ran through `v_measurement.analyte_name`, which the
+# `analyte` rename fixes on its own. The mask rewrite is therefore correcting a
+# WRONG STORED NAME rather than removing a name being printed today. It is still
+# right, and `v_analyte_long` does print it; but the claim "the long view would
+# still print the congener" overstated what is currently reachable, and a gate
+# justified by an unreachable harm is how vacuous gates get written.
+#
+# ---- AND TWO MASKS NAMING AN AROCLOR THAT DOES NOT EXIST (ruled 2026-08-09) ----
+#
+# Surfaced while building the four renames, ruled separately, and folded in here
+# because 010 had not yet been applied to any database:
+#
+#   fda36258... long  "Aroclor 1222"   on analyte `Aroclor 1221`
+#   bb4f58ec... long  "Aroclor 1233"   on analyte `Aroclor 1232`
+#
+# The commercial Aroclor series is 1016, 1221, 1232, 1242, 1248, 1254 and 1260.
+# There is no 1222 and no 1233, so unlike the four renames - where the stored
+# name was at least a real compound - these two print a substance that has never
+# existed. Both analytes are otherwise CORRECT (`11104-28-2` and `11141-16-5`,
+# matching ALS and the authorities), so this is a DISPLAY-NAME-ONLY fix, and its
+# preconditions and its verify both pin `analyte.name` and `analyte.CAS` as
+# things that must NOT move - the mirror image of what the renames assert. A fix
+# that "corrected" the display name by renaming the analyte underneath it would
+# pass a naive check perfectly.
+#
 # ---- WHAT IS DELIBERATELY LEFT ALONE ----
 #
 # `analyte.comments` still reads "Sold as Aroclor 1260", "Major constiuient of
@@ -171,9 +199,48 @@
        to_long   = "Aroclor 1260")
 )
 
+#' Two more `long` masks that name an Aroclor THAT DOES NOT EXIST.
+#'
+#' Robin ruled 2026-08-09, after the four renames above were already built:
+#' `Aroclor 1221`'s long mask reads `Aroclor 1222` and `Aroclor 1232`'s reads
+#' `Aroclor 1233`. Neither is a real Aroclor - the commercial series runs 1016,
+#' 1221, 1232, 1242, 1248, 1254, 1260 - so both masks print a substance that has
+#' never existed, which is a worse failure than the congener names: a congener at
+#' least IS a real compound.
+#'
+#' These two analytes are otherwise CORRECT and are not renamed. `Aroclor 1221`
+#' carries CAS `11104-28-2` and `Aroclor 1232` carries `11141-16-5`, both
+#' verified against the authorities during the a90 investigation and both
+#' matching what ALS prints. So this is a mask-only correction, and the
+#' preconditions below pin `analyte.name` and `analyte.CAS` as things that must
+#' NOT move - the opposite of what `.mig010_renames` asks.
+.mig010_mask_fixes <- list(
+  list(uuid         = "fda36258-7c29-4d1d-953a-597f14667c42",
+       analyte_name = "Aroclor 1221",
+       analyte_CAS  = "11104-28-2",
+       from_long    = "Aroclor 1222",
+       to_long      = "Aroclor 1221"),
+  list(uuid         = "bb4f58ec-7d96-4c72-b0ca-8f617c6267d9",
+       analyte_name = "Aroclor 1232",
+       analyte_CAS  = "11141-16-5",
+       from_long    = "Aroclor 1233",
+       to_long      = "Aroclor 1232")
+)
+
 #' The `long` mask variant is the one `v_analyte_long` / `v_measurement_long`
 #' COALESCE over `analyte.name`.
 .mig010_mask_variant <- "long"
+
+#' Every analyte uuid whose `long` mask name this migration may change.
+#'
+#' The union of the four renames and the two mask-only fixes. The `analyte`
+#' checksum stays keyed on the FOUR - the two fixes must not move `analyte` at
+#' all, and blanking their name/CAS would be exactly the hole that let it.
+#' @keywords internal
+.mig010_mask_keys <- function() {
+  c(.mig010_field("uuid"),
+    vapply(.mig010_mask_fixes, function(spec) spec$uuid, character(1)))
+}
 
 .mig010_field <- function(field) {
   vapply(.mig010_renames, function(spec) spec[[field]], character(1))
@@ -290,6 +357,67 @@
       )
     }
   }
+
+  # The two MASK-ONLY fixes. The shape of the check is deliberately the mirror
+  # image of the block above: `analyte.name` and `analyte.CAS` must be exactly
+  # what the ruling saw and must NOT be candidates for change, because these two
+  # analytes are already correct and only their display name is wrong.
+  for (spec in .mig010_mask_fixes) {
+    got <- DBI::dbGetQuery(con, "SELECT name, CAS FROM analyte WHERE uuid = ?",
+                           params = list(spec$uuid))
+    if (nrow(got) != 1L) {
+      n_hit <- nrow(got)
+      cli::cli_abort(
+        "010-aroclor-mixture-names: analyte {spec$uuid} matches {n_hit} rows,
+         not 1, so the mask-only fix for {sQuote(spec$analyte_name)} cannot be
+         applied.",
+        class = "sampletidy_error"
+      )
+    }
+    if (!identical(got$name[[1]], spec$analyte_name)) {
+      have <- got$name[[1]]
+      cli::cli_abort(
+        "010-aroclor-mixture-names: analyte {spec$uuid} is named {sQuote(have)},
+         not {sQuote(spec$analyte_name)}. This fix corrects a display name on an
+         analyte assumed to be already correct; refusing rather than rewriting a
+         mask onto a row that is not the one the ruling was made about.",
+        class = "sampletidy_error"
+      )
+    }
+    if (!identical(got$CAS[[1]], spec$analyte_CAS)) {
+      have <- got$CAS[[1]]
+      cli::cli_abort(
+        "010-aroclor-mixture-names: {sQuote(spec$analyte_name)} carries CAS
+         {sQuote(have)}, not {sQuote(spec$analyte_CAS)}. The ruling was that this
+         analyte is CORRECT and only its display name is wrong; a different CAS
+         means that premise no longer holds.",
+        class = "sampletidy_error"
+      )
+    }
+
+    variant <- .mig010_mask_variant
+    mask <- DBI::dbGetQuery(
+      con, "SELECT name FROM analyte_mask WHERE uuid_analyte = ? AND variant = ?",
+      params = list(spec$uuid, variant))
+    if (nrow(mask) != 1L) {
+      n_hit <- nrow(mask)
+      cli::cli_abort(
+        "010-aroclor-mixture-names: {sQuote(spec$analyte_name)} has {n_hit}
+         {sQuote(variant)}-variant analyte_mask rows, not exactly 1.",
+        class = "sampletidy_error"
+      )
+    }
+    if (!identical(mask$name[[1]], spec$from_long)) {
+      have <- mask$name[[1]]
+      cli::cli_abort(
+        "010-aroclor-mixture-names: the long-form display name for
+         {sQuote(spec$analyte_name)} is {sQuote(have)}, not
+         {sQuote(spec$from_long)} as the ruling assumes. Refusing - overwriting
+         it blindly would clobber whatever someone else decided.",
+        class = "sampletidy_error"
+      )
+    }
+  }
   invisible(TRUE)
 }
 
@@ -360,7 +488,7 @@ mig010_counts_checksum <- function(con) {
                                    mask_cols = c("name", "CAS"),
                                    order_by = "uuid")),
     analyte_mask = q(.mig010_frozen_sql(
-      con, "analyte_mask", "uuid_analyte", uuids, mask_cols = "name",
+      con, "analyte_mask", "uuid_analyte", .mig010_mask_keys(), mask_cols = "name",
       order_by = "uuid_analyte, variant",
       extra_where = sprintf(
         "variant = %s",
@@ -368,7 +496,8 @@ mig010_counts_checksum <- function(con) {
   )
 }
 
-#' The SAFETY half: nothing outside the four names and four CAS values moved.
+#' The SAFETY half: nothing outside the four names, four CAS values and six
+#' long-form display names moved.
 mig010_verify <- function(before, after) {
   keys <- union(names(before), names(after))
   bad <- keys[!vapply(keys, function(n) identical(before[[n]], after[[n]]), logical(1))]
@@ -376,7 +505,7 @@ mig010_verify <- function(before, after) {
     moved <- paste(bad, collapse = ", ")
     cli::cli_abort(
       "010-aroclor-mixture-names verify failed: this migration changes only four
-       analyte names, four CAS values and four long-form display names, but
+       analyte names, four CAS values and six long-form display names, but
        {moved} moved.",
       class = "sampletidy_error"
     )
@@ -422,6 +551,40 @@ mig010_verify <- function(before, after) {
       fail("the long-form display name for {sQuote(spec$to_name)} is
             {sQuote(have)}, expected {sQuote(spec$to_long)} - `v_analyte_long`
             would still print the congener.")
+    }
+  }
+
+  # The two MASK-ONLY fixes. Both halves are asserted: the mask landed, AND the
+  # analyte it hangs off did NOT move. The second half is the one that matters -
+  # a fix that "corrected" the display name by renaming the analyte underneath it
+  # would satisfy the first half perfectly.
+  for (spec in .mig010_mask_fixes) {
+    got <- DBI::dbGetQuery(con, "SELECT name, CAS FROM analyte WHERE uuid = ?",
+                           params = list(spec$uuid))
+    if (nrow(got) != 1L) fail("analyte {spec$uuid} matches {nrow(got)} rows, not 1.")
+    if (!identical(got$name[[1]], spec$analyte_name)) {
+      have <- got$name[[1]]
+      fail("analyte {spec$uuid} is named {sQuote(have)}, expected
+            {sQuote(spec$analyte_name)} - a MASK-ONLY fix must not have moved it.")
+    }
+    if (!identical(got$CAS[[1]], spec$analyte_CAS)) {
+      have <- got$CAS[[1]]
+      fail("analyte {sQuote(spec$analyte_name)} carries CAS {sQuote(have)},
+            expected {sQuote(spec$analyte_CAS)} - a MASK-ONLY fix must not have
+            moved it.")
+    }
+    mask <- DBI::dbGetQuery(
+      con, "SELECT name FROM analyte_mask WHERE uuid_analyte = ? AND variant = ?",
+      params = list(spec$uuid, .mig010_mask_variant))
+    if (nrow(mask) != 1L) {
+      fail("{sQuote(spec$analyte_name)} has {nrow(mask)} long mask rows, not 1.")
+    }
+    if (!identical(mask$name[[1]], spec$to_long)) {
+      have <- mask$name[[1]]
+      fail("the long-form display name for {sQuote(spec$analyte_name)} is
+            {sQuote(have)}, expected {sQuote(spec$to_long)} - `v_analyte_long`
+            would still print {sQuote(spec$from_long)}, which is not a real
+            Aroclor.")
     }
   }
   invisible(TRUE)
@@ -546,8 +709,8 @@ mig010_run <- function(db, snapshot_dir, dry_run = FALSE, .now = NULL) {
     check_con <- st_connect(db, read_only = TRUE)
     tryCatch(.mig010_verify_renames(check_con),
              finally = DBI::dbDisconnect(check_con, shutdown = TRUE))
-    logf("010-aroclor-mixture-names already applied at %s; all %d rename(s) re-verified; nothing to do.",
-         format(recorded_at), length(.mig010_renames))
+    logf("010-aroclor-mixture-names already applied at %s; all %d rename(s) and %d mask fix(es) re-verified; nothing to do.",
+         format(recorded_at), length(.mig010_renames), length(.mig010_mask_fixes))
     return(invisible(list(status = "already_migrated", backup_path = NA_character_,
                           restore_command = NA_character_,
                           recorded_at = recorded_at)))
@@ -561,10 +724,14 @@ mig010_run <- function(db, snapshot_dir, dry_run = FALSE, .now = NULL) {
   if (isTRUE(dry_run)) {
     logf("DRY RUN: %d analyte(s) would be renamed, with %d CAS correction(s) and
           %d long-form display name(s).",
-         length(.mig010_renames), length(.mig010_renames), length(.mig010_renames))
+         length(.mig010_renames), length(.mig010_renames), length(.mig010_mask_keys()))
     for (spec in .mig010_renames) {
       logf("DRY RUN:   %s (%s) -> %s (%s)", spec$from_name, spec$from_CAS,
            spec$to_name, spec$to_CAS)
+    }
+    for (spec in .mig010_mask_fixes) {
+      logf("DRY RUN:   %s long mask %s -> %s (display name only; analyte and CAS unchanged)",
+           spec$analyte_name, spec$from_long, spec$to_long)
     }
     logf("DRY RUN: every precondition passed. No backup taken, nothing written.")
     return(invisible(list(status = "dry_run", backup_path = NA_character_,
@@ -600,6 +767,20 @@ mig010_run <- function(db, snapshot_dir, dry_run = FALSE, .now = NULL) {
           reason = sprintf(
             "010: long-form display name follows the rename, so v_analyte_long stops printing %s",
             spec$from_long))
+      }
+
+      # The two MASK-ONLY fixes. `analyte` is not touched for these - only the
+      # display name - and the checksum proves it, because their name/CAS are
+      # NOT among the blanked cells.
+      for (spec in .mig010_mask_fixes) {
+        db_update(
+          con, "analyte_mask",
+          key = list(uuid_analyte = spec$uuid, variant = .mig010_mask_variant),
+          changes = list(name = spec$to_long),
+          actor = .mig010_actor,
+          reason = sprintf(
+            "010: %s is not a real Aroclor - the commercial series has no such member - so the long-form display name for %s is corrected to match the analyte (display name only; analyte name and CAS unchanged)",
+            spec$from_long, spec$analyte_name))
       }
 
       DBI::dbExecute(con, "INSERT INTO schema_version (version, applied_at) VALUES (?, ?)",
@@ -641,8 +822,8 @@ mig010_run <- function(db, snapshot_dir, dry_run = FALSE, .now = NULL) {
       NULL
     })
 
-    logf("Verify passed: %d analyte(s) renamed with their CAS; no analysis row changed; no label's resolution moved.",
-         length(.mig010_renames))
+    logf("Verify passed: %d analyte(s) renamed with their CAS, %d display-name-only mask fix(es); no analysis row changed; no label's resolution moved.",
+         length(.mig010_renames), length(.mig010_mask_fixes))
     invisible(TRUE)
   }, db = db)
 
