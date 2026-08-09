@@ -1274,6 +1274,22 @@ acirl_field_xlsx_adapter <- function() {
 
   dplyr::case_when(
     analyte_raw == "Temperature" ~ "\u00b0C",
+    # ACIRL writes a DIMENSIONLESS analyte's units cell as `-` or `_`, and
+    # `unify_value()` rejects BOTH as invalid units ("Invalid unit: \"-\""), so
+    # every such row quarantines as `unknown_unit` instead of importing.
+    # Measured on the 2026-08-01 corpus (`scratchpad/m6a_corpus_candidates.rds`,
+    # 38,450 candidate rows): `_` on 156 rows, `-` on 6, and BOTH are carried by
+    # exactly one analyte - `Sodium Adsorption Ratio`, which is the one analyte
+    # in the corpus that genuinely has no units. The mapping therefore cannot
+    # over-reach. `1` is the udunits DIMENSIONLESS unit, and is what the `SAR`
+    # analyte carries in the registry after 007 ruling (6).
+    #
+    # A BLANK units cell is deliberately NOT mapped here (122 SAR rows). Blank
+    # asserts nothing, and ruling 8's `units_missing` arm (R/reconcile.R) exists
+    # precisely to hold those rows for review rather than assume a unit for
+    # them. `-` and `_` are positive statements that the quantity has no units;
+    # blank is the absence of a statement. They are not the same fact.
+    !is.na(u) & u %in% c("-", "_") ~ "1",
     !is.na(u) & u == "pH Units" ~ "pH",
     !is.na(u) & grepl("\u00b5", u, fixed = TRUE) ~ sub("^.+\u00b5", "\u00b5", u),
     TRUE ~ u
