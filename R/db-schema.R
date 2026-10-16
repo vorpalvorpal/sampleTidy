@@ -169,6 +169,13 @@
   list(
     version = 7L,
     ddl = "ALTER TABLE review_queue ADD COLUMN IF NOT EXISTS uuid_incoming VARCHAR"
+  ),
+  # R-3.8 / A90: the registry fingerprint a router verdict was decided under.
+  # Nullable, no backfill: a NULL row is a legacy verdict and is re-decided
+  # once. Plain ADD COLUMN, as v7 above (ingest_file has a PRIMARY KEY).
+  list(
+    version = 8L,
+    ddl = "ALTER TABLE ingest_file ADD COLUMN IF NOT EXISTS registry_fingerprint VARCHAR"
   )
 )
 
@@ -409,6 +416,20 @@ ingest_file_set_route <- function(con, hash, adapter = NA_character_, tier = NA_
     con,
     "UPDATE ingest_file SET adapter = ?, tier = ?, updated_at = ? WHERE hash = ?",
     params = list(adapter, tier, Sys.time(), hash)
+  )
+  invisible(NULL)
+}
+
+# R-3.8: stamp the adapter-registry fingerprint a router verdict was decided
+# under. Written right after the verdict's own state transition, never on a
+# dry run (the caller guards that).
+ingest_file_set_registry_fingerprint <- function(con, hash, fingerprint) {
+  checkmate::assert_string(hash)
+  checkmate::assert_string(fingerprint)
+  DBI::dbExecute(
+    con,
+    "UPDATE ingest_file SET registry_fingerprint = ?, updated_at = ? WHERE hash = ?",
+    params = list(fingerprint, Sys.time(), hash)
   )
   invisible(NULL)
 }

@@ -75,6 +75,12 @@ ignore_rule <- function(fm) {
 #'   once a missing adapter is added or a buggy one fixed. `ignored` and
 #'   `archived` are never reconsidered at any setting. Skipped under
 #'   `dry_run`, like every other write.
+#'
+#'   R-3.8: independently of this flag, a stored `unclaimed`, `adapter_tie` or
+#'   router-written `failed` (no adapter recorded) verdict is re-decided when
+#'   its `registry_fingerprint` differs from [registry_fingerprint()] or is
+#'   NULL. A fingerprint change never touches parse-/commit-written `failed`
+#'   rows; `reconsider = TRUE` still does.
 #' @return a tibble `(path, hash, filename, state, adapter, tier, reason)`.
 #' @keywords internal
 #' @noRd
@@ -133,13 +139,29 @@ route_files <- function(paths, con, dry_run = FALSE, reconsider = FALSE) {
 # re-decided by accident. `reconsider = TRUE` remains the only way back out of
 # a router verdict.
 
+# R-3.8: the narrower set the registry FINGERPRINT may re-decide on its own.
+# `.st_is_registry_verdict()` above accepts any `failed` (that is what an
+# explicit `reconsider = TRUE` forces); a fingerprint change must not, because
+# a parse()- or commit-written `failed` is a fact about the file or a parser
+# bug, not about which adapters are registered. The two are told apart by the
+# route: every router-written `failed` is written from `seen`, before any
+# adapter was recorded, so its `adapter` is NA; parse and commit failures can
+# only happen to a `claimed` file, whose `adapter` is set.
+.st_is_router_verdict <- function(state, reason, adapter) {
+  if (identical(state, "quarantined")) {
+    return(.st_is_registry_verdict(state, reason))
+  }
+  identical(state, "failed") && is.na(adapter)
+}
+
 .st_route_one_file <- function(path, con, dry_run = FALSE, reconsider = FALSE) {
   fm <- file_meta(path)
   hash <- fm$hash
 
   existing <- DBI::dbGetQuery(
     con,
-    "SELECT state, state_reason, adapter, tier FROM ingest_file WHERE hash = ?",
+    "SELECT state, state_reason, adapter, tier, registry_fingerprint
+       FROM ingest_file WHERE hash = ?",
     params = list(hash)
   )
   already_routed <- nrow(existing) > 0 && !identical(existing$state[[1]], "seen")
@@ -149,8 +171,18 @@ route_files <- function(paths, con, dry_run = FALSE, reconsider = FALSE) {
   # previews what a real run would conclude. That asymmetry is deliberate and
   # matches the dry-run contract the three verdict branches below already
   # follow: report the verdict, persist nothing.
-  reconsidering <- already_routed && isTRUE(reconsider) &&
+  #
+  # R-3.8: a router verdict is also re-decided, with no flag, when the
+  # fingerprint it was stored under differs from the current registry's or is
+  # NULL (a legacy row). `reconsider = TRUE` still forces the wider set.
+  forced <- already_routed && isTRUE(reconsider) &&
     .st_is_registry_verdict(existing$state[[1]], existing$state_reason[[1]])
+  stale <- already_routed && !forced &&
+    .st_is_router_verdict(
+      existing$state[[1]], existing$state_reason[[1]], existing$adapter[[1]]
+    ) &&
+    !identical(existing$registry_fingerprint[[1]], registry_fingerprint())
+  reconsidering <- forced || stale
   if (reconsidering) {
     already_routed <- FALSE
     if (!dry_run) {
@@ -198,6 +230,7 @@ route_files <- function(paths, con, dry_run = FALSE, reconsider = FALSE) {
       msg <- conditionMessage(tier)
       if (!dry_run) {
         ingest_file_set_state(con, hash, "failed", msg)
+        ingest_file_set_registry_fingerprint(con, hash, registry_fingerprint())
       }
       return(tibble::tibble(
         path = path, hash = hash, filename = fm$filename, state = "failed",
@@ -222,6 +255,7 @@ route_files <- function(paths, con, dry_run = FALSE, reconsider = FALSE) {
       )
       if (!dry_run) {
         ingest_file_set_state(con, hash, "failed", msg)
+        ingest_file_set_registry_fingerprint(con, hash, registry_fingerprint())
       }
       return(tibble::tibble(
         path = path, hash = hash, filename = fm$filename, state = "failed",
@@ -245,6 +279,7 @@ route_files <- function(paths, con, dry_run = FALSE, reconsider = FALSE) {
   if (length(winners) == 0) {
     if (!dry_run) {
       ingest_file_set_state(con, hash, "quarantined", "unclaimed")
+      ingest_file_set_registry_fingerprint(con, hash, registry_fingerprint())
     }
     return(tibble::tibble(
       path = path, hash = hash, filename = fm$filename, state = "quarantined",
@@ -292,6 +327,7 @@ route_files <- function(paths, con, dry_run = FALSE, reconsider = FALSE) {
   # state, route and (for a tie) the review item - durably.
   if (!dry_run) {
     ingest_file_set_state(con, hash, "quarantined", "adapter_tie")
+    ingest_file_set_registry_fingerprint(con, hash, registry_fingerprint())
     ingest_file_set_route(con, hash, adapter = NA_character_, tier = winning_tier)
     # R-3.7: before `reconsider` existed, a tie could only ever be decided
     # ONCE per hash - `already_routed` guaranteed it - so an unconditional
