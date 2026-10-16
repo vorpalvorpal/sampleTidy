@@ -200,11 +200,27 @@ acirl_field_xlsx_adapter <- function() {
   obs_by_key <- list()
   for (o in obs_rows) obs_by_key[[paste(o$gauge, o$block, sep = "\r")]] <- o
 
+  fmt_date <- function(d) if (is.na(d)) NA_character_ else format(d, "%d/%m/%Y")
   serial_date <- function(x) {
     n <- suppressWarnings(as.numeric(x))
-    if (is.na(n)) return(NA_character_)
-    format(as.Date(n, origin = "1899-12-30"), "%d/%m/%Y")
+    if (is.na(n)) return(as.Date(NA))
+    as.Date(n, origin = "1899-12-30")
   }
+  # `Month` is usually an Excel serial but is sometimes text ("July", "Jul",
+  # "July 2024"). Returns list(month, year); year NA when the text carries none.
+  month_parts <- function(x) {
+    if (is.na(x) || !nzchar(x)) return(list(month = NA_integer_, year = NA_integer_))
+    n <- suppressWarnings(as.numeric(x))
+    if (!is.na(n)) {
+      d <- as.Date(n, origin = "1899-12-30")
+      return(list(month = as.integer(format(d, "%m")), year = as.integer(format(d, "%Y"))))
+    }
+    m <- match(tolower(substr(stringr::str_extract(x, "[A-Za-z]{3,}"), 1, 3)),
+               tolower(month.abb))
+    y <- suppressWarnings(as.integer(stringr::str_extract(x, "\\b[0-9]{4}\\b")))
+    list(month = m, year = y)
+  }
+  first_of_month <- function(y, m) as.Date(sprintf("%04d-%02d-01", y, m))
 
   dust_samples <- list()
   for (d in dust_rows) {
@@ -214,19 +230,49 @@ acirl_field_xlsx_adapter <- function() {
     # A77: `Month` (Results) and `EXPOSURE DATE` (Observations) are cross-checked
     # and NEITHER is authoritative - they disagree on 8 of 64 real gauge-blocks.
     # A disagreement is recorded and routed to review; it never silently picks one.
-    month_d <- serial_date(d$month_serial)
-    exp_d   <- if (is.null(o)) NA_character_ else serial_date(o$exposure_serial)
-    if (!is.na(month_d) && !is.na(exp_d) && !identical(month_d, exp_d)) {
+    mp      <- month_parts(d$month_serial)
+    exp_dt  <- if (is.null(o)) as.Date(NA) else serial_date(o$exposure_serial)
+    coll_dt <- if (is.null(o)) as.Date(NA) else serial_date(o$collection_serial)
+    n_days  <- if (is.null(o)) NA_real_ else suppressWarnings(as.numeric(o$days))
+    conflict <- FALSE
+    if (!is.na(mp$month) && !is.na(exp_dt)) {
+      # A serial Month must equal the exposure date; a text Month agrees when
+      # the calendar month (and the year, if given) does.
+      conflict <- if (!is.na(suppressWarnings(as.numeric(d$month_serial)))) {
+        !identical(serial_date(d$month_serial), exp_dt)
+      } else {
+        mp$month != as.integer(format(exp_dt, "%m")) ||
+          (!is.na(mp$year) && mp$year != as.integer(format(exp_dt, "%Y")))
+      }
+    }
+    if (conflict) {
       skipped_list[[length(skipped_list) + 1]] <- tibble::tibble(
         source_ref = d$source_ref, reason = "dust_exposure_date_conflict"
       )
       warnings_vec <- c(warnings_vec, sprintf(
         "%s: gauge %s block %d - Results Month (%s) and Observations EXPOSURE DATE (%s) disagree; routed to review (A77).",
-        fm$filename, d$gauge, d$block, month_d, exp_d))
+        fm$filename, d$gauge, d$block, d$month_serial, fmt_date(exp_dt)))
     }
-    # Exposure start is the sampling date where we have it; `Month` is the
-    # fallback for a workbook with no Observations sheet.
-    samp_date <- if (!is.na(exp_d)) exp_d else month_d
+    # Robin's ruling: EXPOSURE (gauge put out) is `date_start`, COLLECTION
+    # (gauge brought in) is `date`. Exposure falls back to the 1st of `Month`
+    # for a workbook with no Observations row; collection falls back to
+    # exposure + days, then to the 1st of the month after the start.
+    start_dt <- exp_dt
+    if (is.na(start_dt) && !is.na(mp$month) && !is.na(mp$year)) {
+      start_dt <- first_of_month(mp$year, mp$month)
+    }
+    samp_dt <- coll_dt
+    if (is.na(samp_dt) && !is.na(start_dt)) {
+      samp_dt <- if (!is.na(exp_dt) && !is.na(n_days)) {
+        exp_dt + n_days
+      } else {
+        seq(first_of_month(as.integer(format(start_dt, "%Y")),
+                           as.integer(format(start_dt, "%m"))),
+            by = "month", length.out = 2)[[2]]
+      }
+    }
+    samp_date <- fmt_date(samp_dt)
+    start_date <- fmt_date(start_dt)
     lab_id <- sprintf("%s!b%d", d$gauge, d$block)
 
     pv <- parse_value(d$value_raw)
@@ -247,7 +293,8 @@ acirl_field_xlsx_adapter <- function() {
         source_hash = fm$hash, source_ref = d$source_ref,
         work_order = header$report_no, org = "ACIRL", adapter = adapter_tag,
         lab_sample_id = lab_id, feature_raw = d$gauge,
-        sample_datetime_raw = samp_date, sample_type = "Normal",
+        sample_datetime_raw = samp_date, sample_date_start_raw = start_date,
+        sample_type = "Normal",
         parent_sample = NA_character_, matrix_raw = "Dust",
         sampler = header$sampled_by,
         comments = if (is.null(o)) NA_character_ else o$observation,
@@ -337,6 +384,7 @@ acirl_field_xlsx_adapter <- function() {
         lab_sample_id = sr$lab_sample_id,
         feature_raw = sr$feature_raw,
         sample_datetime_raw = sr$sample_datetime_raw,
+        sample_date_start_raw = NA_character_,
         sample_type = "Normal",
         parent_sample = NA_character_,
         matrix_raw = "Water",

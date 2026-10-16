@@ -557,6 +557,7 @@ als_enmrg_adapter <- function() {
           lab_sample_id = .st_ct_lookup(lab_sample_id_by_col, key),
           feature_raw = .st_ct_lookup(feature_by_col, key),
           sample_datetime_raw = .st_ct_lookup(sample_date_by_col, key),
+          sample_date_start_raw = NA_character_,
           sample_type = .st_crosstab_sample_type(.st_ct_lookup(sample_type_by_col, key)),
           parent_sample = NA_character_,
           matrix_raw = section_matrix,

@@ -21,7 +21,8 @@
 .st_ir_samples_types <- c(
   source_hash = "character", source_ref = "character", work_order = "character",
   org = "character", adapter = "character", lab_sample_id = "character",
-  feature_raw = "character", sample_datetime_raw = "character", sample_type = "character",
+  feature_raw = "character", sample_datetime_raw = "character",
+  sample_date_start_raw = "character", sample_type = "character",
   parent_sample = "character", matrix_raw = "character", sampler = "character",
   comments = "character", confidence = "double"
 )
@@ -102,6 +103,9 @@ ir_samples <- function(...) {
     out <- .st_ir_prototype("samples")
   } else {
     out <- tibble::tibble(!!!args)
+    if (!"sample_date_start_raw" %in% names(out)) {
+      out$sample_date_start_raw <- rep(NA_character_, nrow(out))
+    }
   }
   ir_validate(out, "samples")
   if (length(args) > 0) {
@@ -130,6 +134,12 @@ ir_validate <- function(x, kind) {
   cols <- if (kind == "results") .st_ir_results_cols else .st_ir_samples_cols
   types <- if (kind == "results") .st_ir_results_types else .st_ir_samples_types
   required <- .st_ir_required[[kind]]
+
+  # `sample_date_start_raw` is optional on input (only dust fills it); a caller
+  # that predates it validates as though it were all-NA.
+  if (kind == "samples" && !"sample_date_start_raw" %in% names(x)) {
+    x$sample_date_start_raw <- rep(NA_character_, nrow(x))
+  }
 
   missing_cols <- setdiff(cols, names(x))
   if (length(missing_cols) > 0) {

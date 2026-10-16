@@ -1964,6 +1964,12 @@
   kept <- rows[keep, , drop = FALSE]
   kept$sample_date <- sample_date[keep]
   kept$sample_datetime <- sample_datetime[keep]
+  # Dust gauges' EXPOSURE date. Absent column or unparseable text -> NA (an
+  # optional start date never holds the row).
+  if ("sample_date_start_raw" %in% names(rows)) {
+    start_dt <- parse_lab_datetime(rows$sample_date_start_raw, .rc_datetime_formats)
+    kept$sample_date_start <- as.Date(as.Date(start_dt, tz = "Australia/Sydney")[keep])
+  }
 
   review <- if (length(review_list) > 0) dplyr::bind_rows(review_list) else .rc_proto_review()
 
@@ -2120,7 +2126,7 @@
        FROM "sample" s
        JOIN analysis a ON a.uuid_sample = s.uuid
        JOIN feature_alias fa ON fa.uuid = s.uuid_feature_alias
-       WHERE ', feat_clause, ' AND CAST(s.date AS DATE) = ? AND a.uuid_lab = ?
+       WHERE ', feat_clause, ' AND ', .ct_sydney_day_sql("s.date"), ' = ? AND a.uuid_lab = ?
        ORDER BY a.uuid'
     ),
     params = list(feat_param, as.character(sample_date), uuid_lab)
@@ -2383,7 +2389,7 @@
        JOIN analysis a ON a.uuid_sample = s.uuid
        JOIN feature_alias fa ON fa.uuid = s.uuid_feature_alias
        JOIN lab_method lm ON lm.uuid = a.uuid_lab
-       WHERE ', feat_clause, ' AND CAST(s.date AS DATE) = ? AND lm.uuid_analyte = ?
+       WHERE ', feat_clause, ' AND ', .ct_sydney_day_sql("s.date"), ' = ? AND lm.uuid_analyte = ?
          AND ', org_clause, '
        ORDER BY a.uuid'
     ),

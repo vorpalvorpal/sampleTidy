@@ -22,13 +22,14 @@ results_types <- c(
 
 samples_cols <- c(
   "source_hash", "source_ref", "work_order", "org", "adapter", "lab_sample_id",
-  "feature_raw", "sample_datetime_raw", "sample_type", "parent_sample",
-  "matrix_raw", "sampler", "comments", "confidence"
+  "feature_raw", "sample_datetime_raw", "sample_date_start_raw", "sample_type",
+  "parent_sample", "matrix_raw", "sampler", "comments", "confidence"
 )
 samples_types <- c(
   source_hash = "character", source_ref = "character", work_order = "character",
   org = "character", adapter = "character", lab_sample_id = "character",
-  feature_raw = "character", sample_datetime_raw = "character", sample_type = "character",
+  feature_raw = "character", sample_datetime_raw = "character",
+  sample_date_start_raw = "character", sample_type = "character",
   parent_sample = "character", matrix_raw = "character", sampler = "character",
   comments = "character", confidence = "double"
 )
@@ -192,7 +193,7 @@ valid_samples_row <- tibble::tibble(
   source_hash = "hash1", source_ref = "Sheet1!B14", work_order = "XX1234567",
   org = "ALS", adapter = "esdat:1.0", lab_sample_id = "XX1234567001",
   feature_raw = "T.S01", sample_datetime_raw = "24 May 2025 11:45",
-  sample_type = "Normal", parent_sample = NA_character_, matrix_raw = "WATER",
+  sample_date_start_raw = NA_character_, sample_type = "Normal", parent_sample = NA_character_, matrix_raw = "WATER",
   sampler = NA_character_, comments = NA_character_, confidence = 1
 )
 stopifnot(identical(names(valid_samples_row), samples_cols))
