@@ -1116,17 +1116,17 @@ confirm_feature_aliases <- function(uuid_alias, uuid_feature = NULL, confirmed_b
 .fa_find_collisions <- function(con, uuid_alias, uuid_feature) {
   DBI::dbGetQuery(
     con,
-    '
+    paste0('
     SELECT DISTINCT s1.uuid AS uuid_new, s2.uuid AS uuid_existing,
-           CAST(s1.date AS DATE) AS collision_date
+           ', .ct_sydney_day_sql("s1.date"), ' AS collision_date
     FROM "sample" s1
     JOIN "sample" s2
-      ON CAST(s2.date AS DATE) = CAST(s1.date AS DATE) AND s2.uuid != s1.uuid
+      ON ', .ct_sydney_day_sql("s2.date"), ' = ', .ct_sydney_day_sql("s1.date"), ' AND s2.uuid != s1.uuid
     JOIN feature_alias fa2 ON fa2.uuid = s2.uuid_feature_alias
     WHERE s1.uuid_feature_alias = ?
       AND fa2.uuid_feature = ?
       AND fa2.uuid <> ?
-    ',
+    '),
     params = list(uuid_alias, uuid_feature, uuid_alias)
   )
 }
@@ -1143,15 +1143,15 @@ confirm_feature_aliases <- function(uuid_alias, uuid_feature = NULL, confirmed_b
 .fa_find_self_collisions <- function(con, uuid_alias) {
   DBI::dbGetQuery(
     con,
-    '
+    paste0('
     SELECT DISTINCT s1.uuid AS uuid_a, s2.uuid AS uuid_b,
-           CAST(s1.date AS DATE) AS collision_date
+           ', .ct_sydney_day_sql("s1.date"), ' AS collision_date
     FROM "sample" s1
     JOIN "sample" s2
-      ON CAST(s2.date AS DATE) = CAST(s1.date AS DATE) AND s2.uuid > s1.uuid
+      ON ', .ct_sydney_day_sql("s2.date"), ' = ', .ct_sydney_day_sql("s1.date"), ' AND s2.uuid > s1.uuid
     WHERE s1.uuid_feature_alias = ?
       AND s2.uuid_feature_alias = ?
-    ',
+    '),
     params = list(uuid_alias, uuid_alias)
   )
 }
