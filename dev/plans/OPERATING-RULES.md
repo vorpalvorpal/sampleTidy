@@ -32,6 +32,7 @@ Never write an agent number as `A<n>`.
 - **A86** — `SAR` is dimensionless (`units = '1'`), and the `%`-typed Aroclor
 - **A88** — Adapters may WITHHOLD rows for review: `needs_review` / `review_kind` / `review_payload` on `results`; identical payloads fold into one item; `release_review()` commits them with the human's dates (design 2026-10-16).
 - **A89** — An adapter may declare `zero_is_nondetect`; only then is its bare `0` a non-detect (2026-10-16).
+- **A90** — Router verdicts store a registry fingerprint (R-3.8); a stale or NULL one is re-decided automatically (2026-10-17).
 
 ## The rules
 
@@ -909,3 +910,19 @@ Never write an agent number as `A<n>`.
   its registry entry; `.rc_resolve_units_values()` looks up each row's adapter
   and sets `quantified = FALSE` for an exact `"0"` value only there, so a
   re-ingested month compares equal to the legacy load (`already_present`).
+
+- **A90** **Registry verdicts store a REGISTRY FINGERPRINT, and a stale one is
+  re-decided without `reconsider`** (Robin, 2026-10-17; R-3.8). `ingest_file.registry_fingerprint`
+  holds a hash of the registered adapters' ids and versions (`registry_fingerprint()`,
+  sorted by id, so registration order is irrelevant; function bodies are not hashed -
+  an adapter author signals a behaviour change by bumping `version`). It is written
+  with each router verdict: `quarantined`/`unclaimed`, `quarantined`/`adapter_tie`,
+  and router-written `failed` (no adapter recorded). On a later route, such a row whose
+  stored fingerprint differs from the current one, or is NULL (legacy), is re-decided
+  exactly as `reconsider = TRUE` would. A fingerprint change NEVER re-decides
+  `archived`, `ignored` or parse-/commit-written `failed` rows. `reconsider = TRUE`
+  keeps its R-3.7 behaviour: it forces registry verdicts AND any `failed`, never
+  `archived`/`ignored`. A dry run persists neither the verdict nor the new
+  fingerprint (F12). An automatic re-decision of a still-tied file opens no second
+  `adapter_tie` review item (the R-3.7 dedupe). Ops-schema version 8; migration 023
+  (marker 1023) adds the column to the live DB with no backfill.

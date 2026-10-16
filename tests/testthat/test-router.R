@@ -342,7 +342,7 @@ stored_route <- function(con, hash) {
   )
 }
 
-test_that("R-3.7: an unclaimed file is re-decided under reconsider = TRUE once an adapter claims it, and is NOT re-decided under reconsider = FALSE", {
+test_that("R-3.7: an unclaimed file is re-decided under reconsider = TRUE once an adapter claims it, and is NOT re-decided under reconsider = FALSE with an unchanged registry", {
   clear_adapters()
   withr::defer({ clear_adapters(); register_builtin_adapters() })
 
@@ -350,6 +350,19 @@ test_that("R-3.7: an unclaimed file is re-decided under reconsider = TRUE once a
   db <- seed_db(dir)
   con <- seed_con(db)
   withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+
+  # R-3.8 change (2026-10-17): a plain re-route now re-decides a registry
+  # verdict on its own whenever the REGISTRY FINGERPRINT (adapter ids and
+  # versions) has changed, so registering a new adapter is no longer a valid
+  # control for `reconsider`. The adapter is registered up front instead, and
+  # its behaviour is toggled through a closure flag. The id and version never
+  # change, so the fingerprint matches and only `reconsider` can force the
+  # re-decision. This stands in for the SpreadsheetML case, where the code
+  # learns to read the file but nobody bumps a version.
+  claims_csv <- FALSE
+  register_adapter(make_matcher_adapter(
+    "late_adapter", function(fm) if (claims_csv && fm$ext == "csv") "format" else "no"
+  ))
 
   path <- st_test_write_file(dir, "ES2617126_0_XTAB.csv", content = "a,b\n1,2\n")
 
@@ -360,18 +373,17 @@ test_that("R-3.7: an unclaimed file is re-decided under reconsider = TRUE once a
   expect_equal(first$reason[[1]], "unclaimed")
   expect_identical(stored_route(con, hash)$state[[1]], "quarantined")
 
-  # The registry changes - the file did not. This is the SpreadsheetML case.
-  register_adapter(make_matcher_adapter(
-    "late_adapter", function(fm) if (fm$ext == "csv") "format" else "no"
-  ))
+  # The adapter's behaviour changes, but the file and the registry do not.
+  claims_csv <- TRUE
 
-  # CONTROL, and it must run BEFORE the reconsider call: with the new adapter
-  # registered, a default re-route still returns the stale verdict. If this
-  # arm ever goes green as "claimed", the test below proves nothing - the file
-  # would be getting claimed with or without reconsider.
+  # CONTROL, and it must run BEFORE the reconsider call: the adapter would now
+  # claim the file, but with an unchanged registry a default re-route still
+  # returns the stale verdict. If this arm ever goes green as "claimed", the
+  # test below proves nothing - the file would be getting claimed with or
+  # without reconsider.
   control <- route_files(c(path), con)
   expect_equal(control$state[[1]], "quarantined",
-               info = "R-3.7 control: reconsider defaults FALSE, so the stale verdict must survive a plain re-route")
+               info = "R-3.7 control: reconsider defaults FALSE and the registry is unchanged, so the stale verdict must survive a plain re-route")
   expect_identical(stored_route(con, hash)$state[[1]], "quarantined")
 
   # The behaviour under test.

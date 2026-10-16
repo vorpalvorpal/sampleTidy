@@ -42,8 +42,9 @@ Verified 2026-08-09 against the live file, read-only; 011-016 rows added 2026-10
 | 1020 | `020-import-dust-2019-20.R` | Robin, 2026-10-17 | 2026-10-17 |
 | 1021 | `021-dust-datetime.R` | Robin, 2026-10-17 | 2026-10-17 |
 | 1022 | `022-view-date-coalesce.R` | Robin, 2026-10-17 | 2026-10-17 |
+| 1023 | `023-registry-fingerprint.R` | Robin, 2026-10-17 (R-3.8 / A90) | **NOT APPLIED** |
 
-**001-022 are all applied.** 011 deleted the derived LMF analyte, its method and 2,267
+**001-022 are all applied; 023 is written and rehearsed but NOT APPLIED.** 011 deleted the derived LMF analyte, its method and 2,267
 analyses, plus (FK-forced, Robin approved) its 4 `Leachate Signature Index` `guideline`
 rows and 1 `analyte_mask` row; row backups are `dev/migrations/011-delete-lmf-BACKUP-<table>.csv`.
 012 sets `rl_low` on H2S (1e-6, 61 rows), CH4 (1e-4, 11,536 rows) and dust-combustible
@@ -107,6 +108,10 @@ have NULL `datetime` (now dated), and 33 rank-only changes on non-NULL-datetime 
 2024-08-07 partitions (those 10 samples duplicate the field readings of that visit; they now compete in the
 ranking, winning on field-beats-lab or on the uuid tiebreak). `dev/epa-monitoring-report.R` reads base
 tables, not the views: its 2023-24, 2024-25 and 2025-26 Katoomba workbooks are value-identical before/after.
+023 adds the nullable `ingest_file.registry_fingerprint` (also ops-schema version 8 in
+`ensure_schema()`), no backfill: every existing row is NULL and its registry verdict is re-decided
+once on the next route (A90). Rehearsed twice on a copy of live (dry run, migrate, re-run = no-op);
+a dry-run route against the migrated copy succeeds.
 Pre-migration snapshots are in `snapshot_dir` (`monitoring_pre-<name>_<ts>.duckdb`).
 
 ## Ordering constraints (enforced in code, not by memory)
@@ -122,6 +127,7 @@ Pre-migration snapshots are in `snapshot_dir` (`monitoring_pre-<name>_<ts>.duckd
     020 ──requires 1019
     021 ──requires 1020
     022 ──requires 1005, 1021
+    023 ──independent
     003, 008, 009, 010, 011, 012, 013, 014, 015 ── independent
 
 Each dependent migration checks its predecessor's marker and refuses without it, so

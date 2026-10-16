@@ -85,3 +85,21 @@ clear_adapters <- function() {
   rm(list = ls(envir = .st_adapter_registry, sorted = TRUE), envir = .st_adapter_registry)
   invisible(NULL)
 }
+
+#' Fingerprint of the current adapter registry (R-3.8)
+#'
+#' A stable hash of the registered adapters' `id` and `version` pairs, sorted
+#' by id so registration order cannot matter. Router verdicts store it; a
+#' stored verdict whose fingerprint differs is re-decided. Function bodies are
+#' deliberately not hashed: an adapter author signals a behaviour change by
+#' bumping `version`.
+#'
+#' @return a single string.
+#' @keywords internal
+#' @noRd
+registry_fingerprint <- function() {
+  reg <- adapter_registry()
+  ids <- names(reg)
+  versions <- vapply(reg, function(ad) as.character(ad$version), character(1))
+  digest::digest(paste0(ids, "\t", versions, collapse = "\n"), algo = "sha256", serialize = FALSE)
+}
