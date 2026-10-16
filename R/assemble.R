@@ -236,6 +236,14 @@
       }
     }
 
+    # Only dust carries a start date (the gauge's EXPOSURE date); first-wins.
+    if ("sample_date_start_raw" %in% names(samples) &&
+        is.na(results$sample_date_start_raw[[i]])) {
+      nn <- samples$sample_date_start_raw[match_idx]
+      nn <- nn[!is.na(nn)]
+      if (length(nn) > 0) results$sample_date_start_raw[[i]] <- nn[[1]]
+    }
+
     nn_type <- m_type[!is.na(m_type)]
     if (length(nn_type) > 0) {
       results$sample_type[[i]] <- nn_type[[1]]
@@ -462,6 +470,7 @@
   }
 
   final_results$sample_datetime_raw <- NA_character_
+  final_results$sample_date_start_raw <- NA_character_
   final_results$sampler <- NA_character_
   final_results$matrix_raw <- NA_character_
   final_results$parent_sample <- NA_character_

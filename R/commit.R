@@ -1353,6 +1353,16 @@
 #' @keywords internal
 #' @noRd
 
+# SQL for the Australia/Sydney calendar day of a stored `sample.date`
+# (TIMESTAMP holding a UTC instant). Legacy rows hold Sydney midnight as its
+# UTC instant (14:00/13:00 the previous day), which `CAST(date AS DATE)` reads
+# a day early; pipeline rows hold naive midnight (A44.3), which reads as
+# 10:00/11:00 Sydney on the same day. The Sydney day is right for both, and
+# the explicit zones keep it independent of the DuckDB session TimeZone.
+.ct_sydney_day_sql <- function(col) {
+  sprintf("CAST(timezone('Australia/Sydney', timezone('UTC', %s)) AS DATE)", col)
+}
+
 #' The READ-ONLY half of `.ct_find_or_create_sample()`: the uuid of an
 #' existing sample this measurement belongs to, or `NA_character_` if it
 #' would need a new one.
@@ -1388,18 +1398,19 @@
     if (is.na(alias_uuid)) return(NA_character_)
     cand <- DBI::dbGetQuery(
       con,
-      'SELECT uuid, datetime FROM "sample" WHERE uuid_feature_alias = ? AND CAST(date AS DATE) = ?
-         ORDER BY uuid',
+      paste0('SELECT uuid, datetime FROM "sample" WHERE uuid_feature_alias = ? AND ',
+             .ct_sydney_day_sql("date"), ' = ?
+         ORDER BY uuid'),
       params = list(alias_uuid, as.character(sample_date))
     )
   } else {
     if (is.na(match_feature)) return(NA_character_)
     cand <- DBI::dbGetQuery(
       con,
-      'SELECT s.uuid, s.datetime FROM "sample" s
+      paste0('SELECT s.uuid, s.datetime FROM "sample" s
          JOIN feature_alias fa ON fa.uuid = s.uuid_feature_alias
-        WHERE fa.uuid_feature = ? AND CAST(s.date AS DATE) = ?
-        ORDER BY s.uuid',
+        WHERE fa.uuid_feature = ? AND ', .ct_sydney_day_sql("s.date"), ' = ?
+        ORDER BY s.uuid'),
       params = list(match_feature, as.character(sample_date))
     )
   }
@@ -1471,7 +1482,8 @@
 # whenever the datetime convention is next reworked.
 .ct_find_or_create_sample <- function(con, pending, match_feature, alias_uuid,
                                        sample_date, sample_datetime,
-                                       uuid_project, organisation, person, reason) {
+                                       uuid_project, organisation, person, reason,
+                                       sample_date_start = as.Date(NA)) {
   hit <- .ct_existing_sample_uuid(con, pending, match_feature, alias_uuid,
                                   sample_date, sample_datetime)
   if (!is.na(hit)) {
@@ -1508,9 +1520,15 @@
   # cross-run sample reuse (a re-ingest can't find the day-early sample and
   # duplicates it). tz = "UTC" preserves the intended calendar day (A44).
   midnight <- as.POSIXct(paste(as.character(sample_date), "00:00:00"), tz = "UTC")
+  # `date_start` (dust EXPOSURE date) is stored the same way; NULL when absent.
+  start_midnight <- if (is.na(sample_date_start)) {
+    as.POSIXct(NA)
+  } else {
+    as.POSIXct(paste(as.character(sample_date_start), "00:00:00"), tz = "UTC")
+  }
   row <- tibble::tibble(
     uuid = new_uuid, uuid_feature_alias = alias_uuid, uuid_project = uuid_project,
-    date = midnight, date_start = as.POSIXct(NA), datetime = sample_datetime,
+    date = midnight, date_start = start_midnight, datetime = sample_datetime,
     datetime_start = as.POSIXct(NA), organisation = organisation, person = person,
     purpose = NA_character_, comments = NA_character_
   )
@@ -1629,6 +1647,7 @@
     sep = "||"
   )
   resolved <- new.env(parent = emptyenv())
+  has_start <- "sample_date_start" %in% names(clean)
 
   for (i in seq_len(n)) {
     k <- key[[i]]
@@ -1644,7 +1663,8 @@
         uuid_project = uuid_project,
         organisation = clean$org[[i]],
         person = clean$sampler[[i]],
-        reason = reason
+        reason = reason,
+        sample_date_start = if (has_start) clean$sample_date_start[[i]] else as.Date(NA)
       )
       assign(k, uuid_i, envir = resolved)
     }

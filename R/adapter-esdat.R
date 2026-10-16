@@ -318,6 +318,7 @@ esdat_adapter <- function() {
     lab_sample_id = sample_code,
     feature_raw = df$Field_ID,
     sample_datetime_raw = df$Sampled_Date_Time,
+    sample_date_start_raw = NA_character_,
     sample_type = df$Sample_Type,
     parent_sample = df$Parent_Sample,
     matrix_raw = df$Matrix_Type,
