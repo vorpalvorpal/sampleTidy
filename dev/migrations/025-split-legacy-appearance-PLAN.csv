@@ -1,0 +1,156 @@
+"uuid","uuid_sample","feat","date_sydney","project","action","legacy_value_chr","stage","appearance","uuid_stage_new"
+"48498ef3-0d4a-4489-8cde-0ff4c10b65a6","606bc6a8-7832-43df-a712-5bfccfd98fa1","B.E01","2023-09-13","ES2331525","split","Pooled Clear","Pooled","Clear","759202b5-32a6-442c-a130-afcd734ef74d"
+"ce2154d6-4f71-4974-a963-d83bc54b6f70","8a014c89-af8e-4ce1-b4b1-7aae5c4dd445","B.E01","2023-09-13","ES2331527","split","Pooled Clear","Pooled","Clear","8d14a732-0533-4eb7-947a-2f22a8280532"
+"f300af0a-3ad6-4039-bdb3-4f8296afa311","cb94bebb-e685-499c-b207-d4e91dacd6d9","B.L01","2023-09-13","ES2331527","split","Mod level Cloudy","Mod level","Cloudy","34c3897a-012a-46d8-a832-ff88d94b6a8c"
+"0c906f2f-f59d-4f33-ae23-bb55217e0b63","07c7d58a-0db0-4826-97c6-312b4a87365f","B.L02","2023-09-13","ES2331527","split","Mod level Cloudy","Mod level","Cloudy","efe34c11-bd52-4bd1-8b2f-5eb177a0e5a9"
+"6093f31a-aa4a-4990-a206-b6b67d0ce65e","63400f6e-9f42-42ae-9ddb-d7be4541d763","B.S01","2023-09-13","ES2331527","split","Low flow clear","Low flow","Clear","43ee6391-d404-4c11-bbc2-8f24a9ef1c8f"
+"f8d1b24b-5067-4a75-8119-b9591e1d6180","6d0ca1a9-f34f-4b84-b1dd-1bf4929abe65","B.S01","2023-09-13","ES2331525","split","Low flowClear","Low flow","Clear","99a99a7e-b84f-4479-836a-88acec686db2"
+"1c1f621d-2f42-4dfd-895c-e93e7f82c211","316ea653-80b9-42c5-890f-c1098bb247af","B.S03","2023-09-13","ES2331527","split","Low flow clear","Low flow","Clear","7c39fe5a-d615-490a-8ce5-ace360e25ff8"
+"617fa8c4-58d9-4d58-879f-b823e820abed","80ca470e-8c8c-4f1b-8683-4bc46effeec1","B.S03","2023-09-13","ES2331525","split","Low flow Clear","Low flow","Clear","3a46aa4e-accd-4307-9527-efa50b95d101"
+"ad55674e-9f3f-4aae-8504-a91d2fa61fc2","47fd6858-dbe8-4158-9c0a-82544e54a6d0","B.S05","2023-09-13","ES2331525","split","Pooled Clear","Pooled","Clear","4f5f5acf-69e1-4dca-920f-d5a0806c53ff"
+"8756c4ad-57e5-4b20-87c6-a6ec8ac00dc9","51d09ec9-78a6-470c-b2d8-b9b4faf68b24","B.S05","2023-09-13","ES2331527","split","Pooled Cloudy","Pooled","Cloudy","7aa2eaa4-be67-49f4-a292-c95d2bdbed79"
+"698a6bb7-7a72-45cd-a358-73a22a33e2c4","39948e07-32d3-4ad1-a2bd-7370249563c7","B.S06","2023-09-13","ES2331525","split","High level clear","High level","Clear","62942634-cdd5-4a2d-952a-6f646c49dd1a"
+"9e7c33fa-9693-47ea-bc30-2fec00fec512","f869873e-be16-4fc8-8f28-6c601557402b","B.S22","2023-09-13","ES2331527","split","Low flow clear","Low flow","Clear","de3661a1-7bcd-486c-917c-d05253e56d43"
+"1dba3bf8-e9ca-431b-8c4a-9c71d984e8d0","4a0299b7-8846-41b0-85a0-1e23b85f2160","K.S01A","2023-09-20","ES2332504","split","Low flow clear","Low flow","Clear","cd757b95-19b4-485a-ac20-2f77594d39a0"
+"e09e4663-b951-477d-a776-ceca632e27d1","9b02c74f-04f4-4e1b-b949-4bcf27af65d0","K.S03","2023-09-20","ES2332504","split","Low flow clear","Low flow","Clear","12339d5a-062e-4fdc-bf44-0f8a7e64c979"
+"391a1350-c54c-4ae3-b4ac-87c720f53d5a","581bf42b-ced0-4662-88cd-d945bffbf431","K.S07","2023-09-20","ES2332504","split","Low flow clear","Low flow","Clear","18e64542-987e-4f72-b872-cf87ae619663"
+"cad0c3a1-10b1-4f9b-a355-f31baeb15fd5","15777f51-a970-4a34-b9e2-0b3e0fbae9a5","K.S08","2023-09-20","ES2332504","split","Low flow clear","Low flow","Clear","6d27f33b-d816-4121-922e-262fbd74313b"
+"95060096-2730-46c6-b379-eb490b399fff","1a361374-a78f-46ee-865e-2f64750e7dea","K.S09","2023-09-20","ES2332504","split","Low flow clear","Low flow","Clear","a63e4f19-13e9-4f99-9246-0ae782174595"
+"19856b51-964b-4110-b18b-0461a9d2dff5","5b6d7deb-b6a5-4f62-b4b6-d3a56d54717a","B.S01","2023-10-11","ES2335099","split","Low flow Clear","Low flow","Clear","f60ad400-b6a7-4366-9e3d-0570f4936f5f"
+"24a13092-fc17-49a9-a263-a54d8fefd4fe","07575198-cdb6-495d-a9d6-a97e8df7309e","B.S03","2023-10-11","ES2335099","split","Low flow Clear","Low flow","Clear","74aff9ee-bc56-44a6-ab89-aff780f0e8c3"
+"c4ee3abc-79f9-440b-af03-c3e07c9a6fc8","703f2b49-bf63-446a-8a3b-909d6be21302","B.S05","2023-10-11","ES2335099","split","Low flow Clear","Low flow","Clear","91f53d45-aa94-4ca1-adcb-ebd29d3b0793"
+"be0b0cf7-4fc6-43d2-9ca8-da961b01f434","5b27a32f-7298-4445-b794-2b1ea3f7f5f3","B.S06","2023-10-11","ES2335099","split","Mod level Cloudy","Mod level","Cloudy","ac5fac3f-6d26-44b8-92fe-730f3ddeed6d"
+"c1bb62cb-f054-45dd-b052-3cb73887f192","22e0badc-9e25-42f1-846e-a49c4434704c","K.S03","2023-10-26","ES2337117","split","Low flow clear","Low flow","Clear","4b5ff654-a6a7-48e7-b3f5-72e22090097f"
+"a867d2f4-4b95-4c92-92e2-8fc9a585daca","323fcf3c-6150-4453-b009-1baa4b2ef13b","K.S07","2023-10-26","ES2337117","split","Pooled Clear","Pooled","Clear","f4259210-0d81-43a6-b9b0-4a8829df8aee"
+"0b70c208-4d61-4091-a46d-ba37bc3301b7","18e4d936-23f5-4e80-ae10-e366508e1294","K.S09","2023-10-26","ES2337117","split","Low flow Clear","Low flow","Clear","94559fe6-0d46-472a-92fb-b111386df19f"
+"f942b137-da9d-4fa6-af9d-904b2f939fba","6f2c19ca-ef2f-479b-ac67-acdf5976a69c","B.L01","2023-12-18","ES2344024","split","Low levelClear","Low level","Clear","fc3e0c85-e1ae-48ae-bb7b-c1e9b867115c"
+"97dd7f44-6b90-4307-9c0a-62bc619d7c24","b46355a9-b0e1-4ce5-89ed-ce46c328a68a","B.L02","2023-12-18","ES2344024","split","Mod Level Cloudy","Mod level","Cloudy","4873c023-6564-4f6c-be1f-1359718e8ab0"
+"db0432d1-883f-47ee-9f19-53cc29bb7391","3d4c6065-2b49-4d87-9688-714005f2df5c","B.S01","2023-12-18","ES2344024","split","Low flow Clear","Low flow","Clear","8a67ca8d-1209-4432-b4fd-97ecf124fdfe"
+"16123ef1-3c5d-43f1-8309-8d44f5145b1e","e0765856-a41d-45d1-b192-707ac1b0a5d7","B.S03","2023-12-18","ES2344024","split","Pooled low level Clear","Low level","Clear","45b2f9d5-5f8e-436e-9994-3e7f392a1771"
+"7a815ea1-2074-49b7-b0e5-d7c8b5a348fb","c66bdf8a-1682-40f8-bc71-acf7a664f0cf","B.S05","2023-12-18","ES2344024","split","Low level Clear","Low level","Clear","b528e6fb-1718-48dd-b4c5-4e99805a3f5a"
+"7e046425-16cd-48ea-99d7-132a66276a72","97d64b49-f116-439e-b0b8-bc8e398fdfea","B.S06","2023-12-18","ES2344024","split","Mod level; Clear","Mod level","Clear","92cb3564-2456-41bd-8c6d-28c20306eb48"
+"7ea416a7-2004-407e-960a-6b96b63baa27","9a3c7b33-a7ac-4467-ae33-488cb0efd219","K.E01","2023-12-19","ES2344219","split","Very low flow Clear","Very low flow","Clear","ac22d06d-8432-4d11-9b9b-43c0653880e0"
+"c0125d64-0089-430d-b270-9fcede0e4152","0ccda655-2d43-4127-b0c6-8b795c4ab9a4","K.S01A","2023-12-19","ES2344219","split","Low flow clear","Low flow","Clear","57a65ecc-5b7c-4307-ae3c-c208c811e18a"
+"b6d4ab8f-ce46-4a8d-bbd8-b6d89a6c9ff5","f29b6084-014f-4e3e-98be-48b01c8bc7d2","K.S08","2023-12-19","ES2344219","split","Pooled Cloudy","Pooled","Cloudy","7598780a-7eb7-468e-98a2-0f8dfa826ce9"
+"8938f667-9b31-44ae-831b-b7a7cb2dfc0d","98a034eb-39fc-4e66-8b16-ffcfc67a6960","K.S09","2023-12-19","ES2344219","split","Low flow Clear","Low flow","Clear","b500d0de-7b1c-4a56-8d98-52c302dc82f3"
+"a7a687a6-249c-497a-aefe-c642f2ab079a","5b65f433-5243-4e2e-86cc-04aeea6f7f37","K.E01","2024-01-17","ES2401677","split","Mod level Clear","Mod level","Clear","ce5a797b-a31f-4d5a-8048-d81cc3544d82"
+"c6c16e38-515a-4480-81cc-5c285effbd5f","ef918707-d645-4008-8823-99cbfe8441e2","K.E02","2024-01-17","ES2401677","split","Mod level Clear","Mod level","Clear","1de35dbd-2641-4bea-a6be-791019ac61d2"
+"c07f9a1f-15d9-4b5f-9681-b3698d2cc7f5","4de4d72d-f71e-4727-babb-d30e5a2a7972","K.S03","2024-01-17","ES2401677","split","Mod flow Clear","Mod flow","Clear","59fa949c-f569-4968-ae37-97d3c59557b4"
+"41af3dc1-fb4b-48e2-a28e-1904402a41b1","33380f35-e479-4f7f-a444-4c4de257e269","K.S07","2024-01-17","ES2401677","split","Low flow Clear","Low flow","Clear","9f9e00d9-9e54-4ce9-90d4-443410e2cc2e"
+"8c1d7be6-f95e-423e-888e-78ad21654633","dbfd67bf-c87f-459a-976d-b84ec4e9e5c0","K.S09","2024-01-17","ES2401677","split","Low flow Clear","Low flow","Clear","137f8ea6-a1b9-4adf-944a-c94ee0a7769f"
+"19856aae-5c08-40b1-b67a-d1e882a7b242","9fcca74a-53de-484c-a5fa-efbe0b61abc0","B.E01","2024-02-19","ES2405550","split","Mod discharge Cloudy","Mod discharge","Cloudy","034a1513-ea42-47d3-a5f5-7b0c5c4d5a11"
+"283a2b80-e634-4ada-b913-74a46e2e2d54","fd9cb186-9ca8-40bd-973c-cf644addad70","B.E01","2024-02-19","ES2412736","split","Low discharge Cloudy","Low discharge","Cloudy","ef573301-d589-493f-ba5f-6a32c823761b"
+"a06fb1e5-65e1-48bb-b9aa-8fc68eb3e3f9","75ac2eab-d673-4a6c-81a3-f05ca6753b4e","B.S01","2024-02-19","ES2405550","split","Mod flowClear","Mod flow","Clear","0485afb3-5157-4b94-adc6-e2b0404757eb"
+"8153c4a4-54f5-4a7d-bbb3-0ebae99196f9","8ab4a157-aa8d-49f2-8fe1-fe9416a94c7c","B.S06","2024-02-19","ES2412736","split","High level Cloudy","High level","Cloudy","c13bcb97-55dc-48fa-bcf7-0bb7cc5278b1"
+"20b5e248-8ed3-4f88-b8f8-e968e757f0b9","c2fdcb79-96a1-4c9f-8ad1-ac7982942f8a","B.S10","2024-02-19","ES2412736","split","Low flow Clear","Low flow","Clear","27c023b3-b3a0-4cc9-85c8-93f67111de58"
+"c343c93c-f8cb-4de2-a6da-ac92ed051e2f","3ed0a598-b62b-4165-aca2-890ac438c578","B.S22","2024-02-19","ES2412736","split","High Level Cloudy","High level","Cloudy","012a2d10-61f2-462b-afe7-3002df359c14"
+"38826a52-869e-4d32-bc41-a9625d460f1a","604037cf-bf03-4e93-8937-caa0d46e007e","K.S03","2024-02-22","ES2405937","split","Mod flow, Clear","Mod flow","Clear","8f51b0c7-e53a-44b1-be08-87bf247d178f"
+"498b910b-99f0-43d2-bf2b-d521d77e050a","c0a8552f-9a53-4559-adb6-7c76ed4d2038","K.S05","2024-02-22","ES2405937","split","Mod level Clear","Mod level","Clear","329f8ade-d749-45c7-87e5-f8a7696d563b"
+"6a40c9e3-5253-430c-a524-8d548d434aca","b899b7ca-fe13-4b22-ac09-46bfcf1b3ce8","K.S06","2024-02-22","ES2405937","split","Low level Cloudy","Low level","Cloudy","fe5e5e9c-f352-43f9-991d-20786fba915a"
+"c78c8b3b-611d-4ba9-b959-898330c51ccc","d66af2ce-e633-4064-995d-b4c3222387f3","K.S07","2024-02-22","ES2405937","split","Pooled Clear","Pooled","Clear","00bc3b9e-c815-4b3a-9bbf-aa572a43bd2d"
+"8770cf90-f45c-47ab-a6c1-cd8f190a68b4","99991b59-6221-4962-94be-8db11e205dd4","K.S09","2024-02-22","ES2405937","split","Mod flow C lear","Mod flow","Clear","263be21a-184f-461e-95a2-e1056c27ef20"
+"ff19c66f-25a6-4b7e-9c69-77202d4edf90","a47fbfde-ac18-40ae-8c00-48de2fd2da60","K.L04","2024-03-04","ES2407054","split","Low flow cloudy","Low flow","Cloudy","1b86a616-02e8-464d-beb9-187eaf5b01c8"
+"a9d73d6d-ee7c-4418-b9d6-64a8ffb9ab8c","d986fca5-2f4b-44ca-a80f-3f0a76adb95b","K.S01A","2024-03-04","ES2407054","split","Low flow Clear","Low flow","Clear","8532fca8-67ed-4705-995b-18f663a81359"
+"3908f010-360b-4c52-bc1c-34727e493a18","48edb95a-755a-4c5c-bdfb-15975dac9e28","K.S03","2024-03-04","ES2407054","split","Low flow Clear","Low flow","Clear","aa9aba43-9ff9-4f80-be50-38d96f4263b2"
+"697969ef-bd74-4bfd-97c1-767cc185362b","361340e3-a7a1-4d85-bb5d-938e96525f72","K.S05","2024-03-04","ES2407054","split","Low level, Cloudy","Low level","Cloudy","9c4dca30-c267-40d4-8d6e-6fcd7ae900ed"
+"95c1d220-606a-4dc5-a279-77a8d9550d7c","e1672388-eeb2-4ff3-8681-99cfad3572f2","K.S06","2024-03-04","ES2407054","split","Low level, Cloudy","Low level","Cloudy","25625e80-54ff-4669-8c0f-bd3dec526299"
+"a74424fd-c3bf-4ad6-8949-4a7346e60bd1","22479b83-d16a-46dc-b5a4-5ea4008f29bf","K.S07","2024-03-04","ES2407054","split","Low flow, Clear","Low flow","Clear","bc76dd4c-1887-41c8-9fa9-65e2bb3e6c02"
+"0c13fb02-8e7c-4ae3-81e8-206a927fc0b2","912c4780-0497-4fa6-b189-dbe7b8703f42","K.S08","2024-03-04","ES2407054","split","Low flow, Clear","Low flow","Clear","53a71172-0704-4393-a84d-0e64bdd9a6f3"
+"8f960e8b-8a00-470f-a738-9693cc05cf8d","253391ad-2376-430c-950f-88f627aaf895","K.S09","2024-03-04","ES2407054","split","Mod flow, Clear. Only field data collected, will be sampled in April","Mod flow","Clear","5375e4cf-720e-469b-81c3-a623cb72e2f9"
+"2a3730bd-366a-4c46-a8a9-38e7569109eb","8e924b0d-2dc2-483b-8faa-e62de85c44c7","B.S01","2024-03-18","ES2408906","split","Low flow Cloudy","Low flow","Cloudy","e9038b16-7e5f-434a-84a6-fab0b66907dc"
+"43e85027-216a-4273-a951-f3961ccff5d5","7ac9032d-2816-406a-abc0-bdc9d105b661","B.S03","2024-03-18","ES2408906","split","High Level Clear","High level","Clear","b6609708-e4cb-44e2-bc6b-2eaf30512286"
+"752a05b3-e361-4f1b-ac54-ade5b5aa33b3","80570099-e7d1-43c9-995b-68cddb910983","B.S05","2024-03-18","ES2408906","split","Low level Clear","Low level","Clear","45e68d9c-ea85-42bb-a47f-97e9e7d9cec4"
+"48077031-dba5-4dab-ae04-884a45c60867","76623348-618e-4ac1-9240-22dd28e714c9","B.S06","2024-03-18","ES2408906","split","High Level Clear","High level","Clear","4de92a6e-28bf-476b-b449-311bf1710357"
+"899fda95-3ae3-47a5-bc22-bb41ac8507ae","23a21410-40f6-4f46-8dd4-08b0b0766f0b","B.S22","2024-03-18","ES2408906","split","High Level Clear","High level","Clear","09f9cc7a-7a81-4e59-a1d8-f75b378ef179"
+"9b2b5c30-66dd-417e-8ddf-19a45917e8dc","ES2412736004","B.S01","2024-04-18","ES2412736","split","Mod flow Slightly Cloudy","Mod flow","Slightly cloudy","df25a39c-58b8-494b-9bb0-792bd84862d5"
+"3ac517ff-5b6d-4e4a-9fab-2c5ae3073f94","ES2412736005","B.S03","2024-04-18","ES2412736","split","Mod flow Slightly Cloudy","Mod flow","Slightly cloudy","7fb23528-da30-43f2-b619-e5c1c8a13a3c"
+"565500e1-465d-4548-ac95-ab7d5e4b6cb5","ES2412736006","B.S05","2024-04-18","ES2412736","split","Mod flow Slightly Cloudy","Mod flow","Slightly cloudy","a2d22543-f739-4e1d-99b9-8489a746c4a6"
+"9a8a7053-5830-4a66-86cd-88187d052d68","ES2413148001","K.S03","2024-04-22","ES2413148","split","Low Flow Clear","Low flow","Clear","042126d3-38db-4876-8f21-ab09fd0c9f77"
+"321f8e5e-7f2a-4740-8ad2-1fbebf2ac10f","d0d53379-3776-4039-af38-e686985a0094","K.S05","2024-04-22","ES2413148","split","Pooled Clear","Pooled","Clear","04dcacfc-8b1a-42db-824b-13baef16437a"
+"7e2b7255-df93-4ae9-91ec-2e5d3c158550","ee898ae1-75bd-4ea3-a4ec-69ad68885f64","K.S06","2024-04-22","ES2413148","split","Low Flow Clear","Low flow","Clear","ba76e0f4-582e-4608-bfa9-c0f35cb184cc"
+"5a5a5d7d-9bd0-4c86-b117-5de1328ea583","49702d30-0d39-47ba-8f91-b1368208cf68","K.S07","2024-04-22","ES2413148","split","Low Flow Clear","Low flow","Clear","1a4d1e8e-aac6-4a5e-9b23-7f0881b50f3e"
+"2489e28c-7f6d-4269-a56e-e2f108dcfe0f","8b6f0736-287e-49ca-8208-e5f5d2e4eef9","K.S09","2024-04-22","ES2413148","split","Low Flow Clear","Low flow","Clear","af866473-971c-444c-a7be-067d4c6730b7"
+"cab4f7c8-0784-4744-bc07-faff3327e6d9","845c5de7-c231-48c2-a5a1-d6f361030c2d","K.S09","2024-04-22","ES2413139","split","Low flow Clear","Low flow","Clear","be003728-ad7d-45ad-b8f8-af68902ebefb"
+"007e5722-623c-4baf-a971-92a4ef18be97","ea972199-8f29-422a-bba7-62bb26755120","K.S10","2024-04-22","ES2413148","split","Low Flow Clear","Low flow","Clear","9b03fb7e-cb77-4a16-83ce-74a147eaf72b"
+"5e7f479c-139b-415d-9227-56e4b4ab437d","b5b63ff4-fb9e-4097-b6df-93ad6cc19865","B.E01","2024-05-09","ES2415103","split","Low discharge Cloudy","Low discharge","Cloudy","e3e168bd-c98c-435b-8bb4-cede2bec847e"
+"6498fda1-ffe9-481f-a0d8-3bc10cf08adb","453f22f7-0d58-4d71-97e9-9ebec4959e68","B.S01","2024-05-09","ES2415103","split","Low flow clear","Low flow","Clear","b3fff3bc-a126-4785-b230-db9ac445978f"
+"f8dbef9d-3fac-487f-b1bc-272a140af3c0","ce60a00a-187b-4c51-b998-1c6df653c191","B.S03","2024-05-09","ES2415103","split","Low flow clear","Low flow","Clear","998de2b2-e6d3-49b6-87ae-22e54b7900b9"
+"e56c2042-7bf5-4bf9-a5fb-083fbf2c498c","c26af2f8-43c7-42b2-bb90-d607975f610a","B.S05","2024-05-09","ES2415103","split","Low flow clear","Low flow","Clear","cf12d816-d39d-47e4-bb2a-b078ca36a58c"
+"5ca4166b-6949-401d-994d-fe37f2ac9b6a","c6824d01-d4b1-4d45-8831-d6c404f84be6","B.S10","2024-05-09","ES2415103","split","Low level Clear","Low level","Clear","71072f94-56fd-443d-8953-9917a0e89a1f"
+"783092b6-43bb-48e8-bb7b-2b98d1217f26","ES2417746001","BH.S01","2024-05-29","ES2417746","split","Low flow Clear","Low flow","Clear","9fa80e5f-78d5-40e8-b5c4-9047f3bb2e8f"
+"e76ab323-5e1d-40f0-a33c-572383f93874","ES2417748005","L.L02","2024-05-29","ES2417748","split","Low flow Clear","Low flow","Clear","49c5203c-4dde-425f-8ceb-7d469be3b4de"
+"3352dc38-12ed-43d5-aced-a4d395fc9940","ES2417748004","L.S02","2024-05-29","ES2417748","split","Low flow Clear","Low flow","Clear","c50889d7-54a8-4f05-8752-22d8c62622c7"
+"9e7b8c78-f9b3-4801-aa0e-4ee405f389ed","ad5e066f-d3f1-478d-bde4-2d06f1082a6c","B.S01","2024-06-13","ES2419948","split","Low flow Clear","Low flow","Clear","19934708-2314-459a-b4ef-cdfc6eb76449"
+"fd90f27a-a75b-45c3-b886-b3c056314538","3aaf87a8-7632-483e-bb67-0576f13ed0e3","B.S03","2024-06-13","ES2419948","split","Pooled mod level Clear","Mod level","Clear","c894fabc-77e3-4ca9-b2ea-040973cbaa6a"
+"37612ebf-d779-470f-a3a3-49678d52bb18","ES2419948009","B.S05","2024-06-13","ES2419948","split","Mod level Pooled Clear","Mod level","Clear","e6e4c066-8f5a-43a5-bc1f-ff67c8cc5063"
+"780fce26-152a-4520-9768-b0682f513ffd","ES2419948010","B.S06","2024-06-13","ES2419948","split","High level Clear","High level","Clear","de439a99-9685-4f22-b653-b24b86a653d6"
+"331a7e9c-40c6-45af-8d9d-23b7923a2908","02ff3952-43ff-49c6-a773-51c66f1729fe","B.S10","2024-06-13","ES2419948","split","Pooled Clear","Pooled","Clear","560b2df9-fd47-4a58-908f-f66e0f6bfcda"
+"8a940298-9fee-4dcc-9eb1-3e44592be6f8","ES2419948013","B.S22","2024-06-13","ES2419948","split","Mod level Clear","Mod level","Clear","dd899530-bc00-4abd-b258-3bb85e3da6de"
+"e4c7ad55-26f8-4eeb-b564-11b709bd5bb3","bcd4181d-8175-4b3d-864b-3d1a170dcd4a","K.E01","2024-06-19","ES2421689","split","Pooled Cloudy","Pooled","Cloudy","3996e6a5-1c47-430e-933e-fa11212d1015"
+"f5b3214e-2cb0-49ab-8fbf-d81c92abf816","31b08e5a-fed7-4f94-97ee-50467090a60c","K.E02","2024-06-19","ES2421689","split","Pooled clear","Pooled","Clear","f41bc9c1-afd7-4242-81d5-cf3f20f8f6bc"
+"3813c4ac-c7c5-4815-bdff-9b671e997c25","73e87de9-0b0c-4059-aa10-d89a986b5c37","K.L03","2024-06-19","ES2421689","split","Mod flow cloudy","Mod flow","Cloudy","f487baab-2b21-4111-ac78-1da121fe2ca9"
+"4ad79ce7-e88f-4f58-ae7c-c5e36a4b8fa4","4739d5ce-d7d7-4c26-930b-85c0aa1d7fd2","K.L04","2024-06-19","ES2421689","split","Mod flow cloudy","Mod flow","Cloudy","11cd302a-d046-4b3b-9ecb-531e759c8b79"
+"f61eed5e-d597-43e3-baa3-252b9cc4f188","1df6fb86-2396-44a7-9593-841668ac8336","K.S01A","2024-06-19","ES2421689","split","Mod flow clear","Mod flow","Clear","5e1fc36c-498f-4faa-82c2-7587037daa4e"
+"abac490b-a80d-46c8-9a3b-4eadc2355781","250bda55-4a67-4626-a9d5-abea883259db","K.S03","2024-06-19","ES2421689","split","Mod flow clear","Mod flow","Clear","315edd1e-e4f8-47d1-a7fd-b96177e49416"
+"85bc0352-a8d3-46aa-8473-00152425dead","03d5548a-6d35-49eb-a86e-001e99f7712e","K.S05","2024-06-19","ES2421689","split","Pooled Cloudy","Pooled","Cloudy","098fd65b-d2aa-4282-a51b-dc08ab181222"
+"9d43d1bd-6820-4518-9fbe-35d930c6bc0f","3d6e09e5-0c8e-4c7f-bcdd-d9a21e90a47d","K.S06","2024-06-19","ES2421689","split","Pooled clear","Pooled","Clear","112838ad-f869-4e24-a26d-4260b3cb8833"
+"6f307da9-c883-4ed1-8870-e27b12b8ae38","42dfcb87-b221-4637-8c0c-9ae0695ad8e7","K.S07","2024-06-19","ES2421689","split","Low flow clear","Low flow","Clear","2c38c2c4-8e9b-427f-ac22-721eecac499a"
+"0b9c602f-fd0c-4c28-8658-98cfecbf773c","5d8a6501-cafb-4e18-8d3c-ca950ee4b34e","K.S09","2024-06-19","ES2421689","split","Mod flow clear","Mod flow","Clear","31ec5e20-dd31-4ca4-97f9-3c58d1873cbf"
+"0e33251d-b0fa-4fff-a117-62812a2acc1c","ES2423031004","B.S01","2024-07-11","ES2423031","split","Mod flow Clear","Mod flow","Clear","e90ce722-3493-4286-8055-d963eddf50a2"
+"81481468-e0c3-4e09-b0f1-e6cb8d186b89","ES2423031005","B.S03","2024-07-11","ES2423031","split","Mod flow Clear","Mod flow","Clear","0b3b8248-af16-4158-a88d-5ba1e1205dbc"
+"cbe17fba-e1b2-44f9-9422-8a69582f9d46","ES2423031006","B.S05","2024-07-11","ES2423031","split","Mod level Clear","Mod level","Clear","4969a069-4aed-4506-b148-68bad28b7c37"
+"27eb5a65-86cb-43af-b623-f9197e55226f","8dc51283-0e44-447a-83e1-a3d1439e6cb2","B.S10","2024-07-11","ES2423031","split","Pooled Clear","Pooled","Clear","1a5e5211-24d8-4433-8b3b-f1a4dff2cd71"
+"33137497-b983-46bd-87a1-0e12009c3fbe","67843ab8-ebd7-40de-ab5f-173d046cca5b","B.E01","2024-09-11","ES2429912","split","Low flow slightly cloudy","Low flow","Slightly cloudy","616b6c34-ce8d-4a2e-a22e-d875e11e619a"
+"6c962665-780f-47dc-a11e-6a18759ec28b","ES2429912008","B.S05","2024-09-11","ES2429912","split","Mod level,clear","Mod level","Clear","03da116e-38ce-4513-9386-b939dccc7bb4"
+"1d8b99f1-cb83-4a4b-8d42-e2f9c4c71fdd","ES2429912009","B.S06","2024-09-11","ES2429912","split","Mod level, slighhtly cloudy","Mod level","Slightly cloudy","014c50be-0a9d-45c1-a906-8bddc3133a5d"
+"a5c49f63-b56c-4338-a341-14ddadf9caa9","ES2429912011","B.S22","2024-09-11","ES2429912","split","Mod level,clear","Mod level","Clear","29990ba4-9f70-4ac7-901b-264769573b50"
+"f57ee740-0f9b-4a84-a822-f985bb4751d8","d6d32917-fcde-4903-bcbb-27176b3530cb","B.MW06","2023-09-13","ES2331527","to_stage","Dry","Dry",,
+"4791c9e0-e99a-4237-820e-f526a857e823","45836841-d4c7-409b-a04b-70824f5b305a","B.MW10","2023-09-13","ES2331527","to_stage","Dry","Dry",,
+"a5821644-4e1c-4dfa-baee-a4fbfbef26f5","8291bf97-4dfd-4101-ad3e-a79ada5bd032","B.S04","2023-09-13","ES2331527","to_stage","Dry","Dry",,
+"901f217c-6ff7-433b-a7e4-4f0aa3d7b282","a68f298e-1d75-44ce-bef6-84889c38a8e3","B.S30","2023-09-13","ES2331525","to_stage","Non Discharge","No discharge",,
+"176ea148-638a-43d1-80e6-fb6f0cfdd629","f85186ae-4039-4b5f-9589-433db754d2f8","B.TS28","2023-09-13","ES2331525","to_stage","Dry","Dry",,
+"e724a7de-202b-41c8-a9eb-0e6113c1f73f","01dfeeed-5f24-4c28-9099-b07c600163e0","K.MW02","2023-09-20","ES2332504","to_stage","Dry","Dry",,
+"f4c8da38-7563-4693-a2f1-ad51eda0c6fa","3e52e460-dcac-4f71-bff6-d3b4715f4757","K.MW03","2023-09-20","ES2332504","to_stage","Dry","Dry",,
+"1e967d73-f114-4ca6-be11-7ad0d8d4f596","ec482658-27b7-41dd-aa06-d32ac931d034","K.S05","2023-09-20","ES2332504","to_stage","Dry","Dry",,
+"5c546073-bc04-4fd0-909e-2b2377df887a","ba6cd3ee-bb08-42d8-8aef-097130e347a8","K.S06","2023-09-20","ES2332504","to_stage","Dry","Dry",,
+"2c10d649-0a44-4ce0-8c14-a10b8998e973","b1afdb69-c2dc-42b3-93ec-b1c9df130d0b","K.S05","2023-10-26","ES2337117","to_stage","Dry","Dry",,
+"781895aa-b74a-45bc-a7d2-331fcdf696ef","e4bc3a84-958b-434f-be02-b9be0fa27ae6","K.S06","2023-10-26","ES2337117","to_stage","Dry","Dry",,
+"c30994ab-8929-4c63-b720-82c4dca8abca","27cfdbc8-2ffd-451a-85c6-c5a0933f6604","L.S01","2023-11-22","ES2340624","to_stage","Dry","Dry",,
+"8c88a0b8-f512-414c-bdc5-cab077380f48","d27f55ed-7444-4e70-b94e-5ffbe3f4926f","L.S02","2023-11-22","ES2340624","to_stage","Dry","Dry",,
+"8c59303c-cd12-4cb1-a90b-a84256c99820","231a7da0-c1e6-4bbb-ada3-71247895c38f","B.E01","2023-12-18","ES2344024","to_stage","Dry","Dry",,
+"04484b4b-cb56-482d-8e79-14eba54df977","6e79a377-be44-40a3-9427-ac24ddefa688","B.S04","2023-12-18","ES2344024","to_stage","Dry","Dry",,
+"c109a997-9278-4938-94d2-01a329ad8c26","d35203c9-1dc2-4d09-ae2f-5a69b1dfd59a","K.MW03","2023-12-19","ES2344219","to_stage","Dry","Dry",,
+"ae02b051-d593-4555-939e-20524a4d701c","d333a4fa-9730-4d81-9b67-ed46cd136808","K.S06","2023-12-19","ES2344219","to_stage","Dry","Dry",,
+"3090ff0d-4eee-45a9-904b-46da261347ab","a918c4dc-9ff5-4ec2-a4b3-ad202f590f38","K.S07","2023-12-19","ES2344219","to_stage","Dry","Dry",,
+"28414475-e989-4dd0-8a05-6164dc9824a3","c0416d99-bcb8-478f-b989-a69d9d05bb29","B.S10","2024-02-19","ES2405550","to_stage","Dry","Dry",,
+"e2df5270-3f85-42a0-9cf1-496a828eb441","c056b844-c177-4a55-ade4-72ac83ea7db8","B.S12","2024-02-19","ES2405550","to_stage","Dry","Dry",,
+"7004b6a1-6d27-4012-9641-1d7f3877d6eb","23c6d213-3121-4d02-b526-547b285df558","B.S12","2024-02-19","ES2412736","to_stage","Dry","Dry",,
+"edd7ac03-7c57-45f7-bcb1-5b45e7d744b3","a36d2d39-2328-4793-9e58-ea40caebfc50","K.E01","2024-02-22","ES2405937","to_stage","Non Discharge","No discharge",,
+"785cc197-e7e5-4cb7-9ad2-e7b94fc3f440","36750a71-08b5-42d5-af49-34a7bc4f9709","K.E02","2024-02-22","ES2405937","to_stage","Non Discharge","No discharge",,
+"bcb21d2b-deea-4a93-bee8-2aee1b777114","e67ef31d-a5c0-4183-92aa-f951251c7b58","K.E01","2024-03-04","ES2407054","to_stage","Dry","Dry",,
+"b7938b00-8f76-4883-a886-b674cd8f53ff","125c581c-b9bd-4553-a0dc-b984d4bc6f40","K.E02","2024-03-04","ES2407054","to_stage","Dry","Dry",,
+"950e1479-46d9-4779-a412-567c72960a00","b46df968-65e0-4805-87ef-1cdb6c02d078","K.L03","2024-03-04","ES2407054","to_stage","Dry","Dry",,
+"45ab5fd1-bc0a-44e6-9d87-5a393858f0df","ec60e5cc-e4f1-4085-ac9d-6ad966f4e96a","K.MW03","2024-03-04","ES2407054","to_stage","Dry","Dry",,
+"5dc1e0cb-9e81-454a-822c-77a82091b1d9","cf13dcb5-1f20-448a-a94d-fb5831a07a0a","K.MW05","2024-03-04","ES2407054","to_stage","Dry","Dry",,
+"d9818114-45ba-4b15-ad88-f4c003ee8420","389c84c9-245b-440f-835a-ed9360f9ae53","K.S10","2024-03-04","ES2407054","to_stage","Dry","Dry",,
+"d6a069f6-154f-4410-b34e-b36cc40de670","67c6b5d1-7bf6-443d-bf7c-5d19d5e9fa5f","B.CW02","2024-03-18","ES2408906","to_stage","Dry","Dry",,
+"42474299-9466-4ad1-a8ca-c752087f3d73","c6f67b20-566e-4af2-993e-10973b61091f","B.E01","2024-03-18","ES2408906","to_stage","Dry","Dry",,
+"a45c4f72-4ea1-4c92-8bd4-23faf5951454","e41f1d0d-4c69-4521-b95f-b97347b81a70","B.S10","2024-03-18","ES2408906","to_stage","No flow","No discharge",,
+"31c16a9a-020f-4b98-b518-305ea0fcbcd5","63a15503-8e64-433e-a490-3c8985c80cae","B.S12","2024-03-18","ES2408906","to_stage","Dry","Dry",,
+"eb8901ab-90dd-4340-a869-0720eb0a452b","35b0c494-3a16-4d0a-8939-b37bba6f2284","K.L01","2024-04-22","ES2413139","to_stage","Not running, no sample","No discharge",,
+"dc743bbd-5901-41d4-a230-17e8e7de5f6b","f4a4563f-d864-4bcf-9d2f-026de050bb8c","L.L01","2024-05-29","ES2417748","to_stage","Dry","Dry",,
+"a70983aa-f1ea-48d0-90ee-39d82a174930","acbdb93b-bd82-417f-8b3c-b8885dbdf350","L.MW09","2024-05-29","ES2417748","to_stage","Dry","Dry",,
+"1c5f0c86-d5f3-42b2-bf8d-99fc26d601e9","b7de5942-ed14-413a-b048-a6ab1985aece","L.S01","2024-05-29","ES2417748","to_stage","Dry","Dry",,
+"6c5ff3c7-cfc0-4eba-8286-e32775259b50","7b1ef25f-3f7e-4c38-b820-95f1cac8e879","B.E01","2024-06-13","ES2419948","to_stage","Dry","Dry",,
+"cdbb4d24-8f3e-409f-ab5d-b400b9237d6f","3170a70c-58d8-4f91-b802-ab67bd2a6a08","B.S12","2024-06-13","ES2419948","to_stage","Dry","Dry",,
+"57a98204-e9ef-4f20-9ed0-0ea3b01e328e","818f997d-8e55-4088-83e7-46b38451dfa4","K.L01","2024-06-19","ES2421689","to_stage","Dry","Dry",,
+"1f7778eb-56b0-4496-b897-ce85d65563f2","6d3473fc-93e9-44ba-9ad0-2211e1e003bd","K.MW05","2024-06-19","ES2421689","to_stage","Dry","Dry",,
+"eff219e6-ff88-4871-81f4-b3a905c02fbf","42ec5658-2eb7-4581-958f-0eb215a65b83","K.S10","2024-06-19","ES2421689","to_stage","No flow","No discharge",,
+"d4a3d0a2-8413-49dd-84a0-21a3911f5228","5b33c33d-0df4-4dc7-a8ef-7e1519d7613f","B.E01","2024-07-11","ES2423031","to_stage","Non Discharge","No discharge",,
+"7417285b-7198-45a7-861a-4a703dd798e5","681924d0-23b4-40a7-a549-0d50d665b75b","K.E01","2024-08-12","ES2426361","to_stage","Dry","Dry",,
+"151555d2-133c-4c5d-a741-c3ce329a60ef","79926aab-f38d-4461-9b30-2535ddd093a9","K.E02","2024-08-12","ES2426361","to_stage","Dry","Dry",,
+"b26c4b30-fc74-4b7e-a40e-85af36edcf7c","e585a2d2-a83a-420c-884c-bb8a2b1a5fef","K.S05","2024-08-12","ES2426361","to_stage","Dry","Dry",,
+"4c0c31f4-6144-4453-87ca-937930414753","ccd40770-0785-454d-bcb9-5f87f2a255ad","K.S06","2024-08-12","ES2426361","to_stage","Dry","Dry",,
+"1eef2dd8-426c-4bc9-a9fb-f8dc8c7877fc","9cb749c9-95ea-497f-aace-484fb7a8228c","K.S10","2024-08-12","ES2426361","to_stage","Dry","Dry",,
+"ef4918a2-b57f-438e-a90c-7279c4ba4a96","79a5262c-aa3c-4705-807c-15eb49b95ce0","B.E01","2024-09-11","ES2429912","to_stage","Dry","Dry",,
+"c1c190be-a607-4ea0-9382-bbfd56cfc323","66f2bb05-3deb-48ae-9175-9e48b779e3f9","B.S10","2024-09-11","ES2429912","to_stage","Dry","Dry",,
