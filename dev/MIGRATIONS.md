@@ -15,7 +15,7 @@ Sharepoint is a **snapshot destination only** — nothing is ever copied back.
 
 ## State of the live database
 
-Verified 2026-08-09 against the live file, read-only; 011-016 rows added 2026-10-16; 016 applied and 017 added 2026-10-17; 018-022 applied 2026-10-17.
+Verified 2026-08-09 against the live file, read-only; 011-016 rows added 2026-10-16; 016 applied and 017 added 2026-10-17; 018-022 applied 2026-10-17; 024 applied 2026-10-17.
 
 | marker | migration | authorised by | applied |
 |---|---|---|---|
@@ -43,8 +43,9 @@ Verified 2026-08-09 against the live file, read-only; 011-016 rows added 2026-10
 | 1021 | `021-dust-datetime.R` | Robin, 2026-10-17 | 2026-10-17 |
 | 1022 | `022-view-date-coalesce.R` | Robin, 2026-10-17 | 2026-10-17 |
 | 1023 | `023-registry-fingerprint.R` | Robin, 2026-10-17 (R-3.8 / A90) | **NOT APPLIED** |
+| 1024 | `024-merge-aug24-water-duplicates.R` | Robin, 2026-10-17 (rulings 1-5) | 2026-10-17 |
 
-**001-022 are all applied; 023 is written and rehearsed but NOT APPLIED.** 011 deleted the derived LMF analyte, its method and 2,267
+**001-022 and 024 are applied; 023 is written and rehearsed but NOT APPLIED.** 011 deleted the derived LMF analyte, its method and 2,267
 analyses, plus (FK-forced, Robin approved) its 4 `Leachate Signature Index` `guideline`
 rows and 1 `analyte_mask` row; row backups are `dev/migrations/011-delete-lmf-BACKUP-<table>.csv`.
 012 sets `rl_low` on H2S (1e-6, 61 rows), CH4 (1e-4, 11,536 rows) and dust-combustible
@@ -112,6 +113,17 @@ tables, not the views: its 2023-24, 2024-25 and 2025-26 Katoomba workbooks are v
 `ensure_schema()`), no backfill: every existing row is NULL and its registry verdict is re-decided
 once on the next route (A90). Rehearsed twice on a copy of live (dry run, migrate, re-run = no-op);
 a dry-run route against the migrated copy succeeds.
+024 merges the 10 duplicate 2024-08-07 Blaxland water samples (B.MW02/08/09, S01/03/05/06/10/22, E01 via
+alias B.EO1; NULL `datetime`, project ES2425916) that the 2026-08-09 ingest of 2400-7399-08 created beside
+their legacy twins: 28 pure-duplicate analyses deleted, 13 new ones (field EC x9, Stage x4) re-pointed onto the
+twins, and for the 5 Appearance conflicts (S01/S03 "Low flow clear", S05 "Mod Level Clear", S22 "cloudy", E01
+"Slightly Cloudy") the pipeline's A76-split value re-pointed onto the twin and the legacy row deleted; then the
+10 emptied samples deleted in a separately committed step. It also merges ACIRL lab_method 45a8fbd1 "Standing
+water level" into 68484c79 "Standing Water Level" (3 2023-10-10 analyses moved by delete + same-uuid re-insert,
+because duckdb 1.4.1 keeps a stale FK index key after per-row deletes/updates of `analysis.uuid_lab` and then
+refuses the lab_method delete; the 6 rows go in one set-based DELETE). B.EO1 alias, projects and assets kept.
+After it a dry-run re-ingest of the archived workbook (its `ingest_file` row removed, copy only) yields 0 new
+rows. Row backups `024-merge-aug24-water-duplicates-BACKUP-{analysis,sample,lab_method}.csv`.
 Pre-migration snapshots are in `snapshot_dir` (`monitoring_pre-<name>_<ts>.duckdb`).
 
 ## Ordering constraints (enforced in code, not by memory)
@@ -128,6 +140,7 @@ Pre-migration snapshots are in `snapshot_dir` (`monitoring_pre-<name>_<ts>.duckd
     021 ──requires 1020
     022 ──requires 1005, 1021
     023 ──independent
+    024 ──requires 1022
     003, 008, 009, 010, 011, 012, 013, 014, 015 ── independent
 
 Each dependent migration checks its predecessor's marker and refuses without it, so
