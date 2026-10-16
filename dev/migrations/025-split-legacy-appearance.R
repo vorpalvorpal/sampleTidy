@@ -239,10 +239,13 @@
   NULL
 }
 
-# The post-025 state.
+# The post-025 state. Once 026 (marker 1026) has settled the three excluded
+# pairs they are no longer "untouched"; 026 verifies them instead.
 .mig025_done_problem <- function(con, P) {
   p <- .mig025_lab_problem(con); if (!is.null(p)) return(p)
-  p <- .mig025_excluded_problem(con); if (!is.null(p)) return(p)
+  if (.mig025_scalar(con, "SELECT COUNT(*) FROM schema_version WHERE version = 1026") == 0L) {
+    p <- .mig025_excluded_problem(con); if (!is.null(p)) return(p)
+  }
   A <- .mig025_analyses(con, .mig025_touched(P))
   if (nrow(A) != length(.mig025_touched(P))) return("a planned analysis is missing")
   ps <- .mig025_per_sample(con, P)

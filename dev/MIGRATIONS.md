@@ -45,6 +45,7 @@ Verified 2026-08-09 against the live file, read-only; 011-016 rows added 2026-10
 | 1023 | `023-registry-fingerprint.R` | Robin, 2026-10-17 (R-3.8 / A90) | 2026-10-17 (applied after 024) |
 | 1024 | `024-merge-aug24-water-duplicates.R` | Robin, 2026-10-17 (rulings 1-5) | 2026-10-17 |
 | 1025 | `025-split-legacy-appearance.R` | Robin, 2026-10-17 (convert legacy ACIRL Appearance to the A76 split) | 2026-10-17 (applied by Robin; rehearsed twice on copies) |
+| 1026 | `026-dust-date-start-and-appearance-fixes.R` | Robin, 2026-10-17 (rulings A, B1-B4) | 2026-10-17 (rehearsed twice on copies) |
 
 **001-024 are applied (023 was applied after 024, 2026-10-17).** 011 deleted the derived LMF analyte, its method and 2,267
 analyses, plus (FK-forced, Robin approved) its 4 `Leachate Signature Index` `guideline`
@@ -125,6 +126,20 @@ because duckdb 1.4.1 keeps a stale FK index key after per-row deletes/updates of
 refuses the lab_method delete; the 6 rows go in one set-based DELETE). B.EO1 alias, projects and assets kept.
 After it a dry-run re-ingest of the archived workbook (its `ingest_file` row removed, copy only) yields 0 new
 rows. Row backups `024-merge-aug24-water-duplicates-BACKUP-{analysis,sample,lab_method}.csv`.
+026 (A) sets `date_start` AND `datetime_start` (021's dust invariant) back one month on the 4 legacy dust samples
+of 2400-7453-03 (a0948ef0 B.D07, 3ff06304 B.D08: exposed 2025-02-01) and 2400-7453-08 (f2b590d1, c11dbd53: exposed
+2025-07-01); `date`/`datetime` (collection) untouched, Sydney midnight as the UTC instant like every dust row.
+After it no dust sample has exposure and collection in the same month. (B1) swaps `value_chr` between the
+Appearance and Stage rows of L.L01/L.L02 2023-11-22 into the adapter's terms (L.L01 Stage "Low level" /
+Appearance "Slightly cloudy"; L.L02 "Pooled" / "Cloudy"). (B2) deletes the B.S10 2024-08-07 legacy Appearance
+"Dry" (11ec50bf; Stage "Dry" kept). (B3) moves the 22 legacy "no water / other" Appearance texts ("Couldnt find",
+"Decomissioned", ...) into their sample's `comments` and deletes the rows, leaving those 22 samples with no
+analyses. (B4) appends 025's dropped K.S09 2024-03-04 note "Only field data collected, will be sampled in April"
+to that sample's comments. 23 deletes in one set-based DELETE. 025's re-verify skips its "excluded pairs
+untouched" check once 1026 exists. A dry-run re-ingest of 2400-7346-02 (Lawson Nov-2023) goes from 4
+value_conflicts (exactly the 4 swapped rows) to 0; 2400-7399-08, 2400-7453-03 and 2400-7453-08 are unchanged
+(the dust rows are A77-withheld, with exposure/collection equal to what 026 writes). Row backups
+`026-dust-date-start-and-appearance-fixes-BACKUP-{analysis,sample}.csv`.
 Pre-migration snapshots are in `snapshot_dir` (`monitoring_pre-<name>_<ts>.duckdb`).
 
 ## Ordering constraints (enforced in code, not by memory)
@@ -143,6 +158,7 @@ Pre-migration snapshots are in `snapshot_dir` (`monitoring_pre-<name>_<ts>.duckd
     023 ──independent
     024 ──requires 1022
     025 ──requires 1024
+    026 ──requires 1025
     003, 008, 009, 010, 011, 012, 013, 014, 015 ── independent
 
 Each dependent migration checks its predecessor's marker and refuses without it, so
