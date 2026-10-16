@@ -28,6 +28,13 @@
 )
 .st_ir_samples_cols <- names(.st_ir_samples_types)
 
+# Optional A88 review columns on `results` (dev/plans/OPERATING-RULES.md A88):
+# accepted and type-checked when present, never part of the prototype.
+.st_ir_results_optional_types <- c(
+  needs_review = "logical", review_kind = "character",
+  review_payload = "list", review_withhold = "logical"
+)
+
 # Fields required to be non-NA (R-3.1): base set for both kinds, extended
 # for results with analyte_raw/value_raw.
 .st_ir_required <- list(
@@ -150,7 +157,14 @@ ir_validate <- function(x, kind) {
     )
   }
 
-  extra_cols <- setdiff(names(x), cols)
+  # The A88 review columns are optional on `results`: type-checked below when
+  # present, but never required.
+  optional <- if (kind == "results") {
+    .st_ir_results_optional_types[names(.st_ir_results_optional_types) %in% names(x)]
+  } else {
+    character(0)
+  }
+  extra_cols <- setdiff(names(x), c(cols, names(optional)))
   if (length(extra_cols) > 0) {
     cli::cli_abort(
       "IR {.val {kind}} validation failed: unexpected extra column{?s}:
@@ -159,9 +173,11 @@ ir_validate <- function(x, kind) {
     )
   }
 
-  for (col in cols) {
+  types <- c(types, optional)
+  for (col in c(cols, names(optional))) {
     type <- types[[col]]
     ok <- switch(type,
+      list = is.list(x[[col]]),
       character = is.character(x[[col]]),
       integer = is.integer(x[[col]]),
       double = is.double(x[[col]]),
