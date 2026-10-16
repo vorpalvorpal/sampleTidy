@@ -88,6 +88,12 @@ merge_identity_aliases(db = st_config("live_db"), actor, dry_run = FALSE)
 # producers), and records the human in `resolved_by` per A55.
 resolve_review(uuid, resolution, resolved_by, db = st_config("live_db"))
 
+# A88, added 2026-10-16 (Robin's design). Commits the rows an ADAPTER withheld
+# for review (payload$rows) with the human's chosen sample dates, then resolves
+# the item, in one transaction. resolve_review() only flips status; this is the
+# path that actually lets withheld rows in.
+release_review(uuid, overrides = list(), resolved_by, db = st_config("live_db"))
+
 # plan 09 R-9.7 / R-9.11, added 2026-07-28 (Robin's ruling). Both operator-run
 # tools, hence the A16 human-callable convention.
 #
@@ -847,6 +853,8 @@ Numbering is continuous, so nothing below is re-used. Index only:
 - **A84** — A sample is identified by (feature, datetime), and where two samples
 - **A85** — A bare number in a units column is never a unit — refused as
 - **A86** — `SAR` is dimensionless (`units = '1'`), and the `%`-typed Aroclor
+- **A88** — Adapters may WITHHOLD rows for review: `needs_review` / `review_kind` / `review_payload` on `results`; identical payloads fold into one item; `release_review()` commits them with the human's dates (design 2026-10-16).
+- **A89** — An adapter may declare `zero_is_nondetect`; only then is its bare `0` a non-detect (2026-10-16).
 
 Full text: `dev/plans/OPERATING-RULES.md`.
 

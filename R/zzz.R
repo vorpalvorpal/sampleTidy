@@ -15,6 +15,7 @@ register_builtin_adapters <- function() {
   register_adapter(als_xtab_adapter(), quiet = TRUE)
   register_adapter(als_enmrg_adapter(), quiet = TRUE)
   register_adapter(acirl_field_xlsx_adapter(), quiet = TRUE)
+  register_adapter(acirl_gas_xlsx_adapter(), quiet = TRUE)
   invisible(NULL)
 }
 

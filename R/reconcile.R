@@ -186,7 +186,8 @@
   tibble::tibble(source_ref = character(0), kind = character(0),
                  subkind = character(0), payload = character(0), n_rows = integer(0),
                  source_hash = character(0), uuid_existing = character(0),
-                 uuid_alias = character(0), candidates = list())
+                 uuid_alias = character(0), candidates = list(),
+                 work_order = character(0))
 }
 
 # ---- R-11.14: fold assembly's inline review flags into reconcile -----------
@@ -1743,6 +1744,17 @@
   value_ranges <- .rc_analyte_value_range(con)
 
   parsed <- parse_value(rows$value_raw)
+  # A89: an adapter that declares `zero_is_nondetect` (the ACIRL gas analyser)
+  # reports a bare `0` for "below what I can see". Honoured per row, by the
+  # row's adapter, so every other adapter's `0` stays a quantified zero
+  # (parse_value("0") is deliberately quantified = TRUE; R-2.3).
+  zero_adapters <- names(Filter(function(a) isTRUE(a$zero_is_nondetect), adapter_registry()))
+  if (length(zero_adapters) > 0 && "adapter" %in% names(rows)) {
+    row_adapter <- sub("/.*$", "", as.character(rows$adapter))
+    is_zero <- !is.na(rows$value_raw) & trimws(rows$value_raw) == "0" &
+      row_adapter %in% zero_adapters
+    parsed$quantified[is_zero & !is.na(parsed$quantified)] <- FALSE
+  }
 
   keep <- rep(TRUE, n)
   value_converted <- rep(NA_real_, n)
@@ -2741,6 +2753,16 @@
 
 # ---- top-level entry point --------------------------------------------------
 
+#' The withheld rows of one folded review item, as a data frame that
+#' round-trips through the payload JSON (`NA` fields drop out per row). The
+#' inline review columns are removed: a released row is a normal row again.
+#' @keywords internal
+#' @noRd
+.rc_withheld_rows_payload <- function(rows) {
+  keep <- setdiff(names(rows), c("needs_review", "review_kind", "review_payload"))
+  as.data.frame(rows[, keep, drop = FALSE], stringsAsFactors = FALSE)
+}
+
 #' Reconcile one assembled event against the registry/analysis DB.
 #'
 #' Read-only: every DB access is a `DBI::dbGetQuery()` (CONTRACT A32). Applies,
@@ -2770,7 +2792,7 @@ reconcile_event <- function(event, con) {
   # caller can see a producer's review_queue_candidate child rows rather than
   # having them silently dropped a second time at this selection step.
   review_cols <- c("source_ref", "kind", "subkind", "payload", "source_hash",
-                    "uuid_existing", "uuid_alias", "candidates")
+                    "uuid_existing", "uuid_alias", "candidates", "work_order")
   skip_cols <- c("source_ref", "reason", "payload", "source_hash",
                   "existing_uuid", "kept_uuid_lab")
 
@@ -2831,7 +2853,27 @@ reconcile_event <- function(event, con) {
     flagged <- .rc_is_true_vec(active$needs_review)
     if (any(flagged)) {
       fr <- active[flagged, , drop = FALSE]
-      stage0_rows <- lapply(seq_len(nrow(fr)), function(i) {
+      # FOLD (A-adapter-review): flagged rows of one file that share the same
+      # kind AND the same payload are ONE question for the human, not k. An
+      # adapter groups rows by giving them an identical payload (one A77
+      # gauge-block; every row of a gas file whose filename and REPORT NO
+      # disagree). Rows with differing payloads (e.g. foreign work orders
+      # naming different work orders) stay separate, as before.
+      payload_sig <- vapply(seq_len(nrow(fr)), function(i) {
+        d <- fr$review_payload[[i]]
+        if (is.null(d)) d <- list()
+        as.character(jsonlite::toJSON(d, auto_unbox = TRUE, null = "null", digits = NA))
+      }, character(1))
+      withhold <- if ("review_withhold" %in% names(fr)) {
+        w <- as.logical(fr$review_withhold); w[is.na(w)] <- TRUE; w
+      } else {
+        rep(TRUE, nrow(fr))
+      }
+      grp_key <- paste(fr$source_hash, fr$review_kind, payload_sig, withhold, sep = "\r")
+      grp <- match(grp_key, unique(grp_key))
+      stage0_rows <- lapply(seq_len(max(grp)), function(g) {
+        idx <- which(grp == g)
+        i <- idx[[1]]
         diag <- fr$review_payload[[i]]
         if (is.null(diag)) diag <- list()
         # PLAN-7b round-3 G-A site 2: `diag` is ADAPTER-CONTROLLED
@@ -2843,18 +2885,45 @@ reconcile_event <- function(event, con) {
         # re-emitted into `diagnostics`, doubling the leak. `[[` + an
         # explicit name check never partial-matches.
         subkind <- if ("subkind" %in% names(diag)) diag[["subkind"]] else NA_character_
-        diag <- diag[setdiff(names(diag), c("kind", "subkind", "home_work_order"))]
+        # `source_ref` / `n_rows` are set by `.rc_review_row()` from the FOLDED
+        # group, so an adapter-supplied copy would only collide with them.
+        diag <- diag[setdiff(names(diag), c("kind", "subkind", "home_work_order",
+                                            "source_ref", "n_rows"))]
         if ("work_order" %in% names(diag)) {
           names(diag)[names(diag) == "work_order"] <- "foreign_work_order"
         }
-        .rc_review_row(
-          source_ref = fr$source_ref[[i]], kind = fr$review_kind[[i]], n_rows = 1L,
+        # `release_review()` commits the withheld rows from the payload alone,
+        # so an ADAPTER-raised item carries them whole. Assembly's own kinds
+        # (value_conflict, other/foreign_work_order) stay lean as before.
+        if (!fr$review_kind[[i]] %in% c("value_conflict", "other")) {
+          if (withhold[[i]]) {
+            diag$rows <- .rc_withheld_rows_payload(fr[idx, , drop = FALSE])
+          } else {
+            diag$informational <- TRUE   # committed AND reviewed; nothing to release
+          }
+        }
+        # An adapter-raised item names the work order the rows themselves carry
+        # (an ACIRL orphan event has no `event$work_order` to fall back on).
+        own_wo <- if (fr$review_kind[[i]] %in% c("value_conflict", "other")) {
+          NA_character_
+        } else {
+          fr$work_order[[i]]
+        }
+        row <- .rc_review_row(
+          source_ref = fr$source_ref[idx], kind = fr$review_kind[[i]], n_rows = length(idx),
           source_hash = fr$source_hash[[i]], subkind = subkind, diagnostics = diag
         )
+        row$work_order <- own_wo
+        row
       })
       stage0 <- dplyr::bind_rows(stage0_rows)
       add_review(stage0)
-      active <- active[!flagged, , drop = FALSE]
+      # Only WITHHELD rows leave `active`; an informational flag (review_withhold
+      # FALSE) keeps its row in the pipeline, its flag spent.
+      hold <- flagged
+      hold[flagged] <- withhold
+      active$needs_review[flagged & !hold] <- FALSE
+      active <- active[!hold, , drop = FALSE]
     }
   }
 

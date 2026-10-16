@@ -141,6 +141,30 @@
 
 # --- R-7.3 sample-metadata join -----------------------------------------
 
+#' Give a `results` tibble the three inline review columns (A22/A56), keeping
+#' whatever an adapter already set. `NA` flags read as `FALSE`; a flagged row
+#' with no `review_kind` gets `"other"`.
+#' @keywords internal
+#' @noRd
+.st_normalise_adapter_review_cols <- function(x) {
+  n <- nrow(x)
+  flag <- if ("needs_review" %in% names(x)) as.logical(x$needs_review) else rep(FALSE, n)
+  flag[is.na(flag)] <- FALSE
+  kind <- if ("review_kind" %in% names(x)) as.character(x$review_kind) else rep(NA_character_, n)
+  kind[flag & is.na(kind)] <- "other"
+  kind[!flag] <- NA_character_
+  payload <- if ("review_payload" %in% names(x)) as.list(x$review_payload) else vector("list", n)
+  # `review_withhold`: TRUE (default) holds the row back from commit; FALSE
+  # raises the review item but lets the row commit (informational signal).
+  withhold <- if ("review_withhold" %in% names(x)) as.logical(x$review_withhold) else rep(TRUE, n)
+  withhold[is.na(withhold)] <- TRUE
+  x$review_withhold <- withhold
+  x$needs_review <- flag
+  x$review_kind <- kind
+  x$review_payload <- payload
+  x
+}
+
 #' Join merged event `samples` onto assembled `results` (R-7.3)
 #'
 #' Matches by `lab_sample_id` (exact) when the result row has one; falls
@@ -437,6 +461,11 @@
       own_idx <- is.na(results_i$work_order) | results_i$work_order == home_wo_i
     }
     foreign_idx <- !own_idx
+    # A22/A56 + A-adapter-review: an ADAPTER may already have flagged rows of
+    # its own (`needs_review` / `review_kind` / `review_payload`). Normalise
+    # the three columns so every file contributes the same shape; the merge
+    # with assembly's own flags happens after the bind, below.
+    results_i <- .st_normalise_adapter_review_cols(results_i)
     # NCP = "Non-Client Parent" (ESdat spec): a foreign work order's field sample
     # pulled in only as the parent leg of this report's batch-QC duplicate/spike
     # (another client's material, client info stripped). Count it for QC-audit
@@ -474,10 +503,17 @@
   final_results$sampler <- NA_character_
   final_results$matrix_raw <- NA_character_
   final_results$parent_sample <- NA_character_
-  final_results$needs_review <- all_flags
-  final_results$review_kind <- ifelse(all_flags, "other", NA_character_)
-  final_results$review_payload <- vector("list", nrow(final_results))
-  for (i in which(all_flags)) {
+  # MERGE, never overwrite: a row an adapter already flagged keeps the
+  # adapter's kind and payload (first-flag-wins, as `.st_flag_conflict()`
+  # does); assembly's foreign_work_order flag only fills rows still unflagged.
+  final_results <- .st_normalise_adapter_review_cols(final_results)
+  adapter_flag <- final_results$needs_review
+  own_flag <- all_flags & !adapter_flag
+  final_results$needs_review <- adapter_flag | all_flags
+  new_kind <- final_results$review_kind
+  new_kind[own_flag] <- "other"
+  final_results$review_kind <- new_kind
+  for (i in which(own_flag)) {
     final_results$review_payload[[i]] <- list(
       kind = "other", subkind = "foreign_work_order",
       work_order = final_results$work_order[[i]], home_work_order = work_order

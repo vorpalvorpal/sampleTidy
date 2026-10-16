@@ -30,6 +30,8 @@ Never write an agent number as `A<n>`.
 - **A84** — A sample is identified by (feature, datetime), and where two samples
 - **A85** — A bare number in a units column is never a unit — refused as
 - **A86** — `SAR` is dimensionless (`units = '1'`), and the `%`-typed Aroclor
+- **A88** — Adapters may WITHHOLD rows for review: `needs_review` / `review_kind` / `review_payload` on `results`; identical payloads fold into one item; `release_review()` commits them with the human's dates (design 2026-10-16).
+- **A89** — An adapter may declare `zero_is_nondetect`; only then is its bare `0` a non-detect (2026-10-16).
 
 ## The rules
 
@@ -856,3 +858,54 @@ Never write an agent number as `A<n>`.
   from the registry (`basis = lab_method(ALS)`), so this is a REGISTRY defect
   of the same shape as A82's `>C10 - C16 Fraction` repoint. Needs a ruling.
 
+
+- **A88** **An adapter may withhold rows it does not trust; the human releases
+  them with a date** (design 2026-10-16; first user: A77's `date_conflict`).
+
+  *Signal.* An adapter sets `needs_review` / `review_kind` / `review_payload`
+  (A22's names) on rows of its `results`. Assembly MERGES its own
+  `foreign_work_order` flag into those columns instead of overwriting them: a
+  row an adapter already flagged keeps the adapter's kind and payload.
+  Reconcile's STAGE-0 removes flagged rows from `active` before QC, so they
+  never commit.
+
+  *Fold.* Flagged rows of one file with the same `(source_hash, review_kind,
+  payload)` become ONE review item, `n_rows = k`. The adapter chooses the
+  grouping by giving rows an identical payload (one A77 gauge-block; every row
+  of a gas file whose filename and REPORT NO disagree). The fold is global;
+  it changes no existing outcome because assembly's per-row flags carry the
+  row's own work order or conflict facts, so their payloads differ.
+
+  *Payload carries the rows.* For adapter-raised kinds (not `value_conflict`
+  / `other`) STAGE-0 writes the withheld rows whole into `payload$rows`, and
+  the item's `work_order` is the rows' own. Release therefore needs neither the
+  archived file nor a re-parse.
+
+  *A77.* `review_kind = "date_conflict"`, subkind `a77`, one item per
+  gauge-block; payload names gauge, file, `month_raw`, `month_date`,
+  `exposure_date`, `collection_date` and the `withheld` analyses. The three
+  dust analytes AND the block's ANALYSIS OBSERVATIONS row are withheld.
+
+  *Informational signals.* A row may carry `review_withhold = FALSE` (default
+  TRUE with `needs_review`): the item is raised and folded as above, but the
+  row stays in the pipeline and COMMITS. The payload then carries
+  `informational: true` instead of `rows`. The gas filename/REPORT NO mismatch
+  uses this; a >2 dp gas reading is withheld and wins on its own row.
+
+  *Dedupe.* `.ct_commit_review()` opens no second OPEN item with the same
+  `(kind, source_hash, payload)` for items carrying `payload$rows` (the shape
+  `adapter_tie` and `work_order_reingest` follow).
+
+  *Release.* `release_review(uuid, overrides = list(date_start, date),
+  resolved_by, db)` (exported) applies the overrides to the withheld rows'
+  sample dates, runs them through `reconcile_event()` and the ordinary commit
+  steps, and resolves the item, in one transaction. Idempotent: an
+  already-resolved item releases nothing.
+
+- **A89** **Only an adapter that declares `zero_is_nondetect = TRUE` has a bare
+  `0` read as a non-detect** (2026-10-16). The ACIRL gas analyser reports `0`
+  for "below what I can see" (PLAN-17 ruling 1). `parse_value("0")` stays
+  `quantified = TRUE` for everyone (R-2.3). The gas adapter sets the field in
+  its registry entry; `.rc_resolve_units_values()` looks up each row's adapter
+  and sets `quantified = FALSE` for an exact `"0"` value only there, so a
+  re-ingested month compares equal to the legacy load (`already_present`).
