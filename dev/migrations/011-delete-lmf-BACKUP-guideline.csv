@@ -1,0 +1,5 @@
+"uuid","uuid_analyte","guideline","level","level_name","value","comments"
+"28d0cfb3-988b-4efe-a686-ae8b6eac205b","c316aea7-69e5-4723-9624-0d4cdee8fe6d","Leachate Signature Index threshold",1,"Background signature",6,
+"5aefcea7-61b6-4e7d-8b89-eeaeb79b8abc","c316aea7-69e5-4723-9624-0d4cdee8fe6d","Leachate Signature Index threshold",2,"Detectable leachate signature",10,
+"67f6df64-170b-483e-8c18-eb22e64610d5","c316aea7-69e5-4723-9624-0d4cdee8fe6d","Leachate Signature Index threshold",3,"Strong leachate signature",14,
+"f819ad3b-6924-4ce9-a64a-c08e1ccff8cb","c316aea7-69e5-4723-9624-0d4cdee8fe6d","Leachate Signature Index threshold",4,"Dominant leachate signature",18,

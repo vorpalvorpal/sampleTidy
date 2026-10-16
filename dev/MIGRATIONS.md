@@ -15,7 +15,7 @@ Sharepoint is a **snapshot destination only** — nothing is ever copied back.
 
 ## State of the live database
 
-Verified 2026-08-09 against the live file, read-only; 011/012 rows added 2026-10-16.
+Verified 2026-08-09 against the live file, read-only; 011-014 rows added 2026-10-16.
 
 | marker | migration | authorised by | applied |
 |---|---|---|---|
@@ -30,17 +30,23 @@ Verified 2026-08-09 against the live file, read-only; 011/012 rows added 2026-10
 | 1008 | `008-duplicate-samples.R` | ruling 9, 2026-08-08 | 2026-08-08 |
 | 1009 | `009-sample-identity-index.R` | A84 | 2026-08-08 |
 | 1010 | `010-aroclor-mixture-names.R` | rulings 2026-08-08 | 2026-08-09 |
-| 1011 | `011-delete-lmf.R` | Robin, 2026-10-16 | **PENDING** (rehearsed clean; held for Robin's OK on deleting the 4 LSI `guideline` rows) |
+| 1011 | `011-delete-lmf.R` | Robin, 2026-10-16 (incl. the LSI mask + 4 guideline rows) | 2026-10-16 |
 | 1012 | `012-detection-limits.R` | Robin, 2026-10-16 | 2026-10-16 |
+| 1013 | `013-dust-incombustible-upper-bound.R` | Robin, 2026-10-16 | 2026-10-16 |
+| 1014 | `014-gas-registry-additions.R` | Robin, 2026-10-16 | 2026-10-16 |
 
-**001-010 and 012 are applied.** 011 is pending: it deletes the derived LMF analyte,
-its method and 2,267 analyses, and also (FK-forced) its 4 `Leachate Signature Index`
-`guideline` rows and 1 `analyte_mask` row. Its row backups are written to
-`dev/migrations/011-delete-lmf-BACKUP-<table>.csv` when it runs. 012 sets `rl_low` on
-H2S (1e-6, 61 rows), CH4 (1e-4, 11,536 rows; method already had it) and
-dust-combustible (0.1, 4 rows) non-detects; `rl_high` untouched (A57); dust-incombustible
-deliberately not touched (awaiting ruling). 012 pre-backup:
-`monitoring_pre-012-detection-limits_20261016T055834.611Z.duckdb`.
+**001-014 are all applied.** 011 deleted the derived LMF analyte, its method and 2,267
+analyses, plus (FK-forced, Robin approved) its 4 `Leachate Signature Index` `guideline`
+rows and 1 `analyte_mask` row; row backups are `dev/migrations/011-delete-lmf-BACKUP-<table>.csv`.
+012 sets `rl_low` on H2S (1e-6, 61 rows), CH4 (1e-4, 11,536 rows) and dust-combustible
+(0.1, 4 rows) non-detects; `rl_high` untouched (A57). 013 re-marks the 4 dust-incombustible
+rows whose sample has a non-detect dust-combustible as `<dust-total` (quantified FALSE,
+value = rl_low = total; old values in `013-...-BACKUP-analysis.csv`); after it, 012's
+"incombustible untouched" check is skipped once marker 1013 exists. 014 adds 33 gas
+features (B.TG385-405 weekly points; K.G367-378 unlocated biofilter points at `K.centroid`),
+their self aliases, `B.Weekly n` / `K.Biofilter ...` / `K.Front of Buildings ...` aliases,
+and `B.G179-181` -> B.TG179-181 aliases (bare `G179-181` are mask_long aliases of K.G179-181).
+Pre-migration snapshots are in `snapshot_dir` (`monitoring_pre-<name>_<ts>.duckdb`).
 
 ## Ordering constraints (enforced in code, not by memory)
 
@@ -48,7 +54,7 @@ deliberately not touched (awaiting ruling). 012 pre-backup:
     005 ──requires 1004
     007 ──requires 1005
     006 ──requires 1007        (and refuses if 1005 is absent)
-    003, 008, 009, 010, 011, 012 ── independent
+    003, 008, 009, 010, 011, 012, 013, 014 ── independent
 
 Each dependent migration checks its predecessor's marker and refuses without it, so
 the order is verified rather than remembered. 006 gained its 1007 dependency because
@@ -75,7 +81,7 @@ re-use a retired migration number again.
 
 ## Migrations are not covered by any plan
 
-Plans 13 and 14 own migrations 001 and 002. **003–012 belong to no plan** — they were
+Plans 13 and 14 own migrations 001 and 002. **003–014 belong to no plan** — they were
 authorised by rulings and A-numbers recorded in `dev/plans/OPERATING-RULES.md`. That is
 deliberate as of 2026-08-09: the plan-driven build closed 2026-07-28, and migrations are
 now operational work. The `authorised by` column above is the substitute for plan

@@ -1,0 +1,2 @@
+"uuid","uuid_analyte","name","method","organisation","rl_low","rl_high","reported_as","api","uuid_project","uuid_feature","comments","units","conversion_constant","preference"
+"00000000-0000-0000-0000-000000000003","c316aea7-69e5-4723-9624-0d4cdee8fe6d","Computed: Leachate Mixing Fraction",,,,,,"false",,,"Computed during ETL build — Computed: Leachate Mixing Fraction",,,

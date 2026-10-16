@@ -138,6 +138,9 @@
     if (hi != 0L) fail(sprintf("%s: rl_high set on %d analysis rows.", spec$key, hi))
   }
   # dust-incombustible untouched
+  # (013, marker 1013, later re-marked 4 of its rows as `<total` upper bounds with
+  # an rl_low; once it has run, this check is moot.)
+  if (.mig012_scalar(con, "SELECT COUNT(*) FROM schema_version WHERE version = 1013") > 0L) return(invisible(TRUE))
   inc <- .mig012_scalar(con, "SELECT COUNT(*) FROM analysis WHERE uuid_lab = 'e6019d73-d6d8-4b64-806a-d4a647a1da9d' AND rl_low IS NOT NULL")
   inc2 <- .mig012_scalar(con, "SELECT COUNT(*) FROM lab_method WHERE uuid = 'e6019d73-d6d8-4b64-806a-d4a647a1da9d' AND rl_low IS NOT NULL")
   if (inc != 0L || inc2 != 0L) fail("dust-incombustible acquired an rl_low; it is pending Robin's ruling.")
