@@ -15,7 +15,7 @@ Sharepoint is a **snapshot destination only** — nothing is ever copied back.
 
 ## State of the live database
 
-Verified 2026-08-09 against the live file, read-only; 011-016 rows added 2026-10-16; 016 applied and 017 added 2026-10-17; 018-022 applied 2026-10-17; 024 applied 2026-10-17.
+Verified 2026-08-09 against the live file, read-only; 011-016 rows added 2026-10-16; 016 applied and 017 added 2026-10-17; 018-022 applied 2026-10-17; 024 applied 2026-10-17; 023 applied 2026-10-17 (after 024).
 
 | marker | migration | authorised by | applied |
 |---|---|---|---|
@@ -42,10 +42,10 @@ Verified 2026-08-09 against the live file, read-only; 011-016 rows added 2026-10
 | 1020 | `020-import-dust-2019-20.R` | Robin, 2026-10-17 | 2026-10-17 |
 | 1021 | `021-dust-datetime.R` | Robin, 2026-10-17 | 2026-10-17 |
 | 1022 | `022-view-date-coalesce.R` | Robin, 2026-10-17 | 2026-10-17 |
-| 1023 | `023-registry-fingerprint.R` | Robin, 2026-10-17 (R-3.8 / A90) | **NOT APPLIED** |
+| 1023 | `023-registry-fingerprint.R` | Robin, 2026-10-17 (R-3.8 / A90) | 2026-10-17 (applied after 024) |
 | 1024 | `024-merge-aug24-water-duplicates.R` | Robin, 2026-10-17 (rulings 1-5) | 2026-10-17 |
 
-**001-022 and 024 are applied; 023 is written and rehearsed but NOT APPLIED.** 011 deleted the derived LMF analyte, its method and 2,267
+**001-024 are applied (023 was applied after 024, 2026-10-17).** 011 deleted the derived LMF analyte, its method and 2,267
 analyses, plus (FK-forced, Robin approved) its 4 `Leachate Signature Index` `guideline`
 rows and 1 `analyte_mask` row; row backups are `dev/migrations/011-delete-lmf-BACKUP-<table>.csv`.
 012 sets `rl_low` on H2S (1e-6, 61 rows), CH4 (1e-4, 11,536 rows) and dust-combustible
