@@ -15,7 +15,7 @@ Sharepoint is a **snapshot destination only** — nothing is ever copied back.
 
 ## State of the live database
 
-Verified 2026-08-09 against the live file, read-only.
+Verified 2026-08-09 against the live file, read-only; 011/012 rows added 2026-10-16.
 
 | marker | migration | authorised by | applied |
 |---|---|---|---|
@@ -30,8 +30,17 @@ Verified 2026-08-09 against the live file, read-only.
 | 1008 | `008-duplicate-samples.R` | ruling 9, 2026-08-08 | 2026-08-08 |
 | 1009 | `009-sample-identity-index.R` | A84 | 2026-08-08 |
 | 1010 | `010-aroclor-mixture-names.R` | rulings 2026-08-08 | 2026-08-09 |
+| 1011 | `011-delete-lmf.R` | Robin, 2026-10-16 | **PENDING** (rehearsed clean; held for Robin's OK on deleting the 4 LSI `guideline` rows) |
+| 1012 | `012-detection-limits.R` | Robin, 2026-10-16 | 2026-10-16 |
 
-**All ten are applied.** Nothing is pending.
+**001-010 and 012 are applied.** 011 is pending: it deletes the derived LMF analyte,
+its method and 2,267 analyses, and also (FK-forced) its 4 `Leachate Signature Index`
+`guideline` rows and 1 `analyte_mask` row. Its row backups are written to
+`dev/migrations/011-delete-lmf-BACKUP-<table>.csv` when it runs. 012 sets `rl_low` on
+H2S (1e-6, 61 rows), CH4 (1e-4, 11,536 rows; method already had it) and
+dust-combustible (0.1, 4 rows) non-detects; `rl_high` untouched (A57); dust-incombustible
+deliberately not touched (awaiting ruling). 012 pre-backup:
+`monitoring_pre-012-detection-limits_20261016T055834.611Z.duckdb`.
 
 ## Ordering constraints (enforced in code, not by memory)
 
@@ -39,7 +48,7 @@ Verified 2026-08-09 against the live file, read-only.
     005 ──requires 1004
     007 ──requires 1005
     006 ──requires 1007        (and refuses if 1005 is absent)
-    003, 008, 009, 010 ── independent
+    003, 008, 009, 010, 011, 012 ── independent
 
 Each dependent migration checks its predecessor's marker and refuses without it, so
 the order is verified rather than remembered. 006 gained its 1007 dependency because
@@ -66,7 +75,7 @@ re-use a retired migration number again.
 
 ## Migrations are not covered by any plan
 
-Plans 13 and 14 own migrations 001 and 002. **003–010 belong to no plan** — they were
+Plans 13 and 14 own migrations 001 and 002. **003–012 belong to no plan** — they were
 authorised by rulings and A-numbers recorded in `dev/plans/OPERATING-RULES.md`. That is
 deliberate as of 2026-08-09: the plan-driven build closed 2026-07-28, and migrations are
 now operational work. The `authorised by` column above is the substitute for plan
