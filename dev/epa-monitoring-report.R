@@ -30,11 +30,10 @@
 #    as exclusive would give 364.  That is suggestive, not authoritative.
 #    >>> Confirm against the licence. <<<
 #
-# B. LOCAL TIME.  `sample.datetime` is UTC-naive and correct; `sample.date` is
-#    NOT usable (it stores Sydney midnight as a UTC-naive timestamp, so its
-#    calendar date is one day early - it agrees with the true Sydney date in
-#    only 2 of 15,111 rows in the rehearsal database).  This script uses
-#    `datetime AT TIME ZONE 'UTC' AT TIME ZONE 'Australia/Sydney'` via the
+# B. LOCAL TIME.  `sample.datetime` and `sample.date` are both UTC-naive
+#    instants, so CAST(... AS DATE) reads Sydney midnight a day early.  This
+#    script uses `COALESCE(datetime, date) AT TIME ZONE 'UTC' AT TIME ZONE
+#    'Australia/Sydney'` (date-only readings have no datetime) via the
 #    DuckDB `icu` extension, which is INSTALLed and LOADed explicitly because
 #    autoload does not work on a read-only connection.
 #
@@ -373,7 +372,10 @@ on.exit(dbDisconnect(con, shutdown = TRUE), add = TRUE)
 invisible(dbExecute(con, "INSTALL icu;"))
 invisible(dbExecute(con, "LOAD icu;"))
 
-LOCAL_DATE <- "(s.datetime AT TIME ZONE 'UTC' AT TIME ZONE 'Australia/Sydney')::DATE"
+# COALESCE: date-only readings (dust, gas, some ACIRL field data) carry no
+# datetime; their `date` holds the same UTC-naive instant convention, so it
+# converts to the right Sydney day (migration 022 did the same for the views).
+LOCAL_DATE <- "(COALESCE(s.datetime, s.date) AT TIME ZONE 'UTC' AT TIME ZONE 'Australia/Sydney')::DATE"
 
 bind <- list(TUNABLES$site, TUNABLES$window_start, TUNABLES$window_end)
 
@@ -466,7 +468,7 @@ JOIN feature_mask fm   ON fm.uuid_feature = f.uuid AND fm.variant = 'EPA'
                       AND fm.name IS NOT NULL
 JOIN analyte_mask am   ON am.uuid_analyte = a.uuid AND am.variant = 'EPA'
                       AND am.name IS NOT NULL
-WHERE f.site = ? AND s.datetime IS NOT NULL
+WHERE f.site = ? AND COALESCE(s.datetime, s.date) IS NOT NULL
   AND %s BETWEEN ?::DATE AND ?::DATE
 ", LOCAL_DATE, LOCAL_DATE), params = bind)
 
