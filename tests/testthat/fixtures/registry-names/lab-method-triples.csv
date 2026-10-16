@@ -1,6 +1,6 @@
 # R-11.3 frozen snapshot, real (organisation, name, method) lab_method
 # triples, measured 2026-07-22. EPA-public data; names only (A3 exception).
-# rows=360 distinct_keys=359
+# rows=359 distinct_keys=358
 # allowlist_collision: ACIRL||Standing Water Level||field / ACIRL||Standing water level||field (A65/R-11.19, kept deliberately)
 "organisation","name","method"
 "ACIRL","*COMBUSTIBLE MATTER","AS3580.10.1-2003"
@@ -362,4 +362,3 @@
 "legacy","Temperature","field"
 "legacy","pH","field"
 NA,"Computed: Adjusted msPAF",NA
-NA,"Computed: Leachate Mixing Fraction",NA

@@ -1,6 +1,6 @@
 # R-11.3 frozen snapshot, real analyte.name values, measured 2026-07-22.
 # EPA-public data; names only (A3 sanctioned exception).
-# rows=247 distinct_keys=246
+# rows=246 distinct_keys=245
 # allowlist_collision: Carbophenothion (two byte-identical registry rows; A67/R-11.3)
 "name"
 "1.2-Dichloroethane-D4"
@@ -136,7 +136,6 @@
 "Hg"
 "Indeno(1.2.3.cd)pyrene"
 "K"
-"LMF"
 "Malathion"
 "Methidathion"
 "Methoxychlor"
