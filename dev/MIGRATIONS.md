@@ -44,7 +44,7 @@ Verified 2026-08-09 against the live file, read-only; 011-016 rows added 2026-10
 | 1022 | `022-view-date-coalesce.R` | Robin, 2026-10-17 | 2026-10-17 |
 | 1023 | `023-registry-fingerprint.R` | Robin, 2026-10-17 (R-3.8 / A90) | 2026-10-17 (applied after 024) |
 | 1024 | `024-merge-aug24-water-duplicates.R` | Robin, 2026-10-17 (rulings 1-5) | 2026-10-17 |
-| 1025 | `025-split-legacy-appearance.R` | Robin, 2026-10-17 (convert legacy ACIRL Appearance to the A76 split) | **not applied** (rehearsed twice on copies, 2026-10-17) |
+| 1025 | `025-split-legacy-appearance.R` | Robin, 2026-10-17 (convert legacy ACIRL Appearance to the A76 split) | 2026-10-17 (applied by Robin; rehearsed twice on copies) |
 
 **001-024 are applied (023 was applied after 024, 2026-10-17).** 011 deleted the derived LMF analyte, its method and 2,267
 analyses, plus (FK-forced, Robin approved) its 4 `Leachate Signature Index` `guideline`
