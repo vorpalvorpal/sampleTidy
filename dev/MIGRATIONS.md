@@ -15,7 +15,7 @@ Sharepoint is a **snapshot destination only** — nothing is ever copied back.
 
 ## State of the live database
 
-Verified 2026-08-09 against the live file, read-only; 011-016 rows added 2026-10-16; 016 applied and 017 added 2026-10-17.
+Verified 2026-08-09 against the live file, read-only; 011-016 rows added 2026-10-16; 016 applied and 017 added 2026-10-17; 018-020 applied 2026-10-17.
 
 | marker | migration | authorised by | applied |
 |---|---|---|---|
@@ -37,8 +37,11 @@ Verified 2026-08-09 against the live file, read-only; 011-016 rows added 2026-10
 | 1015 | `015-redate-legacy-dust.R` | Robin, 2026-10-16 (dust exposure/collection ruling) | 2026-10-16 |
 | 1016 | `016-redate-legacy-dust-2021-22.R` | Robin, 2026-10-16 ("workbook wins; re-date"); applied per ruling 1, 2026-10-17 | 2026-10-17 |
 | 1017 | `017-legacy-dust-load-a-exposure-start.R` | Robin, 2026-10-17 (ruling 2) | 2026-10-17 |
+| 1018 | `018-legacy-dust-year-out-2020.R` | Robin, 2026-10-17 | 2026-10-17 |
+| 1019 | `019-legacy-dust-load-a-2dp.R` | Robin, 2026-10-17 | 2026-10-17 |
+| 1020 | `020-import-dust-2019-20.R` | Robin, 2026-10-17 | 2026-10-17 |
 
-**001-017 are all applied.** 011 deleted the derived LMF analyte, its method and 2,267
+**001-020 are all applied.** 011 deleted the derived LMF analyte, its method and 2,267
 analyses, plus (FK-forced, Robin approved) its 4 `Leachate Signature Index` `guideline`
 rows and 1 `analyte_mask` row; row backups are `dev/migrations/011-delete-lmf-BACKUP-<table>.csv`.
 012 sets `rl_low` on H2S (1e-6, 61 rows), CH4 (1e-4, 11,536 rows) and dust-combustible
@@ -66,6 +69,22 @@ collection date, so `date` is untouched. It EXCLUDES the 2021-02-01 and 2021-03-
 8c8aef7a, 4735d1dd, 20fda4f9), which hold the Jan/Feb-2020 measurements a year out - open, awaiting a
 ruling. Row backup `017-legacy-dust-load-a-exposure-start-BACKUP-sample.csv`. Neither writes `datetime`
 or `datetime_start`.
+018 re-dates those 4 year-out samples to exposure 2020-01-01 / 2020-02-01, collection 2020-02-01 /
+2020-03-01 (Dust Results Database, 2400-6989), and sets 8c8aef7a dust-total 13.1 -> 13.06 (the only value
+that differed from the workbook). The real Jan-2021 and Feb-2021 exposures are in no file found, so both
+gauges have a gap there. `datetime`/`datetime_start` stay 2021-02/-03 as loaded. Row backups
+`018-legacy-dust-year-out-2020-BACKUP-{sample,analysis}.csv`. 019 replaces 16 load-A values with the Dust
+Results Database's 2 dp figures (the 10 samples collected 2020-09..2021-01; every one of the 30 workbook
+values rounds to the stored 1 dp value, none shows `<`; incombustible is 1 dp in the workbook, so none
+moves). The 12 load-A samples collected 2021-04..09 have only the 1 dp pdfs and are untouched. Row backup
+`019-legacy-dust-load-a-2dp-BACKUP-analysis.csv`. 020 inserts the 22 missing Jul-2019..Jul-2020 exposures
+(22 samples, 66 analyses; fixed uuids) mirroring the load-A rows from the same workbook: self aliases,
+the ROOT "Dust monitoring" project 230bd429 (not a child project - those carry only the 2022-08+ per-report
+rows), organisation/person NULL, Sydney-midnight `date_start`/`date`, `datetime` = `datetime_start` =
+collection 11:00 Sydney, Observations text in `analysis.comments`, sample comment "imported 2026-10-17 from
+Dust Results Database workbook, migration 020". B.D07 Jul-2019 combustible `<0.1` is stored per 012 and its
+incombustible as the 013 `<dust-total` bound (0.64; printed 0.6). Not imported: Days Exposed and the mg
+mass columns. Inserted rows dumped to `020-import-dust-2019-20-INSERTED-{sample,analysis}.csv`.
 Pre-migration snapshots are in `snapshot_dir` (`monitoring_pre-<name>_<ts>.duckdb`).
 
 ## Ordering constraints (enforced in code, not by memory)
@@ -76,6 +95,9 @@ Pre-migration snapshots are in `snapshot_dir` (`monitoring_pre-<name>_<ts>.duckd
     006 ──requires 1007        (and refuses if 1005 is absent)
     016 ──requires 1015
     017 ──requires 1016
+    018 ──requires 1017
+    019 ──requires 1018
+    020 ──requires 1019
     003, 008, 009, 010, 011, 012, 013, 014, 015 ── independent
 
 Each dependent migration checks its predecessor's marker and refuses without it, so
@@ -103,7 +125,7 @@ re-use a retired migration number again.
 
 ## Migrations are not covered by any plan
 
-Plans 13 and 14 own migrations 001 and 002. **003–017 belong to no plan** — they were
+Plans 13 and 14 own migrations 001 and 002. **003–020 belong to no plan** — they were
 authorised by rulings and A-numbers recorded in `dev/plans/OPERATING-RULES.md`. That is
 deliberate as of 2026-08-09: the plan-driven build closed 2026-07-28, and migrations are
 now operational work. The `authorised by` column above is the substitute for plan
