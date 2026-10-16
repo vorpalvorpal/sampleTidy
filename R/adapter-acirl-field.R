@@ -223,6 +223,7 @@ acirl_field_xlsx_adapter <- function() {
   first_of_month <- function(y, m) as.Date(sprintf("%04d-%02d-01", y, m))
 
   dust_samples <- list()
+  a77_blocks <- list()   # lab_sample_id -> payload facts of a flagged gauge-block
   for (d in dust_rows) {
     key <- paste(d$gauge, d$block, sep = "\r")
     o <- obs_by_key[[key]]
@@ -274,6 +275,23 @@ acirl_field_xlsx_adapter <- function() {
     samp_date <- fmt_date(samp_dt)
     start_date <- fmt_date(start_dt)
     lab_id <- sprintf("%s!b%d", d$gauge, d$block)
+    if (conflict && is.null(a77_blocks[[lab_id]])) {
+      # Month as a date when it resolves to one: a serial always does; text only
+      # when it names a year as well as a month.
+      month_dt <- if (!is.na(suppressWarnings(as.numeric(d$month_serial)))) {
+        serial_date(d$month_serial)
+      } else if (!is.na(mp$month) && !is.na(mp$year)) {
+        first_of_month(mp$year, mp$month)
+      } else {
+        as.Date(NA)
+      }
+      iso <- function(x) if (is.na(x)) NULL else format(x, "%Y-%m-%d")
+      a77_blocks[[lab_id]] <- list(
+        gauge = d$gauge, block = d$block, file = fm$filename,
+        month_raw = d$month_serial, month_date = iso(month_dt),
+        exposure_date = iso(exp_dt), collection_date = iso(coll_dt)
+      )
+    }
 
     pv <- parse_value(d$value_raw)
     results_rows[[length(results_rows) + 1]] <- tibble::tibble(
@@ -399,6 +417,32 @@ acirl_field_xlsx_adapter <- function() {
     ir_results()
   } else {
     do.call(ir_results, as.list(dplyr::bind_rows(results_rows)))
+  }
+  # A77 -> review (Robin, 2026-10-16: withhold + review). EVERY row of a flagged
+  # gauge-block - the three analytes AND its ANALYSIS OBSERVATIONS row - gets
+  # `needs_review`; rows of one block share an identical payload so reconcile
+  # folds them into ONE `date_conflict`/`a77` item. Nothing of the block commits
+  # until a human picks the date (`release_review()`).
+  # Columns are attached only when something is flagged, so an ordinary file
+  # keeps the pinned IR shape exactly (R-6.3).
+  a77_hits <- lapply(names(a77_blocks), function(lab_id) which(results$lab_sample_id == lab_id))
+  if (any(lengths(a77_hits) > 0)) {
+    results$needs_review <- rep(FALSE, nrow(results))
+    results$review_kind <- rep(NA_character_, nrow(results))
+    results$review_payload <- vector("list", nrow(results))
+    for (k in seq_along(a77_hits)) {
+      hit <- a77_hits[[k]]
+      if (length(hit) == 0) next
+      pl <- a77_blocks[[k]]
+      pl$subkind <- "a77"
+      pl$withheld <- lapply(hit, function(i) list(
+        analyte = results$analyte_raw[[i]], value = results$value_raw[[i]],
+        source_ref = results$source_ref[[i]]
+      ))
+      results$needs_review[hit] <- TRUE
+      results$review_kind[hit] <- "date_conflict"
+      for (i in hit) results$review_payload[[i]] <- pl
+    }
   }
   samples <- if (length(samples_rows) == 0) {
     ir_samples()

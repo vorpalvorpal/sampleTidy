@@ -107,7 +107,7 @@ test_that("R-12.10: register_builtin_adapters() emits no Overwriting inform when
   clear_adapters()
   withr::defer({ clear_adapters(); register_builtin_adapters() })
 
-  # First call populates the registry with all four built-ins (as .onLoad()
+  # First call populates the registry with all five built-ins (as .onLoad()
   # / the start of ingest_dir() do). The second call is the defensive
   # re-registration A33 performs on every ingest_dir() run: same ids, freshly
   # constructed built-in adapter objects. That must be silent.
@@ -115,7 +115,7 @@ test_that("R-12.10: register_builtin_adapters() emits no Overwriting inform when
   expect_no_message(register_builtin_adapters(), message = "Overwriting")
 
   reg <- adapter_registry()
-  expect_setequal(names(reg), c("esdat", "als_xtab", "als_enmrg", "acirl_field_xlsx"))
+  expect_setequal(names(reg), c("esdat", "als_xtab", "als_enmrg", "acirl_field_xlsx", "acirl_gas_xlsx"))
 })
 
 test_that("R-12.10: a third-party adapter registered over a built-in id still emits an Overwriting inform", {

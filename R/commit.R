@@ -683,7 +683,9 @@
 #' a root rather than asserting a campaign membership we cannot justify.
 #' @keywords internal
 #' @noRd
-.ct_ensure_report_project <- function(con, report_no, cited, reason) {
+.ct_ensure_report_project <- function(con, report_no, cited, reason,
+                                      campaign = NA_character_,
+                                      type = "ACIRL report") {
   # A candidate grandparent must be a CAMPAIGN - never another ACIRL report.
   # Both exclusions are load-bearing and both were caught by a failing test
   # rather than reasoned about in advance:
@@ -709,6 +711,26 @@
   }
   parents <- unique(parents)
   grandparent <- if (length(parents) == 1) parents[[1]] else NA_character_
+
+  # PLAN-17: a report that names its own campaign (the monthly gas workbooks
+  # cite no ALS order, so there is nothing to derive one from) files under that
+  # campaign, found by name and created as a root if it is not there yet.
+  if (is.na(grandparent) && !is.na(campaign)) {
+    camp <- .ct_project_by_name(con, campaign)
+    if (is.null(camp)) {
+      camp_uuid <- uuid::UUIDgenerate()
+      db_append(con, "project", tibble::tibble(
+        uuid = camp_uuid, uuid_parent = NA_character_, uuid_root = camp_uuid,
+        uuid_project = NA_character_, name = campaign, type = NA_character_,
+        purpose = NA_character_, date_start = as.POSIXct(NA), date_end = as.POSIXct(NA),
+        regulated_by = NA_character_, cypher = NA_character_, site = NA_character_,
+        value = NA_character_
+      ), actor = .ct_actor, reason = reason)
+      grandparent <- camp_uuid
+    } else {
+      grandparent <- camp$uuid[[1]]
+    }
+  }
 
   existing <- .ct_project_by_name(con, report_no)
   if (!is.null(existing)) {
@@ -747,7 +769,7 @@
   # visible instead.
   row <- tibble::tibble(
     uuid = new_uuid, uuid_parent = grandparent, uuid_root = root,
-    uuid_project = NA_character_, name = report_no, type = "ACIRL report",
+    uuid_project = NA_character_, name = report_no, type = type,
     purpose = NA_character_, date_start = as.POSIXct(NA), date_end = as.POSIXct(NA),
     regulated_by = NA_character_, cypher = NA_character_, site = NA_character_,
     value = NA_character_
@@ -773,8 +795,46 @@
   }
 
   cited <- .ct_event_als_work_orders(event)
-  rp <- .ct_ensure_report_project(con, report_no, cited, reason)
+  # PLAN-17: the monthly gas workbooks file under their own campaign and
+  # project type (identified by the adapter that produced the rows).
+  is_gas <- !is.null(event$results) && "adapter" %in% names(event$results) &&
+    any(startsWith(as.character(event$results$adapter), "acirl_gas_xlsx/"), na.rm = TRUE)
+  rp <- if (is_gas) {
+    .ct_ensure_report_project(con, report_no, cited, reason,
+                              campaign = "Monthly gas monitoring",
+                              type = "Monthly gas monitoring")
+  } else {
+    .ct_ensure_report_project(con, report_no, cited, reason)
+  }
   review <- list()
+  if (is_gas) {
+    # A reused report number: the project already holds samples, and none of
+    # them is on a day this workbook samples. (A re-save of the same month
+    # shares its days, so it is not flagged.) The data still imports.
+    inc <- suppressWarnings(as.Date(event$samples$sample_datetime_raw, format = "%d/%m/%Y"))
+    inc <- unique(as.character(inc[!is.na(inc)]))
+    have <- DBI::dbGetQuery(
+      con,
+      sprintf("SELECT DISTINCT CAST(%s AS VARCHAR) AS d FROM \"sample\"
+                WHERE uuid_project = ? AND date IS NOT NULL",
+              .ct_sydney_day_sql("date")),
+      params = list(rp$uuid)
+    )$d
+    if (length(have) > 0 && length(inc) > 0 && length(intersect(have, inc)) == 0) {
+      rq <- .rq_row(
+        kind = "duplicate_report_number", subkind = "acirl_gas",
+        work_order = report_no,
+        source_hash = .ct_event_first_hash(event),
+        diagnostics = list(
+          report_no = report_no,
+          dates_incoming = as.list(inc),
+          dates_already_filed = as.list(have)
+        )
+      )
+      rq$review$uuid_target <- rp$uuid
+      review[[length(review) + 1L]] <- rq$review
+    }
+  }
 
   # A80's `duplicate_report_number`, keyed exactly as the contract specifies:
   # "this ACIRL parent already has a child ALS work order, and the incoming
@@ -1687,6 +1747,15 @@
   if (nrow(r) == 0) NA_real_ else r$conversion_constant[[1]]
 }
 
+#' `lab_method.rl_low` for one method, or `NA` (PLAN-17 zero non-detects)
+#' @keywords internal
+#' @noRd
+.ct_method_rl_low <- function(con, uuid_lab) {
+  r <- DBI::dbGetQuery(con, "SELECT rl_low FROM lab_method WHERE uuid = ?",
+                       params = list(uuid_lab))
+  if (nrow(r) == 0 || is.na(r$rl_low[[1]])) NA_real_ else as.numeric(r$rl_low[[1]])
+}
+
 #' Insert (or supersede-update) an analysis row for every `clean` row
 #' (step 3). Rows with `supersedes` NA are inserted fresh; rows with a
 #' non-NA `supersedes` update the existing analysis in place instead - with
@@ -1727,11 +1796,25 @@
     rl_low <- clean$rl_converted[[i]]
     rl_high <- if (has_rh) clean$rl_high[[i]] else NA_real_
 
+    # PLAN-17 ruling 1: a gas-adapter zero is a non-detect (`value 0,
+    # quantified FALSE` - set by parse_value()'s bare-`0` rule) whose source
+    # states no limit. The limit is the
+    # METHOD's (`lab_method.rl_low`, already canonical units, so taken after the
+    # conversion-constant scaling below). Deliberately keyed on the adapter and
+    # the literal `0`, so no other source gains a limit it never stated.
+    zero_nondetect <- "adapter" %in% names(clean) && "value_raw" %in% names(clean) &&
+      startsWith(as.character(clean$adapter[[i]]), "acirl_gas_xlsx/") &&
+      identical(trimws(as.character(clean$value_raw[[i]])), "0") &&
+      !is.na(value) && value == 0
+
     cc <- .ct_method_conversion(con, clean$uuid_lab[[i]])
     if (!is.na(cc)) {
       if (!is.na(value)) value <- value * cc
       if (!is.na(rl_low)) rl_low <- rl_low * cc
       if (!is.na(rl_high)) rl_high <- rl_high * cc
+    }
+    if (zero_nondetect && is.na(rl_low)) {
+      rl_low <- .ct_method_rl_low(con, clean$uuid_lab[[i]])
     }
 
     if (is.na(clean$supersedes[[i]])) {
@@ -1847,6 +1930,32 @@
   n <- nrow(review)
   if (n == 0) {
     return(review)
+  }
+  # Re-delivery dedupe (adapter-raised items, A-adapter-review): no second OPEN
+  # item for the same (kind, source_hash, payload) - the shape `adapter_tie`
+  # and `work_order_reingest` already follow. Scoped to adapter-raised items
+  # (`payload$rows` when withheld, `payload$informational` when not).
+  if (all(c("kind", "source_hash", "payload") %in% names(review))) {
+    dup <- vapply(seq_len(n), function(i) {
+      pl <- review$payload[[i]]
+      if (is.na(pl) || is.na(review$source_hash[[i]]) || !(grepl('"rows":', pl, fixed = TRUE) ||
+                                  grepl('"informational":', pl, fixed = TRUE))) {
+        return(FALSE)
+      }
+      DBI::dbGetQuery(
+        con,
+        "SELECT count(*) AS n FROM review_queue
+          WHERE kind = ? AND source_hash = ? AND payload = ? AND status = 'open'",
+        params = list(review$kind[[i]], review$source_hash[[i]], pl)
+      )$n[[1]] > 0
+    }, logical(1))
+    if (any(dup)) {
+      review <- review[!dup, , drop = FALSE]
+      n <- nrow(review)
+      if (n == 0) {
+        return(review)
+      }
+    }
   }
   if (!("uuid" %in% names(review))) {
     review$uuid <- NA_character_

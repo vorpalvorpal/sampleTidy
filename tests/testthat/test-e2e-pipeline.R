@@ -410,6 +410,10 @@ test_that("R-10.6: NAMESPACE exports equal the CONTRACT-pinned public API exactl
     # choose among candidates the package can store but never show, so the
     # reader has to be on the public surface, not internal.
     "review_queue_candidates",
+    # A88, added 2026-10-16 and added to CONTRACT.md's public-API list in the
+    # same change: commits rows an adapter withheld into review, once a human
+    # has chosen the overrides (e.g. the A77 date).
+    "release_review",
     # PLAN-15 E.8, added 2026-07-26 and added to CONTRACT.md's public-API list
     # in the same change. EXPORTED because E.8 pins it as public and it is an
     # operator-run tool: a `dry_run` argument and a `db = st_config("live_db")`
