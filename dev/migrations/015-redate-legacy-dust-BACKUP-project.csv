@@ -1,0 +1,5 @@
+"uuid","uuid_parent","uuid_root","uuid_project","name","type","purpose","date_start","date_end","regulated_by","cypher","site","value","comments"
+"3cffcb25-3247-4a95-8452-79911f0a9abf","230bd429-7ba5-4f95-b688-d01d47367723","230bd429-7ba5-4f95-b688-d01d47367723",,,"Dust monitoring",,,,"EPL",,,,
+"c2a363c1-2895-4f2f-86cc-ce20d8de91c2","230bd429-7ba5-4f95-b688-d01d47367723","230bd429-7ba5-4f95-b688-d01d47367723",,,"Dust monitoring",,"2024-04-01 00:00:00","2024-05-02 00:00:00","EPL",,,,
+"cab41c46-494f-4545-9154-b40615eeb285","230bd429-7ba5-4f95-b688-d01d47367723","230bd429-7ba5-4f95-b688-d01d47367723",,,"Dust monitoring",,,,"EPL",,,,
+"fc3e626f-0ff9-4060-b814-1ab34814dc9c","230bd429-7ba5-4f95-b688-d01d47367723","230bd429-7ba5-4f95-b688-d01d47367723",,,"Dust monitoring",,"2024-06-01 00:00:00","2024-07-02 00:00:00","EPL",,,,

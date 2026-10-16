@@ -15,7 +15,7 @@ Sharepoint is a **snapshot destination only** — nothing is ever copied back.
 
 ## State of the live database
 
-Verified 2026-08-09 against the live file, read-only; 011-014 rows added 2026-10-16.
+Verified 2026-08-09 against the live file, read-only; 011-016 rows added 2026-10-16.
 
 | marker | migration | authorised by | applied |
 |---|---|---|---|
@@ -34,8 +34,10 @@ Verified 2026-08-09 against the live file, read-only; 011-014 rows added 2026-10
 | 1012 | `012-detection-limits.R` | Robin, 2026-10-16 | 2026-10-16 |
 | 1013 | `013-dust-incombustible-upper-bound.R` | Robin, 2026-10-16 | 2026-10-16 |
 | 1014 | `014-gas-registry-additions.R` | Robin, 2026-10-16 | 2026-10-16 |
+| 1015 | `015-redate-legacy-dust.R` | Robin, 2026-10-16 (dust exposure/collection ruling) | 2026-10-16 |
+| 1016 | `016-redate-legacy-dust-2021-22.R` | Robin, 2026-10-16 ("workbook wins; re-date", report first) | **NOT APPLIED** (drafted, rehearsed) |
 
-**001-014 are all applied.** 011 deleted the derived LMF analyte, its method and 2,267
+**001-015 are all applied; 016 is not.** 011 deleted the derived LMF analyte, its method and 2,267
 analyses, plus (FK-forced, Robin approved) its 4 `Leachate Signature Index` `guideline`
 rows and 1 `analyte_mask` row; row backups are `dev/migrations/011-delete-lmf-BACKUP-<table>.csv`.
 012 sets `rl_low` on H2S (1e-6, 61 rows), CH4 (1e-4, 11,536 rows) and dust-combustible
@@ -46,6 +48,16 @@ value = rl_low = total; old values in `013-...-BACKUP-analysis.csv`); after it, 
 features (B.TG385-405 weekly points; K.G367-378 unlocated biofilter points at `K.centroid`),
 their self aliases, `B.Weekly n` / `K.Biofilter ...` / `K.Front of Buildings ...` aliases,
 and `B.G179-181` -> B.TG179-181 aliases (bare `G179-181` are mask_long aliases of K.G179-181).
+015 re-dates the 4 "+1 day" 2024 dust collections (`date` 2 May -> 1 May, 2 Jul -> 1 Jul), dates the
+2 undated July-2024 legacy samples (96c5e696 B.D07, e732697d B.D08: exposure 2024-07-01, collection
+2024-08-01), writes the period of their 4 "Dust monitoring" child projects, re-points the 2 July
+`Appearance` analyses that the 2026-08-09 ingest of 2400-7399-08 put on the June samples, and closes
+that ingest's 6 dust `value_conflict` review items via `resolve_review()`. `datetime` and `uuid_project`
+are never written (009's unique index; duckdb runs an indexed UPDATE as delete+insert, which the
+analysis FK refuses). Row backups `015-redate-legacy-dust-BACKUP-{sample,project,analysis}.csv`.
+**016 is NOT applied**: it repairs the 2021-22 "load B" dust block (22 re-dates, 2 copy samples
+deleted, 6 values set to the 2 dp workbook) and awaits Robin's sign-off; its header holds the
+evidence, and the rows it moves with no workbook behind them.
 Pre-migration snapshots are in `snapshot_dir` (`monitoring_pre-<name>_<ts>.duckdb`).
 
 ## Ordering constraints (enforced in code, not by memory)
@@ -54,7 +66,8 @@ Pre-migration snapshots are in `snapshot_dir` (`monitoring_pre-<name>_<ts>.duckd
     005 ──requires 1004
     007 ──requires 1005
     006 ──requires 1007        (and refuses if 1005 is absent)
-    003, 008, 009, 010, 011, 012, 013, 014 ── independent
+    016 ──requires 1015
+    003, 008, 009, 010, 011, 012, 013, 014, 015 ── independent
 
 Each dependent migration checks its predecessor's marker and refuses without it, so
 the order is verified rather than remembered. 006 gained its 1007 dependency because
@@ -81,7 +94,7 @@ re-use a retired migration number again.
 
 ## Migrations are not covered by any plan
 
-Plans 13 and 14 own migrations 001 and 002. **003–014 belong to no plan** — they were
+Plans 13 and 14 own migrations 001 and 002. **003–016 belong to no plan** — they were
 authorised by rulings and A-numbers recorded in `dev/plans/OPERATING-RULES.md`. That is
 deliberate as of 2026-08-09: the plan-driven build closed 2026-07-28, and migrations are
 now operational work. The `authorised by` column above is the substitute for plan
