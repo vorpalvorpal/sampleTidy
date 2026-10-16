@@ -15,7 +15,7 @@ Sharepoint is a **snapshot destination only** — nothing is ever copied back.
 
 ## State of the live database
 
-Verified 2026-08-09 against the live file, read-only; 011-016 rows added 2026-10-16; 016 applied and 017 added 2026-10-17; 018-020 applied 2026-10-17.
+Verified 2026-08-09 against the live file, read-only; 011-016 rows added 2026-10-16; 016 applied and 017 added 2026-10-17; 018-022 applied 2026-10-17.
 
 | marker | migration | authorised by | applied |
 |---|---|---|---|
@@ -40,8 +40,10 @@ Verified 2026-08-09 against the live file, read-only; 011-016 rows added 2026-10
 | 1018 | `018-legacy-dust-year-out-2020.R` | Robin, 2026-10-17 | 2026-10-17 |
 | 1019 | `019-legacy-dust-load-a-2dp.R` | Robin, 2026-10-17 | 2026-10-17 |
 | 1020 | `020-import-dust-2019-20.R` | Robin, 2026-10-17 | 2026-10-17 |
+| 1021 | `021-dust-datetime.R` | Robin, 2026-10-17 | 2026-10-17 |
+| 1022 | `022-view-date-coalesce.R` | Robin, 2026-10-17 | 2026-10-17 |
 
-**001-020 are all applied.** 011 deleted the derived LMF analyte, its method and 2,267
+**001-022 are all applied.** 011 deleted the derived LMF analyte, its method and 2,267
 analyses, plus (FK-forced, Robin approved) its 4 `Leachate Signature Index` `guideline`
 rows and 1 `analyte_mask` row; row backups are `dev/migrations/011-delete-lmf-BACKUP-<table>.csv`.
 012 sets `rl_low` on H2S (1e-6, 61 rows), CH4 (1e-4, 11,536 rows) and dust-combustible
@@ -85,6 +87,26 @@ collection 11:00 Sydney, Observations text in `analysis.comments`, sample commen
 Dust Results Database workbook, migration 020". B.D07 Jul-2019 combustible `<0.1` is stored per 012 and its
 incombustible as the 013 `<dust-total` bound (0.64; printed 0.6). Not imported: Days Exposed and the mg
 mass columns. Inserted rows dumped to `020-import-dust-2019-20-INSERTED-{sample,analysis}.csv`.
+021 ends the "datetime stays as loaded" caveat of 015-020: for all 122 dust samples (61 B.D07, 61 B.D08,
+incl. 018's 4 and 020's 22) it sets `datetime` = `date` and `datetime_start` = `date_start`, byte-for-byte
+(Sydney midnight held as the UTC instant). Before it, all 122 differed exactly, 116 on the Sydney day, 2 had
+NULL `datetime`, and 9 dust rows ranked 2 in `v_measurement`; after it, 0. 009's `ux_sample_identity` blocks
+the UPDATE, so 021 drops it (own commit), updates in one transaction (244 `change_log` rows via `db_update`,
+actor `021-dust-datetime`), and re-creates it with the exact `duckdb_indexes()` definition inside a
+tryCatch/finally that re-creates it on any failure (tested by forcing a mid-transaction abort). A
+precondition proves the post-update key set is unique; the index was re-proved to reject a duplicate. Row
+backup `021-dust-datetime-BACKUP-sample.csv`.
+022 redefines the 5 `v_measurement*` views (the only views whose SQL mentions `datetime`) so that the `date`
+column and the `preference_rank` partition use `COALESCE(s.datetime, s.date)`: exactly 2 text substitutions
+per view in the `duckdb_views()` SQL, everything else byte-identical, re-read SQL checked equal to the plan.
+The `s.datetime AS datetime` output column is deliberately unchanged. After it no view row has a NULL `date`.
+Old definitions in `022-view-date-coalesce-BACKUP-views.csv`. Measured effect (021+022 vs before, on
+`v_measurement`; `_long` identical, `_epa` 433/133/47, `_gas_report` and `_old` unchanged): 451 rows changed -
+372 dust rows (own date/datetime), 46 rows of the 10 pipeline-ingested 2024-08-07 Blaxland water samples that
+have NULL `datetime` (now dated), and 33 rank-only changes on non-NULL-datetime water rows in the same
+2024-08-07 partitions (those 10 samples duplicate the field readings of that visit; they now compete in the
+ranking, winning on field-beats-lab or on the uuid tiebreak). `dev/epa-monitoring-report.R` reads base
+tables, not the views: its 2023-24, 2024-25 and 2025-26 Katoomba workbooks are value-identical before/after.
 Pre-migration snapshots are in `snapshot_dir` (`monitoring_pre-<name>_<ts>.duckdb`).
 
 ## Ordering constraints (enforced in code, not by memory)
@@ -98,6 +120,8 @@ Pre-migration snapshots are in `snapshot_dir` (`monitoring_pre-<name>_<ts>.duckd
     018 ──requires 1017
     019 ──requires 1018
     020 ──requires 1019
+    021 ──requires 1020
+    022 ──requires 1005, 1021
     003, 008, 009, 010, 011, 012, 013, 014, 015 ── independent
 
 Each dependent migration checks its predecessor's marker and refuses without it, so
@@ -125,7 +149,7 @@ re-use a retired migration number again.
 
 ## Migrations are not covered by any plan
 
-Plans 13 and 14 own migrations 001 and 002. **003–020 belong to no plan** — they were
+Plans 13 and 14 own migrations 001 and 002. **003–022 belong to no plan** — they were
 authorised by rulings and A-numbers recorded in `dev/plans/OPERATING-RULES.md`. That is
 deliberate as of 2026-08-09: the plan-driven build closed 2026-07-28, and migrations are
 now operational work. The `authorised by` column above is the substitute for plan
