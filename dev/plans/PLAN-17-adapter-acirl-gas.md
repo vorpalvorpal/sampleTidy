@@ -1,6 +1,8 @@
 # PLAN-17 — ACIRL monthly gas adapter
 
-_Status: **LIVE** — planned 2026-10-16, nothing built. Rulings below are Robin's
+_Status: **LIVE** — planned 2026-10-16. Build order 1–5 done (adapter `acirl_gas_xlsx`
+in `81bc599`/`f310dc6`; registry additions in migrations 012 and 014). Steps 6
+(dry run on a copy) and 7 (real run) still to do. Rulings below are Robin's
 (2026-10-16) unless marked open._
 
 ## Measured (2026-10-16, read-only; scripts in the session scratchpad `gas/`, `gas2/`)
