@@ -15,7 +15,7 @@ Sharepoint is a **snapshot destination only** — nothing is ever copied back.
 
 ## State of the live database
 
-Verified 2026-08-09 against the live file, read-only; 011-016 rows added 2026-10-16.
+Verified 2026-08-09 against the live file, read-only; 011-016 rows added 2026-10-16; 016 applied and 017 added 2026-10-17.
 
 | marker | migration | authorised by | applied |
 |---|---|---|---|
@@ -35,9 +35,10 @@ Verified 2026-08-09 against the live file, read-only; 011-016 rows added 2026-10
 | 1013 | `013-dust-incombustible-upper-bound.R` | Robin, 2026-10-16 | 2026-10-16 |
 | 1014 | `014-gas-registry-additions.R` | Robin, 2026-10-16 | 2026-10-16 |
 | 1015 | `015-redate-legacy-dust.R` | Robin, 2026-10-16 (dust exposure/collection ruling) | 2026-10-16 |
-| 1016 | `016-redate-legacy-dust-2021-22.R` | Robin, 2026-10-16 ("workbook wins; re-date", report first) | **NOT APPLIED** (drafted, rehearsed) |
+| 1016 | `016-redate-legacy-dust-2021-22.R` | Robin, 2026-10-16 ("workbook wins; re-date"); applied per ruling 1, 2026-10-17 | 2026-10-17 |
+| 1017 | `017-legacy-dust-load-a-exposure-start.R` | Robin, 2026-10-17 (ruling 2) | 2026-10-17 |
 
-**001-015 are all applied; 016 is not.** 011 deleted the derived LMF analyte, its method and 2,267
+**001-017 are all applied.** 011 deleted the derived LMF analyte, its method and 2,267
 analyses, plus (FK-forced, Robin approved) its 4 `Leachate Signature Index` `guideline`
 rows and 1 `analyte_mask` row; row backups are `dev/migrations/011-delete-lmf-BACKUP-<table>.csv`.
 012 sets `rl_low` on H2S (1e-6, 61 rows), CH4 (1e-4, 11,536 rows) and dust-combustible
@@ -55,9 +56,16 @@ and `B.G179-181` -> B.TG179-181 aliases (bare `G179-181` are mask_long aliases o
 that ingest's 6 dust `value_conflict` review items via `resolve_review()`. `datetime` and `uuid_project`
 are never written (009's unique index; duckdb runs an indexed UPDATE as delete+insert, which the
 analysis FK refuses). Row backups `015-redate-legacy-dust-BACKUP-{sample,project,analysis}.csv`.
-**016 is NOT applied**: it repairs the 2021-22 "load B" dust block (22 re-dates, 2 copy samples
-deleted, 6 values set to the 2 dp workbook) and awaits Robin's sign-off; its header holds the
-evidence, and the rows it moves with no workbook behind them.
+016 repairs the 2021-22 "load B" dust block: 22 B.D07/B.D08 re-dates to exposure/collection (16 with no
+workbook, placed by the load-B rule and flagged in its header), deletes the 2 copy samples bb955fc9 and
+bcf15e0f with their 6 analyses, and sets 6 values to the 2 dp workbook (2400-7222-01-02). Row backups
+`016-redate-legacy-dust-2021-22-BACKUP-{sample,analysis}.csv`. 017 sets `date_start` = collection - 1
+month on the 22 "load A" legacy dust rows (collected 2020-09..2021-01 and 2021-04..2021-09, both gauges);
+every one has a workbook (Dust Results Database, 2400-7127-06, 2400-7127-07) confirming `date` is the
+collection date, so `date` is untouched. It EXCLUDES the 2021-02-01 and 2021-03-01 rows (0763faf8,
+8c8aef7a, 4735d1dd, 20fda4f9), which hold the Jan/Feb-2020 measurements a year out - open, awaiting a
+ruling. Row backup `017-legacy-dust-load-a-exposure-start-BACKUP-sample.csv`. Neither writes `datetime`
+or `datetime_start`.
 Pre-migration snapshots are in `snapshot_dir` (`monitoring_pre-<name>_<ts>.duckdb`).
 
 ## Ordering constraints (enforced in code, not by memory)
@@ -67,6 +75,7 @@ Pre-migration snapshots are in `snapshot_dir` (`monitoring_pre-<name>_<ts>.duckd
     007 ──requires 1005
     006 ──requires 1007        (and refuses if 1005 is absent)
     016 ──requires 1015
+    017 ──requires 1016
     003, 008, 009, 010, 011, 012, 013, 014, 015 ── independent
 
 Each dependent migration checks its predecessor's marker and refuses without it, so
@@ -94,7 +103,7 @@ re-use a retired migration number again.
 
 ## Migrations are not covered by any plan
 
-Plans 13 and 14 own migrations 001 and 002. **003–016 belong to no plan** — they were
+Plans 13 and 14 own migrations 001 and 002. **003–017 belong to no plan** — they were
 authorised by rulings and A-numbers recorded in `dev/plans/OPERATING-RULES.md`. That is
 deliberate as of 2026-08-09: the plan-driven build closed 2026-07-28, and migrations are
 now operational work. The `authorised by` column above is the substitute for plan

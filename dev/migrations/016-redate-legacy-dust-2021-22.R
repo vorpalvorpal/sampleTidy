@@ -1,9 +1,10 @@
 # Operator-run migration: repair the 2021-22 legacy dust block (B.D07 and B.D08),
 # whose dates disagree with ACIRL's workbooks.
 #
-# STATUS: DRAFTED AND REHEARSED, NOT APPLIED. Robin's ruling (2026-10-16) is
-# "workbook wins; re-date", with "report before applying". Nothing here has
-# touched the live database. See dev/MIGRATIONS.md.
+# STATUS: APPLIED LIVE 2026-10-17 (Robin's ruling 1, 2026-10-17: "apply as
+# drafted"), after a re-rehearsal on a fresh copy of live (post-015) matched
+# the draft. Original ruling (2026-10-16): "workbook wins; re-date". Load A's
+# date_start (flagged below) was fixed by 017. See dev/MIGRATIONS.md.
 #
 # Dating convention (Robin, 2026-10-16; 015): EXPOSURE date = `date_start`,
 # COLLECTION date = `date`. Gauges go out on the 1st and come in on the 1st of
