@@ -1,156 +1,110 @@
 # sampleTidy — current state
 
-**Read this first on a cold start.** Rewritten, never appended. Last verified
-**2026-08-09** against the live database, read-only.
+**Read this first on a cold start.** This file is rewritten, never appended to.
+Last checked **2026-10-17** against the live database, read-only.
 
-Companion documents, in the order you will want them:
+The companion documents, in the order you are likely to need them:
 
 | for | read |
 |---|---|
-| rules in force today | `dev/plans/OPERATING-RULES.md` (A73+) |
-| migrations: what, when, applied? | `dev/MIGRATIONS.md` |
-| the frozen build contract (A1–A72) | `dev/plans/CONTRACT.md` |
+| decisions waiting on Robin, and choices made in his absence | `scratchpad/DECISIONS-FOR-ROBIN.md` |
+| rules in force today | `dev/plans/OPERATING-RULES.md` (A73+; latest is A91) |
+| migrations: what each does, and whether it is applied | `dev/MIGRATIONS.md` |
+| the frozen build contract (A1–A72, plus later API notes) | `dev/plans/CONTRACT.md` |
 | design authority | `dev/DESIGN.md` |
-| the build itself (all closed) | `dev/plans/PLAN-*.md` — history, not live |
+| the ACIRL gas adapter | `dev/plans/PLAN-17-adapter-acirl-gas.md` |
 
 ## In one sentence
 
-The package is built and signed off, the registry has been repaired by ten applied
-migrations, and the first batch has now been ingested for real — but **the corpus has
-still not been ingested**, and that is the next milestone.
-
-## Build
-
-Plans 01–16 all closed by 2026-07-28 through Phase 10. Nothing in `dev/plans/` is a
-live plan; every file there now carries a `Status:` line saying so. Suite at
-**1,286 tests / 6,077 pass / 0 fail / 9 skip** across 52 test files.
-
-Since 2026-07-28 the work has been **operational, not plan-driven**: Robin's rulings,
-recorded as A73–A86, and ten migrations repairing the registry ahead of the import.
+The package is built. The registry and the legacy data have been repaired by 29
+applied migrations, and ACIRL gas now has an adapter. **The corpus still has not been
+ingested**, and the real gas import is waiting on Robin's go-ahead.
 
 ## Live database
 
-`st_config("live_db")` — a **local** path under `tools::R_user_dir()`, not Sharepoint.
-This is correct by design (`DESIGN.md` §9.1): OneDrive does not respect DuckDB's file
-lock. Sharepoint receives one-way snapshots; nothing is ever copied back.
+`st_config("live_db")` is a **local** path under `tools::R_user_dir()`. Sharepoint only
+receives one-way snapshots and backups.
 
-    analysis 97,153 · sample 15,154 · analyte 248 · lab_method 570 · project 560
-    markers  1..7, 1001, 1003..1010   (all ten migrations applied)
-    review_queue  9 open  (see "The input batch is ingested" below)
-    ingest_file   36 rows — 20 quarantined, 14 archived, 1 needs_review, 1 ignored
+- analysis 94,979 · sample 15,164 · analyte 247 · lab_method 568 · project 560
+- feature 1,023 · feature_alias 2,274
+- markers 1..7, 1001, 1003..1029 (every migration in `dev/migrations/` is applied)
+- review_queue: 2 open (`B.EO1`-style unknown_feature 1, work_order_reingest 1)
+- ingest_file: 36 rows (20 quarantined, 14 archived, 1 needs_review, 1 ignored)
 
-Project types: 423 `Work order`, 71 `Monthly gas monitoring`, 22 `Dust monitoring`,
-12 `Budget line`, 31 NULL.
+Suite: **1,484 tests, 0 failing, 11 skipped**. Gated corpus tests are skipped unless
+`SAMPLETIDY_*_CORPUS` is set.
 
-## The gap that matters
+## Done 2026-10-16/17
 
-**Almost nothing has been through the pipeline.** `ingest_file` holds 36 rows against a
-corpus of ~265 files and 213 ACIRL workbooks. 97,105 of the 97,153 analyses are legacy
-pre-package data, loaded before the 2026-07-23 cutover; the pipeline itself has
-committed 48. The migration campaign cleared the runway and the first batch has now
-flown, but the corpus run has not happened.
+**Code**
+- Dust dating: exposure date → `date_start`, collection date → `date`; sample identity
+  uses the Sydney day.
+- A77 dust Month/Observations conflicts are withheld into review.
+- The ACIRL gas adapter `acirl_gas_xlsx` (PLAN-17).
+- A88 adapter review signals and `release_review()`.
+- A89: an adapter can declare `zero_is_nondetect`; only gas does.
+- A90/R-3.8: a registry fingerprint, so routing verdicts are re-decided when the
+  adapter set changes.
+- **A91: samples are matched within a contractor stream** (gas / ACIRL / ALS / …). An
+  ambiguous match goes to review as `sample_ambiguous` instead of aborting the file;
+  this amends A84 for every adapter.
+- The gas `#n` building suffix follows row position.
+- The EPA report counts sampling events (feature + Sydney day), not sample records.
 
-## The input batch is ingested (2026-08-09) — the first real pipeline run
-
-The input queue held one example batch of 6 files: ALS work order ES2425916
-(XTAB / ENMRG / COA) plus ACIRL report 2400-7399-08 (xls + pdf) and a scanned monthly
-PDF. Rehearsed on a sandboxed copy first, then run live. The queue is now empty and
-both batch folders were removed by `.ig_remove_spent_folder()`.
-
-    +48 analysis · +10 sample · +1 project · +1 asset · +9 review_queue
-
-The 48 committed rows are **ACIRL field data only** — Appearance 11, pH 9, Temperature
-9, EC 9, Stage 7, Standing water level 3. No ALS-copied lab analyte was imported, which
-is A75/A79 working as ruled.
-
-**ES2425916 was correctly BLOCKED by the F.10 guard** — it was already loaded (241
-analyses, 21 samples, 5 prior ingested files). 202 clean rows and 25 conflicting rows
-were all withheld, because F.10 blocks at work-order granularity. The files were still
-archived and removed from the input folder, which is F.17 working: the deliverable is
-retained even when the data is not committed.
-
-**The 9 open review items — four need a ruling:**
-
-| n | item | needs |
-|---|---|---|
-| 6 | `value_conflict/measurement` — dust | a ruling: which source wins |
-| 1 | `unknown_feature/structural` — `B.EO1` | one alias arm; A78 already covers it |
-| 1 | `unknown_feature/self_precedence_note` — `B.S22` | nothing; informational, resolved |
-| 1 | `work_order_reingest/blocked` — ES2425916 | nothing; correct refusal |
-
-1. **The six dust conflicts are real disagreements, not arithmetic.** Two gauges × three
-   analytes in `Dust Results` rows 11–12. Existing vs incoming: 1.53/0.97, 0.33/0.37,
-   1.2/0.6, 0.57/1.09, 0.27/0.39, 0.3/0.7. **Both sides are internally consistent** —
-   total = combustible + incombustible holds for the existing triple and the incoming
-   triple independently — so neither is a transcription slip. The likeliest cause is
-   A77: `Dust Results.Month` and `Dust Observations.EXPOSURE DATE` disagree in 8 of 64
-   real gauge-blocks, so this may be one month's gauge compared against another's.
-2. **`B.EO1` has no alias.** `B.EO01` exists and auto-assigns; `B.EO1` — the exact
-   string in the workbook — does not. A78 ruled the letter-O-for-zero codes are
-   misspellings; this member of the family was never enumerated. 5 rows are held.
-3. **Project filing is CORRECT — a near-duplicate I reported was my error.** The ingest
-   created `2400-7399-08` (type `ACIRL report`) alongside the existing
-   `2400-7399-08-01` (type `Monthly gas monitoring`), which looked like the same month
-   filed twice. It is not. **The `-01` suffix denotes the GAS report, a physically
-   separate workbook** (`2400-7399-08-01 August 2024 Monthly Gas Monitoring Blaxland
-   WMF.xls`). `-08` is the water/dust monthly, `-08-01` is the gas monthly. A80 was
-   applied correctly and no decision is needed.
-
-## Standing rules that outlive any one session
-
-- **Never re-ingest a work order already in the DB.** Now enforced in code by
-  `.ct_reingest_guard()` (R/commit.R, PLAN-15 F.10) — *this is built*; earlier notes
-  saying otherwise are stale. Coverage is **324 of 423** loaded work orders: 99 carry
-  no `asset` row, so there is no evidence of a prior ingest to fire on.
-- **`remove_ingested` defaults TRUE** — ingested sources are DELETED from `input_dir`
-  after the archive copy is re-hashed and matched. Quarantined files are never deleted.
-- Migrations, `ensure_schema()` and any other write against the live DB need an
-  **explicit instruction**. Read-only inspection is always fine. Copy to `scratchpad/`
-  for anything exploratory.
-- The Sharepoint tree is **Files-On-Demand**; reading it wholesale silently downloads
-  ~1.9 GB. Enumerate with `ls`/`find`, never `grep -r`.
-- **A-numbers are decisions; agent numbers are lowercase.** `scratchpad/a79_*.R` is
-  *agent* 79 and has nothing to do with *decision* A79. Commit `d9ad9b9` cites an "A87"
-  that does not exist — it meant agent 87. Do not write an agent number as `A<n>`.
+**Migrations 011–029**, in order:
+- LMF deleted;
+- detection limits set;
+- incombustible dust stored as `<total`;
+- gas registry, then dust re-dating (015–021);
+- the views fall back to `date`;
+- the registry fingerprint column;
+- the Aug-2024 duplicate water samples merged (024);
+- legacy Appearance split into Stage/Appearance (025, 026);
+- doubled legacy field readings removed (027);
+- 95 Katoomba gas building points, K.G379–473, unlocated (028);
+- legacy field readings corrected from the ACIRL reports (029).
 
 ## Next
 
-1. **ACIRL gas readings** (requested 2026-08-09) — scoped below, no blockers found.
-2. **The corpus run** — ~265 files, 213 ACIRL workbooks.
-3. Rule on the six dust conflicts and add the `B.EO1` alias, then resolve the held rows
-   through the PLAN-11 resolve API — no re-ingest needed, and no re-ingest is possible
-   anyway now the sources are archived and removed.
+1. **Gas import.** A dry run on a copy with the A91 code is in
+   `scratchpad/2026-10-17-gasdry2/`. The real run needs Robin's go-ahead.
+2. **Existing-row lookup:** when two samples match a reading, prefer the one whose
+   value equals the incoming row, then the one under the incoming work order. Today
+   the lowest uuid wins, which gives false value_conflicts on legacy visits split
+   across two ALS work orders. This is being built tests-first.
+3. **The corpus run:** about 265 files and 213 ACIRL workbooks, the main milestone.
+   Before it:
+   - "B.S22" resolves to 3 points, including an undated old code on B.S06;
+   - the times on two 2023-06-14 samples are wrong;
+   - `K.SO9` is a misspelling;
+   - check `24006989-02 … Incident Sampling Feb - May 2020.xlsx`: its pre-2020 field
+     readings are on `legacy` methods, so re-importing them will duplicate.
+4. **Release the A77 dust blocks** for 2400-7453-02 (Jan-2025) and 2400-7538-02
+   (Jan-2026, medium confidence) when the corpus run withholds them.
+5. **External:** the list in `DECISIONS-FOR-ROBIN.md`, covering ACIRL (analyser LOD,
+   the Jan-2026 xls, a reissue of 2400-7453-03-01, the 7127-02/-03 dust, distinct
+   building names) and Jane Manners (locating K.G367–378).
 
-## ACIRL gas readings — scoping (measured 2026-08-09, nothing built)
+## Standing rules that outlive any one session
 
-**The source is its own workbook family**, not the monthly water/dust one: 16 `.xls`
-and 43 `.pdf` under `assets/unprocessed`, named `… Monthly Gas Monitoring …`, filed
-under the `-01`-suffixed report number. Sheets: `Front Page`, `Gas Landfil #1`,
-`Gas Landfil #2`, `Gas Buildings`, `MAP`.
-
-Gas data already exists in the DB — **12,656 analyses** under `Monthly gas monitoring`
-projects, analytes **`CH4`** (12,478) and **`H2S`** (178). The registry holds no
-`Methane` or `Carbon dioxide` analyte; the bare formulae are the canonical names.
-
-Three things the adapter will have to handle, none of which the ACIRL water parser does:
-
-- **Two distinct sheet geometries.** `Gas Landfil #*` is a *wide repeating block* —
-  four side-by-side `(Location, CH4 Reading % v/v)` column pairs. `Gas Buildings` is a
-  three-column `(Location, Building Reference, CH4 Reading % v/v)` with the `Location`
-  cell filled down (blank means "same as above"), so a naive read drops the grouping.
-- **Locations are gas probes (`G182`…`G265`), not `B.*` sampling points.** They will
-  need their own feature/alias treatment; do not assume the water registry covers them.
-- **Float noise in the source** — `0.0299999999999999` appears literally. Rounding must
-  be decided rather than inherited, and `0` vs a non-detect is a real distinction here.
-
-Report number lives in a labelled cell (`REPORT NO. :`) on every sheet, so A80 filing
-works the same way it does for water. Per [[acirl-work-order-numbering]] it must be read
-from that cell, never parsed from the filename.
-
-## Deliberately not done
-
-Carry-forward reasons are in `dev/tdd-run/8a-FINDINGS.md`. The open ones: whether
-`unclaimed`/`failed` routing states stay terminal for a real run (Robin's call — it
-changes the R-1.6 state machine); a shared find-by-nullable-key helper; a detector for
-already-broken alias arms. F.17 is realised, not hypothetical — the deliverables of
-five quarantined work orders are gone from the tree entirely.
+- **Never re-ingest a work order already in the DB.** `.ct_reingest_guard()` (F.10)
+  enforces this. Gas is not covered, so a re-imported gas month must come back
+  `already_present`.
+- **`remove_ingested` defaults to TRUE**, so ingested sources are deleted from
+  `input_dir`. In any dry run, set it to FALSE and point the archive and snapshot
+  directories at scratch.
+- **Live-DB writes happen only as numbered migrations.** Rehearse each one twice on
+  fresh copies, take a verified backup, write CSV row backups and change_log rows, and
+  keep to one writer at a time. Claude has standing permission (2026-10-17) to apply
+  rehearsed migrations. Read-only inspection is always fine.
+- **DuckDB 1.4.1 quirks:**
+  - per-row UPDATE or DELETE on FK columns leaves stale index keys, so use set-based
+    deletes and re-insert;
+  - FK checks do not see deletes made inside an open transaction;
+  - an UPDATE under `ux_sample_identity` (alias, datetime, project) runs as a delete
+    plus an insert.
+- **The Sharepoint tree is Files-On-Demand.** Enumerate it with `ls`/`find`, never
+  `grep -r`, and open only the specific files needed.
+- **Never run `dev/epa-monitoring-report.R` casually**: it overwrites Robin's
+  workbooks.
+- **A-numbers are decisions; agent numbers are lowercase.** A87 was never assigned.
