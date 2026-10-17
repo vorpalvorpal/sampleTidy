@@ -47,6 +47,7 @@ Verified 2026-08-09 against the live file, read-only; 011-016 rows added 2026-10
 | 1025 | `025-split-legacy-appearance.R` | Robin, 2026-10-17 (convert legacy ACIRL Appearance to the A76 split) | 2026-10-17 (applied by Robin; rehearsed twice on copies) |
 | 1026 | `026-dust-date-start-and-appearance-fixes.R` | Robin, 2026-10-17 (rulings A, B1-B4) | 2026-10-17 (rehearsed twice on copies) |
 | 1027 | `027-dedupe-legacy-field-readings.R` | Robin, 2026-10-17 ("Fix those 16 legacy days"; keep rule and exclusions proposed in the file header) | 2026-10-17 (rehearsed twice on copies) |
+| 1028 | `028-gas-building-features.R` | Robin, 2026-10-17 (gas-building rulings 1-4) | 2026-10-17, after 027 (rehearsed twice on copies) |
 
 **001-024 are applied (023 was applied after 024, 2026-10-17).** 011 deleted the derived LMF analyte, its method and 2,267
 analyses, plus (FK-forced, Robin approved) its 4 `Leachate Signature Index` `guideline`
@@ -151,6 +152,18 @@ are unsettled (2022-09-07 B.S03, 2023-05-10 B.S01); all 11 are excluded and list
 deleted. One set-based DELETE. 025's re-verify skips the B.E01 pair 027 deleted once marker 1027 exists. Dry-run re-ingests of
 2400-7222-09, -09-01, 2400-7286-09, -09-01 give identical outcomes before and after (matches now land on the kept copies).
 Row backup `027-dedupe-legacy-field-readings-BACKUP-analysis.csv` (written on apply). Apply with `dev/migrations/apply-027.R`.
+028 registers the ACIRL gas-building points (scratchpad/2026-10-17-gasbldg/PROPOSAL.md). (1) 95 new Katoomba features
+K.G379-K.G473 in sheet order (`Gas Building 1` -> 379-410, `2` -> 411-446, `3` -> 447-473), copied from 014's biofilter
+grids: K/air, permanent, UNLOCATED at the live `K.centroid`, undated, comment naming the sheet, location and reference; each
+with its self alias and one `descriptive` alias = the adapter's site-qualified name (e.g. `K.Re-use Center - Toilets-Drain`).
+The two repeated references (Re-use Center "Power point back wall" D29/D35 = K.G432/K.G438, Meeting Room "Window wall 2"
+D9/D13 = K.G448/K.G452) are told apart only by the adapter's positional `#2`; all 4 comments say so. (2) the 20 pre-Oct-2024
+Blaxland building names (May-2021, Aug-2024) become `descriptive` aliases of the existing B.G368-384 (Toilets Right = G373
+Women's, Left = G374 Men's, confirmed by Robin). (3) `date_start` 2024-09-01 -> 2021-05-06 and a comment sentence on
+B.G368-378/380-383; B.G384 (first named Aug 2024) -> 2024-08-07 (B.G379 untouched). 210 aliases, all unbounded (NULL dates). Requires 1026 only; independent of 027 but
+applied after it. A per-file gas ingest of the 16 workbooks on a migrated copy opens 0 building unknown_feature items (control:
+316); only B.G201 and K.G365/K.G366 remain. Row backup `028-gas-building-features-BACKUP-feature.csv`; inserted rows in
+`028-gas-building-features-INSERTED-{feature,feature_alias}.csv` (both written on apply). Apply with `dev/migrations/apply-028.R`.
 Pre-migration snapshots are in `snapshot_dir` (`monitoring_pre-<name>_<ts>.duckdb`).
 
 ## Ordering constraints (enforced in code, not by memory)
@@ -171,6 +184,7 @@ Pre-migration snapshots are in `snapshot_dir` (`monitoring_pre-<name>_<ts>.duckd
     025 ──requires 1024
     026 ──requires 1025
     027 ──requires 1026
+    028 ──requires 1026        (independent of 027; applied after it)
     003, 008, 009, 010, 011, 012, 013, 014, 015 ── independent
 
 Each dependent migration checks its predecessor's marker and refuses without it, so
