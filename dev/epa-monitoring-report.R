@@ -120,12 +120,22 @@
 #    (Dictionary, definition of 3DGM) and it is exactly this one - see
 #    assumption P for the quotation and the caveat on its scope.
 #
-# L. "No. of samples collected and analysed" = COUNT(DISTINCT sample) for that
-#    EPA point x pollutant, not the number of result rows.  They differ where a
-#    determinand is measured twice on one sample (in scope: pH, measured both in
-#    the field and by the lab - 16 sample/pollutant pairs).  min/mean/max are
-#    computed over ALL contributing results, so a doubly-measured sample carries
-#    twice the weight in the mean.  The discrepancy is reported.
+# L. "No. of samples collected and analysed" = the number of distinct SAMPLING
+#    EVENTS for that EPA point x pollutant, where an event is one (feature,
+#    Australia/Sydney local day) - the day being LOCAL_DATE, i.e.
+#    COALESCE(datetime, date) converted from UTC.  It is neither the number of
+#    result rows nor COUNT(DISTINCT sample).
+#
+#    RULED 2026-10-17.  Why not distinct samples: sample-matching rule A91 puts
+#    the ACIRL field readings and the ALS lab readings from one visit into
+#    SEPARATE samples, and 130 legacy field samples are already stored that
+#    way, so a sample count would count one visit twice (in scope: pH, measured
+#    both in the field and by the lab).  Two genuine visits to one feature on
+#    one local day would count once; that is accepted.
+#
+#    min/mean/max are still computed over ALL contributing results, so a visit
+#    with a field AND a lab result for one pollutant contributes both results
+#    to the mean.  The repeat-measurement diagnostic reports how often.
 #
 # M. "No. of samples required" COMES FROM THE LICENCE, NOT THE DATABASE.  No
 #    table or column anywhere in the schema records a required sampling
@@ -447,6 +457,7 @@ rows <- dbGetQuery(con, sprintf("
 SELECT an.uuid                                     AS uuid_analysis,
        s.uuid                                      AS uuid_sample,
        %s                                          AS local_date,
+       f.uuid                                      AS uuid_feature,
        f.name                                      AS feature,
        fm.name                                     AS epa_point,
        a.name                                      AS stored_analyte,
@@ -508,6 +519,10 @@ if (identical(TUNABLES$nondetect, "drop")) {
 
 # --------------------------------------------------------------- AGGREGATION
 
+# Assumption L: one sampling event = one (feature, Sydney local day).
+event_key <- function(d) paste(d$uuid_feature, d$local_date, sep = "\r")
+n_sampling_events <- function(d) length(unique(event_key(d)))
+
 key <- paste(rows$epa_point, rows$pollutant, sep = "\r")
 agg <- do.call(rbind, lapply(split(seq_len(nrow(rows)), key), function(ix) {
   d    <- rows[ix, , drop = FALSE]
@@ -520,7 +535,7 @@ agg <- do.call(rbind, lapply(split(seq_len(nrow(rows)), key), function(ix) {
     epa_point   = d$epa_point[[1]],
     pollutant   = d$pollutant[[1]],
     epa_units   = d$epa_units[[1]],
-    n_samples   = length(unique(d$uuid_sample)),
+    n_samples   = n_sampling_events(d),   # assumption L
     n_results   = nrow(d),
     n_nondetect = sum(!is.na(d$quantified) & !d$quantified),
     lowest      = lo,
@@ -691,14 +706,15 @@ say(sprintf("  non-detects with value != rl_low        : %d   <- rl_low unit-inc
 say(sprintf("  non-detects with rl_low NULL            : %d", sum(is.na(nd_rows$rl_low))))
 say("  (ruled 2026-07-23: as_stored, per the licence Dictionary - assumption P)")
 
-hr("REPEAT MEASUREMENTS (same sample, same pollutant, >1 result)")
-rep_tbl <- as.data.frame(table(paste(rows$uuid_sample, rows$pollutant, sep = "\r")))
+hr("REPEAT MEASUREMENTS (same feature, same local day, same pollutant, >1 result)")
+rep_tbl <- as.data.frame(table(paste(event_key(rows), rows$pollutant, sep = "\r")))
 rep_keys <- as.character(rep_tbl$Var1[rep_tbl$Freq > 1])
 if (length(rep_keys)) {
-  say(sprintf("  %d sample/pollutant pairs have more than one result.", length(rep_keys)))
+  say(sprintf("  %d event/pollutant pairs have more than one result.", length(rep_keys)))
   say("  Pollutants affected: ",
       paste(sort(unique(sub("^.*\r", "", rep_keys))), collapse = ", "))
-  say("  Column 5 counts DISTINCT SAMPLES; min/mean/max use every result.")
+  say("  Column 5 counts SAMPLING EVENTS (feature x local day, assumption L);")
+  say("  min/mean/max use every result.")
 } else say("  (none)")
 
 if (length(unmapped_units)) {
@@ -735,7 +751,7 @@ if (nrow(short)) {
   }
 }
 if (PT_GAS %in% agg$epa_point) {
-  say("  NOTE point 1: 'collected' counts grid LOCATION-SAMPLES, the licence's")
+  say("  NOTE point 1: 'collected' counts grid LOCATION-DAYS, the licence's")
   say("  'Quarterly' means monitoring EVENTS. The two are not comparable.")
 }
 
