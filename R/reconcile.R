@@ -2327,6 +2327,57 @@
   "other_lab"
 }
 
+#' The contractor STREAM of an analysis, from its lab_method (A91)
+#'
+#' `"gas"` when the method's analyte has `type = 'gas'`; otherwise the
+#' lab_method's `organisation` (`ACIRL` - field, transcription and dust -
+#' `ALS`, `legacy`, `Internal`, ...), `NA` when that is NULL or the method is
+#' unknown. `sample.organisation` is the SAMPLER and the project is not the
+#' contractor (A80 files ACIRL field samples under the ALS order), so only the
+#' lab_method attributes a reading. `.ct_sample_match()` (R/commit.R) computes
+#' the same thing in SQL for the analyses already stored; keep the two in step.
+#' @keywords internal
+#' @noRd
+.rc_lab_stream <- function(uuid_lab, registry) {
+  lm <- registry$lab_method
+  i <- match(uuid_lab, lm$uuid)
+  type <- registry$analyte$type[match(lm$uuid_analyte[i], registry$analyte$uuid)]
+  out <- as.character(lm$organisation[i])
+  out[!is.na(type) & type == "gas"] <- "gas"
+  out
+}
+
+#' The stream of an INCOMING row (A91)
+#'
+#' `.rc_lab_stream()` of its resolved `uuid_lab` when that method is confirmed
+#' to an analyte. A missing or DANGLING method (no `uuid_analyte` yet) is read
+#' from the row's own `uuid_analyte` instead: `"gas"` for a gas analyte,
+#' otherwise the row's `org`. With no analyte either, `matrix_raw == "Gas"`
+#' gives `"gas"` and anything else the row's `org`. The dangling case matters
+#' at commit, which re-derives the stream AFTER `.ct_materialise_lab_methods()`
+#' has minted a method with no analyte: it must give the answer reconcile gave.
+#' @keywords internal
+#' @noRd
+.rc_row_stream <- function(rows, registry) {
+  n <- nrow(rows)
+  col <- function(nm) if (nm %in% names(rows)) as.character(rows[[nm]]) else rep(NA_character_, n)
+  uuid_lab <- col("uuid_lab")
+  uuid_analyte <- col("uuid_analyte")
+  matrix <- col("matrix_raw")
+  org <- col("org")
+
+  lm <- registry$lab_method
+  confirmed <- !is.na(lm$uuid_analyte[match(uuid_lab, lm$uuid)])
+  ai <- match(uuid_analyte, registry$analyte$uuid)
+  an_type <- registry$analyte$type[ai]
+  fallback <- ifelse(
+    !is.na(ai),
+    ifelse(!is.na(an_type) & an_type == "gas", "gas", org),
+    ifelse(!is.na(matrix) & matrix == "Gas", "gas", org)
+  )
+  ifelse(confirmed, .rc_lab_stream(uuid_lab, registry), fallback)
+}
+
 #' The analyte a resolved `uuid_lab` measures, or `NA`
 #'
 #' A DANGLING lab_method (created by first sighting, not yet confirmed) has no
@@ -2751,6 +2802,87 @@
   x[order(names(x), method = "radix")]
 }
 
+# ---- A91: stream-scoped sample matching -------------------------------------
+
+#' Withhold the rows whose sample cannot be decided (A91; amends A84)
+#'
+#' Asks `.ct_sample_match()` (R/commit.R) - the matcher commit itself uses -
+#' which sample each row would join. `"ambiguous"` (more than one survivor in
+#' the row's stream) and `"cross_stream_instant"` (a new sample would share its
+#' instant with another stream's sample, which `ux_sample_identity` can refuse
+#' mid-transaction) leave `clean` as A88 withheld rows: one `sample_ambiguous`
+#' item per (file, feature/alias, day, datetime, stream), its payload carrying
+#' the rows whole and the sorted `candidate_samples`, so
+#' `release_review(overrides = list(sample = ...))` can place them. The rest of
+#' the file commits; before A91 the whole event was refused. A row that
+#' arrives with a `sample_override` (a release) has had its sample chosen and
+#' is not asked again.
+#'
+#' `raw` is the event's rows as they entered reconcile, keyed by `.rc_row`, so
+#' a payload holds the row as assembled and not this function's resolved copy.
+#' @return `list(kept, review)`.
+#' @keywords internal
+#' @noRd
+.rc_sample_match_rows <- function(rows, raw, con, registry) {
+  n <- nrow(rows)
+  if (n == 0) return(list(kept = rows, review = .rc_proto_review()))
+
+  keys <- .ct_row_feature_keys(con, rows)
+  stream <- .rc_row_stream(rows, registry)
+  override <- if ("sample_override" %in% names(rows)) rows$sample_override else rep(NA_character_, n)
+  where <- ifelse(keys$pending, keys$alias_uuid, keys$match_feature)
+  dt_key <- ifelse(is.na(rows$sample_datetime), "NA", format(as.numeric(rows$sample_datetime)))
+  tuple <- paste(keys$pending, where, as.character(rows$sample_date), dt_key, stream, sep = "\r")
+
+  # One matcher call per tuple: every row of a tuple joins the same sample.
+  seen <- new.env(parent = emptyenv())
+  match_of <- vector("list", n)
+  for (i in seq_len(n)) {
+    if (!is.na(override[[i]])) next
+    k <- tuple[[i]]
+    if (!exists(k, envir = seen, inherits = FALSE)) {
+      assign(k, .ct_sample_match(
+        con, keys$pending[[i]], keys$match_feature[[i]], keys$alias_uuid[[i]],
+        rows$sample_date[[i]], rows$sample_datetime[[i]], stream[[i]]
+      ), envir = seen)
+    }
+    match_of[[i]] <- get(k, envir = seen)
+  }
+  outcome <- vapply(match_of, function(m) if (is.null(m)) NA_character_ else m$outcome, character(1))
+  hold <- !is.na(outcome) & outcome %in% c("ambiguous", "cross_stream_instant")
+  if (!any(hold)) return(list(kept = rows, review = .rc_proto_review()))
+
+  held <- which(hold)
+  grp_key <- paste(rows$source_hash[held], tuple[held], sep = "\r")
+  grp <- match(grp_key, unique(grp_key))
+  review <- dplyr::bind_rows(lapply(seq_len(max(grp)), function(g) {
+    idx <- held[grp == g]
+    i <- idx[[1]]
+    m <- match_of[[i]]
+    diag <- list(
+      stream = stream[[i]],
+      uuid_feature = keys$match_feature[[i]],
+      uuid_feature_alias = keys$alias_uuid[[i]],
+      sample_date = as.character(rows$sample_date[[i]]),
+      sample_datetime = if (is.na(rows$sample_datetime[[i]])) NA_character_ else
+        format(rows$sample_datetime[[i]], "%Y-%m-%d %H:%M:%S", tz = "UTC"),
+      candidate_samples = I(m$candidates),
+      rows = .rc_withheld_rows_payload(
+        raw[match(rows$.rc_row[idx], raw$.rc_row), setdiff(names(raw), ".rc_row"), drop = FALSE]
+      )
+    )
+    row <- .rc_review_row(
+      source_ref = rows$source_ref[idx], kind = "sample_ambiguous", n_rows = length(idx),
+      source_hash = rows$source_hash[[i]],
+      subkind = if (m$outcome == "cross_stream_instant") "cross_stream_instant" else NA_character_,
+      diagnostics = diag
+    )
+    row$work_order <- rows$work_order[[i]]
+    row
+  }))
+  list(kept = rows[!hold, , drop = FALSE], review = review)
+}
+
 # ---- top-level entry point --------------------------------------------------
 
 #' The withheld rows of one folded review item, as a data frame that
@@ -2927,6 +3059,11 @@ reconcile_event <- function(event, con) {
     }
   }
 
+  # A91: a row id, so a row withheld late (sample matching) can be carried in
+  # its review payload exactly as it entered here. Stripped from `clean` below.
+  active$.rc_row <- seq_len(nrow(active))
+  raw <- active
+
   # R-8.1
   qc <- .rc_qc_filter(active)
   add_skip(qc$skipped)
@@ -2972,6 +3109,13 @@ reconcile_event <- function(event, con) {
   bd <- .rc_batch_duplicate(clean)
   add_review(bd$review)
   clean <- bd$kept
+
+  # A91: the sample each row joins, within its stream. Before A79 below, so a
+  # withheld ALS row deletes no transcription it has not replaced.
+  sm <- .rc_sample_match_rows(clean, raw, con, registry)
+  add_review(sm$review)
+  clean <- sm$kept
+  clean$.rc_row <- NULL
 
   # R-8.9 / A79: last, so it sees only rows that have survived every other
   # check. A row already skipped as `already_present` or held at
