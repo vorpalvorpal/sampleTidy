@@ -52,6 +52,7 @@ Verified 2026-08-09 against the live file, read-only; 011-016 rows added 2026-10
 | 1030 | `030-precorpus-fixes.R` | main session, 2026-10-17, on scratchpad/2026-10-17-precorpus/PROPOSAL.md (issues 2, 3) | 2026-10-17 (rehearsed twice on copies) |
 | 1031 | `031-datetime-day-typos.R` | main session, 2026-10-17, on scratchpad/2026-10-17-dtmismatch/PROPOSAL.md (3 month/day typos in `datetime`; K.MW11B left) | 2026-10-17 (rehearsed twice on copies) |
 | 1032 | `032-letter-o-aliases-and-gas-template-slots.R` | Robin, 2026-10-17 (letter-O codes: "I'm happy for them to be registered now"; B.G201/K.G365/K.G366: "If not, we don't want them") | 2026-10-17 (rehearsed twice on copies, the second interrupted at step B and resumed) |
+| 1033 | `033-kl01-alias.R` | main session, 2026-10-17, following Robin's 032 ruling (ALS ES2620363 carries 40 KL01 rows) | 2026-10-17 (rehearsed twice on copies) |
 
 **001-024 are applied (023 was applied after 024, 2026-10-17).** 011 deleted the derived LMF analyte, its method and 2,267
 analyses, plus (FK-forced, Robin approved) its 4 `Leachate Signature Index` `guideline`
@@ -212,6 +213,11 @@ the same transaction. A re-run resumes at the first unfinished step. change_log 
 `dev/migrations/apply-032.R`. No DB change, recorded here (Robin, 2026-10-17): K.MW11B Mar-2023 (b7286aa9) stays as it is ("probably
 lost to the sands of time"); the 4 bore-height rows at 2024-08-26 22:00 local (B.MW02/04/08/09) stay ("If they are in the db, assume
 they are meant to be there").
+033 registers KL01 -> K.L01 as an undated `transcription_error` (dropped dot) alias, the same row shape as 032's KS07/KS05/KE01.
+032 had left it out, but ALS ES2620363 (not yet imported) carries 40 KL01 rows. K.L01 is the only `.L01` feature at site K and is in use.
+No alias has key or name `kl01`. Its folded-key twin is only K.L01's own self alias `k.l01`, and there is no site `KL`. 1 alias row,
+1 change_log row, the marker; nothing else changes (checksummed). A resolver probe changes only KL01 (pending -> K.L01). Inserted row
+in `033-kl01-alias-INSERTED-feature_alias.csv`. Apply with `dev/migrations/apply-033.R`.
 Pre-migration snapshots are in `snapshot_dir` (`monitoring_pre-<name>_<ts>.duckdb`).
 
 ## Ordering constraints (enforced in code, not by memory)
@@ -237,6 +243,7 @@ Pre-migration snapshots are in `snapshot_dir` (`monitoring_pre-<name>_<ts>.duckd
     030 ──requires 1029
     031 ──requires 1030
     032 ──requires 1031
+    033 ──requires 1032
     003, 008, 009, 010, 011, 012, 013, 014, 015 ── independent
 
 Each dependent migration checks its predecessor's marker and refuses without it, so

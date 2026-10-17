@@ -26,8 +26,8 @@ ingested**. The ACIRL gas import is done (2026-10-17).
 receives one-way snapshots and backups.
 
 - analysis 97,698 · sample 17,883 · analyte 247 · lab_method 568 · project 571
-- feature 1,023 · feature_alias 2,283 (0 pending)
-- markers 1..7, 1001, 1003..1032 (every migration in `dev/migrations/` is applied)
+- feature 1,023 · feature_alias 2,284 (0 pending)
+- markers 1..7, 1001, 1003..1033 (every migration in `dev/migrations/` is applied)
 - review_queue: 5 open (gas: 2 duplicate_report_number, 1 report_no_mismatch;
   earlier: 1 self_precedence_note, 1 work_order_reingest)
 - ingest_file: 52 rows (16 gas workbooks archived 2026-10-17)
@@ -77,7 +77,7 @@ Suite: **1,484 tests, 0 failing, 11 skipped**. Gated corpus tests are skipped un
 3. **The corpus run:** about 265 files and 213 ACIRL workbooks, the main milestone.
    Before it:
    - the 4 mis-timed 2023-06-14 samples and the `b.eo1` date bound (migration 030);
-   - the letter-O codes are registered, undated (032). KL01, "K.E02/K.SO6" and
+   - the letter-O codes are registered, undated (032), and so is KL01 (033). "K.E02/K.SO6" and
      "B.SO1 S1"/"B.SO3 S3" are still unruled and will go to review;
    - B.S22 is fine: it has a self alias, plus a non-blocking self_precedence_note
      about the old B.S06 code, which is Robin's ruling;
