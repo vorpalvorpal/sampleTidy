@@ -2117,7 +2117,8 @@
 #' @keywords internal
 #' @noRd
 .rc_find_existing <- function(con, resolved_feature, uuid_feature_alias, feature_pending,
-                              sample_date, sample_datetime, uuid_lab) {
+                              sample_date, sample_datetime, uuid_lab,
+                              incoming = NULL, work_orders = character(0)) {
   if (is.na(uuid_lab)) return(NULL)   # first-sighting dangling method: nothing committed yet
 
   if (isTRUE(feature_pending)) {
@@ -2134,9 +2135,10 @@
     con,
     paste0(
       'SELECT a.uuid AS analysis_uuid, a.value, a.value_chr, a.quantified, a.rl_low, a.rl_high, a.uuid_lab,
-              s.datetime AS s_datetime
+              s.datetime AS s_datetime, p.name AS project_name
        FROM "sample" s
        JOIN analysis a ON a.uuid_sample = s.uuid
+       LEFT JOIN project p ON p.uuid = s.uuid_project
        JOIN feature_alias fa ON fa.uuid = s.uuid_feature_alias
        WHERE ', feat_clause, ' AND ', .ct_sydney_day_sql("s.date"), ' = ? AND a.uuid_lab = ?
        ORDER BY a.uuid'
@@ -2167,6 +2169,26 @@
     match_dt <- !is.na(cand_dt) & (cand_dt == inc_dt)
     if (any(match_dt)) cand <- cand[match_dt, , drop = FALSE]
   }
+  if (nrow(cand) == 1) return(cand)
+
+  # Several committed analyses still match (e.g. a visit split across two ALS
+  # work orders, each sample holding its own ACIRL report's field reading).
+  # Pick the one to compare against: (1) a candidate equal to the incoming
+  # value under A14, so a row equal to ANY candidate is already_present; then
+  # (2) a candidate filed under one of the event's work orders (or the row's
+  # own report project); then (3) the lowest uuid (the ORDER BY above). Rules 2
+  # and 3 also order the equal candidates. `incoming` is NULL for callers with
+  # no value to compare, which skips rule 1.
+  if (!is.null(incoming)) {
+    eq <- vapply(seq_len(nrow(cand)), function(k) {
+      .rc_values_equal(incoming$value, incoming$value_chr, incoming$quantified,
+                       cand$value[[k]], cand$value_chr[[k]], cand$quantified[[k]])
+    }, logical(1))
+    if (any(eq)) cand <- cand[eq, , drop = FALSE]
+  }
+  wo <- work_orders[!is.na(work_orders)]
+  own <- !is.na(cand$project_name) & cand$project_name %in% wo
+  if (any(own)) cand <- cand[own, , drop = FALSE]
   cand[1, , drop = FALSE]
 }
 
@@ -2470,6 +2492,26 @@
     match_dt <- !is.na(cand_dt) & (cand_dt == inc_dt)
     if (any(match_dt)) cand <- cand[match_dt, , drop = FALSE]
   }
+  if (nrow(cand) == 1) return(cand)
+
+  # Several committed analyses still match (e.g. a visit split across two ALS
+  # work orders, each sample holding its own ACIRL report's field reading).
+  # Pick the one to compare against: (1) a candidate equal to the incoming
+  # value under A14, so a row equal to ANY candidate is already_present; then
+  # (2) a candidate filed under one of the event's work orders (or the row's
+  # own report project); then (3) the lowest uuid (the ORDER BY above). Rules 2
+  # and 3 also order the equal candidates. `incoming` is NULL for callers with
+  # no value to compare, which skips rule 1.
+  if (!is.null(incoming)) {
+    eq <- vapply(seq_len(nrow(cand)), function(k) {
+      .rc_values_equal(incoming$value, incoming$value_chr, incoming$quantified,
+                       cand$value[[k]], cand$value_chr[[k]], cand$quantified[[k]])
+    }, logical(1))
+    if (any(eq)) cand <- cand[eq, , drop = FALSE]
+  }
+  wo <- work_orders[!is.na(work_orders)]
+  own <- !is.na(cand$project_name) & cand$project_name %in% wo
+  if (any(own)) cand <- cand[own, , drop = FALSE]
   cand[1, , drop = FALSE]
 }
 
@@ -2597,12 +2639,6 @@
   review_list <- list()
 
   for (i in seq_len(n)) {
-    existing <- .rc_find_existing(
-      con, rows$uuid_feature[[i]], rows$uuid_feature_alias[[i]], rows$feature_pending[[i]],
-      rows$sample_date[[i]], rows$sample_datetime[[i]], rows$uuid_lab[[i]]
-    )
-    if (is.null(existing)) next
-
     inc_value <- rows$value_converted[[i]]
     # A63/D7: the stored analysis.value is post-conversion_constant (applied at
     # commit); make the incoming value canonical too before the R-8.7/A14
@@ -2612,6 +2648,14 @@
     if (!is.na(cc) && !is.na(inc_value)) inc_value <- inc_value * cc
     inc_chr <- rows$value_chr[[i]]
     inc_quant <- rows$quantified[[i]]
+
+    existing <- .rc_find_existing(
+      con, rows$uuid_feature[[i]], rows$uuid_feature_alias[[i]], rows$feature_pending[[i]],
+      rows$sample_date[[i]], rows$sample_datetime[[i]], rows$uuid_lab[[i]],
+      incoming = list(value = inc_value, value_chr = inc_chr, quantified = inc_quant),
+      work_orders = c(event$work_order, .ct_event_als_work_orders(event), rows$work_order[[i]])
+    )
+    if (is.null(existing)) next
     exist_value <- existing$value[[1]]
     exist_chr <- existing$value_chr[[1]]
     exist_quant <- existing$quantified[[1]]
