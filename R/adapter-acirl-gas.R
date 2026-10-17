@@ -177,7 +177,7 @@ acirl_gas_xlsx_adapter <- function() {
       } else if (is.na(loc)) {
         next
       }
-      if (is.na(val)) next
+      # A blank cell still takes its place in a repeated Reference's #n count.
       feature <- if (building) {
         if (grepl("^gas bore$", tolower(loc)) && grepl("^mp\\s*[0-9]+$", tolower(ref))) {
           paste0(site, ".MP_", sub("^mp\\s*", "", tolower(ref)))
@@ -198,6 +198,7 @@ acirl_gas_xlsx_adapter <- function() {
         paste0(site, ".", loc)
       }
       seen <- c(seen, feature)
+      if (is.na(val)) next
       out[[length(out) + 1L]] <- list(
         row = r, col = cc, feature = feature, raw = val, bio = is_bio
       )

@@ -304,6 +304,82 @@ test_that("4: a reference repeated within ONE building gets `#2`", {
   expect_equal(sum(k$results$feature_raw == "K.Meeting Room - Window wall 2 #2"), 1)
 })
 
+# A small Blaxland-2024-shaped workbook whose `Gas Buildings ` sheet holds
+# `entries` (gx_entries(): loc, ref, val). Used to pin the `#n` suffix rule:
+# the suffix follows the row's POSITION among same-reference rows in a
+# building, whether or not the earlier rows carry a reading.
+gas_suffix_parse <- function(entries) {
+  d <- withr::local_tempdir(.local_envir = parent.frame())
+  rn <- "2400-9902-08-01"
+  wb <- openxlsx::createWorkbook()
+  gx_front_blaxland(wb, rn, "2024-08-07", report_on = "August 2024 Gas Monitoring")
+  gx_landfill_sheet(wb, "Gas Landfil #1", list(list(G182 = 0.01, G183 = 0, G184 = 0)),
+                    report_no = rn)
+  gx_building_sheet(wb, "Gas Buildings ", entries, header_row = 8L, report_no = rn,
+                    titles = c("ALS COAL DIVISION", "BMCC BLAXLAND WASTE MANAGEMENT FACILITY",
+                               "MONTHLY GAS  REPORT"))
+  gx_map_sheet(wb)
+  path <- gx_save(wb, d, paste0(rn, " August 2024 Monthly Gas Monitoring Blaxland WMF.xlsx"))
+  gas_parse(path)
+}
+gas_suffix_bldg <- function(out) {
+  f <- out$results$feature_raw
+  f[grepl("^B\\.Shed - ", f)]
+}
+
+test_that("4: suffix is positional - a BLANK first occurrence still leaves the second as `#2`", {
+  out <- gas_suffix_parse(gx_entries(
+    list("Shed", "Wall", NA_real_),
+    list(NA, "Wall", 0.01),
+    list(NA, "Door", 0)
+  ))
+  f <- gas_suffix_bldg(out)
+  expect_setequal(f, c("B.Shed - Wall #2", "B.Shed - Door"))
+  expect_equal(gas_value_of(out, "B.Shed - Wall #2"), 0.01)
+})
+
+test_that("4: suffix is positional - an `NS` first occurrence still leaves the second as `#2`", {
+  out <- gas_suffix_parse(gx_entries(
+    list("Shed", "Wall", "NS"),
+    list(NA, "Wall", 0.01)
+  ))
+  expect_setequal(gas_suffix_bldg(out), "B.Shed - Wall #2")
+  expect_equal(gas_value_of(out, "B.Shed - Wall #2"), 0.01)
+})
+
+test_that("4: suffix is positional - NR and other skipped text in an earlier occurrence count too", {
+  out <- gas_suffix_parse(gx_entries(
+    list("Shed", "Wall", "NR"),
+    list(NA, "Wall", "No Access"),
+    list(NA, "Wall", 0.02)
+  ))
+  expect_setequal(gas_suffix_bldg(out), "B.Shed - Wall #3")
+})
+
+test_that("4: three occurrences with the MIDDLE one blank give no suffix, then `#3`", {
+  out <- gas_suffix_parse(gx_entries(
+    list("Shed", "Wall", 0.01),
+    list(NA, "Wall", NA_real_),
+    list(NA, "Wall", 0.03)
+  ))
+  expect_setequal(gas_suffix_bldg(out), c("B.Shed - Wall", "B.Shed - Wall #3"))
+  expect_equal(gas_value_of(out, "B.Shed - Wall"), 0.01)
+  expect_equal(gas_value_of(out, "B.Shed - Wall #3"), 0.03)
+})
+
+test_that("4: regression - fully populated repeats are still unsuffixed / `#2` / `#3`", {
+  out <- gas_suffix_parse(gx_entries(
+    list("Shed", "Wall", 0.01),
+    list(NA, "Wall", 0.02),
+    list(NA, "Wall", 0.03),
+    list("Other", "Wall", 0.04)
+  ))
+  expect_setequal(c(gas_suffix_bldg(out), grep("^B\\.Other", out$results$feature_raw, value = TRUE)),
+                  c("B.Shed - Wall", "B.Shed - Wall #2", "B.Shed - Wall #3", "B.Other - Wall"))
+  expect_equal(gas_value_of(out, "B.Shed - Wall #2"), 0.02)
+  expect_equal(gas_value_of(out, "B.Shed - Wall #3"), 0.03)
+})
+
 test_that("4: the same reference in two DIFFERENT buildings is not suffixed", {
   f <- gas_parse(fx$kat)$results$feature_raw
   expect_true("K.Office - Air conditioner" %in% f)
