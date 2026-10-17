@@ -48,6 +48,7 @@ Verified 2026-08-09 against the live file, read-only; 011-016 rows added 2026-10
 | 1026 | `026-dust-date-start-and-appearance-fixes.R` | Robin, 2026-10-17 (rulings A, B1-B4) | 2026-10-17 (rehearsed twice on copies) |
 | 1027 | `027-dedupe-legacy-field-readings.R` | Robin, 2026-10-17 ("Fix those 16 legacy days"; keep rule and exclusions proposed in the file header) | 2026-10-17 (rehearsed twice on copies) |
 | 1028 | `028-gas-building-features.R` | Robin, 2026-10-17 (gas-building rulings 1-4) | 2026-10-17, after 027 (rehearsed twice on copies) |
+| 1029 | `029-legacy-field-corrections.R` | main session, 2026-10-17, under Robin's "the workbook wins" precedent (016, 019) | 2026-10-17 (rehearsed twice on copies) |
 
 **001-024 are applied (023 was applied after 024, 2026-10-17).** 011 deleted the derived LMF analyte, its method and 2,267
 analyses, plus (FK-forced, Robin approved) its 4 `Leachate Signature Index` `guideline`
@@ -164,6 +165,22 @@ B.G368-378/380-383; B.G384 (first named Aug 2024) -> 2024-08-07 (B.G379 untouche
 applied after it. A per-file gas ingest of the 16 workbooks on a migrated copy opens 0 building unknown_feature items (control:
 316); only B.G201 and K.G365/K.G366 remain. Row backup `028-gas-building-features-BACKUP-feature.csv`; inserted rows in
 `028-gas-building-features-INSERTED-{feature,feature_alias}.csv` (both written on apply). Apply with `dev/migrations/apply-028.R`.
+029 corrects legacy ACIRL field readings to their own ACIRL report (the report citing the sample's ALS order),
+on scratchpad/2026-10-17-fieldconflict/ and scratchpad/2026-10-17-mig029/. (1) 2022-09-07 B.S05 ES2232312 Temperature 14.1 -> 14.7.
+(2) Sample 2ad2d3c6 (ES2232312, filed as B.S06) is ALS ES2232312003 = B.S22: the whole sample, with its 3 field and 4 ALS analyses,
+is re-pointed to alias B.S22 (e24bdbc4). duckdb refuses the alias UPDATE while analyses reference the sample, so there are two
+commits on two connections: (A) one set-based DELETE of its 7 analyses, then (B) the re-point, the re-insert of the 7 with the same
+uuids (hard-coded in the file), every value update, the marker. A re-run after a failed B resumes at B. (3) 2023-09-13 ES2331527:
+the legacy whole-sample S01/S03 swap (a lab correction) stays, but the 6 T/pH/EC values are swapped back between 63400f6e (B.S01)
+and 316ea653 (B.S03). The values are swapped in place, with no row moves; the pairs are identical in every other column.
+(4) EC precision: of the 45 legacy field EC values with a fractional part, 30 are set to their own report's cell (29 roundings,
+plus 2022-09-07 B.MW09 333.8 -> 339, which is not a rounding). 11 already equal their report and are kept. 4 are excluded: 2022-08-31
+B.S01/S03/S05, whose only source is a dehydrated pdf, and 2023-05-15 B.S05, whose report prints 1406, a slipped decimal (ALS 141).
+37 value updates in all. Re-verifies of 021 and 024-028 pass unchanged on the migrated copies, so no skip was needed. A dry-run
+re-ingest of 20 workbooks takes value_conflicts from 69 to 32; for the original ten workbooks it goes from 38 to 18. Every
+planned row comes back already_present, except 3 EC rows where the two reports disagree and `.rc_find_existing()` takes the
+other order's copy. Row backups are `029-legacy-field-corrections-BACKUP-{analysis,sample}.csv`, written on apply. Apply with
+`dev/migrations/apply-029.R`.
 Pre-migration snapshots are in `snapshot_dir` (`monitoring_pre-<name>_<ts>.duckdb`).
 
 ## Ordering constraints (enforced in code, not by memory)
@@ -185,6 +202,7 @@ Pre-migration snapshots are in `snapshot_dir` (`monitoring_pre-<name>_<ts>.duckd
     026 ──requires 1025
     027 ──requires 1026
     028 ──requires 1026        (independent of 027; applied after it)
+    029 ──requires 1028
     003, 008, 009, 010, 011, 012, 013, 014, 015 ── independent
 
 Each dependent migration checks its predecessor's marker and refuses without it, so
