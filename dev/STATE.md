@@ -76,9 +76,13 @@ Suite: **1,484 tests, 0 failing, 11 skipped**. Gated corpus tests are skipped un
    across two ALS work orders. This is being built tests-first.
 3. **The corpus run:** about 265 files and 213 ACIRL workbooks, the main milestone.
    Before it:
-   - "B.S22" resolves to 3 points, including an undated old code on B.S06;
-   - the times on two 2023-06-14 samples are wrong;
-   - `K.SO9` is a misspelling;
+   - the 4 mis-timed 2023-06-14 samples and the `b.eo1` date bound (migration 030);
+   - the letter-O codes with no alias (K.SO9, K.SO6, K.SO7, B.LO1/LO2, B.SO5, KS07,
+     KS05, KE01; about 1,200 rows). They go through A78's review-and-confirm route.
+     Pending aliases are stamped with the earliest date seen in a single ingest, so
+     confirm each with `date_start = NA` (`scratchpad/2026-10-17-precorpus/`);
+   - B.S22 is fine: it has a self alias, plus a non-blocking self_precedence_note
+     about the old B.S06 code, which is Robin's ruling;
    - check `24006989-02 … Incident Sampling Feb - May 2020.xlsx`: its pre-2020 field
      readings are on `legacy` methods, so re-importing them will duplicate.
 4. **Release the A77 dust blocks** for 2400-7453-02 (Jan-2025) and 2400-7538-02
