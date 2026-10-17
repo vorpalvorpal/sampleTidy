@@ -1,0 +1,4 @@
+"uuid_analyte","variant","name","units","conversion_constant"
+"b681edf5-f6b5-4214-a3a6-ecc9d7530418","EPA","Dissolved Oxygen","mg/L",1
+"279a3d10-489f-4786-b1af-aca55d4e67dc","EPA","Faecal Coliforms","CFU/100mL",100
+"95489b2b-80be-4b29-ac34-76a878103c6a","EPA","Phosphate","mg/L",1

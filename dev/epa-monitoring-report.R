@@ -340,6 +340,7 @@ UNIT_LONG_FORM <- c(
   "pH_Units"      = "pH units",
   "NTU"           = "nephelometric turbidity units",
   "g/m2/month"    = "grams per square metre per month",
+  "CFU/100mL"     = "colony forming units per 100 millilitres",
   "m"             = "metres",
   "L/L"           = "litres per litre",
   "L/s"           = "litres per second",
