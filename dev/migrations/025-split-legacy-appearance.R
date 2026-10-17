@@ -246,6 +246,17 @@
   if (.mig025_scalar(con, "SELECT COUNT(*) FROM schema_version WHERE version = 1026") == 0L) {
     p <- .mig025_excluded_problem(con); if (!is.null(p)) return(p)
   }
+  # Once 027 (marker 1027) has deleted a redundant duplicate copy of a split
+  # pair (B.E01 2023-09-13 on ES2331527), that pair is no longer 025's to
+  # verify; 027 verifies its deletions. Both halves of a pair must have gone.
+  if (.mig025_scalar(con, "SELECT COUNT(*) FROM schema_version WHERE version = 1027") > 0L) {
+    gone <- DBI::dbGetQuery(con, "SELECT uuid_row FROM change_log WHERE actor = '027-dedupe-legacy-field-readings'
+      AND action = 'delete' AND tbl = 'analysis'")$uuid_row
+    hit <- P$uuid %in% gone
+    if (any(!is.na(P$uuid_stage_new[hit]) & !(P$uuid_stage_new[hit] %in% gone))) return("027 deleted an Appearance but not its Stage")
+    if (any(P$uuid_stage_new[!hit] %in% gone)) return("027 deleted a Stage but not its Appearance")
+    P <- P[!hit, , drop = FALSE]
+  }
   A <- .mig025_analyses(con, .mig025_touched(P))
   if (nrow(A) != length(.mig025_touched(P))) return("a planned analysis is missing")
   ps <- .mig025_per_sample(con, P)

@@ -46,6 +46,7 @@ Verified 2026-08-09 against the live file, read-only; 011-016 rows added 2026-10
 | 1024 | `024-merge-aug24-water-duplicates.R` | Robin, 2026-10-17 (rulings 1-5) | 2026-10-17 |
 | 1025 | `025-split-legacy-appearance.R` | Robin, 2026-10-17 (convert legacy ACIRL Appearance to the A76 split) | 2026-10-17 (applied by Robin; rehearsed twice on copies) |
 | 1026 | `026-dust-date-start-and-appearance-fixes.R` | Robin, 2026-10-17 (rulings A, B1-B4) | 2026-10-17 (rehearsed twice on copies) |
+| 1027 | `027-dedupe-legacy-field-readings.R` | Robin, 2026-10-17 ("Fix those 16 legacy days"; keep rule and exclusions proposed in the file header) | 2026-10-17 (rehearsed twice on copies) |
 
 **001-024 are applied (023 was applied after 024, 2026-10-17).** 011 deleted the derived LMF analyte, its method and 2,267
 analyses, plus (FK-forced, Robin approved) its 4 `Leachate Signature Index` `guideline`
@@ -140,6 +141,16 @@ untouched" check once 1026 exists. A dry-run re-ingest of 2400-7346-02 (Lawson N
 value_conflicts (exactly the 4 swapped rows) to 0; 2400-7399-08, 2400-7453-03 and 2400-7453-08 are unchanged
 (the dust rows are A77-withheld, with exposure/collection equal to what 026 writes). Row backups
 `026-dust-date-start-and-appearance-fixes-BACKUP-{analysis,sample}.csv`.
+027 deletes 16 redundant ACIRL field analyses on 5 legacy feature-days where one visit sits under two ALS
+orders and the same field readings were loaded into both samples: 2022-06-22 B.S01/S03/S05 (drop ES2222088, keep ES2222099),
+2022-09-07 B.S01 (drop ES2232312, keep ES2232317), 2023-09-13 B.E01 (drop 4 on ES2331527, keep the 5 on ES2331525). Keep rule:
+(1) a copy its own order's ACIRL report contradicts goes; (2) else keep the sample holding the visit's complete field set;
+(3) else keep the sample at the observed time (the legacy twin is +1 minute); else exclude. Of the 16 MERGED+MERGED days in
+`scratchpad/2026-10-17-acirlmatch/DESIGN.md`, 9 hold DIFFERENT readings (two field reports, one per order) and 2 identical ones
+are unsettled (2022-09-07 B.S03, 2023-05-10 B.S01); all 11 are excluded and listed in the file header. No sample is emptied or
+deleted. One set-based DELETE. 025's re-verify skips the B.E01 pair 027 deleted once marker 1027 exists. Dry-run re-ingests of
+2400-7222-09, -09-01, 2400-7286-09, -09-01 give identical outcomes before and after (matches now land on the kept copies).
+Row backup `027-dedupe-legacy-field-readings-BACKUP-analysis.csv` (written on apply). Apply with `dev/migrations/apply-027.R`.
 Pre-migration snapshots are in `snapshot_dir` (`monitoring_pre-<name>_<ts>.duckdb`).
 
 ## Ordering constraints (enforced in code, not by memory)
@@ -159,6 +170,7 @@ Pre-migration snapshots are in `snapshot_dir` (`monitoring_pre-<name>_<ts>.duckd
     024 ──requires 1022
     025 ──requires 1024
     026 ──requires 1025
+    027 ──requires 1026
     003, 008, 009, 010, 011, 012, 013, 014, 015 ── independent
 
 Each dependent migration checks its predecessor's marker and refuses without it, so
