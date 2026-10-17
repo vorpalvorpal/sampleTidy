@@ -316,7 +316,13 @@ SITES <- list(
            special_frequency_condition = "M2.4(a)"),
   B = list(name = "Blaxland WMF", licence = "10039", licence_doc = "V28",
            anniversary = "22 Aug", period_start = "08-22", peek = "1,10",
-           special_frequency_condition = "M2.4(a)")
+           special_frequency_condition = "M2.4(a)",
+           notes = paste0(
+             "Total dissolved solids at points 18, 20 and 22 is reported in ",
+             "milligrams per litre, the unit in which it is measured. Condition ",
+             "M2.3 gives micrograms per litre for these points, which appears to ",
+             "be a typographical error: the same pollutant is specified in ",
+             "milligrams per litre at every other point."))
 )
 
 # Licence frequency -> required number of samples over a 12-month period.
@@ -1030,7 +1036,8 @@ NOTE <- list(
     "At ", name_points(gp), " the number of samples collected counts individual ",
     "grid locations. The ", tolower(grid_frequency(gp)), " requirement refers ",
     "to monitoring events."
-  ))
+  )),
+  S$notes  # site-specific notes, e.g. a unit departure from the licence
 )
 NOTE <- unlist(NOTE)
 for (i in seq_along(NOTE)) {
