@@ -25,11 +25,11 @@ ingested**. The ACIRL gas import is done (2026-10-17).
 `st_config("live_db")` is a **local** path under `tools::R_user_dir()`. Sharepoint only
 receives one-way snapshots and backups.
 
-- analysis 97,707 · sample 17,892 · analyte 247 · lab_method 568 · project 571
-- feature 1,023 · feature_alias 2,277 (3 pending: B.G201, K.G365, K.G366)
-- markers 1..7, 1001, 1003..1031 (every migration in `dev/migrations/` is applied)
-- review_queue: 14 open (gas: 9 unknown_feature, 2 duplicate_report_number,
-  1 report_no_mismatch; earlier: 1 self_precedence_note, 1 work_order_reingest)
+- analysis 97,698 · sample 17,883 · analyte 247 · lab_method 568 · project 571
+- feature 1,023 · feature_alias 2,283 (0 pending)
+- markers 1..7, 1001, 1003..1032 (every migration in `dev/migrations/` is applied)
+- review_queue: 5 open (gas: 2 duplicate_report_number, 1 report_no_mismatch;
+  earlier: 1 self_precedence_note, 1 work_order_reingest)
 - ingest_file: 52 rows (16 gas workbooks archived 2026-10-17)
 
 Suite: **1,484 tests, 0 failing, 11 skipped**. Gated corpus tests are skipped unless
@@ -67,9 +67,9 @@ Suite: **1,484 tests, 0 failing, 11 skipped**. Gated corpus tests are skipped un
 
 ## Next
 
-1. **Gas review items:** decide whether B.G201, K.G365 and K.G366 become new
-   features (PLAN-17 ruling 8). Weekly gas reports are filed under their own report
-   numbers. Run script and results: `scratchpad/2026-10-17-gaslive/`.
+1. **Gas review items:** B.G201/K.G365/K.G366 are settled (032 removed them). Weekly gas
+   reports are filed under their own report numbers. Run script and results:
+   `scratchpad/2026-10-17-gaslive/`.
 2. **Existing-row lookup:** when two samples match a reading, prefer the one whose
    value equals the incoming row, then the one under the incoming work order. Today
    the lowest uuid wins, which gives false value_conflicts on legacy visits split
@@ -77,10 +77,8 @@ Suite: **1,484 tests, 0 failing, 11 skipped**. Gated corpus tests are skipped un
 3. **The corpus run:** about 265 files and 213 ACIRL workbooks, the main milestone.
    Before it:
    - the 4 mis-timed 2023-06-14 samples and the `b.eo1` date bound (migration 030);
-   - the letter-O codes with no alias (K.SO9, K.SO6, K.SO7, B.LO1/LO2, B.SO5, KS07,
-     KS05, KE01; about 1,200 rows). They go through A78's review-and-confirm route.
-     Pending aliases are stamped with the earliest date seen in a single ingest, so
-     confirm each with `date_start = NA` (`scratchpad/2026-10-17-precorpus/`);
+   - the letter-O codes are registered, undated (032). KL01, "K.E02/K.SO6" and
+     "B.SO1 S1"/"B.SO3 S3" are still unruled and will go to review;
    - B.S22 is fine: it has a self alias, plus a non-blocking self_precedence_note
      about the old B.S06 code, which is Robin's ruling;
    - check `24006989-02 … Incident Sampling Feb - May 2020.xlsx`: its pre-2020 field

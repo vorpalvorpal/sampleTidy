@@ -51,6 +51,7 @@ Verified 2026-08-09 against the live file, read-only; 011-016 rows added 2026-10
 | 1029 | `029-legacy-field-corrections.R` | main session, 2026-10-17, under Robin's "the workbook wins" precedent (016, 019) | 2026-10-17 (rehearsed twice on copies) |
 | 1030 | `030-precorpus-fixes.R` | main session, 2026-10-17, on scratchpad/2026-10-17-precorpus/PROPOSAL.md (issues 2, 3) | 2026-10-17 (rehearsed twice on copies) |
 | 1031 | `031-datetime-day-typos.R` | main session, 2026-10-17, on scratchpad/2026-10-17-dtmismatch/PROPOSAL.md (3 month/day typos in `datetime`; K.MW11B left) | 2026-10-17 (rehearsed twice on copies) |
+| 1032 | `032-letter-o-aliases-and-gas-template-slots.R` | Robin, 2026-10-17 (letter-O codes: "I'm happy for them to be registered now"; B.G201/K.G365/K.G366: "If not, we don't want them") | 2026-10-17 (rehearsed twice on copies, the second interrupted at step B and resumed) |
 
 **001-024 are applied (023 was applied after 024, 2026-10-17).** 011 deleted the derived LMF analyte, its method and 2,267
 analyses, plus (FK-forced, Robin approved) its 4 `Leachate Signature Index` `guideline`
@@ -195,6 +196,22 @@ a transcription error has no window), so the Feb-May 2024 B.EO1 rows resolve ins
 alias keys at 12 dates changes only `b.eo1` before 2024-08-07. The gas points B.G201/K.G365/K.G366 (PLAN-17 ruling 8) are NOT in
 030: featureSFC holds none of them. change_log +9. Row backups `030-precorpus-fixes-BACKUP-{sample,feature_alias}.csv` (written on
 apply). Re-verifies of 021 and 024-029 pass unchanged on the migrated copies. Apply with `dev/migrations/apply-030.R`.
+032 applies two of Robin's 2026-10-17 rulings (rehearsal and research in scratchpad/2026-10-17-mig032/). (1) Nine undated
+`transcription_error` aliases, confirmed_by R. Shannon, auto_assign TRUE, n_seen 0: K.SO9 -> K.S09, K.SO6 -> K.S06, K.SO7 -> K.S07,
+B.LO1 -> B.L01, B.LO2 -> B.L02, B.SO5 -> B.S05 (letter O for 0) and KS07 -> K.S07, KS05 -> K.S05, KE01 -> K.E01 (dropped dot). They are
+registered by hand, which Robin's ruling allows in place of A78's review-and-confirm, and undated so that earlier workbooks resolve (the
+b.eo1 trap). Before inserting, the migration checks that no existing key or name (case-insensitive) is taken and that no folded-key twin
+(`.rc_method_key`) points at another feature. Excluded as unruled or ambiguous: KL01, "K.E02/K.SO6", "B.SO1 S1", "B.SO3 S3". A resolver
+probe of the 111 swept `feature_raw` values at 4 dates changes only these 9 (pending -> hit). (2) B.G201, K.G365 and K.G366 match no
+located feature at their site. The same numbers exist at the other site (K.G201 at Katoomba, B.G365/366 at Blaxland), but those are
+different probes with their own readings on the same days. So the migration deletes the 9 zero CH4 readings, their 9 samples and the 3
+pending aliases, and closes the 9 unknown_feature/structural review items as resolved by R. Shannon, citing the ruling. Three commits
+(analyses, then samples, then aliases + inserts + review closes + marker), because duckdb's FK check does not see an earlier delete in
+the same transaction. A re-run resumes at the first unfinished step. change_log +66. Row backups
+`032-...-BACKUP-{analysis,sample,feature_alias,review_queue}.csv`; inserted aliases `032-...-INSERTED-feature_alias.csv`. Apply with
+`dev/migrations/apply-032.R`. No DB change, recorded here (Robin, 2026-10-17): K.MW11B Mar-2023 (b7286aa9) stays as it is ("probably
+lost to the sands of time"); the 4 bore-height rows at 2024-08-26 22:00 local (B.MW02/04/08/09) stay ("If they are in the db, assume
+they are meant to be there").
 Pre-migration snapshots are in `snapshot_dir` (`monitoring_pre-<name>_<ts>.duckdb`).
 
 ## Ordering constraints (enforced in code, not by memory)
@@ -218,6 +235,8 @@ Pre-migration snapshots are in `snapshot_dir` (`monitoring_pre-<name>_<ts>.duckd
     028 ──requires 1026        (independent of 027; applied after it)
     029 ──requires 1028
     030 ──requires 1029
+    031 ──requires 1030
+    032 ──requires 1031
     003, 008, 009, 010, 011, 012, 013, 014, 015 ── independent
 
 Each dependent migration checks its predecessor's marker and refuses without it, so
