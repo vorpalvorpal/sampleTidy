@@ -155,7 +155,9 @@
     FROM \"sample\" s JOIN (%s) d ON d.uuid = s.uuid",
     .mig021_syd("s.datetime"), .mig021_syd("s.date"),
     .mig021_syd("s.datetime_start"), .mig021_syd("s.date_start"), .mig021_dust_sql))
-  if (n$n != .mig021_expected_dust_n) fail(sprintf("%d dust samples, expected %d.", n$n, .mig021_expected_dust_n))
+  # Later imports add dust samples (035 set their datetime = date), so the
+  # count can only grow; the per-row datetime checks below still cover them.
+  if (n$n < .mig021_expected_dust_n) fail(sprintf("%d dust samples, expected at least %d.", n$n, .mig021_expected_dust_n))
   if (n$dt_ne + n$dts_ne + n$dt_day_ne + n$dts_day_ne > 0) {
     fail(sprintf("datetime != date on %d, datetime_start != date_start on %d, Sydney day %d / %d.",
                  n$dt_ne, n$dts_ne, n$dt_day_ne, n$dts_day_ne))
