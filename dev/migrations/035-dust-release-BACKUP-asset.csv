@@ -1,0 +1,6 @@
+"uuid","name","date","file_format","type","purpose","organisation","person","uuid_project","uuid_feature","filename","hash","comments"
+"5eed0153-077e-4ca3-97a7-88537d5b5042","ENMRG","2025-02-28 13:00:00","csv","Chemical analysis",,"ALS",,"212e78a9-1f18-4b5c-8503-ed521d21556b",,"ES2608464_1_ENMRG.CSV","6bdd95849abf49b35462fc83a1a03426",
+"6d69e1f7-9a93-4d27-84f7-91fac2d5c55c","Certificate of analysis","2025-02-28 13:00:00","pdf","Certificate of analysis",,"ACIRL",,"212e78a9-1f18-4b5c-8503-ed521d21556b",,"ES2608464_1_COA.pdf","47c1d0b8eeae3fbef01585e0eb43bb3d",
+"9aabe0e2-cbb5-4201-a194-75ed1581d5ca","XTAB","2025-02-28 13:00:00","csv","Chemical analysis",,"ALS",,"212e78a9-1f18-4b5c-8503-ed521d21556b",,"ES2608464_1_XTAB.csv","328f390945b2f0d4251ec3f171b7ecf2",
+"cbd3c3d4-7b89-4f2b-8d23-570fc91ff9ed","XTAB","2025-02-28 13:00:00","xls","Chemical analysis",,"ALS",,"212e78a9-1f18-4b5c-8503-ed521d21556b",,"ES2608464_1_XTAB.XLS","27c6c66dce7b8eb340ad0551e9386ec7",
+"fb9a4dc2-577b-46a1-8f84-fe7c1c7aa5e3","Report","2025-02-28 13:00:00","pdf","Chemical analysis",,"ACIRL",,"212e78a9-1f18-4b5c-8503-ed521d21556b",,"2400-7453-03 Annual March 2026 Blaxland WMF  .pdf","be38ff47e96b28db295904bfb54fb7b6",

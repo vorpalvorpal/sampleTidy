@@ -54,6 +54,7 @@ Verified 2026-08-09 against the live file, read-only; 011-016 rows added 2026-10
 | 1032 | `032-letter-o-aliases-and-gas-template-slots.R` | Robin, 2026-10-17 (letter-O codes: "I'm happy for them to be registered now"; B.G201/K.G365/K.G366: "If not, we don't want them") | 2026-10-17 (rehearsed twice on copies, the second interrupted at step B and resumed) |
 | 1033 | `033-kl01-alias.R` | main session, 2026-10-17, following Robin's 032 ruling (ALS ES2620363 carries 40 KL01 rows) | 2026-10-17 (rehearsed twice on copies) |
 | 1034 | `034-gas-slots-again-and-blaxland-epa-masks.R` | Robin, 2026-10-17 (032 ruling on K.G365/K.G366 re-applied; "Phosphate = P-reactive"); main session for the B.L04 mask and the DO / faecal-coliform masks | 2026-10-17 (rehearsed twice on copies). Deleted the 2 K.G365/K.G366 pending aliases, 4 samples and 4 CH4 0-readings that the 2026-10-17 pending-documents import re-minted (2400-7539-06-02, 2400-7539-09-01) and closed their 4 review items; B.L04 EPA feature_mask name '' -> NULL; EPA analyte_mask rows DO "Dissolved Oxygen" mg/L x1, Faecal Coliforms "Faecal Coliforms" CFU/100mL x100 (stored CFU/mL), P-reactive "Phosphate" mg/L x1. No data-only way exists to make the gas importer skip these labels: the next import of such a workbook re-mints them. 021's re-verify fails on its fixed count (124 dust samples, expected 122) because the same import added 2 ES2531465 dust samples with datetime NULL; not caused by 034 |
+| 1035 | `035-dust-release.R` | main session, 2026-10-17, on scratchpad/2026-10-17-dust/PLAN.md (A77 release for the Blaxland 2025/26 return) | 2026-10-18 by Robin (rehearsed twice on copies; independent review). Released 10 A77 dust blocks (2400-7453-08 already_present as a duplicate of ES2525054; 7453-11/-12, 7538-01, 7538-02 medium confidence), re-filed the released samples under ALS ES2537534/ES2538342/ES2600194/ES2604522, relinked the 2025 annual dust off ES2608464 to ES2506846 and reset ES2608464's date_start + 5 asset dates to 2026-03-16, set datetime = date on 10 NULL-datetime dust samples. B.D07/B.D08 now have 5 events each in 2025-08-22..2026-08-21. 021's fixed-count re-verify is now stale (needs "at least 122") |
 
 **001-024 are applied (023 was applied after 024, 2026-10-17).** 011 deleted the derived LMF analyte, its method and 2,267
 analyses, plus (FK-forced, Robin approved) its 4 `Leachate Signature Index` `guideline`
@@ -246,6 +247,7 @@ Pre-migration snapshots are in `snapshot_dir` (`monitoring_pre-<name>_<ts>.duckd
     032 ──requires 1031
     033 ──requires 1032
     034 ──requires 1033
+    035 ──requires 1034
     003, 008, 009, 010, 011, 012, 013, 014, 015 ── independent
 
 Each dependent migration checks its predecessor's marker and refuses without it, so
