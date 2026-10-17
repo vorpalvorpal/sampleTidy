@@ -49,6 +49,7 @@ Verified 2026-08-09 against the live file, read-only; 011-016 rows added 2026-10
 | 1027 | `027-dedupe-legacy-field-readings.R` | Robin, 2026-10-17 ("Fix those 16 legacy days"; keep rule and exclusions proposed in the file header) | 2026-10-17 (rehearsed twice on copies) |
 | 1028 | `028-gas-building-features.R` | Robin, 2026-10-17 (gas-building rulings 1-4) | 2026-10-17, after 027 (rehearsed twice on copies) |
 | 1029 | `029-legacy-field-corrections.R` | main session, 2026-10-17, under Robin's "the workbook wins" precedent (016, 019) | 2026-10-17 (rehearsed twice on copies) |
+| 1030 | `030-precorpus-fixes.R` | main session, 2026-10-17, on scratchpad/2026-10-17-precorpus/PROPOSAL.md (issues 2, 3) | 2026-10-17 (rehearsed twice on copies) |
 
 **001-024 are applied (023 was applied after 024, 2026-10-17).** 011 deleted the derived LMF analyte, its method and 2,267
 analyses, plus (FK-forced, Robin approved) its 4 `Leachate Signature Index` `guideline`
@@ -181,6 +182,18 @@ re-ingest of 20 workbooks takes value_conflicts from 69 to 32; for the original 
 planned row comes back already_present, except 3 EC rows where the two reports disagree and `.rc_find_existing()` takes the
 other order's copy. Row backups are `029-legacy-field-corrections-BACKUP-{analysis,sample}.csv`, written on apply. Apply with
 `dev/migrations/apply-029.R`.
+030 fixes two things found before the corpus run (scratchpad/2026-10-17-precorpus/PROPOSAL.md; rehearsal and research in
+scratchpad/2026-10-17-mig030/). (1) Four legacy samples of 2023-06-14 get the UTC instant of the local time in their own comment
+(AEST, +10): ES2320105 B.S01 6494ece7 09:30 -> 2023-06-13 23:30 and B.S03 d1fd0ab7 09:15 -> 23:15 (the fabricated local time was
+stored as UTC, a 10-hour slip); ES2320129 B.S01 6a463a90 22:25 -> 23:25 and B.S03 7505ed39 22:10 -> 23:10 (converted at +11 in
+June; comment is the only source). `datetime_start` (equal to `datetime` on all four) moves with it; `date` is unchanged (already
+2023-06-14 Sydney midnight); `analysis` has no datetime column, so its 94 rows are untouched. 021's three-commit index sequence:
+DROP `ux_sample_identity`, one transaction, re-create it with 009's definition in a finally; a precondition proves no
+(alias, datetime, project) collision. (2) `b.eo1` -> B.E01 (transcription_error, 4295a6e1): `date_start` 2024-08-07 -> NULL (A78:
+a transcription error has no window), so the Feb-May 2024 B.EO1 rows resolve instead of going to review. A probe of all 1,881
+alias keys at 12 dates changes only `b.eo1` before 2024-08-07. The gas points B.G201/K.G365/K.G366 (PLAN-17 ruling 8) are NOT in
+030: featureSFC holds none of them. change_log +9. Row backups `030-precorpus-fixes-BACKUP-{sample,feature_alias}.csv` (written on
+apply). Re-verifies of 021 and 024-029 pass unchanged on the migrated copies. Apply with `dev/migrations/apply-030.R`.
 Pre-migration snapshots are in `snapshot_dir` (`monitoring_pre-<name>_<ts>.duckdb`).
 
 ## Ordering constraints (enforced in code, not by memory)
@@ -203,6 +216,7 @@ Pre-migration snapshots are in `snapshot_dir` (`monitoring_pre-<name>_<ts>.duckd
     027 ──requires 1026
     028 ──requires 1026        (independent of 027; applied after it)
     029 ──requires 1028
+    030 ──requires 1029
     003, 008, 009, 010, 011, 012, 013, 014, 015 ── independent
 
 Each dependent migration checks its predecessor's marker and refuses without it, so

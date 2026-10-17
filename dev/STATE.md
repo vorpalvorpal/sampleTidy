@@ -27,7 +27,7 @@ receives one-way snapshots and backups.
 
 - analysis 97,707 · sample 17,892 · analyte 247 · lab_method 568 · project 571
 - feature 1,023 · feature_alias 2,277 (3 pending: B.G201, K.G365, K.G366)
-- markers 1..7, 1001, 1003..1029 (every migration in `dev/migrations/` is applied)
+- markers 1..7, 1001, 1003..1030 (every migration in `dev/migrations/` is applied)
 - review_queue: 14 open (gas: 9 unknown_feature, 2 duplicate_report_number,
   1 report_no_mismatch; earlier: 1 self_precedence_note, 1 work_order_reingest)
 - ingest_file: 52 rows (16 gas workbooks archived 2026-10-17)
