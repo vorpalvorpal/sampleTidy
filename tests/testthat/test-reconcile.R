@@ -294,6 +294,7 @@ test_that("R-8.3: CAS fallback finds the analyte but still queues (known_analyte
 
   # No lab_method row for (Fluoride, Internal); CAS 16984-48-8 -> a-0002 exists
   event <- mk_event(mk_row(source_ref = "r1", analyte_raw = "Fluoride", org = "Internal",
+                           sample_datetime_raw = "24 May 2025 14:00",  # off s-0001's instant (A91 step 5)
                            cas_number = "16984-48-8", method_raw = NA_character_))
   out <- reconcile_event(event, con)
   hit <- out$review[out$review$source_ref == "r1", ]
@@ -2282,6 +2283,7 @@ test_that("R-11.6: a resolved row is still converted exactly as today (R-8.4 una
 test_that("R-11.6/A66: a CAS-hit row reaches `clean` dangling AND its review item names the CAS-matched analyte as a suggestion (pinned both ways)", {
   path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   event <- mk_event(mk_row(source_ref = "r1", analyte_raw = "Fluoride", org = "Internal",
+                           sample_datetime_raw = "24 May 2025 14:00",  # off s-0001's instant (A91 step 5)
                            cas_number = "16984-48-8", method_raw = NA_character_,
                            units_raw = "mg/L", value_raw = "0.5", value_num = 0.5,
                            below_detection = FALSE, rl = 0.1))
@@ -2437,6 +2439,7 @@ test_that("A44: case-variant literal feature codes 'na'/'Na' reach the same coll
 test_that("R-11.9: an unknown_analyte item names the lab method and the CAS-suggested analyte", {
   path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   event <- mk_event(mk_row(source_ref = "r1", analyte_raw = "Fluoride", org = "Internal",
+                           sample_datetime_raw = "24 May 2025 14:00",  # off s-0001's instant (A91 step 5)
                            cas_number = "16984-48-8", method_raw = NA_character_))
   out <- reconcile_event(event, con)
   hit <- out$review[out$review$source_ref == "r1", ]
@@ -2770,11 +2773,15 @@ test_that("PLAN-7b round-3 G-A site 2: STAGE-0 reads review_payload's subkind vi
 })
 
 # ---- R-11.19: exact raw-name match first (A65 live defect) -----------------
+# These ACIRL rows use 14:00, not mk_row()'s 11:45: 11:45 is the instant of
+# the ALS seed sample s-0001, which A91 step 5 would withhold as
+# cross_stream_instant - incidental to what these tests check.
 
 test_that("R-11.19: 'Standing Water Level' resolves to the row spelled exactly that way (lm-0010)", {
   path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   event <- mk_event(mk_row(source_ref = "r1", analyte_raw = "Standing Water Level", org = "ACIRL",
-                           method_raw = "field", cas_number = NA_character_, units_raw = "m",
+                           method_raw = "field", cas_number = NA_character_,
+                           sample_datetime_raw = "24 May 2025 14:00", units_raw = "m",
                            value_raw = "1.5", value_num = 1.5, below_detection = FALSE, rl = 0.01,
                            lab_sample_id = "XX9999999995"))
   out <- reconcile_event(event, con)
@@ -2786,7 +2793,8 @@ test_that("R-11.19: 'Standing Water Level' resolves to the row spelled exactly t
 test_that("R-11.19: 'Standing water level' (lowercase w) resolves to the OTHER row (lm-0011) - not always the same pick", {
   path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   event <- mk_event(mk_row(source_ref = "r1", analyte_raw = "Standing water level", org = "ACIRL",
-                           method_raw = "field", cas_number = NA_character_, units_raw = "m",
+                           method_raw = "field", cas_number = NA_character_,
+                           sample_datetime_raw = "24 May 2025 14:00", units_raw = "m",
                            value_raw = "1.7", value_num = 1.7, below_detection = FALSE, rl = 0.01,
                            lab_sample_id = "XX9999999994"))
   out <- reconcile_event(event, con)
@@ -2798,7 +2806,8 @@ test_that("R-11.19: 'Standing water level' (lowercase w) resolves to the OTHER r
 test_that("R-11.19: a third, unseen spelling folds to a hit (one analyte) and picks the SAME uuid_lab on a re-run (idempotency)", {
   path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   mk_ev <- function(ref) mk_event(mk_row(source_ref = ref, analyte_raw = "STANDING WATER LEVEL", org = "ACIRL",
-                                         method_raw = "field", cas_number = NA_character_, units_raw = "m",
+                                         method_raw = "field", cas_number = NA_character_,
+                           sample_datetime_raw = "24 May 2025 14:00", units_raw = "m",
                                          value_raw = "1.9", value_num = 1.9, below_detection = FALSE, rl = 0.01,
                                          lab_sample_id = "XX9999999993"))
   out1 <- reconcile_event(mk_ev("r1"), con)
@@ -2819,7 +2828,8 @@ test_that("R-11.19: two candidates spanning DIFFERENT analytes still go to revie
     ('lm-r1119-a', 'a-0001', 'Test Reading', 'field', 'ACIRL'),
     ('lm-r1119-b', 'a-0002', 'test reading', 'field', 'ACIRL')")
   event <- mk_event(mk_row(source_ref = "r1", analyte_raw = "TEST READING", org = "ACIRL",
-                           method_raw = "field", cas_number = NA_character_))
+                           method_raw = "field", cas_number = NA_character_,
+                           sample_datetime_raw = "24 May 2025 14:00"))
   out <- reconcile_event(event, con)
   hit <- out$review[out$review$source_ref == "r1", ]
   expect_equal(nrow(hit), 1)
@@ -5655,6 +5665,7 @@ test_that("PLAN-7b item 8 REVERSED (Robin, 2026-07-26): `blocking` stays SCOPED 
 
   # unknown_analyte: known_analyte_no_method (CAS-suggested) branch
   event_cas <- mk_event(mk_row(source_ref = "r1", analyte_raw = "Fluoride", org = "Internal",
+                               sample_datetime_raw = "24 May 2025 14:00",  # off s-0001's instant (A91 step 5)
                                cas_number = "16984-48-8", method_raw = NA_character_))
   out_cas <- reconcile_event(event_cas, con)
   hit_cas <- out_cas$review[out_cas$review$source_ref == "r1", ]

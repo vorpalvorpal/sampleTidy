@@ -92,6 +92,9 @@ resolve_review(uuid, resolution, resolved_by, db = st_config("live_db"))
 # for review (payload$rows) with the human's chosen sample dates, then resolves
 # the item, in one transaction. resolve_review() only flips status; this is the
 # path that actually lets withheld rows in.
+# A91, added 2026-10-17: a `sample_ambiguous` item also takes
+# overrides$sample = <one of the item's candidate sample uuids> | "new";
+# any other uuid is refused.
 release_review(uuid, overrides = list(), resolved_by, db = st_config("live_db"))
 
 # plan 09 R-9.7 / R-9.11, added 2026-07-28 (Robin's ruling). Both operator-run
@@ -851,10 +854,13 @@ Numbering is continuous, so nothing below is re-used. Index only:
 - **A83** — Every ACIRL transcription label gets its own ACIRL `lab_method`,
 - **A83 (amended)** — A83 AMENDED 2026-08-08 — the mapping is now 212 labels, not 208, and
 - **A84** — A sample is identified by (feature, datetime), and where two samples
+- **A84 (amended)** — A84 AMENDED by A91 (2026-10-17) — an ambiguous sample match is reviewed (`sample_ambiguous`), no longer refused; the data half stands
 - **A85** — A bare number in a units column is never a unit — refused as
 - **A86** — `SAR` is dimensionless (`units = '1'`), and the `%`-typed Aroclor
 - **A88** — Adapters may WITHHOLD rows for review: `needs_review` / `review_kind` / `review_payload` on `results`; identical payloads fold into one item; `release_review()` commits them with the human's dates (design 2026-10-16).
 - **A89** — An adapter may declare `zero_is_nondetect`; only then is its bare `0` a non-detect (2026-10-16).
+- **A90** — Router verdicts store a registry fingerprint (R-3.8); a stale or NULL one is re-decided automatically (2026-10-17).
+- **A91** — A sample is matched within its contractor STREAM (`gas` / `ACIRL` / `ALS` / …, read from the `lab_method`); an ambiguous match is reviewed (`sample_ambiguous`), not refused (2026-10-17). **AMENDS A84's import half**: the ruling-9 abort becomes a review for every adapter, ALS included.
 
 Full text: `dev/plans/OPERATING-RULES.md`.
 

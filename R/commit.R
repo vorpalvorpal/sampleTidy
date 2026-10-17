@@ -246,8 +246,9 @@
 #'
 #' A `supersedes` row matched an existing analysis (hence an existing sample)
 #' and is the A12 path; `already_present` rows are not in `clean` at all. What
-#' is left is measured with `.ct_existing_sample_uuid()` - the same predicate
-#' commit itself uses - so the guard and the writer cannot disagree.
+#' is left is measured with `.ct_sample_match()` - the same stream-aware
+#' matcher commit itself uses (A91) - so the guard and the writer cannot
+#' disagree.
 #' @keywords internal
 #' @noRd
 .ct_unmatched_clean_rows <- function(con, clean) {
@@ -256,15 +257,23 @@
     return(integer(0))
   }
   keys <- .ct_row_feature_keys(con, clean)
+  stream <- .rc_row_stream(clean, .rc_load_registry(con))
   supers <- if ("supersedes" %in% names(clean)) clean$supersedes else rep(NA_character_, n)
+  override <- if ("sample_override" %in% names(clean)) clean$sample_override else rep(NA_character_, n)
   out <- integer(0)
   for (i in seq_len(n)) {
     if (!is.na(supers[[i]])) next
-    hit <- .ct_existing_sample_uuid(
+    if (!is.na(override[[i]])) {
+      if (override[[i]] == "new") out <- c(out, i)
+      next
+    }
+    # A91: the stream-aware matcher, read-only. An ambiguous row matches
+    # existing samples (reconcile withholds it); only a new one is unmatched.
+    m <- .ct_sample_match(
       con, keys$pending[[i]], keys$match_feature[[i]], keys$alias_uuid[[i]],
-      clean$sample_date[[i]], clean$sample_datetime[[i]]
+      clean$sample_date[[i]], clean$sample_datetime[[i]], stream[[i]]
     )
-    if (is.na(hit)) out <- c(out, i)
+    if (m$outcome %in% c("new", "cross_stream_instant")) out <- c(out, i)
   }
   out
 }
@@ -1427,75 +1436,35 @@
 #' existing sample this measurement belongs to, or `NA_character_` if it
 #' would need a new one.
 #'
-#' Factored out (behaviour unchanged - `.ct_find_or_create_sample()` calls it)
-#' so PLAN-15 F.10's re-ingest guard can ask "does this row match an existing
-#' sample?" WITHOUT writing anything: the guard must decide before the
-#' transaction does any work, and a guard that reasoned about sample identity
-#' with its own second copy of the R-11.18/A62 predicate would be free to
-#' drift from the one commit actually uses.
+#' A91: the decision itself is `.ct_sample_match()` below, which reconcile and
+#' the PLAN-15 F.10 guard ask too, so none of them carries its own copy of the
+#' R-11.18/A62 predicate to drift from the one commit uses. `stream = NULL`
+#' matches across every stream (the pre-A91 behaviour); commit passes the
+#' row's stream. What this function adds is the REFUSAL: an `"ambiguous"` or
+#' `"cross_stream_instant"` answer aborts, as an invariant check - reconcile
+#' has already withheld those rows (`.rc_sample_match_rows()`).
 #'
-#' BOTH candidate queries carry an explicit `ORDER BY uuid` - the PLAN-7b
+#' The candidate queries carry an explicit `ORDER BY uuid` - the PLAN-7b
 #' round-2 D6 convention, applied here on 2026-08-03 after an audit found this
-#' function was the SIBLING that never got it. `.rc_find_existing()`
-#' (R/reconcile.R:1794) carries a full docstring explaining why: when the
-#' datetime narrowing below does not collapse the candidate set to one, the
-#' `cand$uuid[[1]]` pick at the bottom is whichever row DuckDB's physical
-#' storage order happens to emit first, which is not stable across compaction
-#' or checkpoint - and that uuid becomes `clean$uuid_sample`, i.e. the sample
-#' every row of the batch is attached to.
-#'
-#' Measured on the live database (scratchpad/m6a_sample_pick.R): 68
-#' (feature, date) groups hold more than one sample; the datetime narrowing
-#' cannot separate 13 of them; and in 8 of those 13 the unordered SELECT's
-#' first row is NOT the lowest uuid, so the choice was being made by storage
-#' order today. The pick is still arbitrary - it is now the same arbitrary
-#' answer every time, which is the property that matters.
+#' function was the SIBLING that never got it. Measured on the live database
+#' (scratchpad/m6a_sample_pick.R): 68 (feature, date) groups hold more than
+#' one sample; the datetime narrowing cannot separate 13 of them; and in 8 of
+#' those 13 the unordered SELECT's first row is NOT the lowest uuid, so the
+#' choice was being made by storage order.
 #' @keywords internal
 #' @noRd
 .ct_existing_sample_uuid <- function(con, pending, match_feature, alias_uuid,
-                                      sample_date, sample_datetime) {
-  if (isTRUE(pending)) {
-    if (is.na(alias_uuid)) return(NA_character_)
-    cand <- DBI::dbGetQuery(
-      con,
-      paste0('SELECT uuid, datetime FROM "sample" WHERE uuid_feature_alias = ? AND ',
-             .ct_sydney_day_sql("date"), ' = ?
-         ORDER BY uuid'),
-      params = list(alias_uuid, as.character(sample_date))
-    )
-  } else {
-    if (is.na(match_feature)) return(NA_character_)
-    cand <- DBI::dbGetQuery(
-      con,
-      paste0('SELECT s.uuid, s.datetime FROM "sample" s
-         JOIN feature_alias fa ON fa.uuid = s.uuid_feature_alias
-        WHERE fa.uuid_feature = ? AND ', .ct_sydney_day_sql("s.date"), ' = ?
-        ORDER BY s.uuid'),
-      params = list(match_feature, as.character(sample_date))
-    )
-  }
-  if (nrow(cand) == 0) {
-    return(NA_character_)
-  }
-  # Compare instants as epoch seconds so a tz-tagged incoming POSIXct and the
-  # driver's UTC-returned candidate never raise a spurious "inconsistent
-  # tzone" warning; equality of instants is tz-independent.
-  inc_dt <- as.numeric(sample_datetime)
-  cand_dt <- as.numeric(cand$datetime)
-  create_new <- !is.na(inc_dt) &&
-    all(!is.na(cand_dt)) &&
-    !any(cand_dt == inc_dt)
-  if (create_new) {
-    return(NA_character_)
-  }
-  if (!is.na(inc_dt)) {
-    match_dt <- !is.na(cand_dt) & (cand_dt == inc_dt)
-    if (any(match_dt)) cand <- cand[match_dt, , drop = FALSE]
+                                      sample_date, sample_datetime,
+                                      stream = NULL, fresh = NULL) {
+  m <- .ct_sample_match(con, pending, match_feature, alias_uuid,
+                        sample_date, sample_datetime, stream, fresh)
+  if (m$outcome %in% c("new", "reuse")) {
+    return(m$uuid)
   }
   # A76/ruling-9: MORE THAN ONE SURVIVOR IS AMBIGUOUS, AND AMBIGUOUS IS REFUSED.
   #
   # Until 2026-08-08 this line was `cand$uuid[[1]]` - "pick one and carry on".
-  # The `ORDER BY uuid` above (PLAN-7b D6) made that pick STABLE, which is worth
+  # The `ORDER BY uuid` (PLAN-7b D6) made that pick STABLE, which is worth
   # having, but stable is not the same as right: every row of the incoming batch
   # then attaches to whichever of several real samples sorted first. Measured on
   # the live database (scratchpad/r008_*.R), re-ingesting one date-only B.L01
@@ -1505,28 +1474,142 @@
   #
   # Robin's ruling (2026-08-08): "there should never be two samples at the same
   # feature at the same datetime ... quarantine any incoming data where this is
-  # true." Refusing IS the quarantine: `commit_event()` runs inside a
-  # transaction, so nothing lands and the operator is told exactly which samples
-  # cannot be told apart.
-  #
-  # This can only fire where the old code was already guessing. One candidate
-  # still reuses it, and a datetime that separates the candidates still narrows
-  # to one - both unchanged.
-  if (nrow(cand) > 1) {
+  # true." A91 (2026-10-17) moved the quarantine to reconcile: those rows are
+  # withheld as `sample_ambiguous` and the rest of the file commits. So this
+  # abort is now an INVARIANT check that reconcile makes unreachable - reaching
+  # it means a row got past `.rc_sample_match_rows()` that should not have.
+  # `commit_event()` runs inside a transaction, so nothing lands.
+  where <- if (isTRUE(pending)) alias_uuid else match_feature
+  when <- if (is.na(sample_datetime)) "NA" else format(sample_datetime)
+  if (m$outcome == "cross_stream_instant") {
     cli::cli_abort(
-      c("commit_event(): {nrow(cand)} existing samples cannot be told apart from
-         the incoming one, so it is refused rather than merged onto a guess.",
-        "i" = "feature/alias {.val {if (isTRUE(pending)) alias_uuid else match_feature}},
-               date {.val {as.character(sample_date)}}, datetime
-               {.val {if (is.na(inc_dt)) 'NA' else format(sample_datetime)}}",
-        "i" = "candidates: {paste(cand$uuid, collapse = ', ')}",
-        "x" = "Two samples at one feature and one datetime is a DATA error. Give
-               the samples their real times, or separate them onto the features
-               they actually belong to, before importing this batch."),
+      c("commit_event(): a new sample here would share its instant with another
+         stream's sample, so it is refused rather than written.",
+        "i" = "feature/alias {.val {where}}, date {.val {as.character(sample_date)}},
+               datetime {.val {when}}, stream {.val {stream}}",
+        "i" = "other-stream samples: {paste(m$candidates, collapse = ', ')}",
+        "x" = "reconcile should have withheld this row as {.val sample_ambiguous}
+               / {.val cross_stream_instant} (A91); this is a bug, not a data error."),
       class = "sampletidy_error"
     )
   }
-  cand$uuid[[1]]
+  cli::cli_abort(
+    c("commit_event(): {length(m$candidates)} existing samples cannot be told apart from
+       the incoming one, so it is refused rather than merged onto a guess.",
+      "i" = "feature/alias {.val {where}}, date {.val {as.character(sample_date)}}, datetime
+             {.val {when}}",
+      "i" = "candidates: {paste(m$candidates, collapse = ', ')}",
+      "x" = "Two samples at one feature and one datetime is a DATA error. Give
+             the samples their real times, or separate them onto the features
+             they actually belong to, before importing this batch."),
+    class = "sampletidy_error"
+  )
+}
+
+#' Which sample an incoming row joins, within its contractor stream (A91)
+#'
+#' READ-ONLY and never aborts; reconcile (`.rc_sample_match_rows()`), the F.10
+#' guard and commit all ask this one function, so they cannot disagree.
+#'
+#' Candidates are the samples at the feature (or, for a pending row, the
+#' alias) on the Sydney day that hold at least one analysis of `stream` - the
+#' stream `.rc_lab_stream()` reads from the lab_method, computed here in SQL
+#' for the analyses already stored. A sample with NO analyses is a candidate
+#' for every stream, except one this commit pass has just created: `fresh`
+#' names those (uuid -> stream), because their analyses are written only
+#' after every sample is resolved. `stream = NULL` makes every sample a
+#' candidate (the pre-A91 matcher).
+#'
+#' The R-11.18/A62 predicate then decides among the candidates, unchanged: a
+#' NEW sample only when distinctness is provable (incoming datetime non-NA AND
+#' every candidate datetime non-NA AND none equal); otherwise reuse, preferring
+#' a datetime-equal candidate. More than one survivor is `"ambiguous"`. A new
+#' sample whose non-NA datetime equals another stream's sample at the feature
+#' is `"cross_stream_instant"` instead: A80 files ACIRL field samples under the
+#' ALS order, so such an insert can collide on `ux_sample_identity`.
+#'
+#' Both queries carry `ORDER BY uuid` (the PLAN-7b D6 convention) and the
+#' candidates come back radix-sorted, so the answer never depends on storage
+#' order.
+#' @return `list(outcome, uuid, candidates)`: `outcome` is `"new"`, `"reuse"`,
+#'   `"ambiguous"` or `"cross_stream_instant"`; `uuid` the reused sample (else
+#'   NA); `candidates` the sorted uuids the outcome is about (`character(0)` for
+#'   `"new"`).
+#' @keywords internal
+#' @noRd
+.ct_sample_match <- function(con, pending, match_feature, alias_uuid,
+                             sample_date, sample_datetime, stream, fresh = NULL) {
+  out <- function(outcome, uuid = NA_character_, candidates = character(0)) {
+    list(outcome = outcome, uuid = uuid, candidates = sort(candidates, method = "radix"))
+  }
+  stream_sql <- "CASE WHEN an.type = 'gas' THEN 'gas' ELSE lm.organisation END"
+  from <- paste0(
+    'SELECT DISTINCT s.uuid, s.datetime, a.uuid IS NOT NULL AS has_analysis, ',
+    stream_sql, ' AS stream
+       FROM "sample" s
+       LEFT JOIN analysis a ON a.uuid_sample = s.uuid
+       LEFT JOIN lab_method lm ON lm.uuid = a.uuid_lab
+       LEFT JOIN analyte an ON an.uuid = lm.uuid_analyte '
+  )
+  if (isTRUE(pending)) {
+    if (is.na(alias_uuid)) return(out("new"))
+    rows <- DBI::dbGetQuery(
+      con,
+      paste0(from, 'WHERE s.uuid_feature_alias = ? AND ', .ct_sydney_day_sql("s.date"), ' = ?
+         ORDER BY s.uuid'),
+      params = list(alias_uuid, as.character(sample_date))
+    )
+  } else {
+    if (is.na(match_feature)) return(out("new"))
+    rows <- DBI::dbGetQuery(
+      con,
+      paste0(from, 'JOIN feature_alias fa ON fa.uuid = s.uuid_feature_alias
+        WHERE fa.uuid_feature = ? AND ', .ct_sydney_day_sql("s.date"), ' = ?
+        ORDER BY s.uuid'),
+      params = list(match_feature, as.character(sample_date))
+    )
+  }
+  if (nrow(rows) == 0) {
+    return(out("new"))
+  }
+
+  smp <- rows[!duplicated(rows$uuid), c("uuid", "datetime"), drop = FALSE]
+  in_stream <- vapply(smp$uuid, function(u) {
+    if (is.null(stream)) return(TRUE)
+    r <- rows[rows$uuid == u, , drop = FALSE]
+    held <- r$stream[r$has_analysis]
+    if (length(held) == 0) {
+      # empty: any stream - unless this pass created it for another stream
+      return(!(u %in% names(fresh)) || identical(unname(fresh[[u]]), stream))
+    }
+    stream %in% held
+  }, logical(1))
+  cand <- smp[in_stream, , drop = FALSE]
+  other <- smp[!in_stream, , drop = FALSE]
+
+  # Compare instants as epoch seconds so a tz-tagged incoming POSIXct and the
+  # driver's UTC-returned candidate never raise a spurious "inconsistent
+  # tzone" warning; equality of instants is tz-independent.
+  inc_dt <- as.numeric(sample_datetime)
+  cand_dt <- as.numeric(cand$datetime)
+  create_new <- nrow(cand) == 0 || (!is.na(inc_dt) && all(!is.na(cand_dt)) &&
+                                      !any(cand_dt == inc_dt))
+  if (create_new) {
+    other_dt <- as.numeric(other$datetime)
+    clash <- !is.na(inc_dt) & !is.na(other_dt) & other_dt == inc_dt
+    if (any(clash)) {
+      return(out("cross_stream_instant", candidates = other$uuid[clash]))
+    }
+    return(out("new"))
+  }
+  if (!is.na(inc_dt)) {
+    match_dt <- !is.na(cand_dt) & (cand_dt == inc_dt)
+    if (any(match_dt)) cand <- cand[match_dt, , drop = FALSE]
+  }
+  if (nrow(cand) > 1) {
+    return(out("ambiguous", candidates = cand$uuid))
+  }
+  out("reuse", uuid = cand$uuid[[1]], candidates = cand$uuid)
 }
 
 # The identity key here is feature + date/datetime. Matrix is deliberately NOT
@@ -1543,11 +1626,16 @@
 .ct_find_or_create_sample <- function(con, pending, match_feature, alias_uuid,
                                        sample_date, sample_datetime,
                                        uuid_project, organisation, person, reason,
-                                       sample_date_start = as.Date(NA)) {
-  hit <- .ct_existing_sample_uuid(con, pending, match_feature, alias_uuid,
-                                  sample_date, sample_datetime)
-  if (!is.na(hit)) {
-    return(hit)
+                                       sample_date_start = as.Date(NA),
+                                       stream = NULL, fresh = NULL, reuse = TRUE) {
+  # `reuse = FALSE` is a reviewer's `overrides$sample = "new"` (A91): the
+  # matcher already said this row cannot be placed, and the human said "new".
+  if (reuse) {
+    hit <- .ct_existing_sample_uuid(con, pending, match_feature, alias_uuid,
+                                    sample_date, sample_datetime, stream, fresh)
+    if (!is.na(hit)) {
+      return(hit)
+    }
   }
 
   # Round-2 item 11: refuse a non-Date sample_date rather than silently
@@ -1682,12 +1770,16 @@
 
 #' Resolve every `clean` row's sample uuid (step 2)
 #'
-#' Iterates the distinct `(feature-or-alias, sample_date, sample_datetime)`
-#' tuples of `clean` in row order, reusing the sample uuid already resolved
-#' for an earlier row sharing the same tuple (writes made earlier in this
-#' same transaction are visible to the `SELECT`s inside
+#' Iterates the distinct `(feature-or-alias, sample_date, sample_datetime,
+#' stream)` tuples of `clean` in row order, reusing the sample uuid already
+#' resolved for an earlier row sharing the same tuple (writes made earlier in
+#' this same transaction are visible to the `SELECT`s inside
 #' `.ct_find_or_create_sample()`, so cross-tuple reuse via the DB round-trip
-#' falls out for free too).
+#' falls out for free too). A91: the stream is part of the tuple, and a sample
+#' created in this pass is remembered with its stream (`fresh`) because it
+#' holds no analyses yet - otherwise a gas row would join the field sample
+#' created a moment earlier. A `sample_override` column (`release_review()`)
+#' places a row on the reviewer's sample, or on a new one for `"new"`.
 #'
 #' @return character vector, one sample uuid per row of `clean`.
 #' @keywords internal
@@ -1700,18 +1792,26 @@
   }
 
   keys <- .ct_row_feature_keys(con, clean)
+  # After .ct_materialise_lab_methods(), so a just-minted method is known.
+  stream <- .rc_row_stream(clean, .rc_load_registry(con))
+  override <- if ("sample_override" %in% names(clean)) clean$sample_override else rep(NA_character_, n)
   mk <- ifelse(keys$pending, keys$alias_uuid, keys$match_feature)
   key <- paste(
     mk, as.character(clean$sample_date),
     ifelse(is.na(clean$sample_datetime), "NA", format(clean$sample_datetime, "%Y-%m-%d %H:%M:%S")),
+    stream, override,
     sep = "||"
   )
   resolved <- new.env(parent = emptyenv())
+  fresh <- character(0)
   has_start <- "sample_date_start" %in% names(clean)
 
   for (i in seq_len(n)) {
     k <- key[[i]]
     uuid_i <- if (exists(k, envir = resolved, inherits = FALSE)) get(k, envir = resolved) else NULL
+    if (is.null(uuid_i) && !is.na(override[[i]]) && override[[i]] != "new") {
+      uuid_i <- override[[i]]          # the reviewer's sample, already checked
+    }
     if (is.null(uuid_i)) {
       uuid_i <- .ct_find_or_create_sample(
         con,
@@ -1724,8 +1824,15 @@
         organisation = clean$org[[i]],
         person = clean$sampler[[i]],
         reason = reason,
-        sample_date_start = if (has_start) clean$sample_date_start[[i]] else as.Date(NA)
+        sample_date_start = if (has_start) clean$sample_date_start[[i]] else as.Date(NA),
+        stream = stream[[i]], fresh = fresh,
+        reuse = !identical(override[[i]], "new")
       )
+      if (!(uuid_i %in% names(fresh)) && DBI::dbGetQuery(
+        con, "SELECT count(*) AS n FROM analysis WHERE uuid_sample = ?", params = list(uuid_i)
+      )$n[[1]] == 0) {
+        fresh[[uuid_i]] <- stream[[i]]
+      }
       assign(k, uuid_i, envir = resolved)
     }
     sample_uuid[[i]] <- uuid_i

@@ -50,7 +50,10 @@
 #' @param overrides a named list; `date_start` (exposure, the sample's
 #'   `date_start`) and `date` (collection, the sample's `date`) are each a
 #'   `Date` (or an ISO string) that replaces the withheld rows' own. Omit a
-#'   name to keep the date the row arrived with.
+#'   name to keep the date the row arrived with. `sample` places the rows of
+#'   a `sample_ambiguous` item (A91): one of the item's candidate sample
+#'   uuids, or `"new"` for a new sample. It is required for that kind, and any
+#'   other uuid is refused.
 #' @param resolved_by who released it - mandatory, no default (A55).
 #' @param db path to the DuckDB file; defaults to `st_config("live_db")`.
 #' @return `invisible(TRUE)` if rows were released, `invisible(FALSE)` if
@@ -60,7 +63,8 @@ release_review <- function(uuid, overrides = list(), resolved_by,
                            db = st_config("live_db")) {
   checkmate::assert_string(uuid)
   checkmate::assert_list(overrides, names = "unique")
-  checkmate::assert_subset(names(overrides), c("date_start", "date"))
+  checkmate::assert_subset(names(overrides), c("date_start", "date", "sample"))
+  if (!is.null(overrides$sample)) checkmate::assert_string(overrides$sample)
   checkmate::assert_string(resolved_by)
   checkmate::assert_string(db)
 
@@ -83,6 +87,29 @@ release_review <- function(uuid, overrides = list(), resolved_by,
           )
         }
         rows <- .rv_rows_from_payload(payload$rows)
+        # A91: a sample_ambiguous item is released onto a sample the reviewer
+        # names. Without one, reconcile would only withhold the rows again.
+        cands <- as.character(unlist(payload$candidate_samples))
+        if (identical(item$kind[[1]], "sample_ambiguous") &&
+            !(isTRUE(overrides$sample %in% c(cands, "new")))) {
+          cli::cli_abort(
+            c("release_review(): {.val {uuid}} is a {.val sample_ambiguous} item, so
+               {.code overrides$sample} must name one of its candidate samples or {.val new}.",
+              "i" = "candidates: {.val {cands}}",
+              "x" = "got {.val {if (is.null(overrides$sample)) 'nothing' else overrides$sample}}"),
+            class = "sampletidy_error"
+          )
+        }
+        if (!is.null(overrides$sample)) {
+          if (!identical(item$kind[[1]], "sample_ambiguous")) {
+            cli::cli_abort(
+              "release_review(): {.code overrides$sample} applies only to a
+               {.val sample_ambiguous} item; {.val {uuid}} is {.val {item$kind[[1]]}}.",
+              class = "sampletidy_error"
+            )
+          }
+          rows$sample_override <- rep(overrides$sample, nrow(rows))
+        }
         fmt <- function(d) format(as.Date(d), "%d/%m/%Y")
         if (!is.null(overrides$date)) rows$sample_datetime_raw <- rep(fmt(overrides$date), nrow(rows))
         if (!is.null(overrides$date_start)) {

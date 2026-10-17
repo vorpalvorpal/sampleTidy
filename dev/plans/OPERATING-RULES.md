@@ -28,11 +28,13 @@ Never write an agent number as `A<n>`.
 - **A83** — Every ACIRL transcription label gets its own ACIRL `lab_method`,
 - **A83 (amended)** — A83 AMENDED 2026-08-08 — the mapping is now 212 labels, not 208, and
 - **A84** — A sample is identified by (feature, datetime), and where two samples
+- **A84 (amended)** — A84 AMENDED by A91 (2026-10-17) — an ambiguous sample match is reviewed (`sample_ambiguous`), no longer refused; the data half stands
 - **A85** — A bare number in a units column is never a unit — refused as
 - **A86** — `SAR` is dimensionless (`units = '1'`), and the `%`-typed Aroclor
 - **A88** — Adapters may WITHHOLD rows for review: `needs_review` / `review_kind` / `review_payload` on `results`; identical payloads fold into one item; `release_review()` commits them with the human's dates (design 2026-10-16).
 - **A89** — An adapter may declare `zero_is_nondetect`; only then is its bare `0` a non-detect (2026-10-16).
 - **A90** — Router verdicts store a registry fingerprint (R-3.8); a stale or NULL one is re-decided automatically (2026-10-17).
+- **A91** — A sample is matched within its contractor STREAM (`gas` / `ACIRL` / `ALS` / …, read from the `lab_method`); an ambiguous match is reviewed (`sample_ambiguous`), not refused (Robin, 2026-10-17; amends A84's import half).
 
 ## The rules
 
@@ -800,6 +802,14 @@ Never write an agent number as `A<n>`.
   migration now refuses until the destination is as visible as the source —
   whether the Lawson STP tanker discharge belongs in the EPA return at all is a
   ruling, not a migration's decision.
+- **A84 AMENDED 2026-10-17 by A91** — the IMPORT half no longer refuses.
+  Two or more indistinguishable candidates now withhold the incoming rows as
+  `sample_ambiguous` (candidates listed) and the rest of the file commits, for
+  EVERY adapter, ALS included (Robin, D2). Candidates are only the samples of
+  the row's own stream (A91). `.ct_existing_sample_uuid()` keeps its abort, but
+  only as an invariant check that reconcile makes unreachable. The DATA half
+  above (008's two fixes, and the invariant living in code) is unchanged.
+
 - **A85** **A bare number in a units column is never a unit** — refused as
   `units_implausible / units_numeric` (`R/reconcile.R`, 2026-08-08). udunits
   disagrees, and that is the danger: it reads a bare number as a DIMENSIONLESS
@@ -926,3 +936,38 @@ Never write an agent number as `A<n>`.
   fingerprint (F12). An automatic re-decision of a still-tied file opens no second
   `adapter_tie` review item (the R-3.7 dedupe). Ops-schema version 8; migration 023
   (marker 1023) adds the column to the live DB with no backfill.
+
+- **A91** **A sample is matched within its contractor STREAM; an ambiguous match
+  is reviewed, not refused** (Robin, 2026-10-17; amends A84's import half;
+  design `scratchpad/2026-10-17-acirlmatch/DESIGN.md`, R2).
+  Every analysis belongs to one stream, read from its `lab_method`: `gas` when
+  the analyte's `type` is `gas`, otherwise the lab_method's `organisation`
+  (`ACIRL` — field, transcription and dust — `ALS`, `legacy`, `Internal`, …).
+  An incoming row may reuse only a sample at the same feature and Sydney day
+  that already holds an analysis of the **same** stream (a sample with no
+  analyses matches any stream); A62's datetime predicate then decides among
+  those as before. None → a new sample; one → reuse; more than one → the rows
+  are withheld (`sample_ambiguous`, candidates listed) and the rest of the
+  file commits; `release_review(overrides = list(sample = ...))` places them.
+  A new sample that would share a non-NA datetime with another stream's sample
+  at that feature is also withheld (`cross_stream_instant`).
+  **Why:** `sample.organisation` is the sampler and the project is not the
+  contractor (A80 files ACIRL field samples under the ALS order), so only
+  the lab_method attributes a reading. Legacy holds ACIRL field readings both
+  merged into ALS samples (971) and as separate samples (130); keying on
+  "holds a reading of my stream" reuses both shapes, so re-ingesting a legacy
+  field sheet duplicates no visit. Gas is its own stream because a gas sample's
+  project is the gas campaign and a sample's project is its first writer and
+  cannot be updated (A84/F.14): sharing a sample with field readings would make
+  the result depend on arrival order. Measured: R0 aborted at 66 feature-days;
+  under A91 15 reuse, 28 create, 23 (legacy one-visit-two-samples) review.
+
+  *Rulings (Robin, 2026-10-17).* **D1** gas readings get their own samples
+  (stream `gas`) and never share the ACIRL field sample. **D2** review instead
+  of abort applies to every adapter, ALS included (the A84 amendment above).
+  **D3** on a day holding only an ALS sample, an incoming ACIRL field row
+  creates a separate ACIRL sample; it does not merge into the ALS one.
+
+  *Unchanged:* `already_present`, `value_conflict`, supersedes, A79
+  transcription supersession (all lab- or analyte-keyed across every sample of
+  the feature-day), dust `date_start` handling, and `ux_sample_identity`.
