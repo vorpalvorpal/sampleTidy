@@ -1,6 +1,8 @@
 #!/usr/bin/env Rscript
 # =============================================================================
-# NSW EPA annual monitoring-data return - Katoomba (site "K")
+# NSW EPA annual monitoring-data return - per site
+#   K  Katoomba WMF, licence 13089 (V5)
+#   B  Blaxland WMF, licence 10039 (V28)
 # =============================================================================
 #
 # Fills the blank EPA return template
@@ -11,6 +13,15 @@
 #   Rscript dev/epa-monitoring-report.R
 #   Rscript dev/epa-monitoring-report.R db=/path/to/monitoring.duckdb
 #   Rscript dev/epa-monitoring-report.R nondetect=drop units=symbol
+#   Rscript dev/epa-monitoring-report.R site=B
+#
+# Licence data lives in two CSVs beside this script, not in the code:
+#   dev/epa_licence_requirements.csv  (site, point, pollutant) -> frequency and
+#                                     required count - see assumption M
+#   dev/epa_licence_points.csv        (site, point) -> role - see assumption N
+# Per-site settings (licence number, reporting period, default peek) are in
+# SITES below.  A site with no requirements rows stops before anything is
+# written.
 #
 # Every setting in the "TUNABLES" block below can be overridden with a
 # `key=value` command-line argument of the same name.
@@ -19,13 +30,15 @@
 # ASSUMPTIONS AND DECISIONS - read these before sending anything to the EPA
 # -----------------------------------------------------------------------------
 #
-# A. REPORTING WINDOW.  2025-05-27 to 2026-05-26, treated as BOTH ENDPOINTS
-#    INCLUSIVE (365 local calendar days).  Nothing in the database records the
-#    licence's reporting period, so the window is a parameter, not a lookup, and
-#    the inclusivity convention could NOT be verified against an EPA source from
-#    here.  It is applied as `local_date BETWEEN start AND end` on the
+# A. REPORTING WINDOW.  Per site, from `period_start` in SITES: Katoomba
+#    27 May to 26 May, Blaxland 22 Aug to 21 Aug.  The default is the most
+#    recent period that has fully ended; `window_start` / `window_end` override
+#    it.  Both endpoints are INCLUSIVE (365 local calendar days).  Nothing in
+#    the database records the licence's reporting period, so the window is a
+#    setting, not a lookup, and the inclusivity convention could NOT be
+#    verified against an EPA source from here.  It is applied as `local_date BETWEEN start AND end` on the
 #    Australia/Sydney calendar date.  The one piece of supporting evidence is
-#    arithmetic: 2025-05-27 to 2026-05-26 INCLUSIVE is exactly 365 days, which
+#    arithmetic (Katoomba): 2025-05-27 to 2026-05-26 INCLUSIVE is exactly 365 days, which
 #    is what you would expect an annual return to cover; reading the end date
 #    as exclusive would give 364.  That is suggestive, not authoritative.
 #    >>> Confirm against the licence. <<<
@@ -51,7 +64,7 @@
 #    analysis -> lab_method (uuid_lab) -> analyte (uuid_analyte).
 #
 # F. SCOPE = EPA MASK NAMES ONLY.  A feature with no `feature_mask` row for
-#    variant 'EPA' (or a NULL mask name), or an analyte with no `analyte_mask`
+#    variant 'EPA' (or a NULL or blank mask name), or an analyte with no `analyte_mask`
 #    row for variant 'EPA' (or a NULL mask name), is OUT OF SCOPE.  Every such
 #    drop is counted and printed - see the "DROPPED" sections of the console
 #    report.  Nothing is dropped silently.
@@ -78,7 +91,7 @@
 #    `analysis.value * COALESCE(analyte_mask.conversion_constant,
 #    analyte.conversion_constant)`, matching the package's write-side
 #    convention (R/commit.R `.ct_commit_analyses`, D7/A63: the constant is a
-#    multiplier onto the stored value).  In scope for Katoomba this bites
+#    multiplier onto the stored value).  In scope at both sites this bites
 #    exactly once and it matters: Methane is stored as L/L and reported to the
 #    EPA as %v/v with a constant of 100, because licence 13089 M2.2 specifies
 #    "percent by volume" and the R2.3 / M7.3 action threshold is "1% methane
@@ -94,7 +107,7 @@
 #    and must not be filed as one.  >>> Needs Robin's ruling. <<<
 #
 # K. NON-DETECTS - THE BIGGEST OPEN QUESTION IN THIS SCRIPT.  Roughly 47% of
-#    in-scope Katoomba results in the window are below the detection limit.
+#    in-scope Katoomba (K) results in the window are below the detection limit.
 #    How they enter min/mean/max changes the numbers filed with the regulator.
 #    Controlled by `NONDETECT` below:
 #
@@ -108,7 +121,7 @@
 #          at all gets a count but blank statistics.
 #      "half"    - non-detects contribute `value / 2` (the conventional
 #          half-the-reporting-limit substitution).  NOTE this has no basis in
-#          licence 13089 - see assumption P.
+#          either licence - see assumption P.
 #
 #    Substituting `analysis.rl_low` is deliberately NOT offered: in the
 #    rehearsal data `rl_low` is unit-inconsistent with `value` for 127 of the
@@ -141,14 +154,20 @@
 #    table or column anywhere in the schema records a required sampling
 #    frequency, count or quota (`guideline` holds ANZECC concentration trigger
 #    values, which are a different thing entirely).  The counts are therefore
-#    transcribed from licence 13089 conditions M2.2 and M2.3 into the
-#    `LICENCE_REQUIREMENTS` table below, keyed by (EPA point, pollutant).
-#    "Quarterly" -> 4 and "Yearly" -> 1 over a 12-month reporting period.
+#    transcribed from each licence's conditions M2.2 and M2.3 into
+#    dev/epa_licence_requirements.csv, one row per (site, EPA point, EPA
+#    pollutant), with group line items already expanded (`group_item`).
+#    "Monthly" -> 12, "Quarterly" -> 4 and "Yearly" -> 1 over a 12-month
+#    reporting period; the script refuses a row whose count disagrees with its
+#    frequency.  A (point, pollutant) listed twice keeps the HIGHER count.  The
+#    Katoomba rows were generated from the table this script used to build in
+#    code, so they are unchanged; the Blaxland rows were transcribed from
+#    licence 10039 V28 and checked against it independently.
 #
 #    THREE CASES DELIBERATELY LEAVE THE CELL EMPTY:
-#      1. Points 2 and 3 (E01/E02).  M2.4(a) "Special Frequency 1" means
-#         "within the first 24 hours of discharge" - one sample set per
-#         DISCHARGE EVENT.  The required number is the number of discharge
+#      1. Discharge points (role "discharge": Katoomba 2 and 3, Blaxland 1).
+#         M2.4(a) "Special Frequency 1" means "within the first 24 hours of
+#         discharge" - one sample set per DISCHARGE EVENT.  The required number is the number of discharge
 #         events in the period, which the database does not record.  Writing
 #         4 or 1 here would be a false statement.
 #      2. Any (point, pollutant) the licence does not require.  Roughly half
@@ -162,7 +181,9 @@
 #    fraction rows.  The group's frequency is applied to EVERY member row,
 #    because each congener is analysed as part of that annual suite and leaving
 #    them blank would read as "nothing required".  The console report lists
-#    exactly which rows were filled this way.
+#    exactly which rows were filled this way.  The TPH/TRH fractions are now
+#    enumerated in the CSV (they used to be matched by prefix at run time); a
+#    prefixed fraction at a TPH point with no row is flagged in the console.
 #    RULED 2026-07-23 (Robin): keep the expansion, required = 1.  This is a
 #    large share of column 4 - 120 of 333 filled cells in 2023-24 and 96 of 324
 #    in 2024-25 - so it is recorded here rather than left as a silent default.
@@ -180,9 +201,16 @@
 #    gaps - see section 3.3 of dev/EPA-LICENCE-RECONCILIATION.md for the
 #    required-but-absent pairs.
 #
-# N. EPA POINT 1 IS AN AGGREGATE.  360 Katoomba gas features (K.G01 ... K.G364)
-#    all carry the EPA mask name "1", so they are pooled into a single reported
-#    row per pollutant.  That is what the mask says, and it matches licence
+# N. POINT ROLES AND THE GAS GRID.  dev/epa_licence_points.csv gives each
+#    site's licence points a role: gas_grid, discharge, surface_water,
+#    groundwater, leachate, dust or weather.  Roles drive the empty discharge
+#    cells (M), the footnote wording, and the exclusion of weather points
+#    (Blaxland 27, condition M4), which this return does not cover.
+#
+#    THE GRID POINT IS AN AGGREGATE (Katoomba 1; Blaxland 10, 363 features
+#    B.G001 ... B.G367).  At Katoomba, 360 gas features (K.G01 ... K.G364)
+#    all carry the EPA mask name "1", so they are pooled into a single
+#    reported row per pollutant.  That is what the mask says, and it matches licence
 #    13089 P1.1, which defines point 1 as "landfill gas monitoring locations
 #    conducted in a grid pattern over the landfill footprint" - one point, many
 #    locations.  It is called out because it is easy to mistake for a bug.
@@ -207,6 +235,10 @@
 #    Nothing needs re-running for either - the live masks and the three filed
 #    returns already reflect this.
 #
+#    Blaxland's masks already follow licence 10039 V28.  A mask name that is
+#    '' or blank is treated exactly like NULL (B.L04 carried '' and would
+#    otherwise surface as a blank point ID).
+#
 # P. BELOW-DETECTION VALUES ARE MARKED, NOT CHANGED.  sampleTidy's storage
 #    convention is that a below-detection result carries the reporting limit in
 #    `analysis.value` with `quantified = FALSE`.  Under the default
@@ -215,7 +247,8 @@
 #    0.1" from "never detected, limit of reporting 0.1" - the template has eight
 #    numeric columns and no way to write "<0.1".
 #
-#    Licence 13089's Dictionary is the only place the licence states a
+#    Each licence's Dictionary (13089 and 10039 word it identically) is the
+#    only place the licence states a
 #    convention for non-detects.  In the definition of 3DGM: "Where one or more
 #    of the samples is zero or below the detection limit for the analysis, then
 #    1 or the detection limit respectively should be used in place of those
@@ -254,9 +287,9 @@ TUNABLES <- list(
   # database after cutover; override with db=<path> for testing.
   db = NULL,
 
-  site           = "K",
-  window_start   = "2025-05-27",
-  window_end     = "2026-05-26",   # inclusive - see assumption A
+  site           = "K",            # a key of SITES below
+  window_start   = NULL,           # default: from the site's period - see A
+  window_end     = NULL,           # inclusive - see assumption A
 
   nondetect      = "as_stored",    # as_stored | drop | half   - see K
   units          = "long",         # long | symbol             - see H
@@ -265,8 +298,29 @@ TUNABLES <- list(
   template       = NULL,           # defaults to dev/epa_monitoring_data_template.xlsx
   out            = NULL,           # defaults to dev/epa_monitoring_data_<site>_<start>_<end>.xlsx
 
-  peek           = "1,2"           # EPA points echoed to the console at the end
+  requirements   = NULL,           # defaults to dev/epa_licence_requirements.csv - see M
+  points         = NULL,           # defaults to dev/epa_licence_points.csv       - see N
+
+  peek           = NULL            # EPA points echoed to the console at the end;
+                                   # default: the site's `peek` in SITES
 )
+
+# Per-site licence settings.  The window defaults to the most recent complete
+# reporting period: `period_start` (MM-DD) to the day before it a year later.
+# `anniversary` is the licence's own anniversary date, quoted for the console
+# only - note it is the period END at Katoomba but the period START at
+# Blaxland, which is why the period is stated separately rather than derived.
+SITES <- list(
+  K = list(name = "Katoomba WMF", licence = "13089", licence_doc = "V5",
+           anniversary = "26 May", period_start = "05-27", peek = "1,2",
+           special_frequency_condition = "M2.4(a)"),
+  B = list(name = "Blaxland WMF", licence = "10039", licence_doc = "V28",
+           anniversary = "22 Aug", period_start = "08-22", peek = "1,10",
+           special_frequency_condition = "M2.4(a)")
+)
+
+# Licence frequency -> required number of samples over a 12-month period.
+FREQUENCY_COUNT <- c(Monthly = 12L, Quarterly = 4L, Yearly = 1L)
 
 # Symbol -> template house style.  Anything absent here passes through verbatim
 # and is reported (assumption H).
@@ -344,6 +398,111 @@ if (!file.exists(db_path)) {
   stop("Database not found: ", db_path)
 }
 
+# ------------------------------------------- LICENCE REQUIREMENTS + POINTS
+# Loaded and validated BEFORE anything else, so a site with no requirements
+# stops here and no workbook is ever written for it (assumption M).
+
+SITE <- TUNABLES$site
+req_path <- TUNABLES$requirements %||% file.path(DEV_DIR, "epa_licence_requirements.csv")
+pts_path <- TUNABLES$points %||% file.path(DEV_DIR, "epa_licence_points.csv")
+for (f in c(req_path, pts_path)) if (!file.exists(f)) stop("Not found: ", f)
+
+ALL_REQ <- utils::read.csv(req_path, colClasses = "character",
+                           na.strings = "", strip.white = TRUE)
+ALL_PTS <- utils::read.csv(pts_path, colClasses = "character",
+                           na.strings = "", strip.white = TRUE)
+stopifnot(all(c("site", "licence", "epa_point", "pollutant", "frequency",
+                "required", "condition", "group_item") %in% names(ALL_REQ)),
+          all(c("site", "epa_point", "role") %in% names(ALL_PTS)))
+
+LICENCE_REQUIREMENTS <- ALL_REQ[ALL_REQ$site %in% SITE, , drop = FALSE]
+POINTS <- ALL_PTS[ALL_PTS$site %in% SITE, , drop = FALSE]
+if (!nrow(LICENCE_REQUIREMENTS)) {
+  stop("No licence requirements for site '", SITE, "' in ", req_path,
+       ". Transcribe the licence's monitoring conditions into that file before ",
+       "generating a return; no workbook has been written.", call. = FALSE)
+}
+if (!nrow(POINTS)) {
+  stop("No licence monitoring points for site '", SITE, "' in ", pts_path,
+       "; no workbook has been written.", call. = FALSE)
+}
+if (is.null(SITES[[SITE]])) {
+  stop("No per-site settings for site '", SITE, "' in SITES; no workbook has ",
+       "been written.", call. = FALSE)
+}
+S <- SITES[[SITE]]
+
+ROLES <- c("gas_grid", "discharge", "surface_water", "groundwater", "leachate",
+           "dust", "weather")
+if (any(bad <- !POINTS$role %in% ROLES)) {
+  stop("Unknown role(s) in ", pts_path, ": ",
+       paste(unique(POINTS$role[bad]), collapse = ", "))
+}
+if (anyDuplicated(POINTS$epa_point)) stop("Duplicate EPA point in ", pts_path)
+PT_ROLE <- function(role) POINTS$epa_point[POINTS$role %in% role]
+PT_DISCHARGE   <- PT_ROLE("discharge")   # Special Frequency 1: per discharge event
+PT_GRID        <- PT_ROLE("gas_grid")    # pooled grid of gas locations
+PT_NOT_REPORTED <- PT_ROLE("weather")    # licence point, but not in this return
+
+local({
+  r <- LICENCE_REQUIREMENTS
+  if (!all(r$licence == S$licence)) {
+    stop("Requirements for site '", SITE, "' cite licence(s) ",
+         paste(unique(r$licence), collapse = ", "), ", not ", S$licence)
+  }
+  if (length(miss <- setdiff(r$epa_point, POINTS$epa_point))) {
+    stop("Requirements name EPA point(s) not in ", pts_path, ": ",
+         paste(miss, collapse = ", "))
+  }
+  if (any(bad <- !r$frequency %in% c(names(FREQUENCY_COUNT), "Special Frequency 1"))) {
+    stop("Unknown frequency: ", paste(unique(r$frequency[bad]), collapse = ", "))
+  }
+  want <- unname(FREQUENCY_COUNT[r$frequency])          # NA for Special Frequency
+  got  <- suppressWarnings(as.integer(r$required))
+  if (any(bad <- !(is.na(want) & is.na(got)) & !(!is.na(want) & !is.na(got) & want == got))) {
+    stop("Required count disagrees with frequency in ", req_path, " at: ",
+         paste(utils::head(paste0(r$epa_point[bad], "/", r$pollutant[bad]), 5),
+               collapse = "; "))
+  }
+  if (any(!is.na(got) & r$epa_point %in% PT_DISCHARGE)) {
+    stop("A discharge (Special Frequency 1) point carries a required count")
+  }
+})
+LICENCE_REQUIREMENTS$required <- as.integer(LICENCE_REQUIREMENTS$required)
+LICENCE_REQUIREMENTS$group_item[is.na(LICENCE_REQUIREMENTS$group_item)] <- ""
+
+# A (point, pollutant) appearing in two conditions keeps the HIGHER count.
+LICENCE_REQUIREMENTS <- do.call(rbind, lapply(
+  split(LICENCE_REQUIREMENTS, paste(LICENCE_REQUIREMENTS$epa_point,
+                                    LICENCE_REQUIREMENTS$pollutant, sep = "\r")),
+  function(d) {
+    if (all(is.na(d$required))) d[1, , drop = FALSE]
+    else d[which.max(d$required), , drop = FALSE]
+  }))
+rownames(LICENCE_REQUIREMENTS) <- NULL
+
+# Reporting window (assumption A).  Explicit window_* arguments override.
+local({
+  ws <- TUNABLES$window_start; we <- TUNABLES$window_end
+  shift_year <- function(d, n) {
+    d <- as.POSIXlt(d); d$year <- d$year + n; as.Date(d)
+  }
+  if (is.null(ws) && is.null(we)) {
+    today <- as.Date(format(Sys.time(), tz = "Australia/Sydney"))
+    ws <- as.Date(paste0(format(today, "%Y"), "-", S$period_start))
+    # Latest period that has fully ENDED before today.
+    while (shift_year(ws, 1) - 1 >= today) ws <- shift_year(ws, -1)
+    we <- shift_year(ws, 1) - 1
+  } else if (is.null(we)) {
+    ws <- as.Date(ws); we <- shift_year(ws, 1) - 1
+  } else if (is.null(ws)) {
+    we <- as.Date(we); ws <- shift_year(we + 1, -1)
+  }
+  TUNABLES$window_start <<- format(as.Date(ws))
+  TUNABLES$window_end   <<- format(as.Date(we))
+})
+if (TUNABLES$window_end < TUNABLES$window_start) stop("window_end is before window_start")
+
 template <- TUNABLES$template %||% file.path(DEV_DIR, "epa_monitoring_data_template.xlsx")
 if (!file.exists(template)) stop("Template not found: ", template)
 
@@ -365,7 +524,10 @@ hr("NSW EPA annual monitoring-data return")
 say("database : ", db_path)
 say("template : ", template)
 say("output   : ", out_path)
-say("site     : ", TUNABLES$site)
+say("site     : ", TUNABLES$site, " (", S$name, ", licence ", S$licence, " ",
+    S$licence_doc, ", anniversary ", S$anniversary, ")")
+say("licence data : ", req_path, " (", nrow(LICENCE_REQUIREMENTS), " rows), ",
+    pts_path, " (", nrow(POINTS), " points)")
 say("window   : ", TUNABLES$window_start, " to ", TUNABLES$window_end,
     " inclusive (Australia/Sydney local date)")
 say("non-detect handling : ", TUNABLES$nondetect)
@@ -407,7 +569,7 @@ site_rows AS (SELECT * FROM base WHERE site = ?),
 win_rows  AS (SELECT * FROM site_rows WHERE local_date BETWEEN ?::DATE AND ?::DATE),
 feat_rows AS (SELECT * FROM win_rows w WHERE EXISTS (
    SELECT 1 FROM feature_mask fm
-   WHERE fm.uuid_feature = w.uuid_feature AND fm.variant = 'EPA' AND fm.name IS NOT NULL)),
+   WHERE fm.uuid_feature = w.uuid_feature AND fm.variant = 'EPA' AND NULLIF(TRIM(fm.name), '') IS NOT NULL)),
 an_rows AS (SELECT * FROM feat_rows fr WHERE EXISTS (
    SELECT 1 FROM analyte_mask am
    WHERE am.uuid_analyte = fr.uuid_analyte AND am.variant = 'EPA' AND am.name IS NOT NULL))
@@ -431,7 +593,7 @@ JOIN feature f        ON f.uuid  = fa.uuid_feature
 WHERE f.site = ? AND %s BETWEEN ?::DATE AND ?::DATE
   AND NOT EXISTS (SELECT 1 FROM feature_mask fm
                   WHERE fm.uuid_feature = f.uuid AND fm.variant = 'EPA'
-                    AND fm.name IS NOT NULL)
+                    AND NULLIF(TRIM(fm.name), '') IS NOT NULL)
 GROUP BY 1 ORDER BY n_results DESC", LOCAL_DATE), params = bind)
 
 dropped_analytes <- dbGetQuery(con, sprintf("
@@ -447,7 +609,7 @@ JOIN analyte a        ON a.uuid  = lm.uuid_analyte
 LEFT JOIN analyte_mask am ON am.uuid_analyte = a.uuid AND am.variant = 'EPA'
 WHERE f.site = ? AND %s BETWEEN ?::DATE AND ?::DATE
   AND EXISTS (SELECT 1 FROM feature_mask fm
-              WHERE fm.uuid_feature = f.uuid AND fm.variant = 'EPA' AND fm.name IS NOT NULL)
+              WHERE fm.uuid_feature = f.uuid AND fm.variant = 'EPA' AND NULLIF(TRIM(fm.name), '') IS NOT NULL)
   AND (am.uuid_analyte IS NULL OR am.name IS NULL)
 GROUP BY 1, 2 ORDER BY n_results DESC", LOCAL_DATE), params = bind)
 
@@ -476,7 +638,7 @@ JOIN feature f         ON f.uuid  = fa.uuid_feature
 JOIN lab_method lm     ON lm.uuid = an.uuid_lab
 JOIN analyte a         ON a.uuid  = lm.uuid_analyte
 JOIN feature_mask fm   ON fm.uuid_feature = f.uuid AND fm.variant = 'EPA'
-                      AND fm.name IS NOT NULL
+                      AND NULLIF(TRIM(fm.name), '') IS NOT NULL
 JOIN analyte_mask am   ON am.uuid_analyte = a.uuid AND am.variant = 'EPA'
                       AND am.name IS NOT NULL
 WHERE f.site = ? AND COALESCE(s.datetime, s.date) IS NOT NULL
@@ -565,90 +727,56 @@ sfx_part <- sub("^[0-9]+", "", agg$epa_point)
 agg <- agg[order(num_part, sfx_part, agg$pollutant), , drop = FALSE]
 rownames(agg) <- NULL
 
-# ------------------------------------------------- LICENCE REQUIRED COUNTS (M)
-# Transcribed from licence 13089 (dev/13089_V5.pdf) conditions M2.2 and M2.3.
-# Quarterly -> 4, Yearly -> 1 over a 12-month reporting period.
-
-QUARTERLY <- 4L
-YEARLY    <- 1L
-
-PT_GAS        <- "1"
-PT_DISCHARGE  <- c("2", "3")                                    # E01, E02
-PT_SURFACE    <- c("4", "5", "6", "7", "8", "9", "10")
-PT_GROUND     <- c("11", "12", "13", "14", "15", "16", "17")
-PT_LEACHATE   <- "18"
-
-# Licence line items that the mask expands into many rows (assumption M).
-OCP_CONGENERS <- c("4,4'-DDD", "4,4'-DDE", "4,4'-DDT", "Aldrin", "Dieldrin",
-                   "Endosulfan i", "Endosulfan ii", "Endosulfan sulfate",
-                   "Endrin", "Heptachlor", "Heptachlor epoxide", "Methoxychlor",
-                   "alpha-BHC", "beta-BHC", "gamma-BHC (lindane)")
-OPP_CONGENERS <- c("Chlorpyrifos", "Diazinon", "Dimethoate", "Ethion",
-                   "Malathion", "Methyl Azinphos", "Methyl Chlorpyrifos",
-                   "Methyl Parathion", "Parathion")
-# TPH/TRH fraction rows, matched by prefix so a new fraction is picked up.
-HYDROCARBON_RX <- "^(Total Petroleum Hydrocarbons|Total Recoverable Hydrocarbons)"
-GROUPED <- c(OCP_CONGENERS, OPP_CONGENERS)
-
-.req <- function(points, pollutants, n) {
-  expand.grid(epa_point = points, pollutant = pollutants, required = as.integer(n),
-              stringsAsFactors = FALSE, KEEP.OUT.ATTRS = FALSE)
+# Point numbers in prose: "point 1", "points 2 and 3", "points 7, 8 and 10".
+name_points <- function(p) {
+  p <- p[order(suppressWarnings(as.numeric(sub("^([0-9]+).*$", "\\1", p))), p)]
+  if (!length(p)) return("no point")
+  if (length(p) == 1) return(paste("point", p))
+  paste0("points ", paste(head(p, -1), collapse = ", "), " and ", tail(p, 1))
+}
+# The licence frequency word for a grid point's requirement (e.g. "Quarterly").
+grid_frequency <- function(gp) {
+  f <- unique(LICENCE_REQUIREMENTS$frequency[LICENCE_REQUIREMENTS$epa_point == gp &
+                                               !is.na(LICENCE_REQUIREMENTS$required)])
+  if (length(f) == 1) f else "required"
 }
 
-hydro_rows <- grep(HYDROCARBON_RX, unique(agg$pollutant), value = TRUE)
-
-LICENCE_REQUIREMENTS <- rbind(
-  # ---- M2.2 air, POINT 1
-  .req(PT_GAS, "Methane", QUARTERLY),
-
-  # ---- M2.3 groundwater quarterly, POINTS 11-17
-  .req(PT_GROUND,
-       c("Alkalinity (as calcium carbonate)", "Calcium", "Chloride", "Fluoride",
-         "Magnesium", "Nitrate (as N)", "Nitrite (as N)", "Phosphorus (total)",
-         "Sodium", "Sulfate"),
-       QUARTERLY),
-
-  # ---- M2.3 groundwater + leachate yearly, POINTS 11-18
-  .req(c(PT_GROUND, PT_LEACHATE),
-       c("Aluminium", "Arsenic", "Barium", "Benzene", "Cadmium",
-         "Chromium (hexavalent)", "Chromium (total)", "Cobalt", "Copper",
-         "Ethyl benzene", "Lead", "Manganese", "Mercury", "Nickel",
-         "Polycyclic Aromatic Hydrocarbons", "Toluene", "Total Phenolics",
-         "Xylene", "Zinc",
-         OCP_CONGENERS, OPP_CONGENERS, hydro_rows),
-       YEARLY),
-
-  # ---- M2.3 Standing Water Level, POINTS 11-18, quarterly
-  .req(c(PT_GROUND, PT_LEACHATE), "Standing water level", QUARTERLY),
-
-  # ---- M2.3 groundwater + surface water quarterly, POINTS 4-17
-  .req(c(PT_SURFACE, PT_GROUND),
-       c("Conductivity", "pH", "Ammonia (as N)", "Potassium",
-         "Total Dissolved Solids", "Total Organic Carbon"),
-       QUARTERLY),
-
-  # ---- M2.3 leachate yearly, POINT 18
-  .req(PT_LEACHATE,
-       c("Alkalinity (as calcium carbonate)", "Biochemical oxygen demand",
-         "Calcium", "Chloride", "Fluoride", "Magnesium", "Nitrate (as N)",
-         "Nitrite (as N)", "Ammonia (as N)", "Phosphorus (total)", "Potassium",
-         "Sodium", "Sulfate", "Total Dissolved Solids", "Total Organic Carbon",
-         "Total Suspended Solids"),
-       YEARLY)
-)
-# A (point, pollutant) appearing in two conditions keeps the HIGHER count.
-LICENCE_REQUIREMENTS <- do.call(rbind, lapply(
-  split(LICENCE_REQUIREMENTS, paste(LICENCE_REQUIREMENTS$epa_point,
-                                    LICENCE_REQUIREMENTS$pollutant, sep = "\r")),
-  function(d) d[which.max(d$required), , drop = FALSE]))
+# ------------------------------------------------- LICENCE REQUIRED COUNTS (M)
+# LICENCE_REQUIREMENTS was loaded from the requirements CSV at the top (one row
+# per point x EPA pollutant, group line items already expanded).
 
 agg$required <- LICENCE_REQUIREMENTS$required[
   match(paste(agg$epa_point, agg$pollutant, sep = "\r"),
         paste(LICENCE_REQUIREMENTS$epa_point, LICENCE_REQUIREMENTS$pollutant,
               sep = "\r"))]
 
-# Points 2 and 3: per discharge event, number unknown - must stay empty (M).
+# Discharge points: Special Frequency 1, per discharge event, number unknown -
+# must stay empty (M).
 agg$required[agg$epa_point %in% PT_DISCHARGE] <- NA_integer_
+
+# Points the licence names but which this return does not cover (weather, M4),
+# and points the points file does not know at all.
+not_reported <- agg[agg$epa_point %in% PT_NOT_REPORTED, , drop = FALSE]
+agg <- agg[!agg$epa_point %in% PT_NOT_REPORTED, , drop = FALSE]
+rows <- rows[!rows$epa_point %in% PT_NOT_REPORTED, , drop = FALSE]
+rownames(agg) <- NULL
+unknown_points <- setdiff(unique(agg$epa_point), POINTS$epa_point)
+
+# Group line items (OCP/OPP congeners, TPH/TRH fractions) - see M.
+GROUPED_KEYS <- with(LICENCE_REQUIREMENTS[LICENCE_REQUIREMENTS$group_item != "", ],
+                     paste(epa_point, pollutant, sep = "\r"))
+# A TPH/TRH-prefixed pollutant with no requirements row is probably a new
+# fraction the CSV has not caught up with - flag it rather than leave it blank.
+HYDROCARBON_RX <- "^(Total Petroleum Hydrocarbons|Total Recoverable Hydrocarbons)"
+tph_points <- unique(LICENCE_REQUIREMENTS$epa_point[LICENCE_REQUIREMENTS$group_item == "TPH"])
+new_fractions <- agg[grepl(HYDROCARBON_RX, agg$pollutant) & is.na(agg$required) &
+                       agg$epa_point %in% tph_points, , drop = FALSE]
+
+# Required pairs with no data in the window (assumption M: they have no row).
+req_counted <- LICENCE_REQUIREMENTS[!is.na(LICENCE_REQUIREMENTS$required) &
+                                      !LICENCE_REQUIREMENTS$epa_point %in% PT_NOT_REPORTED, ]
+no_data <- req_counted[!paste(req_counted$epa_point, req_counted$pollutant, sep = "\r") %in%
+                         paste(agg$epa_point, agg$pollutant, sep = "\r"), ]
 
 # --------------------------------------------------------- UNIT PRESENTATION
 
@@ -672,7 +800,7 @@ say(sprintf("  %-32s %8d", "dropped: feature has no EPA name",
 say(sprintf("  %-32s %8d", "dropped: analyte has no EPA name",
             funnel$stage3_feature_has_epa_name - funnel$stage4_analyte_has_epa_name))
 
-hr("DROPPED - Katoomba features in window with NO EPA mask name")
+hr(paste0("DROPPED - site ", SITE, " features in window with NO EPA mask name"))
 if (nrow(dropped_features)) print(dropped_features) else say("  (none)")
 
 hr("DROPPED - analytes in window with NO EPA mask name")
@@ -726,13 +854,13 @@ hr("LICENCE REQUIRED COUNTS (column 4)")
 say(sprintf("  rows with a required count : %d of %d", sum(!is.na(agg$required)),
             nrow(agg)))
 say(sprintf("  rows left EMPTY            : %d", sum(is.na(agg$required))))
-say(sprintf("    - points 2/3, per discharge event (M2.4a) : %d",
+say(sprintf("    - %s, per discharge event (%s) : %d",
+            name_points(PT_DISCHARGE), S$special_frequency_condition,
             sum(agg$epa_point %in% PT_DISCHARGE)))
 say(sprintf("    - not a licence requirement at that point : %d",
             sum(is.na(agg$required) & !agg$epa_point %in% PT_DISCHARGE)))
 grouped_filled <- agg[!is.na(agg$required) &
-                        (agg$pollutant %in% GROUPED |
-                           grepl(HYDROCARBON_RX, agg$pollutant)), ]
+                        paste(agg$epa_point, agg$pollutant, sep = "\r") %in% GROUPED_KEYS, ]
 say(sprintf("  filled from a GROUP line item (judgement call, see M) : %d",
             nrow(grouped_filled)))
 if (nrow(grouped_filled)) {
@@ -750,12 +878,27 @@ if (nrow(short)) {
                 substr(s$pollutant[i], 1, 34), s$n_samples[i], s$required[i]))
   }
 }
-if (PT_GAS %in% agg$epa_point) {
-  say("  NOTE point 1: 'collected' counts grid LOCATION-DAYS, the licence's")
-  say("  'Quarterly' means monitoring EVENTS. The two are not comparable.")
+for (gp in intersect(PT_GRID, agg$epa_point)) {
+  say("  NOTE point ", gp, ": 'collected' counts grid LOCATION-DAYS, the licence's")
+  say("  '", grid_frequency(gp), "' means monitoring EVENTS. The two are not comparable.")
+}
+if (nrow(new_fractions)) {
+  say("  >>> TPH/TRH fraction(s) with no requirements row at a TPH point - add them")
+  say("      to ", basename(req_path), " if they belong to the group: ",
+      paste(unique(new_fractions$pollutant), collapse = ", "))
 }
 
-hr("IN SCOPE FOR KATOOMBA IN THIS WINDOW")
+if (nrow(not_reported)) {
+  hr("NOT REPORTED - licence points outside this return (weather, M4)")
+  say(sprintf("  %d row(s) at point(s) %s omitted", nrow(not_reported),
+              paste(unique(not_reported$epa_point), collapse = ", ")))
+}
+if (length(unknown_points)) {
+  hr("WARNING - EPA points in the feature mask but NOT in the licence points file")
+  say("  ", paste(unknown_points, collapse = ", "), "   (", pts_path, ")")
+}
+
+hr(paste0("IN SCOPE FOR SITE ", SITE, " IN THIS WINDOW"))
 say(sprintf("  EPA points  : %d  -> %s", length(unique(agg$epa_point)),
             paste(unique(agg$epa_point), collapse = ", ")))
 say(sprintf("  pollutants  : %d", length(unique(agg$pollutant))))
@@ -834,7 +977,7 @@ n_marked <- c(
 # --- footnote ---------------------------------------------------------------
 
 # Not every below-detection result is a reporting limit: a field instrument may
-# record a true zero (in scope for Katoomba this is methane, and only methane).
+# record a true zero (in scope at Katoomba and Blaxland this is methane only).
 # The sentence is emitted only when such results are actually present, so the
 # note stays true for any site/window.
 zero_nd <- unique(rows$pollutant[rows$is_nd & !is.na(rows$value) & rows$value == 0])
@@ -843,7 +986,21 @@ zero_sentence <- if (length(zero_nd)) {
          ", which the field instrument records as zero when none is detected.")
 } else ""
 
-NOTE <- c(
+# Built from the requirements data: the conditions cited and the frequencies in
+# use at this site, most frequent first.
+.and <- function(x) if (length(x) < 2) x else
+  paste(paste(head(x, -1), collapse = ", "), "and", tail(x, 1))
+req_conditions <- local({
+  cc <- sort(unique(LICENCE_REQUIREMENTS$condition))
+  paste(if (length(cc) > 1) "conditions" else "condition", .and(cc))
+})
+req_frequencies <- local({
+  f <- names(FREQUENCY_COUNT)[names(FREQUENCY_COUNT) %in%
+                                LICENCE_REQUIREMENTS$frequency[!is.na(LICENCE_REQUIREMENTS$required)]]
+  paste(paste(f, "=", FREQUENCY_COUNT[f]), collapse = ", ")
+})
+
+NOTE <- list(
   paste0(
     "Note on values below the analytical detection limit. Where a result was ",
     "below the detection limit for the analysis, the figure shown is that ",
@@ -858,18 +1015,23 @@ NOTE <- c(
     "Figures in normal type are measured values."
   ),
   paste0(
-    "No. of samples required is taken from licence conditions M2.2 and M2.3 ",
-    "(Quarterly = 4, Yearly = 1). It is left blank where the licence sets no ",
-    "requirement for that pollutant at that point, and for points 2 and 3, ",
-    "where condition M2.4(a) Special Frequency 1 requires sampling within the ",
-    "first 24 hours of each discharge rather than a fixed number of samples."
+    "No. of samples required is taken from ", req_conditions, " of licence ",
+    S$licence, " (", req_frequencies, "). It is left blank where the licence ",
+    "sets no requirement for that pollutant at that point",
+    if (length(PT_DISCHARGE)) paste0(
+      ", and for ", name_points(PT_DISCHARGE), ", where condition ",
+      S$special_frequency_condition, " Special Frequency 1 requires sampling ",
+      "within the first 24 hours of each discharge rather than a fixed number ",
+      "of samples"),
+    "."
   ),
-  if (PT_GAS %in% agg$epa_point) paste0(
-    "At point 1 the number of samples collected counts individual grid ",
-    "locations. The quarterly requirement refers to monitoring events."
-  )
+  lapply(intersect(PT_GRID, agg$epa_point), function(gp) paste0(
+    "At ", name_points(gp), " the number of samples collected counts individual ",
+    "grid locations. The ", tolower(grid_frequency(gp)), " requirement refers ",
+    "to monitoring events."
+  ))
 )
-NOTE <- Filter(Negate(is.null), NOTE)
+NOTE <- unlist(NOTE)
 for (i in seq_along(NOTE)) {
   wb$add_data(x = NOTE[[i]], dims = paste0("A", NOTE_ROW + i - 1L),
               col_names = FALSE)
@@ -895,22 +1057,40 @@ say(sprintf("  Highest %4d of %d", n_marked[["Highest"]], nrow(agg)))
 say("Footnote explaining the convention written at row ", NOTE_ROW, ".")
 
 # Show a couple of EPA points so the result is inspectable from the console.
-PEEK_POINTS <- strsplit(TUNABLES$peek %||% "1,2", ",")[[1]]
+PEEK_POINTS <- strsplit(TUNABLES$peek %||% S$peek, ",")[[1]]
 hr(paste0("SAMPLE OF THE RESULT (EPA point", if (length(PEEK_POINTS) > 1) "s" else "",
           " ", paste(PEEK_POINTS, collapse = ", "), ")"))
-peek <- agg[agg$epa_point %in% PEEK_POINTS, ]
-old_width <- options(width = 200)
-print(data.frame(
-  Point      = peek$epa_point,
-  Pollutant  = peek$pollutant,
-  Unit       = peek$unit_out,
-  Required   = NA_character_,
-  Collected  = peek$n_samples,
-  Lowest     = signif(peek$lowest, 6),
-  Mean       = signif(peek$mean, 6),
-  Highest    = signif(peek$highest, 6),
-  check.names = FALSE
-), row.names = FALSE)
-options(old_width)
+peek <- agg[agg$epa_point %in% PEEK_POINTS, , drop = FALSE]
+if (nrow(peek)) {
+  old_width <- options(width = 200)
+  print(data.frame(
+    Point      = peek$epa_point,
+    Pollutant  = peek$pollutant,
+    Unit       = peek$unit_out,
+    Required   = peek$required,
+    Collected  = peek$n_samples,
+    Lowest     = signif(peek$lowest, 6),
+    Mean       = signif(peek$mean, 6),
+    Highest    = signif(peek$highest, 6),
+    check.names = FALSE
+  ), row.names = FALSE)
+  options(old_width)
+} else say("  (no rows at those points in this window)")
+
+# Required (point, pollutant) pairs with NO data in the window have no row in
+# the return at all (assumption M), so say so once, loudly.
+if (nrow(no_data)) {
+  nd_list <- paste0("pt ", no_data$epa_point, " ", no_data$pollutant,
+                    " (", no_data$frequency, ")")
+  nd_list <- nd_list[order(suppressWarnings(as.numeric(no_data$epa_point)),
+                           no_data$pollutant)]
+  # message(), not warning(): warning() truncates at 8170 characters and a
+  # site with large gaps lists several hundred pairs.
+  message(sprintf(paste0(
+    "\nWARNING: %d of %d required (point, pollutant) pairs have NO data in %s to %s and ",
+    "are absent from the return:\n  %s"),
+    nrow(no_data), nrow(req_counted), TUNABLES$window_start, TUNABLES$window_end,
+    paste(nd_list, collapse = "\n  ")))
+}
 
 invisible(NULL)
