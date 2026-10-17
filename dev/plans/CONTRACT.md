@@ -275,7 +275,9 @@ for lab reports; `sample.organisation ∈ {ACIRL, Internal, ALS}`;
   unless `st_config("remove_ingested")` is TRUE (default FALSE — the tested
   switch): then sources whose hash has a verified asset copy are deleted
   after a successful run; quarantined/failed/cruft files are never deleted.
-- **A14** Value-equality for already-present: numeric within
+- **A14** *(amended by A92: a more precise stored value that rounds to the
+  printed incoming value is also equal — see OPERATING-RULES.md.)*
+  Value-equality for already-present: numeric within
   `abs(a-b) <= 1e-9 * max(1, abs(a), abs(b))` after unit conversion, plus
   equal `quantified` flag; else conflict. `quantified` is a **tri-state**
   (TRUE plain numeric, FALSE below/above detection, NA text result), so
@@ -861,6 +863,7 @@ Numbering is continuous, so nothing below is re-used. Index only:
 - **A89** — An adapter may declare `zero_is_nondetect`; only then is its bare `0` a non-detect (2026-10-16).
 - **A90** — Router verdicts store a registry fingerprint (R-3.8); a stale or NULL one is re-decided automatically (2026-10-17).
 - **A91** — A sample is matched within its contractor STREAM (`gas` / `ACIRL` / `ALS` / …, read from the `lab_method`); an ambiguous match is reviewed (`sample_ambiguous`), not refused (2026-10-17). **AMENDS A84's import half**: the ruling-9 abort becomes a review for every adapter, ALS included.
+- **A92** — A stored value MORE precise than the report prints it (pH 6.59 vs printed `6.6`) is `already_present`: rounded half away from zero to the incoming `value_raw`'s printed decimals, it equals the incoming value (2026-10-17). **AMENDS A14**: one more way to be equal, for quantified numerics with a plain-numeral `value_raw` only; the stored value is never changed.
 
 Full text: `dev/plans/OPERATING-RULES.md`.
 

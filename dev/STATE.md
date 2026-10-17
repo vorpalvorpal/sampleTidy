@@ -8,7 +8,7 @@ The companion documents, in the order you are likely to need them:
 | for | read |
 |---|---|
 | decisions waiting on Robin, and choices made in his absence | `scratchpad/DECISIONS-FOR-ROBIN.md` |
-| rules in force today | `dev/plans/OPERATING-RULES.md` (A73+; latest is A91) |
+| rules in force today | `dev/plans/OPERATING-RULES.md` (A73+; latest is A92) |
 | migrations: what each does, and whether it is applied | `dev/MIGRATIONS.md` |
 | the frozen build contract (A1–A72, plus later API notes) | `dev/plans/CONTRACT.md` |
 | design authority | `dev/DESIGN.md` |

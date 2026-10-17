@@ -35,6 +35,7 @@ Never write an agent number as `A<n>`.
 - **A89** — An adapter may declare `zero_is_nondetect`; only then is its bare `0` a non-detect (2026-10-16).
 - **A90** — Router verdicts store a registry fingerprint (R-3.8); a stale or NULL one is re-decided automatically (2026-10-17).
 - **A91** — A sample is matched within its contractor STREAM (`gas` / `ACIRL` / `ALS` / …, read from the `lab_method`); an ambiguous match is reviewed (`sample_ambiguous`), not refused (Robin, 2026-10-17; amends A84's import half).
+- **A92** — A stored value MORE precise than the report prints it is `already_present`: round the stored value half away from zero to the incoming `value_raw`'s printed decimals (Robin, 2026-10-17; amends A14).
 
 ## The rules
 
@@ -971,3 +972,60 @@ Never write an agent number as `A<n>`.
   *Unchanged:* `already_present`, `value_conflict`, supersedes, A79
   transcription supersession (all lab- or analyte-keyed across every sample of
   the feature-day), dust `date_start` handling, and `ux_sample_identity`.
+
+- **A92** **A stored value MORE precise than the source prints it is already
+  present** (Robin, 2026-10-17; **amends A14**; tests
+  `tests/testthat/test-precision-tolerant-match.R`). Legacy values are sometimes
+  stored with more digits than a report prints: field pH 6.59 where the ACIRL
+  report prints 6.6, field EC 94.74 where it prints 95. Under A14's exact
+  equality, re-importing such a report raised a false `value_conflict`.
+
+  *The rule.* It applies when the incoming value is numeric and quantified,
+  the existing value is numeric and quantified, and the two differ under A14.
+  Let d be the number of decimal places PRINTED in the incoming `value_raw`:
+  `"6.6"` → 1, `"95"` → 0, `"0.03"` → 2, `"6.60"` → 2. The pair is equal when
+  the existing value, rounded half away from zero to d places, equals the
+  incoming value within A14's tolerance. The outcome is `already_present`
+  against that analysis. **The stored value is not changed.** A92 is one more
+  way to be equal. It never makes two A14-equal values unequal.
+
+  - *Direction.* Only the existing value can be rounded. It is "more precise
+    than d" exactly when rounding changes it. A less precise stored value
+    against a more precise incoming one is still a conflict: stored 6.6,
+    incoming `"6.59"` rounds 6.6 to 6.6 ≠ 6.59.
+  - *Rounding* is DECIMAL half away from zero (6.65 → 6.7, −6.65 → −6.7,
+    0.15 → 0.2, 2.5 → 3). R's `round()` is not this: it gives 0.1, because
+    0.15 is the binary 0.1499…, and 2, because it rounds half to even.
+  - *Plain numerals only.* d is read only from a plain decimal numeral,
+    `^-?[0-9]+([.][0-9]+)?$` after `trimws()`. Scientific notation (`"1E-07"`),
+    a `<` or `>` prefix, a thousands or decimal comma, and any other text all
+    fall back to A14 unchanged. d always comes from `value_raw`, never from
+    `value_num`.
+  - *Float noise.* The ACIRL field, gas and crosstab adapters read xlsx with
+    `col_types = "text"`. readxl writes a numeric cell's text with up to 16
+    significant digits. Measured: 6.6 → `"6.6"`, 95 → `"95"`, but 94.74 →
+    `"94.73999999999999"`, 1e-7 → `"1E-07"`. A float-noise string gives a
+    large d, so the rule rarely fires on it. That is accepted: it falls back
+    to today's A14. The same reading loses a cell's number format, so a cell
+    showing `6.60` reads back as `"6.6"` (d = 1). The gas adapter likewise
+    writes `format(round(num, 2))`, which drops trailing zeros. In both cases
+    d can be smaller than what the report showed. ESdat CSVs keep the
+    printed text.
+  - *Units* [ASSUMED, to confirm]. d counts digits in the SOURCE unit. When
+    the canonical incoming value is `k ×` the `value_raw` number (a unit
+    conversion and/or `conversion_constant`) and k is a power of ten 10^p,
+    the stored value is compared as `stored / 10^p` against the `value_raw`
+    number at d places. Examples: % → L/L for CH4, µS/cm → mS/cm, mg/L →
+    µg/L. Any other k (a `conversion_constant` of 2, an affine temperature
+    conversion), or a `value_raw` of 0, falls back to A14.
+  - *Unchanged.* Non-detects (`quantified = FALSE` on either side), text
+    results (`value_chr`, `quantified` NA, compared by identity), qualifiers,
+    the revision/supersede branch, A79 transcription supersession, and the
+    feature-alias merge (`.fa_merge_samples()` compares two stored values,
+    with no `value_raw`).
+  - *Several candidates* (`.rc_find_existing()` rule 1). A candidate equal
+    by A92 counts as equal. A candidate equal under A14 beats one that is
+    equal only by A92, even when rules 2 and 3 (the cited work order, the
+    lowest uuid) would prefer the A92 one. Rules 2 and 3 then order the
+    candidates within the winning tier as before. A `value_conflict` still
+    names the candidate that rules 2 and 3 choose.

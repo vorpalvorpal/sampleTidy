@@ -2184,7 +2184,15 @@
       .rc_values_equal(incoming$value, incoming$value_chr, incoming$quantified,
                        cand$value[[k]], cand$value_chr[[k]], cand$quantified[[k]])
     }, logical(1))
+    # A92: a candidate equal only after rounding to the printed precision also
+    # counts as equal, but an A14-equal candidate beats it.
+    eq92 <- eq | vapply(seq_len(nrow(cand)), function(k) {
+      .rc_values_equal(incoming$value, incoming$value_chr, incoming$quantified,
+                       cand$value[[k]], cand$value_chr[[k]], cand$quantified[[k]],
+                       inc_raw = incoming$value_raw)
+    }, logical(1))
     if (any(eq)) cand <- cand[eq, , drop = FALSE]
+    else if (any(eq92)) cand <- cand[eq92, , drop = FALSE]
   }
   wo <- work_orders[!is.na(work_orders)]
   own <- !is.na(cand$project_name) & cand$project_name %in% wo
@@ -2229,10 +2237,13 @@
 }
 
 #' A14 value equality: numeric within `abs(a-b) <= 1e-9*max(1,|a|,|b|)`, plus
-#' equal `quantified`; text values compared by identity.
+#' equal `quantified`; text values compared by identity. With `inc_raw` (the
+#' incoming `value_raw`), A92 adds one more way to be equal: see
+#' `.rc_equal_at_printed_precision()`.
 #' @keywords internal
 #' @noRd
-.rc_values_equal <- function(inc_value, inc_chr, inc_quant, exist_value, exist_chr, exist_quant) {
+.rc_values_equal <- function(inc_value, inc_chr, inc_quant, exist_value, exist_chr, exist_quant,
+                             inc_raw = NA_character_) {
   # `quantified` is a TRI-state. NA is not "unknown detection state" - since
   # 2026-07-23 it means "this result is not a measurement at all", i.e. the row
   # is text-valued, and it is exactly as determinate as TRUE or FALSE. Treating
@@ -2243,12 +2254,38 @@
   if (is.na(inc_quant) != is.na(exist_quant)) return(FALSE)
   if (!is.na(inc_quant) && !identical(inc_quant, exist_quant)) return(FALSE)
   if (!is.na(inc_value) && !is.na(exist_value)) {
-    return(abs(inc_value - exist_value) <= 1e-9 * max(1, abs(inc_value), abs(exist_value)))
+    if (abs(inc_value - exist_value) <= 1e-9 * max(1, abs(inc_value), abs(exist_value))) return(TRUE)
+    return(.rc_equal_at_printed_precision(inc_value, inc_raw, inc_quant, exist_value, exist_quant))
   }
   if (is.na(inc_value) && is.na(exist_value)) {
     return(identical(inc_chr, exist_chr))
   }
   FALSE
+}
+
+#' A92: the stored value, rounded decimal half away from zero to the d places
+#' printed in the incoming plain-numeral `value_raw`, equals the incoming value
+#' (A14 tolerance). Both sides must be numeric and quantified. When the
+#' canonical incoming value is 10^p times the raw number (unit scaling), the
+#' stored value is compared as `stored / 10^p` against the raw number. Any
+#' other scale, or a raw value of 0, is FALSE (plain A14).
+#' @keywords internal
+#' @noRd
+.rc_equal_at_printed_precision <- function(inc_value, inc_raw, inc_quant, exist_value, exist_quant) {
+  if (length(inc_raw) != 1L || is.na(inc_raw) || !isTRUE(inc_quant) || !isTRUE(exist_quant)) return(FALSE)
+  raw <- trimws(inc_raw)
+  if (!grepl("^-?[0-9]+([.][0-9]+)?$", raw)) return(FALSE)
+  raw_num <- as.numeric(raw)
+  if (is.na(raw_num) || raw_num == 0) return(FALSE)
+  d <- if (grepl(".", raw, fixed = TRUE)) nchar(sub("^[^.]*[.]", "", raw)) else 0L
+  k <- inc_value / raw_num
+  if (!is.finite(k) || k <= 0) return(FALSE)
+  p <- round(log10(k))
+  if (abs(k / 10^p - 1) > 1e-9) return(FALSE)
+  # signif() strips binary noise (0.15 * 10 is 1.4999...) before the half-up step.
+  scaled <- signif(abs(exist_value / 10^p) * 10^d, 15)
+  rounded <- sign(exist_value) * floor(scaled + 0.5) / 10^d
+  abs(rounded - raw_num) <= 1e-9 * max(1, abs(rounded), abs(raw_num))
 }
 
 # ---- R-8.9: ACIRL transcription supersession (A79) ---------------------------
@@ -2507,7 +2544,15 @@
       .rc_values_equal(incoming$value, incoming$value_chr, incoming$quantified,
                        cand$value[[k]], cand$value_chr[[k]], cand$quantified[[k]])
     }, logical(1))
+    # A92: a candidate equal only after rounding to the printed precision also
+    # counts as equal, but an A14-equal candidate beats it.
+    eq92 <- eq | vapply(seq_len(nrow(cand)), function(k) {
+      .rc_values_equal(incoming$value, incoming$value_chr, incoming$quantified,
+                       cand$value[[k]], cand$value_chr[[k]], cand$quantified[[k]],
+                       inc_raw = incoming$value_raw)
+    }, logical(1))
     if (any(eq)) cand <- cand[eq, , drop = FALSE]
+    else if (any(eq92)) cand <- cand[eq92, , drop = FALSE]
   }
   wo <- work_orders[!is.na(work_orders)]
   own <- !is.na(cand$project_name) & cand$project_name %in% wo
@@ -2652,7 +2697,8 @@
     existing <- .rc_find_existing(
       con, rows$uuid_feature[[i]], rows$uuid_feature_alias[[i]], rows$feature_pending[[i]],
       rows$sample_date[[i]], rows$sample_datetime[[i]], rows$uuid_lab[[i]],
-      incoming = list(value = inc_value, value_chr = inc_chr, quantified = inc_quant),
+      incoming = list(value = inc_value, value_chr = inc_chr, quantified = inc_quant,
+                      value_raw = rows$value_raw[[i]]),
       work_orders = c(event$work_order, .ct_event_als_work_orders(event), rows$work_order[[i]])
     )
     if (is.null(existing)) next
@@ -2660,7 +2706,8 @@
     exist_chr <- existing$value_chr[[1]]
     exist_quant <- existing$quantified[[1]]
 
-    if (.rc_values_equal(inc_value, inc_chr, inc_quant, exist_value, exist_chr, exist_quant)) {
+    if (.rc_values_equal(inc_value, inc_chr, inc_quant, exist_value, exist_chr, exist_quant,
+                         inc_raw = rows$value_raw[[i]])) {
       keep[[i]] <- FALSE
       # PLAN-16 R-16.14: existing_uuid is a real, ALWAYS-populated column on
       # the SKIP tibble via .rq_skip() - the bare-uuid-with-no-structure
