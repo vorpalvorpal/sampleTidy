@@ -2064,6 +2064,40 @@
       }
     }
   }
+  # Re-ingest dedupe for `unknown_feature`: a row-level re-ingest of a file
+  # (every row already_present) rebuilds the same unresolved-feature items. No
+  # second OPEN item for the same (source_hash, feature_raw, site, point) -
+  # per file, like the adapter dedupe above; a RESOLVED item never blocks. The
+  # original item keeps its `uuid_alias`, and with nothing left to open the
+  # file's state comes out as on first ingest (`.ct_set_file_states()`).
+  if (all(c("kind", "source_hash", "payload") %in% names(review))) {
+    dup <- vapply(seq_len(n), function(i) {
+      pl <- review$payload[[i]]
+      if (!identical(review$kind[[i]], "unknown_feature") || is.na(pl) ||
+          !startsWith(pl, "{") || is.na(review$source_hash[[i]])) {
+        return(FALSE)
+      }
+      DBI::dbGetQuery(
+        con,
+        "SELECT count(*) AS n FROM review_queue
+          WHERE kind = 'unknown_feature' AND source_hash = ? AND status = 'open'
+            AND CASE WHEN json_valid(payload) THEN json_extract_string(payload, '$.feature_raw') END
+                IS NOT DISTINCT FROM json_extract_string(?, '$.feature_raw')
+            AND CASE WHEN json_valid(payload) THEN json_extract_string(payload, '$.site') END
+                IS NOT DISTINCT FROM json_extract_string(?, '$.site')
+            AND CASE WHEN json_valid(payload) THEN json_extract_string(payload, '$.point') END
+                IS NOT DISTINCT FROM json_extract_string(?, '$.point')",
+        params = list(review$source_hash[[i]], pl, pl, pl)
+      )$n[[1]] > 0
+    }, logical(1))
+    if (any(dup)) {
+      review <- review[!dup, , drop = FALSE]
+      n <- nrow(review)
+      if (n == 0) {
+        return(review)
+      }
+    }
+  }
   if (!("uuid" %in% names(review))) {
     review$uuid <- NA_character_
   }
