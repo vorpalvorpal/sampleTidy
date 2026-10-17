@@ -1,8 +1,11 @@
 # PLAN-17 — ACIRL monthly gas adapter
 
 _Status: **LIVE** — planned 2026-10-16. Build order 1–5 done (adapter `acirl_gas_xlsx`
-in `81bc599`/`f310dc6`; registry additions in migrations 012 and 014). Steps 6
-(dry run on a copy) and 7 (real run) still to do. Rulings below are Robin's
+in `81bc599`/`f310dc6`; registry additions in migrations 012 and 014). Step 6 (dry
+runs on copies) done; **step 7 done 2026-10-17**: all 16 workbooks imported live,
++2,728 readings (565 already present), 12 review items (B.G201, K.G365, K.G366
+unknown_feature; 2 duplicate_report_number; 1 report_no_mismatch). Gas samples are
+matched within their own stream (A91). Rulings below are Robin's
 (2026-10-16) unless marked open._
 
 ## Measured (2026-10-16, read-only; scripts in the session scratchpad `gas/`, `gas2/`)

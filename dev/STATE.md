@@ -18,18 +18,19 @@ The companion documents, in the order you are likely to need them:
 
 The package is built. The registry and the legacy data have been repaired by 29
 applied migrations, and ACIRL gas now has an adapter. **The corpus still has not been
-ingested**, and the real gas import is waiting on Robin's go-ahead.
+ingested**. The ACIRL gas import is done (2026-10-17).
 
 ## Live database
 
 `st_config("live_db")` is a **local** path under `tools::R_user_dir()`. Sharepoint only
 receives one-way snapshots and backups.
 
-- analysis 94,979 · sample 15,164 · analyte 247 · lab_method 568 · project 560
-- feature 1,023 · feature_alias 2,274
+- analysis 97,707 · sample 17,892 · analyte 247 · lab_method 568 · project 571
+- feature 1,023 · feature_alias 2,277 (3 pending: B.G201, K.G365, K.G366)
 - markers 1..7, 1001, 1003..1029 (every migration in `dev/migrations/` is applied)
-- review_queue: 2 open (`B.EO1`-style unknown_feature 1, work_order_reingest 1)
-- ingest_file: 36 rows (20 quarantined, 14 archived, 1 needs_review, 1 ignored)
+- review_queue: 14 open (gas: 9 unknown_feature, 2 duplicate_report_number,
+  1 report_no_mismatch; earlier: 1 self_precedence_note, 1 work_order_reingest)
+- ingest_file: 52 rows (16 gas workbooks archived 2026-10-17)
 
 Suite: **1,484 tests, 0 failing, 11 skipped**. Gated corpus tests are skipped unless
 `SAMPLETIDY_*_CORPUS` is set.
@@ -66,8 +67,9 @@ Suite: **1,484 tests, 0 failing, 11 skipped**. Gated corpus tests are skipped un
 
 ## Next
 
-1. **Gas import.** A dry run on a copy with the A91 code is in
-   `scratchpad/2026-10-17-gasdry2/`. The real run needs Robin's go-ahead.
+1. **Gas review items:** decide whether B.G201, K.G365 and K.G366 become new
+   features (PLAN-17 ruling 8). Weekly gas reports are filed under their own report
+   numbers. Run script and results: `scratchpad/2026-10-17-gaslive/`.
 2. **Existing-row lookup:** when two samples match a reading, prefer the one whose
    value equals the incoming row, then the one under the incoming work order. Today
    the lowest uuid wins, which gives false value_conflicts on legacy visits split
