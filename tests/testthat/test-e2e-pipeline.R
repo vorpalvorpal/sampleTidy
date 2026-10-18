@@ -423,6 +423,10 @@ test_that("R-10.6: NAMESPACE exports equal the CONTRACT-pinned public API exactl
     # claiming an export the package did not deliver and man/ stale -- this
     # closes that half-state rather than reverting it to internal.
     "merge_identity_aliases",
+    # Auto-import (scratchpad/2026-10-18-autoimport/SPEC.md, Robin 2026-10-18/19),
+    # added to CONTRACT.md's public-API list in the same change: the hourly
+    # Obsidian-triggered run and the vault notes it writes. Operator-run tools.
+    "inbox_run", "inbox_check", "inbox_signature", "import_report", "import_status",
     # Phase-7b round 3, added 2026-07-26 (Robin's ruling) and added to
     # CONTRACT.md's public-API list in the same change. EXPORTED because round 3
     # found that NOTHING in the package could close a `sample_collision` review
