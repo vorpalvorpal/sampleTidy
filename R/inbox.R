@@ -819,6 +819,7 @@ import_status <- function(db = st_config("live_db"), input_dir, report_dir,
 
   js <- list(
     updated = .inbox_syd(now, "%Y-%m-%d %H:%M"),
+    host = unname(Sys.info()[["nodename"]]),
     dry_run = !is.null(dry_run),
     review_items_open = n_open,
     folders_waiting = n_waiting,
