@@ -1048,7 +1048,7 @@ NOTE <- list(
     S$licence, " (", req_frequencies, ")",
     if (EXTRAS) ". It is left blank where the licence sets no requirement for that pollutant at that point",
     if (length(.disch_n)) paste0(
-      if (EXTRAS) ", and for " else ". For ", name_points(.disch_n), ", where condition ",
+      if (EXTRAS) ", and for " else ". It is left blank for ", name_points(.disch_n), ", where condition ",
       S$special_frequency_condition, " Special Frequency 1 requires sampling ",
       "within the first 24 hours of each discharge rather than a fixed number ",
       "of samples"),
