@@ -184,6 +184,13 @@
 }
 
 #' Hashes of files previously INGESTED (archived) against this work order.
+#'
+#' Rule (Robin 2026-10-18): an asset whose `ingest_file` row is archived with
+#' `state_reason = 'retained_sibling'` is NOT prior-ingestion evidence - it was
+#' kept alongside the committed file, never ingested itself. Everything else
+#' counts: legacy assets with NO `ingest_file` row (hence the LEFT JOIN, never
+#' an inner join) and re-downloads archived as `commit_event: <wo>`.
+#' `.ct_reingest_guard_preview()` inherits this via `.ct_reingest_guard()`.
 #' @keywords internal
 #' @noRd
 .ct_wo_prior_asset_hashes <- function(con, work_order, own_hashes) {
@@ -194,7 +201,9 @@
     con,
     "SELECT a.hash FROM asset a
        JOIN project p ON p.uuid = a.uuid_project
-      WHERE p.name = ? AND p.type = 'Work order'",
+       LEFT JOIN ingest_file i ON i.hash = a.hash
+      WHERE p.name = ? AND p.type = 'Work order'
+        AND coalesce(i.state_reason, '') <> 'retained_sibling'",
     params = list(work_order)
   )
   if (nrow(r) == 0) {
@@ -299,6 +308,8 @@
     if (n_samples == 0) next           # first-time work order: never blocked
     # NB: no `.ct_wo_project_pipeline_registered()` condition here - see the
     # step-0b header. Requiring it left the legacy corpus unguarded.
+    # Robin 2026-10-18: retained_sibling assets are not prior-ingest evidence
+    # (see `.ct_wo_prior_asset_hashes()`); the dry-run preview shares this.
     prior <- .ct_wo_prior_asset_hashes(con, wo, own_hashes)
     if (length(prior) == 0) next       # no prior ingest, so not a RE-ingest
 
