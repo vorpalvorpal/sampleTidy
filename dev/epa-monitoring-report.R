@@ -298,6 +298,9 @@ TUNABLES <- list(
   template       = NULL,           # defaults to dev/epa_monitoring_data_template.xlsx
   out            = NULL,           # defaults to dev/epa_monitoring_data_<site>_<start>_<end>.xlsx
 
+  extras         = "false",        # true | false - false (default) keeps only rows whose
+                                   # (point, pollutant) is in the requirements table;
+                                   # true also keeps extra data/mask pairs - see M
   requirements   = NULL,           # defaults to dev/epa_licence_requirements.csv - see M
   points         = NULL,           # defaults to dev/epa_licence_points.csv       - see N
 
@@ -385,6 +388,8 @@ local({
 stopifnot(TUNABLES$nondetect %in% c("as_stored", "drop", "half"))
 stopifnot(TUNABLES$units %in% c("long", "symbol"))
 stopifnot(TUNABLES$unit_mismatch %in% c("exclude", "include"))
+stopifnot(tolower(TUNABLES$extras) %in% c("true", "false"))
+EXTRAS <- identical(tolower(TUNABLES$extras), "true")
 
 # Default DB path from st_config("live_db"), per the package's own config.
 db_path <- TUNABLES$db
@@ -785,6 +790,22 @@ req_counted <- LICENCE_REQUIREMENTS[!is.na(LICENCE_REQUIREMENTS$required) &
 no_data <- req_counted[!paste(req_counted$epa_point, req_counted$pollutant, sep = "\r") %in%
                          paste(agg$epa_point, agg$pollutant, sep = "\r"), ]
 
+# Default (extras=false): keep only (point, pollutant) pairs that are in the
+# requirements table for this site (membership, not a non-blank count).
+if (!EXTRAS) {
+  .kk <- function(p, q) paste(p, q, sep = "\r")
+  .in_req <- .kk(agg$epa_point, agg$pollutant) %in%
+    .kk(LICENCE_REQUIREMENTS$epa_point, LICENCE_REQUIREMENTS$pollutant)
+  extras_dropped <- agg[!.in_req, , drop = FALSE]
+  agg <- agg[.in_req, , drop = FALSE]
+  rows <- rows[.kk(rows$epa_point, rows$pollutant) %in% .kk(agg$epa_point, agg$pollutant), ,
+               drop = FALSE]
+  rownames(agg) <- NULL
+  hr("EXTRAS EXCLUDED (extras=false)")
+  say(sprintf("  %d row(s) with data but no requirements row left out; extras=true keeps them",
+              nrow(extras_dropped)))
+}
+
 # --------------------------------------------------------- UNIT PRESENTATION
 
 unmapped_units <- character()
@@ -1007,6 +1028,7 @@ req_frequencies <- local({
   paste(paste(f, "=", FREQUENCY_COUNT[f]), collapse = ", ")
 })
 
+.disch_n <- if (EXTRAS) PT_DISCHARGE else intersect(PT_DISCHARGE, agg$epa_point)
 NOTE <- list(
   paste0(
     "Note on values below the analytical detection limit. Where a result was ",
@@ -1023,10 +1045,10 @@ NOTE <- list(
   ),
   paste0(
     "No. of samples required is taken from ", req_conditions, " of licence ",
-    S$licence, " (", req_frequencies, "). It is left blank where the licence ",
-    "sets no requirement for that pollutant at that point",
-    if (length(PT_DISCHARGE)) paste0(
-      ", and for ", name_points(PT_DISCHARGE), ", where condition ",
+    S$licence, " (", req_frequencies, ")",
+    if (EXTRAS) ". It is left blank where the licence sets no requirement for that pollutant at that point",
+    if (length(.disch_n)) paste0(
+      if (EXTRAS) ", and for " else ". For ", name_points(.disch_n), ", where condition ",
       S$special_frequency_condition, " Special Frequency 1 requires sampling ",
       "within the first 24 hours of each discharge rather than a fixed number ",
       "of samples"),
