@@ -90,11 +90,12 @@ test_that("R-10.1: router_matrix() claims every fixture at exactly one winning t
   # any other Chemistry2e file. Logged as a plan-text conflict in
   # dev/plans/PLAN-CHANGE-REQUESTS.md; this test follows the concrete,
   # testable match() rule over the PLAN-10 prose.
-  # Also unclaimed by design: ES2600185_0_XTAB.XLS is a SpreadsheetML-XML
-  # ".XLS" whose parsing is parked post-MVP (A37 - readxl can't read it and
-  # match() returns "no"); random.xlsx is a structureless workbook no adapter
-  # claims. Both correctly claim no adapter, like random.csv/NOT_ESDAT.xml.
-  never_claimed <- c("random.csv", "NOT_ESDAT.xml", "ES2600185_0_XTAB.XLS", "random.xlsx")
+  # Also unclaimed by design: random.xlsx is a structureless workbook no
+  # adapter claims, like random.csv/NOT_ESDAT.xml. (ES2600185_0_XTAB.XLS, a
+  # SpreadsheetML-XML ".XLS", used to be listed here while its parsing was
+  # parked post-MVP under A37; since 2026-10-18 als_xtab claims it, so it
+  # falls under the exactly-one-winning-claim rule below.)
+  never_claimed <- c("random.csv", "NOT_ESDAT.xml", "random.xlsx")
 
   for (p in paths) {
     claims <- matrix[matrix$path == p & matrix$tier != "no", ]

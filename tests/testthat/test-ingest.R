@@ -104,9 +104,11 @@ test_that("R-9.5: subdirectory content is untouched and cruft files are ignored"
   # route-time snapshot), `ignored` is the two cruft files (old_export.bak,
   # .DS_Store) PLUS the four XX1234567 crosstab/enmrg sources that
   # assemble_events() supersede-drops to a better source (route-time
-  # reporting counted those four as `claimed`): 2 + 4 = 6.
+  # reporting counted those four as `claimed`), PLUS one of the
+  # ES2600185_0_XTAB.csv / .XLS twins now that SpreadsheetML XTAB is read
+  # (2026-10-18): 2 + 4 + 1 = 7.
   expect_true(report$n_files_routed > 0)
-  expect_equal(unname(report$files_by_state[["ignored"]]), 6L)
+  expect_equal(unname(report$files_by_state[["ignored"]]), 7L)
 
   # the subdirectory and its contents are never touched
   subdir <- file.path(input_dir, "subdir")
