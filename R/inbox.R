@@ -343,6 +343,142 @@ inbox_check <- function(input_dir, report_dir, now = Sys.time(),
   list(work = work, hashes = hashes)
 }
 
+# ---- filing an email folder's leftovers ----------------------------------------------
+
+.inbox_data_exts <- c("csv", "tsv", "txt", "json", "xml", "xls", "xlsx", "xlsm",
+                      "xlsb", "zip")
+.inbox_done_states <- c("archived", "ignored", "retained_sibling")
+
+# Classify files given their ingest_file facts (NA = not in the DB).
+# Returns data.frame(file, data, unfinished, state).
+.inbox_classify <- function(files, state, adapter, has_asset) {
+  ext <- tolower(tools::file_ext(files))
+  claimed <- !is.na(adapter) & nzchar(adapter)
+  data <- ext %in% .inbox_data_exts | claimed
+  has_asset <- !is.na(has_asset) & has_asset
+  done <- !is.na(state) &
+    (state %in% .inbox_done_states | (state == "needs_review" & has_asset))
+  data.frame(file = files, data = data, unfinished = data & !done,
+             state = ifelse(is.na(state), "not yet imported", state),
+             stringsAsFactors = FALSE)
+}
+
+# ingest_file facts for hashes -> aligned vectors.
+.inbox_facts_by_hash <- function(db, hashes) {
+  n <- length(hashes)
+  out <- list(state = rep(NA_character_, n), adapter = rep(NA_character_, n),
+              has_asset = rep(NA, n))
+  con <- .inbox_read_con(db)
+  if (is.null(con) || n == 0) return(out)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
+  r <- tryCatch(DBI::dbGetQuery(con, "SELECT hash, state, adapter, uuid_asset FROM ingest_file"),
+                error = function(e) NULL)
+  if (is.null(r)) return(out)
+  m <- match(hashes, r$hash)
+  out$state <- r$state[m]
+  out$adapter <- r$adapter[m]
+  out$has_asset <- ifelse(is.na(m), NA, !is.na(r$uuid_asset[m]) & nzchar(r$uuid_asset[m]))
+  out
+}
+
+# Same, keyed by filename (latest row): metadata-only, for the status note.
+.inbox_facts_by_name <- function(db, files) {
+  n <- length(files)
+  out <- list(state = rep(NA_character_, n), adapter = rep(NA_character_, n),
+              has_asset = rep(NA, n))
+  con <- .inbox_read_con(db)
+  if (is.null(con) || n == 0) return(out)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
+  r <- tryCatch(DBI::dbGetQuery(con, "SELECT filename, state, adapter, uuid_asset, updated_at
+                                        FROM ingest_file WHERE filename IS NOT NULL"),
+                error = function(e) NULL)
+  if (is.null(r) || nrow(r) == 0) return(out)
+  r <- r[order(as.numeric(r$updated_at), decreasing = TRUE, na.last = TRUE), , drop = FALSE]
+  r <- r[!duplicated(r$filename), , drop = FALSE]
+  m <- match(files, r$filename)
+  out$state <- r$state[m]
+  out$adapter <- r$adapter[m]
+  out$has_asset <- ifelse(is.na(m), NA, !is.na(r$uuid_asset[m]) & nzchar(r$uuid_asset[m]))
+  out
+}
+
+# Everything in a folder that would be filed (hidden files included).
+.inbox_folder_entries <- function(path) {
+  list.files(path, all.files = TRUE, no.. = TRUE, full.names = TRUE)
+}
+
+# Judge a settled folder: list(fileable, unfinished = data.frame, n_other, files).
+# `dry_rep` is the dry-run ingest report for the folder (or NULL).
+.inbox_folder_verdict <- function(path, db, dry_rep = NULL, dry_run = FALSE) {
+  ent <- .inbox_folder_entries(path)
+  if (length(ent) == 0 || any(dir.exists(ent))) {
+    return(list(fileable = FALSE, unfinished = data.frame(), n_other = 0L, files = character(0)))
+  }
+  files <- basename(ent)
+  hashes <- vapply(ent, function(f) tryCatch(hash_file(f), error = function(e) NA_character_),
+                   character(1))
+  fa <- .inbox_facts_by_hash(db, unname(hashes))
+  cl <- .inbox_classify(files, fa$state, fa$adapter, fa$has_asset)
+  if (dry_run && !is.null(dry_rep)) {
+    # a dry run writes no ingest_file rows: judge new data files from the
+    # dry-run report's file states instead.
+    fbs <- unlist(dry_rep$files_by_state)
+    cnt <- function(k) if (k %in% names(fbs)) as.integer(fbs[[k]]) else 0L
+    n_nondata <- sum(!cl$data)
+    bad <- cnt("failed") + cnt("needs_review") + max(0L, cnt("quarantined") - n_nondata)
+    new_data <- cl$data & is.na(fa$state)
+    cl$unfinished <- cl$unfinished & !new_data
+    if (bad > 0 || isTRUE(dry_rep$failed)) cl$unfinished <- cl$unfinished | new_data
+  }
+  list(fileable = !any(cl$unfinished), unfinished = cl[cl$unfinished, , drop = FALSE],
+       n_other = sum(!cl$unfinished), files = files)
+}
+
+# Move every file of `path` into <archive_dir>/_emails/<basename>[ (n)].
+# Never overwrites, never deletes a file that was not first verified at the
+# destination. Returns list(to, files, error).
+.inbox_file_folder <- function(path, archive_dir) {
+  root <- file.path(archive_dir, "_emails")
+  dir.create(root, recursive = TRUE, showWarnings = FALSE)
+  base <- basename(path)
+  dest <- NULL
+  n <- 1L
+  repeat {
+    cand <- file.path(root, if (n == 1L) base else sprintf("%s (%d)", base, n))
+    if (!file.exists(cand) && dir.create(cand, showWarnings = FALSE)) {
+      dest <- cand
+      break
+    }
+    n <- n + 1L
+    if (n > 1000L) return(list(to = NA_character_, files = character(0),
+                               error = "no free destination name under _emails"))
+  }
+  moved <- character(0)
+  fail <- function(msg) list(to = normalizePath(dest, mustWork = FALSE), files = moved, error = msg)
+  for (f in .inbox_folder_entries(path)) {
+    to <- file.path(dest, basename(f))
+    if (file.exists(to)) return(fail(paste("destination exists:", to)))
+    ok <- suppressWarnings(file.rename(f, to))
+    if (!ok) {
+      sz <- file.size(f)
+      mt <- file.mtime(f)
+      cp <- file.copy(f, to, overwrite = FALSE, copy.date = TRUE)
+      same <- isTRUE(cp) && file.exists(to) && identical(file.size(to), sz) &&
+        identical(unname(tools::md5sum(f)), unname(tools::md5sum(to)))
+      if (!same) {
+        if (file.exists(to)) unlink(to)
+        return(fail(paste("could not move", basename(f))))
+      }
+      Sys.setFileTime(to, mt)
+      file.remove(f)
+    }
+    moved <- c(moved, basename(f))
+  }
+  if (length(.inbox_folder_entries(path)) == 0) unlink(path, recursive = FALSE, force = FALSE)
+  if (dir.exists(path) && length(.inbox_folder_entries(path)) == 0) file.remove(path)
+  list(to = normalizePath(dest, mustWork = FALSE), files = moved, error = NULL)
+}
+
 # ---- the run log ------------------------------------------------------------------------
 
 .inbox_read_log <- function(report_dir) {
@@ -366,6 +502,7 @@ inbox_check <- function(input_dir, report_dir, now = Sys.time(),
   lg$folders <- lapply(res$folders, function(f) {
     f$files_left <- asis(f$files_left)
     f$work_orders <- lapply(f$work_orders, as.list)
+    if (!is.null(f$files_filed)) f$files_filed$files <- asis(f$files_filed$files)
     f
   })
   if (length(lg$folders) == 0) lg$folders <- stats::setNames(list(), character(0))
@@ -465,6 +602,7 @@ inbox_run <- function(input_dir = st_config("input_dir"),
     list(work = logical(0), hashes = list())
   todo <- settled[found$work[names(settled)]]
   aborted <- FALSE
+  reps <- list()
 
   if (length(todo) > 0) {
     tmp_db <- NULL
@@ -492,6 +630,7 @@ inbox_run <- function(input_dir = st_config("input_dir"),
         rep <- tryCatch(ingest_dir(cd$path, db = work_db, dry_run = dry_run),
                         error = function(e) e)
         failed <- inherits(rep, "error")
+        if (!failed) reps[[nm]] <- rep
         fres <- function(k) if (failed) 0L else as.integer(.inbox_or(rep[[k]], 0L))
         wos <- list()
         if (!failed && !dry_run) {
@@ -524,6 +663,51 @@ inbox_run <- function(input_dir = st_config("input_dir"),
     }
   }
 
+  # Filing: every settled folder, not only those imported this run.
+  would_file <- character(0)
+  archive_dir <- tryCatch(st_config("archive_dir"), error = function(e) NULL)
+  if (!aborted && length(settled) > 0 && is.character(archive_dir) &&
+      length(archive_dir) == 1 && nzchar(archive_dir)) {
+    for (nm in names(settled)) {
+      cd <- settled[[nm]]
+      if (!dir.exists(cd$path)) next
+      entry <- res$folders[[nm]]
+      if (!is.null(entry) && isTRUE(entry$failed)) next
+      v <- .inbox_folder_verdict(cd$path, db, dry_rep = reps[[nm]], dry_run = dry_run)
+      if (!v$fileable || length(v$files) == 0) next
+      if (dry_run) {
+        would_file <- c(would_file, sprintf(
+          "Would file %s to %s (%d file(s)).", nm,
+          file.path(archive_dir, "_emails", nm), length(v$files)))
+        next
+      }
+      mv <- tryCatch(.inbox_file_folder(cd$path, archive_dir),
+                     error = function(e) list(to = NA_character_, files = character(0),
+                                              error = conditionMessage(e)))
+      if (!is.null(mv$error)) {
+        res$errors <- c(res$errors, sprintf("filing %s failed: %s", nm, mv$error))
+      }
+      if (is.null(entry)) {
+        entry <- list(events_committed = 0L, rows_new = 0L, rows_already_present = 0L,
+                      rows_superseded = 0L, review_items_opened = 0L, failed = FALSE,
+                      error = NA_character_, files_left = character(0),
+                      folder_path = normalizePath(cd$path, mustWork = FALSE),
+                      work_orders = list())
+      }
+      entry$files_filed <- list(to = mv$to, files = mv$files)
+      entry$files_left <- if (dir.exists(cd$path)) {
+        f <- list.files(cd$path, full.names = TRUE)
+        basename(f[!dir.exists(f)])
+      } else character(0)
+      res$folders[[nm]] <- entry
+    }
+  }
+  for (nm in names(res$folders)) {
+    if (is.null(res$folders[[nm]]$files_filed)) {
+      res$folders[[nm]]$files_filed <- list(to = NA_character_, files = character(0))
+    }
+  }
+
   res$ended_at <- .inbox_fmt_utc(Sys.time())
 
   if (dry_run) {
@@ -531,7 +715,8 @@ inbox_run <- function(input_dir = st_config("input_dir"),
       "**DRY RUN** - nothing was imported, backed up or removed.",
       if (length(res$folders_processed) > 0)
         paste0("Would import: ", paste(res$folders_processed, collapse = "; "), ".")
-      else "Nothing new to import."
+      else "Nothing new to import.",
+      would_file
     )
     import_status(db, input_dir, report_dir, now = now,
                   settle_minutes = settle_minutes, dry_run = banner)
@@ -572,9 +757,20 @@ inbox_run <- function(input_dir = st_config("input_dir"),
   out
 }
 
+.inbox_line_filed <- function(l) {
+  out <- list()
+  for (nm in names(l$folders)) {
+    ff <- l$folders[[nm]]$files_filed
+    fl <- as.character(unlist(ff$files))
+    if (length(fl) > 0) out[[length(out) + 1]] <- list(folder = nm, to = ff$to, files = fl)
+  }
+  out
+}
+
 .inbox_day_has_news <- function(report_dir, now) {
   any(vapply(.inbox_today_lines(report_dir, now), function(l) {
-    length(.inbox_line_imports(l)) > 0 || length(.inbox_line_problems(l)) > 0
+    length(.inbox_line_imports(l)) > 0 || length(.inbox_line_problems(l)) > 0 ||
+      length(.inbox_line_filed(l)) > 0
   }, logical(1)))
 }
 
@@ -616,6 +812,16 @@ import_report <- function(db = st_config("live_db"), report_dir, now = Sys.time(
       for (i in idx) out <- c(out, .inbox_import_line(imports[[i]]))
       out <- c(out, "")
     }
+  }
+  filed <- unlist(lapply(lines_today, .inbox_line_filed), recursive = FALSE)
+  if (length(filed) > 0) {
+    out <- c(out, "## Filed", "")
+    for (e in filed) {
+      dest <- as.character(.inbox_or(e$to, NA_character_))
+      head <- if (is.na(dest)) e$folder else paste0(e$folder, " · ", .inbox_md_link(basename(dest), dest))
+      out <- c(out, paste0("- ", head), paste0("  - ", e$files))
+    }
+    out <- c(out, "")
   }
   probs <- unlist(lapply(lines_today, function(l) {
     p <- .inbox_line_problems(l)
@@ -715,7 +921,6 @@ import_status <- function(db = st_config("live_db"), input_dir, report_dir,
   n_notes <- sum(rv$kind == "self_precedence_note", na.rm = TRUE)
 
   scan <- .inbox_scan(input_dir, now, settle_minutes)
-  states <- .inbox_filename_states(db)
   waiting <- character(0)
   waiting_json <- list()
   n_waiting <- 0L
@@ -730,15 +935,25 @@ import_status <- function(db = st_config("live_db"), input_dir, report_dir,
                                                        files = as.list(cd$files))
       n_waiting <- n_waiting + 1L
     } else {
-      st <- vapply(cd$files, function(f) {
-        s <- states[[f]]
-        if (is.null(s)) "not yet imported" else s
-      }, character(1))
-      waiting <- c(waiting, sprintf("- %s — %d file(s) left", url, length(cd$files)),
-                   sprintf("  - %s — %s", cd$files, st))
-      waiting_json[[length(waiting_json) + 1]] <- list(
-        folder = cd$name, status = "left",
-        files = lapply(seq_along(cd$files), function(i) list(file = cd$files[[i]], state = unname(st[[i]]))))
+      fa <- .inbox_facts_by_name(db, cd$files)
+      cl <- .inbox_classify(cd$files, fa$state, fa$adapter, fa$has_asset)
+      if (any(cl$unfinished)) {
+        un <- cl[cl$unfinished, , drop = FALSE]
+        n_other <- sum(!cl$unfinished)
+        waiting <- c(waiting, sprintf("- %s — %d unfinished data file(s)", url, nrow(un)),
+                     sprintf("  - %s — %s", un$file, un$state),
+                     if (n_other > 0) sprintf("  - %d other file(s) (email, images, ...) filed with it once the data is done", n_other))
+        waiting_json[[length(waiting_json) + 1]] <- list(
+          folder = cd$name, status = "left", other_files = n_other,
+          files = lapply(seq_len(nrow(un)), function(i) list(file = un$file[[i]], state = un$state[[i]])))
+      } else {
+        st <- cl$state
+        waiting <- c(waiting, sprintf("- %s — %d file(s) left", url, length(cd$files)),
+                     sprintf("  - %s — %s", cd$files, st))
+        waiting_json[[length(waiting_json) + 1]] <- list(
+          folder = cd$name, status = "left",
+          files = lapply(seq_along(cd$files), function(i) list(file = cd$files[[i]], state = unname(st[[i]]))))
+      }
       n_waiting <- n_waiting + 1L
     }
   }
@@ -832,18 +1047,4 @@ import_status <- function(db = st_config("live_db"), input_dir, report_dir,
   jsonlite::write_json(js, file.path(report_dir, ".import-status.json"),
                        auto_unbox = TRUE, pretty = TRUE, na = "null", digits = NA)
   invisible(path)
-}
-
-# filename -> latest ingest_file state (a name lookup; no file contents read).
-.inbox_filename_states <- function(db) {
-  con <- .inbox_read_con(db)
-  if (is.null(con)) return(list())
-  on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
-  r <- tryCatch(DBI::dbGetQuery(con, "SELECT filename, state, updated_at FROM ingest_file
-                                       WHERE filename IS NOT NULL"),
-                error = function(e) NULL)
-  if (is.null(r) || nrow(r) == 0) return(list())
-  r <- r[order(as.numeric(r$updated_at), decreasing = TRUE, na.last = TRUE), , drop = FALSE]
-  r <- r[!duplicated(r$filename), , drop = FALSE]
-  stats::setNames(as.list(r$state), r$filename)
 }
