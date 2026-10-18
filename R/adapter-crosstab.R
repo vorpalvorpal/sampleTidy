@@ -63,7 +63,10 @@
 #' @keywords internal
 #' @noRd
 als_xtab_adapter <- function() {
-  version <- "1.0"
+  # 1.1 (2026-10-18): SpreadsheetML 2003 ".XLS" now matched/parsed (A37
+  # un-parked). Bumped so R-3.8 re-routes XTAB.XLS files previously
+  # quarantined `unclaimed` under 1.0.
+  version <- "1.1"
   dialect <- .st_crosstab_dialects$als_xtab
   list(
     id = dialect$id,
@@ -103,8 +106,10 @@ als_enmrg_adapter <- function() {
 # which are mutually exclusive as first-row markers. A34/A37: real XTAB
 # `.XLS` is SpreadsheetML XML, which `readxl` cannot read - the peek below
 # returns NULL for it, so `match()` gracefully returns `"no"` (no crash);
-# the `.csv` twin carries the data. SpreadsheetML parsing is parked
-# post-MVP.
+# `.XLS` is SpreadsheetML XML, which `readxl` cannot read; since 2026-10-18
+# it is read via xml2 (`.st_crosstab_spreadsheetml_grid()`), yielding the same
+# character grid the `.csv` twin yields. Malformed / non-SpreadsheetML XML
+# and garbage bytes still give `"no"` (no crash).
 .st_crosstab_match <- function(fm, dialect) {
   if (!fm$ext %in% c("csv", "xls", "xlsx")) {
     return("no")
@@ -167,6 +172,15 @@ als_enmrg_adapter <- function() {
     }
     lines <- strsplit(txt, "\r\n|\n")[[1]]
     return(lines[seq_len(min(length(lines), .ST_CROSSTAB_PEEK_N_LINES))])
+  }
+
+  if (.st_crosstab_looks_like_xml(fm$path)) {
+    mat <- tryCatch(.st_crosstab_spreadsheetml_grid(fm$path), error = function(e) NULL)
+    if (is.null(mat) || nrow(mat) == 0) {
+      return(NULL)
+    }
+    mat <- mat[seq_len(min(nrow(mat), .ST_CROSSTAB_PEEK_N_LINES)), , drop = FALSE]
+    return(apply(mat, 1, function(r) paste(ifelse(is.na(r), "", r), collapse = ",")))
   }
 
   df <- tryCatch(
@@ -241,6 +255,9 @@ als_enmrg_adapter <- function() {
       source_label = fm$filename
     ))
   } else if (fm$ext %in% c("xls", "xlsx")) {
+    if (.st_crosstab_looks_like_xml(path)) {
+      return(.st_crosstab_spreadsheetml_grid(path))
+    }
     df <- suppressMessages(readxl::read_excel(
       path, sheet = 1, col_names = FALSE, col_types = "text"
     ))
@@ -250,6 +267,63 @@ als_enmrg_adapter <- function() {
     "{.path {path}} has an unsupported extension for the crosstab adapter ({fm$ext}).",
     class = "sampletidy_parse_error"
   )
+}
+
+# --- SpreadsheetML 2003 reader (A37) --------------------------------------
+
+# TRUE when the file's first non-blank bytes (after an optional BOM) are an
+# XML prolog or tag - i.e. it is not a binary BIFF/OOXML workbook.
+.st_crosstab_looks_like_xml <- function(path) {
+  b <- tryCatch(readBin(path, what = "raw", n = 64), error = function(e) raw(0))
+  if (length(b) >= 3 && identical(b[1:3], as.raw(c(0xef, 0xbb, 0xbf)))) b <- b[-(1:3)]
+  b <- b[!b %in% as.raw(c(0x20, 0x09, 0x0a, 0x0d))]
+  length(b) > 0 && b[[1]] == as.raw(0x3c)
+}
+
+# Read the FIRST worksheet of a SpreadsheetML 2003 workbook as a character
+# matrix (NA for empty cells; text trimmed like readr's trim_ws), honouring
+# ss:Index on rows and cells and ss:MergeAcross. The second ("QC ...")
+# worksheet is deliberately ignored. Errors (malformed XML, not SpreadsheetML,
+# no worksheet) propagate; callers contain them.
+.st_crosstab_spreadsheetml_grid <- function(path) {
+  doc <- xml2::read_xml(path)
+  root <- xml2::xml_root(doc)
+  if (!identical(xml2::xml_name(root), "Workbook") ||
+      !any(grepl("urn:schemas-microsoft-com:office:spreadsheet", unname(xml2::xml_ns(root)), fixed = TRUE))) {
+    stop("not a SpreadsheetML workbook")
+  }
+  ws <- xml2::xml_find_first(root, "./*[local-name()='Worksheet']")
+  if (inherits(ws, "xml_missing")) stop("SpreadsheetML workbook has no worksheet")
+  rows <- xml2::xml_find_all(ws, "./*[local-name()='Table']/*[local-name()='Row']")
+  ss_attr <- function(node, name) {
+    a <- xml2::xml_attrs(node)
+    hit <- a[sub("^.*:", "", names(a)) == name]
+    if (length(hit)) suppressWarnings(as.integer(hit[[1]])) else NA_integer_
+  }
+  cells <- list()
+  r <- 0L
+  for (row in rows) {
+    idx <- ss_attr(row, "Index")
+    r <- if (is.na(idx)) r + 1L else idx
+    cs <- xml2::xml_find_all(row, "./*[local-name()='Cell']")
+    c0 <- 0L
+    for (cell in cs) {
+      cidx <- ss_attr(cell, "Index")
+      c0 <- if (is.na(cidx)) c0 + 1L else cidx
+      d <- xml2::xml_find_first(cell, "./*[local-name()='Data']")
+      txt <- if (inherits(d, "xml_missing")) NA_character_ else trimws(xml2::xml_text(d))
+      if (!is.na(txt) && !nzchar(txt)) txt <- NA_character_
+      if (!is.na(txt)) cells[[length(cells) + 1L]] <- list(r, c0, txt)
+      mrg <- ss_attr(cell, "MergeAcross")
+      if (!is.na(mrg)) c0 <- c0 + mrg
+    }
+  }
+  if (length(cells) == 0) stop("SpreadsheetML worksheet has no cell data")
+  nr <- max(vapply(cells, `[[`, 1L, 1L))
+  nc <- max(vapply(cells, `[[`, 1L, 2L))
+  mat <- matrix(NA_character_, nrow = nr, ncol = nc)
+  for (x in cells) mat[x[[1]], x[[2]]] <- x[[3]]
+  mat
 }
 
 # --- R-5.1 shared parser: the row-by-row state machine -------------------

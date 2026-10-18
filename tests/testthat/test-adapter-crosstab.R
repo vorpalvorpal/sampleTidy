@@ -53,9 +53,12 @@ test_that("R-5.2: real ENMRG fixture claimed only by als_enmrg (format tier)", {
   expect_identical(xtab_adapter()$match(meta), "no")
 })
 
-test_that("A37: real XTAB '.XLS' (SpreadsheetML, unreadable by readxl) matches no, no crash", {
+test_that("A37 (un-parked 2026-10-18): real XTAB '.XLS' (SpreadsheetML) is claimed by als_xtab only", {
+  # Was `match() == "no"` while SpreadsheetML parsing was parked post-MVP.
+  # Full coverage (twin equality, ss:Index, encoding, malformed files) lives
+  # in test-adapter-crosstab-spreadsheetml.R.
   meta <- sampleTidy:::file_meta(xtab_xls_path)
-  expect_identical(xtab_adapter()$match(meta), "no")
+  expect_identical(xtab_adapter()$match(meta), "format")
   expect_identical(enmrg_adapter()$match(meta), "no")
 })
 
@@ -438,8 +441,8 @@ test_that("R-12.8: UTF-8 BOM on line 1 does not defeat match()", {
   expect_identical(xtab_adapter()$match(meta), "format")
 })
 
-test_that("R-12.8: SpreadsheetML .XLS (A37) still returns match() == 'no' after the peek hardening", {
+test_that("R-12.8: SpreadsheetML .XLS (A37) is still claimed only by als_xtab after the peek hardening", {
   meta <- sampleTidy:::file_meta(xtab_xls_path)
-  expect_identical(xtab_adapter()$match(meta), "no")
+  expect_identical(xtab_adapter()$match(meta), "format")
   expect_identical(enmrg_adapter()$match(meta), "no")
 })
