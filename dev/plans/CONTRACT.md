@@ -97,6 +97,16 @@ resolve_review(uuid, resolution, resolved_by, db = st_config("live_db"))
 # any other uuid is refused.
 release_review(uuid, overrides = list(), resolved_by, db = st_config("live_db"))
 
+# Auto-import, added 2026-10-19 (Robin's rulings 2026-10-18/19; spec
+# scratchpad/2026-10-18-autoimport/SPEC.md). inbox_run() acts only when
+# inbox_check() sees new input (metadata signature) or a DB change; writes
+# the dated "<date>-imports.md" and standing "Import status.md" notes.
+inbox_signature(input_dir)
+inbox_check(input_dir, report_dir, now = Sys.time(), db = st_config("live_db"))
+inbox_run(input_dir = st_config("input_dir"), db = st_config("live_db"), backup_dir, report_dir, now = Sys.time(), settle_minutes = 10, keep_backups = 10, dry_run = FALSE)
+import_report(db, report_dir, now = Sys.time())
+import_status(db, input_dir, report_dir, now = Sys.time(), settle_minutes = 10)
+
 # plan 09 R-9.7 / R-9.11, added 2026-07-28 (Robin's ruling). Both operator-run
 # tools, hence the A16 human-callable convention.
 #
