@@ -62,10 +62,20 @@ since the last check, or the last check left a folder still arriving (unsettled)
   (the name starts with the arrival time), exactly as the manual runs did
   (scratchpad/2026-10-17-pending/run.R). A failure in one folder is contained: it is
   recorded and the next folder still runs.
-- **After import.** Files the run archived (state `archived`) are removed from the
-  folder (the package's `remove_ingested` behaviour); a folder left empty is removed.
-  Files still `needs_review`, `quarantined` or `failed` stay where they are, so the
-  folder stays visible as unfinished.
+- **After import.** Files the run archived are removed from the folder (a file with an
+  asset row is removed even if its state is `needs_review`, because it is already
+  archived). Then **filing** runs over every settled candidate folder (not only those
+  imported this run, so pre-existing folders clear too): if no DATA file in the folder
+  is unfinished (needs_review without an asset, failed, quarantined), every remaining
+  file is MOVED to `<archive_dir>/_emails/<folder basename>/` (`" (2)"`, `" (3)"` on a
+  name collision; never overwrite, never delete) and the empty folder removed. DATA =
+  csv, tsv, txt, json, xml, xls, xlsx, xlsm, xlsb, zip, or anything an adapter claims;
+  everything else (.eml, images, pdf, doc/docx, msg, html, ...) is a leftover. A folder
+  with an unfinished data file moves nothing and stays under Waiting, listing the
+  unfinished data files and "<n> other file(s) ... filed with it". Filing is recorded in
+  the log (`files_filed`) and in a **Filed** section of the dated note, which is written
+  on a filing-only day too. Accepted risk (2026-10-19): an ALS COA arriving in an email
+  *before* its data is filed under `_emails`, not attached to its work order.
 - **Lock.** Only one `inbox_run()` at a time: a lock file in the DB's directory with the
   PID and start time; a lock older than 2 hours or whose PID is dead is stale and taken
   over (and that is reported). A second concurrent run exits immediately, writing nothing.
