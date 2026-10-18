@@ -253,9 +253,10 @@ inbox_check <- function(input_dir, report_dir, now = Sys.time(),
 .inbox_work_orders <- function(pre, post, kind) {
   if (is.null(pre) || is.null(post)) return(list())
   new_s <- post$samples[!(post$samples$uuid %in% pre$samples$uuid), , drop = FALSE]
-  an_pre <- stats::setNames(pre$an$n, pre$an$wo)
-  an_post <- stats::setNames(post$an$n, post$an$wo)
-  wos <- sort(unique(c(new_s$wo, names(an_post)[vapply(names(an_post), function(w) {
+  # Unnamed projects exist in the live DB; they cannot be reported by work order.
+  an_pre <- with(pre$an[!is.na(pre$an$wo), , drop = FALSE], stats::setNames(n, wo))
+  an_post <- with(post$an[!is.na(post$an$wo), , drop = FALSE], stats::setNames(n, wo))
+  wos <- sort(unique(c(stats::na.omit(new_s$wo), names(an_post)[vapply(names(an_post), function(w) {
     an_post[[w]] - (if (w %in% names(an_pre)) an_pre[[w]] else 0) > 0
   }, logical(1))])), method = "radix")
   lapply(wos, function(w) {
@@ -957,10 +958,8 @@ import_status <- function(db = st_config("live_db"), input_dir, report_dir,
       n_waiting <- n_waiting + 1L
     }
   }
-  for (d in scan$other_dirs) {
-    waiting <- c(waiting, sprintf("- %s — not an import folder; left for you",
-                                  .inbox_md_link(d, file.path(input_dir, d))))
-  }
+  # Non-input* directories (archive, bare input, the user's own folders) are not
+  # sampleTidy's business and are not listed; loose files may be misfiled reports.
   for (f in scan$loose) {
     waiting <- c(waiting, sprintf("- %s — loose file; left for you",
                                   .inbox_md_link(f, file.path(input_dir, f))))
