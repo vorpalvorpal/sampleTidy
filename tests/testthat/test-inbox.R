@@ -181,6 +181,9 @@ test_that("inbox_run(): only input* subdirectories are candidates; bare 'input',
   # the loose file is listed as waiting in the status note
   waiting <- md_section(read_status_note(s$report_dir), "Waiting")
   expect_true(any(grepl("loose_ES2600185.csv", waiting, fixed = TRUE)))
+  # sibling directories (archive, bare input, the user's own folders) are not listed
+  expect_false(any(grepl("Robin's notes", waiting, fixed = TRUE)))
+  expect_false(any(grepl("not an import folder", waiting, fixed = TRUE)))
 })
 
 test_that("inbox_run(): settled gate - a folder with a recently-modified file is 'arriving', not imported; pending makes the next call run", {
