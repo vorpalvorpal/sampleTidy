@@ -3,7 +3,7 @@
 # Run from Obsidian's Shell commands plugin. Does nothing unless this machine holds the
 # live DB and something under input_dir (or the DB file) changed since the last good run.
 # Metadata only: stat, never file contents (Files-On-Demand).
-# Test overrides: SAMPLETIDY_AUTOIMPORT_{DB,INPUT,REPORT,RSCRIPT,LOG}.
+# Test overrides: SAMPLETIDY_AUTOIMPORT_{DB,INPUT,REPORT,RSCRIPT,LOG,CODE}.
 export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"   # Obsidian's PATH lacks Rscript
 HERE="$(cd "$(dirname "$0")" && pwd)"
 DB="${SAMPLETIDY_AUTOIMPORT_DB:-$HOME/Library/Application Support/org.R-project.R/R/sampleTidy/monitoring.duckdb}"
@@ -36,9 +36,22 @@ if [ -f "$GATE" ] && [ -f "$STATE" ] && [ "$(cat "$GATE")" = "$NOW" ] \
 fi
 
 mkdir -p "$(dirname "$LOG")"
-{ echo "=== $(date '+%Y-%m-%d %H:%M:%S') auto-import start"
+# Run the last commit on main, never the working tree: a development session's
+# uncommitted edits must not reach the live DB. A detached worktree outside the repo
+# is moved to main's commit on every run. CODE overrides it (tests).
+RUN="${SAMPLETIDY_AUTOIMPORT_CODE:-}"
+if [ -z "$RUN" ]; then
+  REPO="$(dirname "$HERE")"; RUN="$HOME/Library/Application Support/sampleTidy-run"
+  if [ -d "$RUN/.git" ] || [ -f "$RUN/.git" ]; then
+    git -C "$RUN" checkout -q --detach "$(git -C "$REPO" rev-parse main)" >>"$LOG" 2>&1
+  else
+    git -C "$REPO" worktree prune >>"$LOG" 2>&1
+    git -C "$REPO" worktree add -q --detach "$RUN" main >>"$LOG" 2>&1
+  fi || { echo "=== $(date '+%Y-%m-%d %H:%M:%S') could not prepare $RUN" >>"$LOG"; exit 1; }
+fi
+{ echo "=== $(date '+%Y-%m-%d %H:%M:%S') auto-import start ($(git -C "$RUN" rev-parse --short HEAD 2>/dev/null || echo "$RUN"))"
   SAMPLETIDY_AUTOIMPORT_INPUT="$INPUT" SAMPLETIDY_AUTOIMPORT_DB="$DB" \
-  SAMPLETIDY_AUTOIMPORT_REPORT="$REPORT" "$RSCRIPT" "$HERE/auto-import.R"; } >>"$LOG" 2>&1
+  SAMPLETIDY_AUTOIMPORT_REPORT="$REPORT" "$RSCRIPT" "$RUN/dev/auto-import.R"; } >>"$LOG" 2>&1
 rc=$?
 if [ $rc -eq 0 ]; then mkdir -p "$REPORT" && snapshot >"$GATE"; fi   # post-run: R's own clean-up is not a change
 exit $rc

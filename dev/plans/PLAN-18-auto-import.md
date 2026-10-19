@@ -170,6 +170,12 @@ Paths to source folders are given as `file:///` links (as the invoices note does
 
 ## 3. Wiring (not unit-tested; done after the package code)
 
+**Runs committed code only (2026-10-19).** `dev/auto-import.sh` runs `dev/auto-import.R` from a
+detached worktree at `~/Library/Application Support/sampleTidy-run`, moved to `main`'s commit on
+every run, never from the working tree: a development session's uncommitted edits must not reach
+the live DB. Uncommitted work is invisible to the hourly run until it is committed to `main`.
+
+
 - `dev/auto-import.R`: loads the package, calls `inbox_run()` with the live config and
   `report_dir = ~/pkm/0 Misc/00 Misc/00.09 Import triage`.
 - A launchd LaunchAgent `~/Library/LaunchAgents/com.rjs.sampletidy.autoimport.plist`
