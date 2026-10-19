@@ -36,7 +36,10 @@ checks <- list(
   limits = file.path(dev_dir, "epa_licence_limits.csv"),
   requirements = file.path(dev_dir, "epa_licence_requirements.csv"),
   points = file.path(dev_dir, "epa_licence_points.csv"),
-  invoices = invoices
+  invoices = invoices,
+  # PLAN-19: field QC criteria and the QC samples each round must carry.
+  qc = list(criteria = file.path(dev_dir, "qc_criteria.csv"),
+            requirements = file.path(dev_dir, "qc_requirements.csv"))
 )
 
 inbox_run(input_dir = input_dir, db = db,

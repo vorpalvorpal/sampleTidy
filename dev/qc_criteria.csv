@@ -1,0 +1,11 @@
+rule,qc_type,analyte_class,param,value,unit,action,source,status
+dup_lor_multiple,duplicate,any,k,5,x_LOR,,SQMP s8.5 (PLAN-19 R-19.24),proposed
+dup_rpd,duplicate,inorganic,max,30,percent,qualify,SQMP s8.5 (PLAN-19 R-19.24),proposed
+dup_rpd,duplicate,organic,max,50,percent,qualify,SQMP s8.5 (PLAN-19 R-19.24),proposed
+dup_absdiff,duplicate,any,max,2,x_LOR,qualify,SQMP s8.5 (PLAN-19 R-19.24),proposed
+blank_detect,any,any,threshold,LOR,—,,SQMP s8.4 (PLAN-19 R-19.25),proposed
+blank_factor,any,any,f,5,x_blank,qualify,SQMP s8.4 (PLAN-19 R-19.25),proposed
+blank_factor,any,lab_contaminant,f,10,x_blank,qualify,SQMP s8.4 (PLAN-19 R-19.25),proposed
+carryover,field_blank;rinsate_blank,any,min_analytes,2,count,ask_acirl,SQMP s8.4 (PLAN-19 R-19.26),proposed
+filtered_method_regex,any,any,regex,^(E[A-Z][0-9]{3}[A-Z]?F|EG053FG[^:]*|EP002):,—,,SQMP s8.3 (PLAN-19 R-19.33),proposed
+completeness,any,any,min,100,percent,chase,SQMP s8 (PLAN-19 R-19.27),proposed

@@ -1,0 +1,6 @@
+site,months,qc_type,n_min,from,to,source
+B,3;6;9;12,duplicate,1,2026-09-01,,SQMP s8 (Blaxland quarterly)
+B,3;6;9;12,field_blank,1,2026-09-01,,SQMP s8 (Blaxland quarterly)
+B,3;6;9;12,rinsate_blank,1,2026-09-01,,SQMP s8 (Blaxland quarterly)
+B,3;6;9;12,filter_blank,1,2026-09-01,,SQMP s8 (Blaxland quarterly)
+B,3,transport_blank,1,2026-09-01,,SQMP s8 (Blaxland annual)

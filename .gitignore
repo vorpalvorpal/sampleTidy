@@ -17,3 +17,9 @@ dev/tdd-run/*
 # live here, not run scratch. Phase 9's sign-off gate calls it, so a checkout
 # without it cannot reproduce the coverage result.
 !dev/tdd-run/criterion-lint.py
+
+# PLAN-19 R-19.12: the QC code -> point table is confidential, never in git.
+qc-codes*.csv
+**/qc-codes*.csv
+dev/migrations/049-*-BACKUP-*.csv
+!tests/testthat/fixtures/qc/qc-codes-FAKE.csv
