@@ -12,6 +12,8 @@
                    "site_history", "rl_change", "unit_change",
                    # PLAN-19 phase 1 (section 6 order; phase-1b/2 checks slot in between)
                    "qc_dup_rpd", "qc_blank_detect", "qc_missing", "qc_unresolved",
+                   # PLAN-19 phase 1b
+                   "lab_qc_outlier", "holding_time",
                    "lab_qc_missing")
 
 .flags_cols <- c("check", "site", "feature", "analyte", "date", "value", "unit",
@@ -33,6 +35,8 @@
   qc_blank_detect = "a field QC blank has a detection",
   qc_missing = "a QC round lacks a required QC sample",
   qc_unresolved = "a QC sample cannot be paired with its point or round",
+  lab_qc_outlier = "ALS reports a lab QC outlier (spike or control recovery) on our results",
+  holding_time = "ALS analysed a sample after its holding time",
   lab_qc_missing = "no readable ALS QC report (QCI) for a work order"
 )
 
@@ -192,6 +196,7 @@
     SELECT a.uuid AS analysis, a.uuid_sample AS sample, lm.uuid_analyte AS uuid_analyte,
            an.name AS analyte, a.value AS value, a.quantified AS quantified,
            a.rl_low AS rl_low, lm.organisation AS lorg, lm.method AS method,
+           lm.name AS method_name,
            COALESCE(lm.units, an.units) AS units, an.units AS analyte_units,
            %s AS atype, %s AS lab_contaminant
       FROM analysis a
@@ -272,10 +277,18 @@
     DBI::dbGetQuery(con, "SELECT DISTINCT p.name FROM asset a JOIN project p ON p.uuid = a.uuid_project
                            WHERE a.filename ILIKE '%\\_QCI%' ESCAPE '\\'")$name
   } else character(0)
+  # PLAN-19 phase 1b: ALS-reported lab QC outliers (NULL before migration 048).
+  lqo <- if (DBI::dbExistsTable(con, "lab_qc_outlier")) DBI::dbGetQuery(con, "
+    SELECT uuid, uuid_report, work_order, kind, method, method_name, analyte_raw, lab_id,
+           qc_lot, client_id, uuid_sample, data_raw, value_pct, limit_low, limit_high,
+           comment, days_overdue, CAST(date_analysed AS DATE) AS date_analysed,
+           CAST(due_analysis AS DATE) AS due_analysis,
+           CAST(due_extraction AS DATE) AS due_extraction
+      FROM lab_qc_outlier") else NULL
   list(con = con, samples = s, streams = ss, results = a, qc_features = qcf,
        qc_tables = DBI::dbExistsTable(con, "qc_feature"),
        qc_label_conflict_wo = as.character(rq), lab_qc_report = lqr,
-       qci_asset_wo = as.character(qci_wo))
+       qci_asset_wo = as.character(qci_wo), lab_qc_outlier = lqo)
 }
 
 # The image without QC samples (R-19.5), for the checks in .flags_qc_blind.
@@ -807,6 +820,9 @@ import_flags <- function(db = st_config("live_db"), now = Sys.time(), checks) {
       rows[[ck]] <- r
     }
   }
+  # PLAN-19 R-19.32: a licence_limit / site_history / rl_change flag on a
+  # result that a QC finding qualifies says so. The key is unchanged.
+  rows <- .qc_apply_qualified(rows)
   # Ruling R12: an invoiced-not-received flag is the more specific statement
   # of an overdue month's gap, so it replaces the overdue flag.
   if (!is.null(rows$overdue) && !is.null(rows$invoiced_not_received)) {
