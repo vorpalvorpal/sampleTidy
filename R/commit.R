@@ -260,7 +260,7 @@
 #' disagree.
 #' @keywords internal
 #' @noRd
-.ct_unmatched_clean_rows <- function(con, clean) {
+.ct_unmatched_clean_rows <- function(con, clean, event = NULL) {
   n <- if (is.null(clean)) 0L else nrow(clean)
   if (n == 0) {
     return(integer(0))
@@ -280,7 +280,8 @@
     # existing samples (reconcile withholds it); only a new one is unmatched.
     m <- .ct_sample_match(
       con, keys$pending[[i]], keys$match_feature[[i]], keys$alias_uuid[[i]],
-      clean$sample_date[[i]], clean$sample_datetime[[i]], stream[[i]]
+      clean$sample_date[[i]], clean$sample_datetime[[i]], stream[[i]],
+      work_orders = .rc_row_work_orders(event, clean, i)
     )
     if (m$outcome %in% c("new", "cross_stream_instant")) out <- c(out, i)
   }
@@ -359,7 +360,7 @@
       next                             # EXEMPTION 1: A12 supersede re-issue
     }
 
-    unmatched <- .ct_unmatched_clean_rows(con, wo_clean)
+    unmatched <- .ct_unmatched_clean_rows(con, wo_clean, event)
     if (length(unmatched) == 0) next   # EXEMPTION 3: everything already matches
 
     # commit-4 (round-3): `own_hashes[[1]]` is evaluated identically on EVERY
@@ -1481,9 +1482,11 @@
 #' @noRd
 .ct_existing_sample_uuid <- function(con, pending, match_feature, alias_uuid,
                                       sample_date, sample_datetime,
-                                      stream = NULL, fresh = NULL) {
+                                      stream = NULL, fresh = NULL,
+                                      work_orders = character(0)) {
   m <- .ct_sample_match(con, pending, match_feature, alias_uuid,
-                        sample_date, sample_datetime, stream, fresh)
+                        sample_date, sample_datetime, stream, fresh,
+                        work_orders = work_orders)
   if (m$outcome %in% c("new", "reuse")) {
     return(m$uuid)
   }
@@ -1564,15 +1567,18 @@
 #' @keywords internal
 #' @noRd
 .ct_sample_match <- function(con, pending, match_feature, alias_uuid,
-                             sample_date, sample_datetime, stream, fresh = NULL) {
+                             sample_date, sample_datetime, stream, fresh = NULL,
+                             work_orders = character(0)) {
   out <- function(outcome, uuid = NA_character_, candidates = character(0)) {
     list(outcome = outcome, uuid = uuid, candidates = sort(candidates, method = "radix"))
   }
   stream_sql <- "CASE WHEN an.type = 'gas' THEN 'gas' ELSE lm.organisation END"
   from <- paste0(
-    'SELECT DISTINCT s.uuid, s.datetime, a.uuid IS NOT NULL AS has_analysis, ',
+    'SELECT DISTINCT s.uuid, s.datetime, p.name AS project_name,
+            a.uuid IS NOT NULL AS has_analysis, ',
     stream_sql, ' AS stream
        FROM "sample" s
+       LEFT JOIN project p ON p.uuid = s.uuid_project
        LEFT JOIN analysis a ON a.uuid_sample = s.uuid
        LEFT JOIN lab_method lm ON lm.uuid = a.uuid_lab
        LEFT JOIN analyte an ON an.uuid = lm.uuid_analyte '
@@ -1599,7 +1605,7 @@
     return(out("new"))
   }
 
-  smp <- rows[!duplicated(rows$uuid), c("uuid", "datetime"), drop = FALSE]
+  smp <- rows[!duplicated(rows$uuid), c("uuid", "datetime", "project_name"), drop = FALSE]
   in_stream <- vapply(smp$uuid, function(u) {
     if (is.null(stream)) return(TRUE)
     r <- rows[rows$uuid == u, , drop = FALSE]
@@ -1616,10 +1622,19 @@
   # Compare instants as epoch seconds so a tz-tagged incoming POSIXct and the
   # driver's UTC-returned candidate never raise a spurious "inconsistent
   # tzone" warning; equality of instants is tz-independent.
+  #
+  # C1: AFTER stream scoping, a candidate filed under one of the row's
+  # `work_orders` whose clock is the legacy 11:00 / 11:01 Sydney placeholder
+  # (`.rc_placeholder_datetime()`: 2,575 time-unknown legacy samples, and
+  # migration 005's lab twins one minute later) counts as time-unknown when
+  # deciding "provably new" - exactly as `.rc_find_existing()` does, so
+  # reconcile and commit agree. Narrowing below still uses the stored instant.
+  # The default `work_orders = character(0)` is the pre-C1 matcher.
   inc_dt <- as.numeric(sample_datetime)
   cand_dt <- as.numeric(cand$datetime)
-  create_new <- nrow(cand) == 0 || (!is.na(inc_dt) && all(!is.na(cand_dt)) &&
-                                      !any(cand_dt == inc_dt))
+  ev_dt <- .rc_candidate_datetime(cand_dt, cand$project_name, work_orders)
+  create_new <- nrow(cand) == 0 || (!is.na(inc_dt) && all(!is.na(ev_dt)) &&
+                                      !any(ev_dt == inc_dt))
   if (create_new) {
     other_dt <- as.numeric(other$datetime)
     clash <- !is.na(inc_dt) & !is.na(other_dt) & other_dt == inc_dt
@@ -1653,12 +1668,14 @@
                                        sample_date, sample_datetime,
                                        uuid_project, organisation, person, reason,
                                        sample_date_start = as.Date(NA),
-                                       stream = NULL, fresh = NULL, reuse = TRUE) {
+                                       stream = NULL, fresh = NULL, reuse = TRUE,
+                                       work_orders = character(0)) {
   # `reuse = FALSE` is a reviewer's `overrides$sample = "new"` (A91): the
   # matcher already said this row cannot be placed, and the human said "new".
   if (reuse) {
     hit <- .ct_existing_sample_uuid(con, pending, match_feature, alias_uuid,
-                                    sample_date, sample_datetime, stream, fresh)
+                                    sample_date, sample_datetime, stream, fresh,
+                                    work_orders = work_orders)
     if (!is.na(hit)) {
       return(hit)
     }
@@ -1810,7 +1827,7 @@
 #' @return character vector, one sample uuid per row of `clean`.
 #' @keywords internal
 #' @noRd
-.ct_resolve_samples <- function(con, clean, uuid_project, reason) {
+.ct_resolve_samples <- function(con, clean, uuid_project, reason, event = NULL) {
   n <- nrow(clean)
   sample_uuid <- rep(NA_character_, n)
   if (n == 0) {
@@ -1822,10 +1839,14 @@
   stream <- .rc_row_stream(clean, .rc_load_registry(con))
   override <- if ("sample_override" %in% names(clean)) clean$sample_override else rep(NA_character_, n)
   mk <- ifelse(keys$pending, keys$alias_uuid, keys$match_feature)
+  # C1: the same work-order set reconcile used (`.rc_row_work_orders()`), and
+  # part of the memo key because it changes the matcher's answer.
+  wos <- lapply(seq_len(n), function(i) .rc_row_work_orders(event, clean, i))
+  wo_key <- vapply(wos, function(w) paste(sort(w, method = "radix"), collapse = ","), character(1))
   key <- paste(
     mk, as.character(clean$sample_date),
     ifelse(is.na(clean$sample_datetime), "NA", format(clean$sample_datetime, "%Y-%m-%d %H:%M:%S")),
-    stream, override,
+    stream, override, wo_key,
     sep = "||"
   )
   resolved <- new.env(parent = emptyenv())
@@ -1852,7 +1873,8 @@
         reason = reason,
         sample_date_start = if (has_start) clean$sample_date_start[[i]] else as.Date(NA),
         stream = stream[[i]], fresh = fresh,
-        reuse = !identical(override[[i]], "new")
+        reuse = !identical(override[[i]], "new"),
+        work_orders = wos[[i]]
       )
       if (!(uuid_i %in% names(fresh)) && DBI::dbGetQuery(
         con, "SELECT count(*) AS n FROM analysis WHERE uuid_sample = ?", params = list(uuid_i)
@@ -2465,7 +2487,7 @@ commit_event <- function(event, resolved, con) {
       clean <- .ct_materialise_feature_aliases(con, clean, event, .ct_actor, reason)
       clean <- .ct_materialise_lab_methods(con, clean, event, .ct_actor, reason)
 
-      clean$uuid_sample <- .ct_resolve_samples(con, clean, uuid_project, reason)
+      clean$uuid_sample <- .ct_resolve_samples(con, clean, uuid_project, reason, event)
       # PLAN-19 R-19.6: the ALS lab sample numbers of the committed samples.
       .ct_record_lab_ids(con, clean, reason)
       # PLAN-15 C.4: provenance for every structural / WO-site-inferred
