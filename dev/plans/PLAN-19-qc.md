@@ -47,6 +47,25 @@ Corpus measurements are in Appendix A.
   unusable: it has no limits, never references our samples, has unreliable units
   and is often empty.
 
+- **R19-10 (Robin, 2026-10-19) Open questions 1-5 and 7-9 settled as recommended:**
+  (1) `B.JF00` field blank and `B.JA00` lab/source blank, as proposed; (2) **no** lab
+  contaminants for now: `analyte.lab_contaminant` is added but left FALSE everywhere,
+  and an analyte is set when it first appears and Robin confirms; (3) duplicates compare
+  lab results only, a non-detect is taken at its RL, mislabel guard as proposed;
+  (4) blank and rinsate qualification is round-wide; (5) carry-over as proposed;
+  (7) `qc_missing` **waits** until every expected work order of the round has arrived
+  (it does not flag at the first); (8) frequency outliers are stored, not shown;
+  (9) `holding_time` uses `resample` only for licence-required pollutants.
+- **R19-11 (Robin, 2026-10-19) ALS's own duplicate verdict is accepted as is.** A lab
+  duplicate (LAB_D/DUP) that ALS reports is judged only by ALS's limits (QCI/QC report).
+  sampleTidy never recomputes it. `qc_dup_rpd` applies only to Council's blind field
+  duplicates, which ALS cannot recognise.
+- **R19-12 [proposed 2026-10-19, pending Robin] Field-duplicate pairing has no ±3-day
+  fallback.** The parent is the parent point's sample in the same work order. Failing
+  that, it is the parent point's sample on the **same Sydney date** in any work order.
+  Failing that, the pair is unresolved (a `qc_unresolved` flag), not guessed.
+  This replaces the ±3-day fallback in section 6.
+
 ## 1. What exists today (verified on a copy of live at marker 1045)
 
 - `.rc_qc_filter()` (R/reconcile.R ~333) drops every IR row with `sample_type` other
@@ -330,8 +349,8 @@ means no rows and no error; a DB older than 048 still refreshes.
 - **Pairing a QC sample with its round** applies to every check below. The round is
   the QC sample's work order project together with its site and Sydney month. The
   parent sample is the sample at `uuid_parent` in the same project. If there is none,
-  it is the parent's sample at the same site with a Sydney date within ±3 days, in any
-  project **[proposed]**. If there is still none, the parent is unresolved.
+  it is the parent's sample on the same Sydney date, in any project (R19-12; no ±3-day
+  window). If there is still none, the parent is unresolved.
 
 Examples use the placeholder `B.JDxx` and invented values. Real lines carry the real
 code.
@@ -571,6 +590,8 @@ Today the schedule is `2026-09 Blaxland Schedule.xlsx`, including its tab *QC sa
     a CSV.
 
 ## 11. Open questions for Robin
+
+Settled 2026-10-19: see R19-10 to R19-12 in section 0. The list below is kept for the record.
 
 1. Names for the type-only features: `B.JF00` (field blank) and `B.JA00` (lab/source
    blank)? (R-19.3)
