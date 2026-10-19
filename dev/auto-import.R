@@ -2,7 +2,7 @@
 # or dev/auto-import.cmd, which have already checked that this machine holds the
 # live DB and that something changed. inbox_run() re-checks and holds the lock.
 args <- commandArgs(trailingOnly = FALSE)
-here <- sub("^--file=", "", args[grepl("^--file=", args)])
+here <- gsub("~+~", " ", sub("^--file=", "", args[grepl("^--file=", args)]), fixed = TRUE)  # Rscript encodes spaces
 repo <- if (length(here)) dirname(dirname(normalizePath(here[1]))) else getwd()
 suppressMessages(devtools::load_all(repo, quiet = TRUE))
 
