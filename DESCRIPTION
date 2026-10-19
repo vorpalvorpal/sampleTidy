@@ -29,6 +29,7 @@ Imports:
     duckdb,
     fs,
     jsonlite,
+    pdftools,
     purrr,
     readr,
     readxl,

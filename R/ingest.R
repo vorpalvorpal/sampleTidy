@@ -680,8 +680,18 @@
             # transaction) and just runs inline, same as `.ct_ensure_project()`
             # (R/commit.R) already relies on for `add_project()`.
             db_transaction(con, function(con) {
-              archive_file(con, path, hash, event = list(work_order = work_order),
-                           type = sibling_type)
+              uuid_asset <- archive_file(con, path, hash, event = list(work_order = work_order),
+                                         type = sibling_type)
+              # PLAN-19 R-19.16: an ALS QC report is parsed once, here, in
+              # the same transaction. lab_qc_ingest() stores a parse failure
+              # as an `unreadable` report rather than raising, and is a
+              # no-op before migration 048; the tryCatch is a backstop so
+              # that nothing in it can ever block retention.
+              if (identical(sibling_type, "QC")) {
+                tryCatch(lab_qc_ingest(con, uuid_asset, path, actor = "ingest"),
+                         error = function(e) cli::cli_warn(
+                           "ingest_dir(): lab QC parse of {.path {path}} failed: {conditionMessage(e)}"))
+              }
               ingest_file_set_state(con, hash, "archived", reason = "retained_sibling", reset = TRUE)
             })
             hash

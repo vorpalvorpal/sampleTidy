@@ -544,3 +544,217 @@
   }
   list(header = header, summary = sm$summary, outliers = out, warnings = unique(warn))
 }
+
+# ---- storage: lab_qc_report / lab_qc_outlier (R-19.8, R-19.9, R-19.16) ----------------------
+
+# The asset's report kind from its filename token: `_QCI` -> QCI, `_QC` -> QC.
+.lab_qc_kind <- function(filename) {
+  if (grepl("(?i)_QCI(\\[[0-9]+\\])?\\.[a-z0-9]+$", filename, perl = TRUE)) return("QCI")
+  if (grepl("(?i)_QC(\\[[0-9]+\\])?\\.[a-z0-9]+$", filename, perl = TRUE)) return("QC")
+  NA_character_
+}
+
+# The PDF's text lines (pages joined by "\f"), or a condition on failure.
+.lab_qc_read <- function(path) {
+  tryCatch({
+    if (!file.exists(path)) stop("file not found: ", path)
+    if (isTRUE(file.size(path) == 0)) stop("the file is empty (0 bytes)")
+    pages <- suppressWarnings(suppressMessages(pdftools::pdf_text(path)))
+    if (length(pages) == 0) stop("the PDF has no pages")
+    lines <- strsplit(paste(pages, collapse = "\f"), "\n", fixed = TRUE)[[1]]
+    enc2utf8(lines)
+  }, error = function(e) e)
+}
+
+#' Link outlier rows to our samples (R-19.21), first match wins:
+#' 1. lab_id (of this work order) -> sample_lab_id;
+#' 2. (work order, client ID) -> the work order's samples whose feature the
+#'    client ID resolves to, live at the sample date - exactly one, else NULL.
+#' An `Anonymous` row (another client's sample) is never linked.
+#' @keywords internal
+#' @noRd
+.lab_qc_link <- function(con, o, work_order) {
+  o$uuid_sample <- rep(NA_character_, nrow(o))
+  if (nrow(o) == 0 || is.na(work_order)) return(o)
+  anon <- !is.na(o$client_id) & tolower(trimws(o$client_id)) == "anonymous"
+  # Route 1.
+  r1 <- !anon & !is.na(o$lab_id) & substr(o$lab_id, 1, 9) == work_order
+  if (any(r1) && DBI::dbExistsTable(con, "sample_lab_id")) {
+    sl <- DBI::dbGetQuery(con, "SELECT lab_id, uuid_sample FROM sample_lab_id WHERE work_order = ?",
+                          params = list(work_order))
+    hit <- match(o$lab_id[r1], sl$lab_id)
+    o$uuid_sample[r1] <- sl$uuid_sample[hit]
+  }
+  # Route 2.
+  r2 <- is.na(o$uuid_sample) & !anon & !is.na(o$client_id) & !grepl("^-+$", o$client_id)
+  if (!any(r2)) return(o)
+  s <- DBI::dbGetQuery(con, "
+    SELECT s.uuid AS sample, fa.uuid_feature AS uuid_feature, COALESCE(s.datetime, s.date) AS ts
+      FROM \"sample\" s
+      JOIN project p ON p.uuid = s.uuid_project
+      LEFT JOIN feature_alias fa ON fa.uuid = s.uuid_feature_alias
+     WHERE p.name = ?", params = list(work_order))
+  if (nrow(s) == 0) return(o)
+  s$date <- .flags_syd_date(s$ts)
+  reg <- list(feature = DBI::dbGetQuery(con, "SELECT * FROM feature"),
+              feature_alias = DBI::dbGetQuery(con, "SELECT * FROM feature_alias"))
+  ids <- unique(o$client_id[r2])
+  link <- vapply(ids, function(cid) {
+    ok <- vapply(seq_len(nrow(s)), function(j) {
+      if (is.na(s$uuid_feature[[j]])) return(FALSE)
+      cand <- .rc_feature_candidates(cid, s$date[[j]], reg)
+      s$uuid_feature[[j]] %in% cand$uuid_feature
+    }, logical(1))
+    if (sum(ok) == 1) s$sample[ok] else NA_character_
+  }, character(1))
+  o$uuid_sample[r2] <- unname(link[match(o$client_id[r2], ids)])
+  o
+}
+
+#' Parse one retained ALS QC asset into lab_qc_report / lab_qc_outlier
+#'
+#' R-19.16: dispatches on the filename token (`_QCI` -> the QCI parser; `_QC`
+#' -> a `partial` report until the QC.pdf parser exists). A parse failure is
+#' stored as an `unreadable` report, never raised. A report already stored at
+#' the current parser version is left alone; one at any other version is
+#' replaced, report and outliers, in one transaction (R-19.9). A DB without
+#' the migration-048 tables is a no-op.
+#'
+#' @param con an open read-write connection.
+#' @param uuid_asset the `asset` row.
+#' @param path the PDF (the source or the archived copy).
+#' @param actor change_log actor.
+#' @return the report status (invisibly), or NULL when nothing was done.
+#' @keywords internal
+#' @noRd
+lab_qc_ingest <- function(con, uuid_asset, path, actor = "ingest") {
+  if (!DBI::dbExistsTable(con, "lab_qc_report") || !DBI::dbExistsTable(con, "lab_qc_outlier")) {
+    return(invisible(NULL))
+  }
+  a <- DBI::dbGetQuery(con, "SELECT a.filename, a.hash, p.name AS project FROM asset a
+                              LEFT JOIN project p ON p.uuid = a.uuid_project WHERE a.uuid = ?",
+                       params = list(uuid_asset))
+  filename <- if (nrow(a) && !is.na(a$filename[[1]])) a$filename[[1]] else basename(path)
+  kind <- .lab_qc_kind(filename)
+  if (is.na(kind)) return(invisible(NULL))
+  prev <- DBI::dbGetQuery(con, "SELECT uuid, parser_version FROM lab_qc_report WHERE uuid_asset = ?",
+                          params = list(uuid_asset))
+  if (nrow(prev) && identical(prev$parser_version[[1]], .qci_parser_version)) {
+    return(invisible(NULL))
+  }
+  m <- regmatches(filename, regexpr("E[A-Z][0-9]{7}", filename))
+  file_wo <- if (length(m)) m else if (nrow(a)) a$project[[1]] else NA_character_
+  hash <- if (nrow(a)) a$hash[[1]] else NA_character_
+
+  rep <- list(work_order = file_wo, issue_date = as.Date(NA), n_received = NA_integer_,
+              n_analysed = NA_integer_, summary = NA_character_, status = "unreadable",
+              message = NA_character_)
+  out <- .qci_empty_outliers()
+  lines <- .lab_qc_read(path)
+  if (inherits(lines, "condition")) {
+    rep$message <- paste("PDF unreadable:", conditionMessage(lines))
+  } else if (kind == "QC") {
+    rep$status <- "partial"
+    rep$message <- "QC.pdf not parsed yet (PLAN-19 phase 3)"
+  } else {
+    res <- tryCatch(.qci_parse(lines), error = function(e) e)
+    if (inherits(res, "error")) {
+      rep$message <- paste("QCI parse failed:", conditionMessage(res))
+    } else {
+      h <- res$header
+      msgs <- res$warnings
+      rep$status <- if (length(msgs)) "partial" else "parsed"
+      if (!is.na(h$work_order) && !is.na(file_wo) && h$work_order != file_wo) {
+        # As crosstab Workgroup: the header wins, the disagreement is noted.
+        msgs <- c(msgs, sprintf("header Work Order %s differs from the filename's %s; the header wins",
+                                h$work_order, file_wo))
+      }
+      if (!is.na(h$work_order)) rep$work_order <- h$work_order
+      rep$issue_date <- h$issue_date
+      rep$n_received <- h$n_received
+      rep$n_analysed <- h$n_analysed
+      rep$summary <- as.character(jsonlite::toJSON(res$summary, auto_unbox = TRUE, na = "null",
+                                                   null = "null"))
+      rep$message <- if (length(msgs)) paste(msgs, collapse = "; ") else NA_character_
+      out <- res$outliers
+    }
+  }
+  out <- .lab_qc_link(con, out, rep$work_order)
+
+  report <- data.frame(uuid = uuid::UUIDgenerate(), uuid_asset = uuid_asset,
+                       work_order = rep$work_order, kind = kind, issue_date = rep$issue_date,
+                       n_received = as.integer(rep$n_received), n_analysed = as.integer(rep$n_analysed),
+                       summary = rep$summary, status = rep$status, message = rep$message,
+                       parser_version = .qci_parser_version, parsed_at = Sys.time(),
+                       stringsAsFactors = FALSE)
+  if (nrow(out)) {
+    out <- cbind(data.frame(uuid = uuid::UUIDgenerate(n = nrow(out)), uuid_report = report$uuid,
+                            work_order = rep$work_order, stringsAsFactors = FALSE), out)
+    out$days_overdue <- as.integer(out$days_overdue)
+    out$source_page <- as.integer(out$source_page)
+  }
+  reason <- sprintf("ALS lab QC report %s (PLAN-19 R-19.16)", filename)
+  db_transaction(con, function(con) {
+    if (nrow(prev)) {
+      # R-19.9: a stale parser_version is replaced, report and rows together.
+      for (u in prev$uuid) {
+        ids <- DBI::dbGetQuery(con, "SELECT uuid FROM lab_qc_outlier WHERE uuid_report = ?",
+                               params = list(u))$uuid
+        for (x in ids) db_delete(con, "lab_qc_outlier", uuid = x, actor = actor, reason = reason)
+        db_delete(con, "lab_qc_report", uuid = u, actor = actor, reason = reason)
+      }
+    }
+    db_append(con, "lab_qc_report", report, actor = actor, reason = reason, source_hash = hash)
+    if (nrow(out)) db_append(con, "lab_qc_outlier", out, actor = actor, reason = reason,
+                             source_hash = hash)
+  })
+  invisible(report$status)
+}
+
+#' Parse every archived ALS QC report not yet parsed (R-19.17)
+#'
+#' Applies the lab-QC parse step to every `QC`-typed asset whose archived copy
+#' exists and that has no `lab_qc_report` row at the current parser version.
+#' Operator-run (migration 052). Each asset is its own transaction, so one bad
+#' file never undoes the rest.
+#'
+#' @param db the database file.
+#' @param actor the change_log actor, e.g. `"052-lab-qc-backfill"`.
+#' @return a data.frame, one row per asset considered: `uuid_asset`,
+#'   `filename`, `result` (`parsed`, `partial`, `unreadable`, `current`,
+#'   `no_archive`), invisibly.
+#' @export
+lab_qc_backfill <- function(db = st_config("live_db"), actor = "lab_qc_backfill") {
+  checkmate::assert_string(db)
+  checkmate::assert_string(actor)
+  arch <- st_config("archive_dir")
+  with_db_write(function(con) {
+    if (!DBI::dbExistsTable(con, "lab_qc_report")) {
+      cli::cli_abort("lab_qc_backfill(): {.path {db}} has no lab_qc_report table (migration 048 first).",
+                     class = "sampletidy_error")
+    }
+    a <- DBI::dbGetQuery(con, "
+      SELECT a.uuid, a.filename, r.parser_version
+        FROM asset a LEFT JOIN lab_qc_report r ON r.uuid_asset = a.uuid
+       WHERE a.type = 'QC' ORDER BY a.filename, a.uuid")
+    res <- character(nrow(a))
+    for (i in seq_len(nrow(a))) {
+      if (identical(a$parser_version[[i]], .qci_parser_version)) {
+        res[[i]] <- "current"
+        next
+      }
+      path <- file.path(arch, a$uuid[[i]], a$filename[[i]])
+      if (is.na(a$filename[[i]]) || !file.exists(path)) {
+        res[[i]] <- "no_archive"
+        next
+      }
+      st <- lab_qc_ingest(con, a$uuid[[i]], path, actor = actor)
+      res[[i]] <- if (is.null(st)) "skipped" else st
+    }
+    out <- data.frame(uuid_asset = a$uuid, filename = a$filename, result = res,
+                      stringsAsFactors = FALSE)
+    tb <- table(out$result)
+    cli::cli_inform("lab_qc_backfill(): {paste(names(tb), tb, sep = ' ', collapse = ', ')}")
+    invisible(out)
+  }, db = db)
+}
