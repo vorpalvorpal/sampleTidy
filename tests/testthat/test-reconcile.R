@@ -4216,6 +4216,219 @@ test_that("R-15.6/C.5: one curated cross-site alias suppresses Layer 3 for the W
   expect_true(is.na(c2$uuid_feature))
 })
 
+# ---- C2: an ACIRL report's site, read from its cited ALS work orders ------
+#
+# SPEC C2-acirl-site-guard. For an ACIRL report event (orphan, with
+# `report$sources`), the single site of the existing samples under the cited
+# ALS work orders vetoes a Layer-1/2 hit onto a feature at another site.
+
+c2_event <- function(con, feature_raw, cited, tag = "c2", n = 1L) {
+  rows <- dplyr::bind_rows(lapply(seq_len(n), function(i) {
+    mk_row(source_ref = sprintf("%s-r%d", tag, i), work_order = "2400-9902-09",
+           org = "ACIRL", adapter = "acirl_field_xlsx/1",
+           lab_sample_id = feature_raw, feature_raw = feature_raw,
+           analyte_raw = "pH Value", method_raw = NA_character_,
+           total_or_filtered = NA_character_, units_raw = "pH Unit",
+           value_raw = "7.10", value_num = 7.1, cas_number = NA_character_,
+           sample_datetime_raw = "04/09/2025", matrix_raw = "Water")
+  }))
+  fname <- sprintf("2400-9902-09 %s WMF.xlsx", tag)
+  fpath <- file.path(tempfile("c2src"), fname)
+  dir.create(dirname(fpath))
+  writeLines(paste("c2 fixture", tag), fpath)
+  hash <- hash_file(fpath)
+  rows$source_hash <- hash
+  DBI::dbExecute(con,
+    "INSERT INTO ingest_file (hash, filename, path_first_seen, state, work_order, revision)
+     VALUES (?, ?, ?, 'reconciled', NULL, 0)",
+    params = list(hash, fname, fpath))
+  list(
+    work_order = NA_character_, orphan = TRUE, results = rows,
+    samples = tibble::tibble(sample_datetime_raw = unique(rows$sample_datetime_raw)),
+    files = tibble::tibble(hash = hash, filename = fname, adapter = "acirl_field_xlsx/1",
+                           rank = 1L, kept = TRUE),
+    report = list(sources = stats::setNames(list(list(
+      hash = hash, filename = fname, report_no = "2400-9902-09",
+      als_work_orders = cited, feature_aliases = list(), als_candidates = list()
+    )), hash))
+  )
+}
+
+c2_seed <- function(con, confirmed_by = NA_character_) {
+  DBI::dbExecute(con,
+    "INSERT INTO feature_alias (uuid, uuid_feature, name, alias_key, kind, n_seen,
+       auto_assign, first_seen, last_seen, confirmed_by) VALUES
+     ('fa-c2-1', 'f-0008', 'S01X', 's01x', 'historical_code', 1, TRUE,
+      TIMESTAMP '2025-01-01 00:00:00', TIMESTAMP '2025-01-01 00:00:00', ?)",
+    params = list(confirmed_by))
+  DBI::dbExecute(con, "INSERT INTO project (uuid, name, type) VALUES
+    ('p-th', 'TH1111111', 'Work order'), ('p-mix', 'MX2222222', 'Work order')")
+  DBI::dbExecute(con, "INSERT INTO \"sample\"
+    (uuid, uuid_feature_alias, uuid_project, date, datetime, organisation) VALUES
+    ('s-c2-th', 'fa-0017', 'p-th', TIMESTAMP '2025-05-24 00:00:00',
+     TIMESTAMP '2025-05-24 01:45:00', 'ALS'),
+    ('s-c2-mix-t', 'fa-0001', 'p-mix', TIMESTAMP '2025-05-26 00:00:00',
+     TIMESTAMP '2025-05-26 01:45:00', 'ALS'),
+    ('s-c2-mix-th', 'fa-0017', 'p-mix', TIMESTAMP '2025-05-27 00:00:00',
+     TIMESTAMP '2025-05-27 01:45:00', 'ALS')")
+}
+
+c2_review <- function(out, subkind = "site_conflict") {
+  r <- out$review[out$review$kind == "unknown_feature" & !is.na(out$review$subkind) &
+                    out$review$subkind == subkind, , drop = FALSE]
+  r
+}
+
+c2_cands <- function(review_row) {
+  if (nrow(review_row) == 0) return(data.frame(kind = character(), uuid_feature = character()))
+  cd <- review_row$candidates[[1]]
+  cd[!is.na(cd$kind) & cd$kind == "candidate", , drop = FALSE]
+}
+
+c2_setup <- function(confirmed_by = NA_character_) {
+  path <- seed_db(); con <- seed_con(path)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE), envir = parent.frame())
+  c2_seed(con, confirmed_by)
+  con
+}
+
+test_that("C2.1: an ACIRL report citing a site-T WO does not let an S01X -> TH.S01 alias resolve; the row is pending with a site_conflict review", {
+  con <- c2_setup()
+  out <- reconcile_event(c2_event(con, "S01X", "XX1234567"), con)
+  row <- out$clean[out$clean$feature_raw == "S01X", ]
+  expect_equal(nrow(row), 1)
+  expect_true(row$feature_pending)
+  expect_true(is.na(row$uuid_feature))
+  sc <- c2_review(out)
+  expect_equal(nrow(sc), 1)
+  expect_true("blocking" %in% names(sc) && isTRUE(sc$blocking[1]))
+  expect_true("f-0008" %in% c2_cands(sc)$uuid_feature)
+  expect_true(nrow(sc) == 1 && grepl("report_site", sc$payload[1], fixed = TRUE))
+})
+
+test_that("C2.2 control: citing a WO whose samples are at TH resolves S01X -> f-0008, no site_conflict", {
+  con <- c2_setup()
+  out <- reconcile_event(c2_event(con, "S01X", "TH1111111"), con)
+  row <- out$clean[out$clean$feature_raw == "S01X", ]
+  expect_false(row$feature_pending)
+  expect_identical(row$uuid_feature, "f-0008")
+  expect_equal(nrow(c2_review(out)), 0)
+})
+
+test_that("C2.3 control: no DB evidence (unknown WO, or no cited WOs) leaves S01X -> f-0008", {
+  con <- c2_setup()
+  out1 <- reconcile_event(c2_event(con, "S01X", "ES0000000", tag = "c2a"), con)
+  r1 <- out1$clean[out1$clean$feature_raw == "S01X", ]
+  expect_false(r1$feature_pending)
+  expect_identical(r1$uuid_feature, "f-0008")
+  out2 <- reconcile_event(c2_event(con, "S01X", character(0), tag = "c2b"), con)
+  r2 <- out2$clean[out2$clean$feature_raw == "S01X", ]
+  expect_false(r2$feature_pending)
+  expect_identical(r2$uuid_feature, "f-0008")
+  expect_equal(nrow(c2_review(out1)) + nrow(c2_review(out2)), 0)
+})
+
+test_that("C2.4 control: mixed-site evidence (T and TH samples under the cited WO) is not unanimous, so no veto", {
+  con <- c2_setup()
+  out <- reconcile_event(c2_event(con, "S01X", "MX2222222"), con)
+  row <- out$clean[out$clean$feature_raw == "S01X", ]
+  expect_false(row$feature_pending)
+  expect_identical(row$uuid_feature, "f-0008")
+  expect_equal(nrow(c2_review(out)), 0)
+})
+
+test_that("C2.5 control: an ALS event with the same row is unaffected (scoping), and R-15.6's TS1 -> f-0008 still holds", {
+  con <- c2_setup()
+  # mk_event() work order XX1234567 has samples at T only; an ALS event must NOT be vetoed.
+  out <- reconcile_event(mk_event(mk_row(source_ref = "als1", feature_raw = "S01X",
+                                         sample_datetime_raw = "20 May 2025 09:00")), con)
+  row <- out$clean[out$clean$source_ref == "als1", ]
+  expect_false(row$feature_pending)
+  expect_identical(row$uuid_feature, "f-0008")
+  out2 <- reconcile_event(mk_event(mk_row(source_ref = "als2", feature_raw = "TS1",
+                                          sample_datetime_raw = "20 May 2025 09:00")), con)
+  expect_identical(out2$clean$uuid_feature[out2$clean$source_ref == "als2"], "f-0008")
+  expect_equal(nrow(c2_review(out)), 0)
+})
+
+test_that("C2.6: a SELF alias is vetoed too - T.MW01 in a report citing a TH-site WO is pending with a site_conflict naming f-0003", {
+  con <- c2_setup()
+  out <- reconcile_event(c2_event(con, "T.MW01", "TH1111111"), con)
+  row <- out$clean[out$clean$feature_raw == "T.MW01", ]
+  expect_true(row$feature_pending)
+  expect_true(is.na(row$uuid_feature))
+  sc <- c2_review(out)
+  expect_equal(nrow(sc), 1)
+  expect_true("blocking" %in% names(sc) && isTRUE(sc$blocking[1]))
+  expect_setequal(c2_cands(sc)$uuid_feature, "f-0003")
+})
+
+test_that("C2.7: same-site narrowing - an auto-assign key with arms at T and TH resolves to the T arm in a report citing a T WO", {
+  con <- c2_setup()
+  DBI::dbExecute(con,
+    "INSERT INTO feature_alias (uuid, uuid_feature, name, alias_key, kind, n_seen,
+       auto_assign, first_seen, last_seen, confirmed_by) VALUES
+     ('fa-c2-d1', 'f-0002', 'DUALX', 'dualx', 'historical_code', 1, TRUE,
+      TIMESTAMP '2025-01-01 00:00:00', TIMESTAMP '2025-01-01 00:00:00', NULL),
+     ('fa-c2-d2', 'f-0008', 'DUALX', 'dualx', 'historical_code', 1, TRUE,
+      TIMESTAMP '2025-01-01 00:00:00', TIMESTAMP '2025-01-01 00:00:00', NULL)")
+  out <- reconcile_event(c2_event(con, "DUALX", "XX1234567"), con)
+  row <- out$clean[out$clean$feature_raw == "DUALX", ]
+  expect_false(row$feature_pending)
+  expect_identical(row$uuid_feature, "f-0002")
+  expect_equal(nrow(c2_review(out)), 0)
+  expect_true(startsWith(as.character(row$feature_resolution), "report_site_narrowed:"))
+})
+
+test_that("C2.8: a human-confirmed cross-site alias still wins over the report site", {
+  con <- c2_setup(confirmed_by = "R. Shannon")
+  out <- reconcile_event(c2_event(con, "S01X", "XX1234567"), con)
+  row <- out$clean[out$clean$feature_raw == "S01X", ]
+  expect_false(row$feature_pending)
+  expect_identical(row$uuid_feature, "f-0008")
+  expect_equal(nrow(c2_review(out)), 0)
+})
+
+test_that("C2.9: committing the site_conflict event makes no sample at TH.S01, writes a dangling-alias sample, and persists the review item with its candidates", {
+  con <- c2_setup()
+  withr::local_options(list("sampletidy.archive_dir" = withr::local_tempdir()))
+  before <- DBI::dbGetQuery(con,
+    "SELECT count(*) AS n FROM \"sample\" WHERE uuid_feature_alias IN ('fa-0017','fa-0022','fa-c2-1')")$n
+  ev <- c2_event(con, "S01X", "XX1234567", tag = "c2commit")
+  out <- reconcile_event(ev, con)
+  commit_event(ev, out, con)
+  after <- DBI::dbGetQuery(con,
+    "SELECT count(*) AS n FROM \"sample\" WHERE uuid_feature_alias IN ('fa-0017','fa-0022','fa-c2-1')")$n
+  expect_equal(after, before)
+  dang <- DBI::dbGetQuery(con, "SELECT uuid FROM feature_alias WHERE alias_key = 's01x' AND uuid_feature IS NULL")
+  expect_equal(nrow(dang), 1)
+  if (nrow(dang) == 1) {
+    n <- DBI::dbGetQuery(con, "SELECT count(*) AS n FROM \"sample\" WHERE uuid_feature_alias = ?",
+                         params = list(dang$uuid[[1]]))$n
+    expect_equal(n, 1)
+  }
+  rq <- DBI::dbGetQuery(con,
+    "SELECT uuid FROM review_queue WHERE kind = 'unknown_feature' AND subkind = 'site_conflict'")
+  expect_equal(nrow(rq), 1)
+  if (nrow(rq) == 1) {
+    cd <- DBI::dbGetQuery(con, "SELECT uuid_feature FROM review_queue_candidate WHERE uuid_review = ?",
+                          params = list(rq$uuid[[1]]))
+    expect_true("f-0008" %in% cd$uuid_feature)
+  }
+})
+
+test_that("C2.10: two reconciles of the same site_conflict event give an identical review payload and candidates", {
+  con <- c2_setup()
+  ev <- c2_event(con, "S01X", "XX1234567", tag = "c2det")
+  a <- c2_review(reconcile_event(ev, con))
+  b <- c2_review(reconcile_event(ev, con))
+  expect_equal(nrow(a), 1)
+  expect_identical(a$payload, b$payload)
+  # uuid / uuid_review are minted per call by design (.rq_row); compare content.
+  keep <- function(x) lapply(x, function(d) d[, setdiff(names(d), c("uuid", "uuid_review")), drop = FALSE])
+  expect_identical(keep(a$candidates), keep(b$candidates))
+})
+
 test_that("A14/R-8.7: a re-ingested TEXT result matches as already_present and does NOT commit twice (quantified NA compares equal to NA)", {
   # Regression guard for the 2026-07-23 tri-state change. `quantified` is NA for
   # every text result; if .rc_values_equal() treats NA as unmatchable, the same

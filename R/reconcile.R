@@ -189,7 +189,7 @@
                  subkind = character(0), payload = character(0), n_rows = integer(0),
                  source_hash = character(0), uuid_existing = character(0),
                  uuid_alias = character(0), candidates = list(),
-                 work_order = character(0))
+                 work_order = character(0), blocking = logical(0))
 }
 
 # ---- R-11.14: fold assembly's inline review flags into reconcile -----------
@@ -281,6 +281,12 @@
   # historical orphan rows whose candidates are JSON and PLAN-16 ruled
   # "preserve, do not convert".
   row$candidates <- list(rq$candidates)
+  # C2: `blocking` also rides as a typed column (it is ALSO in the
+  # diagnostics, the persisted carrier), so a caller of `reconcile_event()`
+  # branches on one field without parsing the payload. NA when the producer
+  # did not state it.
+  b <- diagnostics$blocking
+  row$blocking <- if (is.logical(b) && length(b) == 1) b else NA
   row
 }
 
@@ -737,6 +743,58 @@
   hit$uuid[[1]]
 }
 
+# ---- C2: ACIRL report site veto ---------------------------------------------
+
+#' Split a key's live `auto_assign` arms by the ACIRL report site (C2
+#' (2026-10-20): ACIRL report site veto; amends PLAN-15 C.3 for ACIRL events).
+#'
+#' An arm is VETOED when its feature sits at a site other than `report_site`
+#' and it is not human-confirmed. Robin's rulings (2026-10-20):
+#' - `self` arms ARE vetoed: `B.MW02` inside a Katoomba report is a site-prefix
+#'   typo, and the self arm is exactly the arm that misfiles it;
+#' - an arm with `confirmed_by` non-NULL still wins - a human said this name
+#'   means that feature, cross-site or not;
+#' - a feature with a NA/blank site is never vetoed (there is no site to
+#'   conflict with).
+#' @return `list(kept, vetoed)`: the surviving arms (a `cand` tibble) and the
+#'   DISTINCT vetoed `uuid_feature`s, radix-sorted.
+#' @keywords internal
+#' @noRd
+.rc_site_veto <- function(cand, report_site, registry) {
+  if (is.na(report_site) || nrow(cand) == 0) {
+    return(list(kept = cand, vetoed = character(0)))
+  }
+  site <- trimws(registry$feature$site[match(cand$uuid_feature, registry$feature$uuid)])
+  fa <- registry$feature_alias
+  confirmed <- if ("confirmed_by" %in% names(fa)) {
+    cb <- fa$confirmed_by[match(cand$uuid_alias, fa$uuid)]
+    !is.na(cb) & nzchar(trimws(as.character(cb)))
+  } else {
+    rep(FALSE, nrow(cand))
+  }
+  off_site <- !is.na(site) & site != "" & site != report_site & !confirmed
+  list(
+    kept = cand[!off_site, , drop = FALSE],
+    vetoed = sort(unique(cand$uuid_feature[off_site]), method = "radix")
+  )
+}
+
+#' The point a vetoed row would have at the REPORT site, for its structural
+#' review candidate (C2). Only a `boundary == TRUE` parse names a site: the
+#' bare-prefix parse "recognises" site B in `bore 8` and site L in
+#' `lined leachate dam`, so a non-boundary parse falls back to the whole
+#' canonicalised key, which - as in Layer 3 (C.2) - must carry no separator.
+#' @return a canonical point, or NA.
+#' @keywords internal
+#' @noRd
+.rc_report_site_point <- function(key, sites) {
+  if (is.na(key)) return(NA_character_)
+  p <- .rc_parse_structural(key, sites)
+  if (!is.null(p) && isTRUE(p$boundary)) return(p$point)
+  pt <- .rc_canonical_point(key)
+  if (grepl("[. ]", pt)) NA_character_ else pt
+}
+
 # ---- R-8.2/R-11.5: feature resolution (conveyor) ---------------------------
 
 #' Resolve `feature_raw` for every row (R-11.5 conveyor). EVERY row is kept and
@@ -749,11 +807,20 @@
 #'   `alias_key` set. Row STAYS in `active` AND emits a review item.
 #' - held (NA/blank feature_raw, no key): review only, dropped from `active`
 #'   (there is no key to hang a pending alias on - A44).
+#' - site_conflict (C2 (2026-10-20): ACIRL report site veto; amends PLAN-15
+#'   C.3 for ACIRL events): `report_site` is not NA (`.rc_report_site()`) and
+#'   every live arm - or the Layer-2 hit - is at another site. Pending exactly
+#'   as `ambiguous` is, with a blocking `site_conflict` review. When the veto
+#'   leaves arms at `report_site` the row resolves among those instead
+#'   (`report_site_narrowed:` provenance).
 #'
+#' @param report_site the ACIRL report's site, or NA (no veto - every
+#'   ALS/ESdat event).
 #' @return `list(kept, review)`.
 #' @keywords internal
 #' @noRd
-.rc_resolve_features <- function(rows, registry, work_order, orphan = FALSE) {
+.rc_resolve_features <- function(rows, registry, work_order, orphan = FALSE,
+                                 report_site = NA_character_) {
   n <- nrow(rows)
   if (n == 0) {
     rows$uuid_feature <- character(0)
@@ -799,6 +866,23 @@
   # SUPPRESSED, per row. Never a resolution - only a second place for
   # `.rc_three_way()` to look for an already-committed equal measurement.
   gated_hit <- rep(NA_character_, n)
+  # C2, per row: `list(vetoed, struct_hit)` when the report-site veto left the
+  # row with nothing to resolve to (NULL = no conflict).
+  veto_list <- vector("list", n)
+  if (length(report_site) != 1 || is.na(report_site) || trimws(report_site) == "") {
+    report_site <- NA_character_
+  }
+  site_conflict <- function(i, vetoed) {
+    point <- .rc_report_site_point(alias_key[[i]], sites)
+    sh <- .rc_structural_hit(report_site, point, index, row_dates[[i]], registry)
+    veto_list[[i]] <<- list(vetoed = vetoed, struct_hit = sh)
+    struct_site[[i]] <<- report_site
+    struct_point[[i]] <<- point
+    uuid_feature[[i]] <<- NA_character_
+    uuid_alias[[i]] <<- NA_character_
+    pending[[i]] <<- TRUE
+    status[[i]] <<- "pending"
+  }
   feat_name <- function(u) {
     nm <- registry$feature$name[match(u, registry$feature$uuid)]
     if (length(nm) == 0 || is.na(nm)) u else nm
@@ -811,6 +895,27 @@
       next
     }
     cand <- .rc_feature_candidates(rows$feature_raw[[i]], row_dates[[i]], registry)
+    # C2 (2026-10-20): ACIRL report site veto; amends PLAN-15 C.3 for ACIRL
+    # events. Curation no longer always wins inside an ACIRL report: an
+    # unconfirmed arm (self arms included) onto another site is dropped BEFORE
+    # the hit / self-precedence / ambiguity count. Nothing left -> pending
+    # `site_conflict`; arms left at the report site -> resolve among them.
+    site_narrowed <- FALSE
+    if (!is.na(report_site) && nrow(cand) > 0) {
+      v <- .rc_site_veto(cand, report_site, registry)
+      if (length(v$vetoed) > 0) {
+        if (nrow(v$kept) == 0) {
+          site_conflict(i, v$vetoed)
+          next
+        }
+        cand <- v$kept
+        site_narrowed <- TRUE
+      }
+    }
+    narrowed_reason <- function(u) {
+      paste0("report_site_narrowed: ", rows$feature_raw[[i]], " -> ", feat_name(u),
+             " (site=", report_site, ")")
+    }
     distinct_feat <- unique(cand$uuid_feature)
     if (length(distinct_feat) == 1) {
       uuid_feature[[i]] <- distinct_feat
@@ -831,6 +936,7 @@
       arm <- if (any(arm_is_self)) which(arm_is_self)[[1]] else 1L
       uuid_alias[[i]] <- cand$uuid_alias[[arm]]
       status[[i]] <- "hit"
+      if (site_narrowed) resolution[[i]] <- narrowed_reason(distinct_feat)
       next
     }
     # E.2/E.7 (R1/R2): several live arms, exactly one of them the feature's own
@@ -843,6 +949,7 @@
       uuid_alias[[i]] <- sp$uuid_alias
       shadowed[[i]] <- sp$shadowed
       status[[i]] <- "hit"
+      if (site_narrowed) resolution[[i]] <- narrowed_reason(sp$uuid_feature)
       next
     }
 
@@ -885,6 +992,15 @@
     if (is.na(hit)) next
     self <- .rc_self_alias(hit, registry)
     if (is.na(self)) next               # B.6: never commit with a NA alias
+    # C2: a Layer-2 hit onto another site is vetoed like a Layer-1 arm.
+    if (!is.na(report_site)) {
+      v <- .rc_site_veto(tibble::tibble(uuid_alias = self, uuid_feature = hit),
+                         report_site, registry)
+      if (length(v$vetoed) > 0) {
+        site_conflict(i, v$vetoed)
+        next
+      }
+    }
     uuid_feature[[i]] <- hit
     uuid_alias[[i]] <- self
     pending[[i]] <- FALSE
@@ -898,6 +1014,9 @@
   if (!is.na(l3)) {
     for (i in which(status == "pending")) {
       if (is.na(alias_key[[i]])) next
+      # C2: a report-site conflict is never re-sited either (unreachable
+      # today - Layer 3 is skipped for orphan events - but pinned).
+      if (!is.null(veto_list[[i]])) next
       # C.2: a row that yielded a RECOGNISED site is never re-sited, even
       # when its point missed - that is the cross-site merge this guards.
       if (!is.na(parsed_site[[i]])) next
@@ -951,7 +1070,8 @@
   kept <- rows[keep, , drop = FALSE]
 
   review <- dplyr::bind_rows(
-    .rc_feature_review(rows, status, cand_list, exp_list, struct_site, struct_point, work_order),
+    .rc_feature_review(rows, status, cand_list, exp_list, struct_site, struct_point, work_order,
+                       veto_list = veto_list, report_site = report_site),
     .rc_self_precedence_notes(rows, uuid_feature, shadowed, work_order),
     .rc_qc_label_conflicts(rows, status, uuid_feature, registry, work_order)
   )
@@ -1074,6 +1194,51 @@
   s
 }
 
+#' The SITE an ACIRL report is about, read from its cited ALS work orders
+#' (C2 (2026-10-20): ACIRL report site veto; amends PLAN-15 C.3 for ACIRL
+#' events).
+#'
+#' An ACIRL field report cites the ALS work orders its samples went to; the
+#' samples ALREADY committed under those work orders say which site the report
+#' is about. That is the one piece of site evidence an orphan (ACIRL) event has
+#' - Layer 3 (`.rc_wo_site()`) is skipped for it - and it is what catches the
+#' corpus misfiles (`S3` -> K.S03 and `Bore 8` -> K.MW08 inside Blaxland
+#' reports; `B.MW02` -> the Blaxland bore inside a Katoomba report).
+#'
+#' The site is the single distinct `feature.site` across every committed
+#' sample whose project (type `Work order`) is a cited WO, counting only
+#' samples whose alias resolves to a feature. NA when:
+#' - the event has no `report$sources` (every ALS/ESdat event - scoping);
+#' - it cites no work order, or no such sample exists;
+#' - the samples span more than one site (not unanimous, so no veto).
+#'
+#' ONE query per event, never per row, and read-only (A32).
+#' @return a length-1 character, possibly NA.
+#' @keywords internal
+#' @noRd
+.rc_report_site <- function(event, con) {
+  sources <- event$report$sources
+  if (is.null(sources) || length(sources) == 0) return(NA_character_)
+  wo <- .ct_event_als_work_orders(event)
+  if (length(wo) == 0) return(NA_character_)
+  sql <- sprintf(
+    "SELECT DISTINCT f.site AS site
+       FROM \"sample\" s
+       JOIN project p ON p.uuid = s.uuid_project
+       JOIN feature_alias fa ON fa.uuid = s.uuid_feature_alias
+       JOIN feature f ON f.uuid = fa.uuid_feature
+      WHERE p.type = 'Work order' AND p.name IN (%s)",
+    paste(rep("?", length(wo)), collapse = ", ")
+  )
+  site <- DBI::dbGetQuery(con, sql, params = as.list(wo))$site
+  site <- trimws(as.character(site))
+  # A sample at a site-less feature makes the evidence non-unanimous: NA.
+  if (length(site) == 0 || any(is.na(site) | site == "")) return(NA_character_)
+  site <- unique(site)
+  if (length(site) != 1) return(NA_character_)
+  site
+}
+
 #' Grouped `unknown_feature` review items (one per normalised feature_raw; the
 #' NA/blank key groups into a single item - A44). `source_hash` is the
 #' first of the group (seam S-4). Covers both committable-pending and held rows.
@@ -1103,6 +1268,7 @@
 #' | # | subkind                | fires when                                   | blocking |
 #' |---|------------------------|----------------------------------------------|----------|
 #' | 0 | `self_precedence_note` | a live `self` arm won over >=1 shadowed arm  | FALSE    |
+#' | 0.5 | `site_conflict`      | ACIRL report site vetoed every arm (C2)      | TRUE     |
 #' | 1 | `ambiguous`            | >=2 LIVE candidate features                  | TRUE     |
 #' | 2 | `expired_alias`        | ZERO live arms and >=1 EXPIRED arm (E.3)     | TRUE     |
 #' | 3 | `suggestion`           | EXACTLY ONE live candidate feature (F.6)     | TRUE     |
@@ -1121,6 +1287,17 @@
 #' loop above only sets `status = "held"` when `alias_key[[i]]` IS NA), so
 #' this rank is unambiguous to add: the group formed at rank 4.5 is always
 #' whole-group `held`, never mixed with a `pending` row.
+#'
+#' C2 (2026-10-20): ACIRL report site veto; amends PLAN-15 C.3 for ACIRL
+#' events. Rank 0.5 `site_conflict` fires when `.rc_resolve_features()` vetoed
+#' every live arm (or the Layer-2 hit) of the group's key because its feature
+#' is at a site other than the report's (`veto_list`). It sits ABOVE
+#' `ambiguous` because the live-arm count is meaningless once the arms were
+#' vetoed: the actionable fact is the site conflict. Its typed candidates are
+#' the vetoed feature(s) plus the structural hit `(report_site, point)` when
+#' one exists; `report_site` (and `site`/`point` when a point was derived)
+#' ride in the diagnostics. Unlike ranks 1-3 it is not keyed off a count, but
+#' it is still exclusive: a vetoed row never reaches the suggestion path.
 #'
 #' Three things the table pins that prose kept getting wrong:
 #'
@@ -1193,7 +1370,9 @@
 #' @keywords internal
 #' @noRd
 .rc_feature_review <- function(rows, status, cand_list, exp_list, struct_site,
-                               struct_point, work_order) {
+                               struct_point, work_order, veto_list = NULL,
+                               report_site = NA_character_) {
+  if (is.null(veto_list)) veto_list <- vector("list", nrow(rows))
   idx <- which(status %in% c("pending", "held"))
   if (length(idx) == 0) return(.rc_proto_review())
 
@@ -1232,8 +1411,20 @@
     # every member's status is "held" - see the table header above for why
     # that is never mixed with a "pending" member.
     is_held_group <- length(g) > 0 && all(status[g] == "held")
+    # C2: the group's vetoed features and report-site structural hits, as a
+    # union over the whole group (F.5), vetoed first.
+    veto_g <- Filter(Negate(is.null), veto_list[g])
+    is_site_conflict <- length(veto_g) > 0
+    if (is_site_conflict) {
+      vetoed <- unique(unlist(lapply(veto_g, `[[`, "vetoed"), use.names = FALSE))
+      sh <- unlist(lapply(veto_g, `[[`, "struct_hit"), use.names = FALSE)
+      cand <- unique(c(vetoed, sh[!is.na(sh)]))
+      n_live <- length(cand)
+    }
     subkind <- if (is_held_group) {
       "held"
+    } else if (is_site_conflict) {
+      "site_conflict"
     } else if (n_live >= 2) {
       "ambiguous"
     } else if (n_live == 1) {
@@ -1258,6 +1449,13 @@
     if (identical(subkind, "structural")) {
       diagnostics$site <- st_site
       diagnostics$point <- st_point
+    }
+    if (identical(subkind, "site_conflict")) {
+      diagnostics$report_site <- report_site
+      if (!is.na(st_point)) {
+        diagnostics$site <- st_site
+        diagnostics$point <- st_point
+      }
     }
     out[[length(out) + 1]] <- .rc_review_row(
       source_ref = refs, kind = "unknown_feature",
@@ -2957,6 +3155,8 @@
   for (col in setdiff(cols, names(df))) {
     df[[col]] <- if (identical(col, "candidates")) {
       vector("list", nrow(df))
+    } else if (identical(col, "blocking")) {
+      rep(NA, nrow(df))
     } else {
       NA_character_
     }
@@ -3100,7 +3300,8 @@ reconcile_event <- function(event, con) {
   # caller can see a producer's review_queue_candidate child rows rather than
   # having them silently dropped a second time at this selection step.
   review_cols <- c("source_ref", "kind", "subkind", "payload", "source_hash",
-                    "uuid_existing", "uuid_alias", "candidates", "work_order")
+                    "uuid_existing", "uuid_alias", "candidates", "work_order",
+                    "blocking")
   skip_cols <- c("source_ref", "reason", "payload", "source_hash",
                   "existing_uuid", "kept_uuid_lab")
 
@@ -3246,7 +3447,11 @@ reconcile_event <- function(event, con) {
   active <- qc$kept
 
   # R-11.5 (feature conveyor)
-  feat <- .rc_resolve_features(active, registry, event$work_order, isTRUE(event$orphan))
+  # C2 (2026-10-20): ACIRL report site veto; amends PLAN-15 C.3 for ACIRL
+  # events. One read-only query per event (A32), NA for every non-ACIRL event.
+  report_site <- .rc_report_site(event, con)
+  feat <- .rc_resolve_features(active, registry, event$work_order, isTRUE(event$orphan),
+                               report_site = report_site)
   add_review(feat$review)
   active <- feat$kept
 
