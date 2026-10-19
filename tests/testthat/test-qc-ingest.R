@@ -145,9 +145,14 @@ test_that("R-19.6: commit writes one sample_lab_id row per committed crosstab sa
   s <- qci_samples(db)
   expect_setequal(s$feature, c("Q.MW02", "Q.MW08", "Q.S01", "Q.JD42", "Q.S05"))
   li <- qci_query(db, "SELECT * FROM sample_lab_id")
-  expect_equal(nrow(li), nrow(s))
+  # every committed sample counts, including those committed on a pending alias
+  # (ruled 2026-10-19: qci_samples() sees only resolved ones)
+  all_s <- qci_query(db, "SELECT s.uuid FROM \"sample\" s
+                            JOIN project p ON p.uuid = s.uuid_project
+                           WHERE p.name = ?", params = list(sec_wo))
+  expect_equal(nrow(li), nrow(all_s))
   expect_true(all(li$work_order == sec_wo))
-  expect_setequal(li$uuid_sample, s$uuid)
+  expect_setequal(li$uuid_sample, all_s$uuid)
   by_client <- stats::setNames(li$lab_id, li$client_id)
   expect_identical(unname(by_client[c("Q.MW02", "Q.MW08", "Q.S01", "Q.JD42", "Q.S05")]),
                    sprintf("ES2537534-%03d", c(1L, 2L, 4L, 5L, 6L)))
