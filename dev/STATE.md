@@ -13,6 +13,7 @@ The companion documents, in the order you are likely to need them:
 | the frozen build contract (A1–A72, plus later API notes) | `dev/plans/CONTRACT.md` |
 | design authority | `dev/DESIGN.md` |
 | the ACIRL gas adapter | `dev/plans/PLAN-17-adapter-acirl-gas.md` |
+| field and ALS lab QC (planned) | `dev/plans/PLAN-19-qc.md` |
 
 ## In one sentence
 
