@@ -100,8 +100,29 @@ inbox_report_path <- function(report_dir, now) {
   file.path(report_dir, paste0(sydney_date(now), "-imports.md"))
 }
 
+#' Ruling R8 (2026-10-19): both notes start with a YAML frontmatter block
+#' (`---` / `summary:` / `  - '...'` / `---`). Returns the frontmatter lines
+#' (without the fences), or NULL when the note has none.
+note_frontmatter <- function(lines) {
+  if (length(lines) < 2 || !identical(lines[[1]], "---")) return(NULL)
+  end <- which(lines == "---")
+  end <- end[end > 1]
+  if (length(end) == 0) return(NULL)
+  if (end[[1]] == 2) character(0) else lines[2:(end[[1]] - 1)]
+}
+
+#' The note body after its frontmatter (unchanged when there is none), so the
+#' header-line assertions keep reading the header.
+strip_frontmatter <- function(lines) {
+  fm <- note_frontmatter(lines)
+  if (is.null(fm)) return(lines)
+  n <- length(fm) + 2L
+  if (n >= length(lines)) character(0) else lines[(n + 1L):length(lines)]
+}
+
 read_report <- function(report_dir, now) {
-  readLines(inbox_report_path(report_dir, now), warn = FALSE, encoding = "UTF-8")
+  strip_frontmatter(readLines(inbox_report_path(report_dir, now), warn = FALSE,
+                              encoding = "UTF-8"))
 }
 
 #' Lines of the markdown section whose heading matches `title` (a `#` heading),
@@ -153,7 +174,7 @@ run_inbox <- function(s, now = Sys.time(), ...) {
 
 status_note_path <- function(report_dir) file.path(report_dir, "Import status.md")
 read_status_note <- function(report_dir) {
-  readLines(status_note_path(report_dir), warn = FALSE, encoding = "UTF-8")
+  strip_frontmatter(readLines(status_note_path(report_dir), warn = FALSE, encoding = "UTF-8"))
 }
 
 #' Snapshot of a directory tree: relative path -> "size|mtime|md5", used to

@@ -561,7 +561,7 @@ test_that("import_report(): the dated note is named for the Sydney date of now; 
   path <- file.path(s$report_dir, "2026-10-19-imports.md")
   expect_true(file.exists(path))
   expect_false(file.exists(file.path(s$report_dir, "2026-10-18-imports.md")))
-  l <- readLines(path, warn = FALSE, encoding = "UTF-8")
+  l <- strip_frontmatter(readLines(path, warn = FALSE, encoding = "UTF-8"))
   l <- l[nzchar(trimws(l))]
   expect_identical(l[[1]], "*Imports · 01:30 · 0 folder(s) imported today, 0 review item(s) open*")
   expect_identical(l[[length(l)]], "*Last run 01:30; next within the hour. Log: .imports.log*")

@@ -427,6 +427,10 @@ test_that("R-10.6: NAMESPACE exports equal the CONTRACT-pinned public API exactl
     # added to CONTRACT.md's public-API list in the same change: the hourly
     # Obsidian-triggered run and the vault notes it writes. Operator-run tools.
     "inbox_run", "inbox_check", "inbox_signature", "import_report", "import_status",
+    # PLAN-18 section 4 (phase 2, Robin 2026-10-19), added to CONTRACT.md's
+    # public-API list in the same change: the deterministic checks behind the
+    # status note's Flags section, callable on their own (read-only).
+    "import_flags", "sampling_rounds",  # + PLAN-18 4.6 ledger reader (superseded the PDF parser)
     # Phase-7b round 3, added 2026-07-26 (Robin's ruling) and added to
     # CONTRACT.md's public-API list in the same change. EXPORTED because round 3
     # found that NOTHING in the package could close a `sample_collision` review
