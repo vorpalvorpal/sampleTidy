@@ -10,7 +10,20 @@
 # here). The directory-create and copy are both checked (R-12.4/F10): a
 # failure aborts `sampletidy_error` before the `asset` row is inserted, so
 # the surrounding commit transaction rolls back rather than "succeeding"
-# with a missing archive copy.
+# with a missing archive copy. A failed copy also removes the per-asset
+# directory just created. Inside a `db_transaction()` the new directory is
+# registered (`.st_on_rollback()`, R/mutate.R) so a rollback unlinks it too -
+# otherwise an aborted commit leaves an orphan directory with no asset row and
+# a retry copies the file again under a new uuid. Commit keeps it; the
+# dedupe-reuse path creates nothing so a rollback never touches an existing
+# directory; cleanup errors are swallowed so the original error propagates.
+
+# Seam for tests: the single place the file copy happens.
+#' @keywords internal
+#' @noRd
+.ar_copy_file <- function(from, to) {
+  isTRUE(file.copy(from, to))
+}
 
 #' Archive one ingested source file as an `asset` row
 #'
@@ -118,7 +131,14 @@ archive_file <- function(con, path, hash, event, type = "Chemical analysis") {
   # and must abort, not be papered over.
   dir_created <- dir.create(uuid_dir, recursive = FALSE, showWarnings = FALSE)
   dest <- file.path(uuid_dir, basename(path))
-  copied <- isTRUE(dir_created) && isTRUE(file.copy(path, dest))
+  copied <- isTRUE(dir_created) && .ar_copy_file(path, dest)
+  if (isTRUE(dir_created)) {
+    if (copied) {
+      .st_on_rollback(con, function() unlink(uuid_dir, recursive = TRUE))
+    } else {
+      unlink(uuid_dir, recursive = TRUE)
+    }
+  }
   if (!copied) {
     cli::cli_abort(
       "Failed to archive source file {.path {path}} to {.path {dest}}.",
