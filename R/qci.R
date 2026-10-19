@@ -1,0 +1,546 @@
+# PLAN-19 phase 1b: the ALS QA/QC Compliance Assessment (QCI) parser (R-19.18 -
+# R-19.20). A pure function of the PDF's text lines:
+#
+#   lines <- strsplit(paste(pdftools::pdf_text(path), collapse = "\f"), "\n")[[1]]
+#
+# which is line-for-line `pdftotext -layout`. A line that begins with "\f" is
+# the first line of a new page. The report is ALS's own fact sheet: nothing
+# here judges a value (R19-2, R19-11); the flag checks do that.
+#
+# Layout (PLAN-19 Appendix A): page 1 carries the key : value header grid and
+# the seven Summary-of-Outliers bullets. The detail tables follow on later
+# pages, each led by an `Outliers : <table>` title:
+#   * Quality Control Samples - one record per outlier, columns located by x
+#     position (they move between files and pages);
+#   * Analysis Holding Time Compliance - method / container / client-ID lines;
+#   * Frequency of Quality Control Samples - one row per QC type x method.
+# The full holding-time and frequency listings that follow those tables are
+# not parsed (phase 3, R-19.36).
+
+.qci_parser_version <- "1"
+
+.qci_summary_keys <- c("mb", "dup", "lcs", "ms", "surrogate", "holding_time", "frequency")
+
+.qci_outlier_cols <- c("kind", "method", "method_name", "analyte_raw", "cas", "lab_id",
+                       "qc_lot", "client_id", "data_raw", "value_pct", "limit_low",
+                       "limit_high", "comment", "days_overdue", "date_analysed",
+                       "due_analysis", "date_extracted", "due_extraction", "source_page")
+
+.qci_method_re <- "E[A-Z][0-9]{3}[A-Za-z0-9/-]*"
+.qci_lab_id_re <- "E[A-Z][0-9]{7}-{1,2}[0-9]{3}"
+.qci_lot_re <- "QC-[A-Z0-9]+(?:-[A-Z0-9]+)*"
+.qci_date_re <- "[0-9]{2}-[A-Z][a-z]{2}-[0-9]{4}"
+.qci_limits_re <- "^(----|[0-9.]+ ?- ?[0-9.]+ ?%)$"
+.qci_data_re <- "^(Not|Not Determined|[<>]?-?[0-9.]+ ?%?)$"
+
+# ---- small pieces ----------------------------------------------------------------
+
+# dd-Mon-yyyy -> Date, locale-free; anything else ("----", blank) -> NA.
+.qci_date <- function(x) {
+  x <- trimws(as.character(x))
+  ok <- !is.na(x) & grepl(paste0("^", .qci_date_re, "$"), x)
+  out <- rep(as.Date(NA), length(x))
+  if (any(ok)) {
+    mon <- match(substr(x[ok], 4, 6), month.abb)
+    out[ok] <- as.Date(sprintf("%s-%02d-%s", substr(x[ok], 8, 11), mon, substr(x[ok], 1, 2)))
+  }
+  out
+}
+
+.qci_na_dash <- function(x) {
+  x <- trimws(as.character(x))
+  x[!is.na(x) & (x == "" | grepl("^-+$", x))] <- NA_character_
+  x
+}
+
+.qci_num <- function(x) suppressWarnings(as.numeric(x))
+
+# Cells of a line: runs of text separated by two or more spaces, with their
+# character start/end positions (1-based, inclusive).
+.qci_tokens <- function(line) {
+  m <- gregexpr("\\S+(?: \\S+)*", line, perl = TRUE)[[1]]
+  if (length(m) == 1 && m[[1]] == -1) {
+    return(data.frame(text = character(), start = integer(), end = integer(),
+                      stringsAsFactors = FALSE))
+  }
+  len <- attr(m, "match.length")
+  data.frame(text = regmatches(line, list(m))[[1]], start = as.integer(m),
+             end = as.integer(m + len - 1L), stringsAsFactors = FALSE)
+}
+
+# Replace characters `from`..`to` of `line` with spaces (positions kept).
+.qci_blank <- function(line, from, to) {
+  if (is.na(from) || to < from) return(line)
+  paste0(substr(line, 1, from - 1L), strrep(" ", to - from + 1L),
+         substr(line, to + 1L, nchar(line)))
+}
+
+.qci_empty_outliers <- function() {
+  d <- data.frame(kind = character(), method = character(), method_name = character(),
+                  analyte_raw = character(), cas = character(), lab_id = character(),
+                  qc_lot = character(), client_id = character(), data_raw = character(),
+                  value_pct = numeric(), limit_low = numeric(), limit_high = numeric(),
+                  comment = character(), days_overdue = integer(),
+                  stringsAsFactors = FALSE)
+  d$date_analysed <- as.Date(character())
+  d$due_analysis <- as.Date(character())
+  d$date_extracted <- as.Date(character())
+  d$due_extraction <- as.Date(character())
+  d$source_page <- integer()
+  d[, .qci_outlier_cols]
+}
+
+# One outlier row from a named list (missing fields NA).
+.qci_row <- function(...) {
+  x <- list(...)
+  d <- .qci_empty_outliers()[NA_integer_, , drop = FALSE]
+  rownames(d) <- NULL
+  for (k in names(x)) d[[k]] <- if (is.null(x[[k]]) || length(x[[k]]) == 0) d[[k]] else x[[k]]
+  d
+}
+
+# ---- page structure ----------------------------------------------------------------
+
+# Per line: its page number, the line without its leading form feed, and
+# whether it is page furniture (the repeated page header block, the footer).
+.qci_pages <- function(lines) {
+  n <- length(lines)
+  page <- integer(n)
+  skip <- logical(n)
+  text <- lines
+  cur <- 1L
+  hdr_left <- 0L
+  for (i in seq_len(n)) {
+    x <- text[[i]]
+    if (startsWith(x, "\f")) {
+      cur <- cur + 1L
+      x <- sub("^\f+", "", x)
+      text[[i]] <- x
+    }
+    m <- regmatches(x, regexec("^Page\\s*:\\s*([0-9]+)\\s+of\\s+[0-9]+\\s*$", x))[[1]]
+    if (length(m) == 2) {
+      cur <- as.integer(m[[2]])
+      skip[[i]] <- TRUE
+      hdr_left <- 3L
+    } else if (hdr_left > 0L && grepl("^(Work Order|Client|Project)\\s*:", x)) {
+      skip[[i]] <- TRUE
+      hdr_left <- hdr_left - 1L
+    } else {
+      hdr_left <- 0L
+    }
+    if (grepl("^\\s*right solutions[.|[:space:]]*right partner\\.?\\s*$", x, ignore.case = TRUE)) {
+      skip[[i]] <- TRUE
+    }
+    page[[i]] <- cur
+  }
+  list(text = text, page = page, skip = skip)
+}
+
+# ---- header (R-19.19) ------------------------------------------------------------------
+
+.qci_header <- function(text, page) {
+  p1 <- text[page == 1L]
+  grab <- function(re) {
+    for (x in p1) {
+      m <- regmatches(x, regexec(re, x, perl = TRUE))[[1]]
+      if (length(m) == 2) return(m[[2]])
+    }
+    NA_character_
+  }
+  list(work_order = grab("Work Order\\s*:\\s*(E[A-Z][0-9]{7})"),
+       issue_date = .qci_date(grab(paste0("Issue Date\\s*:\\s*(", .qci_date_re, ")"))),
+       n_received = as.integer(grab("No\\. of samples received\\s*:\\s*([0-9]+)")),
+       n_analysed = as.integer(grab("No\\. of samples analysed\\s*:\\s*([0-9]+)")))
+}
+
+# ---- Summary of Outliers (R-19.19) ------------------------------------------------------
+
+.qci_bullet_key <- function(x) {
+  if (grepl("surrogate", x, ignore.case = TRUE)) return("surrogate")
+  if (grepl("Method Blank", x, fixed = TRUE)) return("mb")
+  if (grepl("Laboratory Control", x, fixed = TRUE)) return("lcs")
+  if (grepl("Matrix Spike", x, fixed = TRUE)) return("ms")
+  if (grepl("Holding Time", x, ignore.case = TRUE)) return("holding_time")
+  if (grepl("Frequency", x, ignore.case = TRUE)) return("frequency")
+  if (grepl("Duplicate", x, fixed = TRUE)) return("dup")
+  NA_character_
+}
+
+.qci_bullet_value <- function(x) {
+  x <- gsub("\\s+", " ", trimws(x))
+  if (grepl("^NO .* (outliers )?(occur|exist)\\.$", x)) return(FALSE)
+  if (grepl(paste0("^For all regular sample matrices, (where applicable to the methodology, )?",
+                   "NO surrogate recovery outliers occur\\.$"), x)) return(FALSE)
+  if (grepl(" (exist|occur) - please see following pages for full details\\.$", x)) return(TRUE)
+  NA
+}
+
+.qci_summary <- function(text, page, skip) {
+  warn <- character(0)
+  out <- stats::setNames(as.list(rep(NA, length(.qci_summary_keys))), .qci_summary_keys)
+  start <- grep("^Summary of Outliers\\s*$", text)
+  if (length(start) == 0) {
+    return(list(summary = out, warnings = "Summary of Outliers not found", end = 0L))
+  }
+  start <- start[[1]]
+  pg <- page[[start]]
+  idx <- which(seq_along(text) > start & page == pg & !skip)
+  end <- if (length(idx)) max(idx) else start
+  bullets <- character(0)
+  open <- FALSE
+  for (i in idx) {
+    x <- text[[i]]
+    if (grepl("^\\s*l\\s+\\S", x)) {
+      bullets <- c(bullets, sub("^\\s*l\\s+", "", x))
+      open <- TRUE
+    } else if (open && grepl("^\\s+\\S", x)) {
+      # A bullet wrapped onto the next line.
+      bullets[[length(bullets)]] <- paste(bullets[[length(bullets)]], trimws(x))
+    } else {
+      open <- FALSE
+    }
+  }
+  seen <- character(0)
+  for (b in bullets) {
+    k <- .qci_bullet_key(b)
+    v <- .qci_bullet_value(b)
+    if (is.na(k)) {
+      warn <- c(warn, sprintf("unrecognised Summary bullet: %s", trimws(b)))
+      next
+    }
+    if (k %in% seen) {
+      warn <- c(warn, sprintf("Summary bullet for %s appears twice", k))
+      out[[k]] <- NA
+      next
+    }
+    seen <- c(seen, k)
+    if (is.na(v)) warn <- c(warn, sprintf("unrecognised Summary bullet (%s): %s", k, trimws(b)))
+    out[[k]] <- v
+  }
+  for (k in setdiff(.qci_summary_keys, seen)) {
+    warn <- c(warn, sprintf("no Summary bullet for %s", k))
+  }
+  list(summary = out, warnings = warn, end = end)
+}
+
+# ---- sections ------------------------------------------------------------------------------
+
+# The detail sections after the Summary: list of (type, line indices).
+.qci_sections <- function(text, skip, from) {
+  n <- length(text)
+  type <- rep(NA_character_, n)
+  cur <- NA_character_
+  for (i in seq_len(n)) {
+    if (i <= from) next
+    x <- text[[i]]
+    if (grepl("^\\s*Outliers\\s*:.*-\\s*Continued\\s*$", x)) {
+      # A continued page: same table, the title is page furniture.
+      skip[[i]] <- TRUE
+    } else if (grepl("^\\s*Outliers\\s*:\\s*Quality Control Samples\\s*$", x)) {
+      cur <- "qc"
+      skip[[i]] <- TRUE
+    } else if (grepl("^\\s*Outliers\\s*:\\s*Analysis Holding Time Compliance\\s*$", x)) {
+      cur <- "ht"
+      skip[[i]] <- TRUE
+    } else if (grepl("^\\s*Outliers\\s*:\\s*Frequency of Quality Control Samples\\s*$", x)) {
+      cur <- "freq"
+      skip[[i]] <- TRUE
+    } else if (grepl("^\\s*Outliers\\s*:", x) ||
+               grepl("^(Analysis Holding Time Compliance|Quality Control Parameter Frequency Compliance|Brief Method Summaries)", x)) {
+      cur <- NA_character_
+    }
+    type[[i]] <- cur
+  }
+  list(type = type, skip = skip)
+}
+
+# ---- QC table (R-19.20) --------------------------------------------------------------------
+
+.qci_subsection_kind <- function(x) {
+  if (grepl("Matrix Spike|\\(MS\\)", x)) return("ms")
+  if (grepl("Laboratory Control|\\(LCS\\)", x)) return("lcs")
+  if (grepl("Surrogate", x, ignore.case = TRUE)) return("surrogate")
+  if (grepl("Method Blank|\\(MB\\)", x)) return("mb")
+  if (grepl("Duplicate|\\(DUP\\)", x)) return("dup")
+  NA_character_
+}
+
+.qci_parse_qc <- function(text, page, idx) {
+  warn <- character(0)
+  rows <- list()
+  kind <- NULL          # NULL: no subsection yet; NA: an unknown one
+  method <- NA_character_
+  method_name <- NA_character_
+  pend <- list()        # lab_id / lot / method seen on lines before the data line
+  rec <- NULL           # the open record: cells plus the data line's token spans
+
+  close_rec <- function() {
+    if (is.null(rec)) return(invisible())
+    if (!is.null(rec$kind) && !is.na(rec$kind)) {
+      cell <- function(k) {
+        v <- rec$cells[[k]]
+        if (is.null(v) || length(v) == 0) NA_character_ else paste(v, collapse = " ")
+      }
+      data_raw <- cell("data")
+      limits <- cell("limits")
+      lim <- regmatches(limits, regexec("^([0-9.]+) ?- ?([0-9.]+) ?%$", limits))[[1]]
+      val <- regmatches(data_raw, regexec("^([<>]?-?[0-9.]+) ?%$", data_raw))[[1]]
+      rows[[length(rows) + 1L]] <<- .qci_row(
+        kind = rec$kind, method = rec$method, method_name = rec$method_name,
+        analyte_raw = .qci_na_dash(cell("analyte")), cas = .qci_na_dash(cell("cas")),
+        lab_id = .qc_norm_lab_id(rec$lab_id), qc_lot = rec$lot,
+        client_id = .qci_na_dash(cell("client")), data_raw = data_raw,
+        value_pct = if (length(val) == 2) .qci_num(sub("^[<>]", "", val[[2]])) else NA_real_,
+        limit_low = if (length(lim) == 3) .qci_num(lim[[2]]) else NA_real_,
+        limit_high = if (length(lim) == 3) .qci_num(lim[[3]]) else NA_real_,
+        comment = cell("comment"), source_page = rec$page)
+    }
+    rec <<- NULL
+  }
+
+  for (i in idx) {
+    x <- text[[i]]
+    if (!nzchar(trimws(x))) next
+    if (grepl("Compound Group Name", x, fixed = TRUE)) next
+    if (grepl("^\\s*Matrix\\s*:", x) || grepl("^\\s*Duplicates, Method Blanks", x)) next
+    mline <- regmatches(x, regexec(paste0("^\\s*(", .qci_method_re, "):\\s*"), x))[[1]]
+    if (grepl("^\\S", x) && length(mline) == 0) {
+      close_rec()
+      pend <- list()
+      kind <- .qci_subsection_kind(x)
+      if (is.na(kind)) warn <- c(warn, sprintf("unknown QC subsection: %s", trimws(x)))
+      method <- NA_character_
+      method_name <- NA_character_
+      next
+    }
+    line <- x
+    # Lab ID / QC lot anywhere on the line (x-position free: a long method
+    # name can push it right, or glue it to the method text).
+    lab <- regexpr(.qci_lab_id_re, line)
+    lot <- regexpr(.qci_lot_re, line, perl = TRUE)
+    lab_id <- if (lab > 0) regmatches(line, lab) else NA_character_
+    lot_id <- if (lot > 0) regmatches(line, lot) else NA_character_
+    m_code <- NA_character_
+    m_name <- NA_character_
+    if (length(mline) == 2) {
+      m_code <- mline[[2]]
+      ms <- nchar(mline[[1]]) + 1L
+      cut <- c(if (lab > 0 && lab >= ms) lab, if (lot > 0 && lot >= ms) lot)
+      rest <- substr(line, ms, nchar(line))
+      gap <- regexpr("\\s{2,}", rest)
+      end_gap <- if (gap > 0) ms + gap - 2L else nchar(line)
+      m_end <- min(c(cut - 1L, end_gap))
+      m_name <- trimws(substr(line, ms, m_end))
+      line <- .qci_blank(line, 1L, m_end)
+    }
+    if (lab > 0) line <- .qci_blank(line, lab, lab + attr(lab, "match.length") - 1L)
+    if (lot > 0) line <- .qci_blank(line, lot, lot + attr(lot, "match.length") - 1L)
+    tk <- .qci_tokens(line)
+    n <- nrow(tk)
+    is_data <- FALSE
+    if (n >= 3) {
+      li <- if (grepl(.qci_limits_re, tk$text[[n]])) n else if (grepl(.qci_limits_re, tk$text[[n - 1L]])) n - 1L else 0L
+      is_data <- li >= 3 && grepl(.qci_data_re, tk$text[[li - 1L]])
+    }
+    if (is_data) {
+      close_rec()
+      if (!is.na(m_code)) pend$method <- c(m_code, m_name)
+      if (!is.na(lab_id)) pend$lab_id <- lab_id
+      if (!is.na(lot_id)) pend$lot <- lot_id
+      if (!is.null(pend$method)) {
+        method <- pend$method[[1]]
+        method_name <- pend$method[[2]]
+      }
+      roles <- character(n)
+      roles[li] <- "limits"
+      roles[li - 1L] <- "data"
+      if (li < n) roles[(li + 1L):n] <- "comment"
+      if (li - 2L >= 1) roles[li - 2L] <- "cas"
+      if (li - 3L >= 1) roles[li - 3L] <- "analyte"
+      if (li - 4L >= 1) roles[seq_len(li - 4L)] <- "client"
+      cells <- lapply(c(client = "client", analyte = "analyte", cas = "cas", data = "data",
+                        limits = "limits", comment = "comment"),
+                      function(r) tk$text[roles == r])
+      if (is.null(kind)) warn <- c(warn, sprintf("QC record before any subsection (page %d)", page[[i]]))
+      rec <- list(kind = if (is.null(kind)) NA_character_ else kind, method = method,
+                  method_name = method_name, lab_id = if (is.null(pend$lab_id)) NA_character_ else pend$lab_id,
+                  lot = if (is.null(pend$lot)) NA_character_ else pend$lot,
+                  page = page[[i]], cells = cells, spans = tk, roles = roles)
+      if (is.na(method)) warn <- c(warn, sprintf("QC record with no method (page %d)", page[[i]]))
+      pend <- list()
+      next
+    }
+    if (!is.na(m_code) || !is.na(lab_id) || !is.na(lot_id)) {
+      # A line before its record's data line: a lone lab ID, or the method
+      # (and lot) whose data wrapped to the next line.
+      close_rec()
+      if (!is.na(m_code)) pend$method <- c(m_code, m_name)
+      if (!is.na(lab_id)) pend$lab_id <- lab_id
+      if (!is.na(lot_id)) pend$lot <- lot_id
+      next
+    }
+    if (n == 0) next
+    if (is.null(rec)) {
+      warn <- c(warn, sprintf("unplaced QC table line (page %d): %s", page[[i]], trimws(x)))
+      next
+    }
+    # A wrapped continuation: each piece joins the data-line cell it lies under.
+    sp <- rec$spans
+    for (j in seq_len(n)) {
+      ov <- pmin(sp$end, tk$end[[j]]) - pmax(sp$start, tk$start[[j]]) + 1L
+      k <- if (any(ov > 0)) which.max(ov) else which.min(abs((sp$start + sp$end) / 2 - (tk$start[[j]] + tk$end[[j]]) / 2))
+      role <- rec$roles[[k]]
+      rec$cells[[role]] <- c(rec$cells[[role]], tk$text[[j]])
+    }
+  }
+  close_rec()
+  if (length(pend)) warn <- c(warn, "QC table ends with a record that has no data line")
+  list(rows = if (length(rows)) do.call(rbind, rows) else .qci_empty_outliers(), warnings = warn)
+}
+
+# ---- holding-time table (R-19.20) ---------------------------------------------------------
+
+.qci_parse_ht <- function(text, page, idx) {
+  warn <- character(0)
+  rows <- list()
+  method <- NA_character_
+  method_name <- NA_character_
+  in_list <- FALSE
+  dates <- NULL
+  tail_re <- sprintf(paste0("\\s+(----|%1$s)\\s+(----|%1$s)\\s+(----|[0-9]+)\\s+",
+                            "(----|%1$s)\\s+(----|%1$s)\\s+(----|[0-9]+)\\s*$"), .qci_date_re)
+  for (i in idx) {
+    x <- text[[i]]
+    if (!nzchar(trimws(x))) next
+    if (grepl("^\\s*Matrix\\s*:", x) || grepl("^Method\\s{2,}", x) ||
+        grepl("^\\s*Container / Client Sample ID", x) || grepl("^\\s*overdue(\\s+overdue)?\\s*$", x)) next
+    mline <- regmatches(x, regexec(paste0("^\\s?(", .qci_method_re, "):\\s*(.*?)\\s*$"), x))[[1]]
+    if (length(mline) == 3) {
+      method <- mline[[2]]
+      # A block continued on a new page repeats its method line with the
+      # table title glued on (ES2413933): page furniture, not the name.
+      method_name <- sub("\\s+-\\s+Analysis Holding Time Compliance$", "", mline[[3]])
+      in_list <- FALSE
+      next
+    }
+    tm <- regexpr(tail_re, x, perl = TRUE)
+    if (tm > 0) {
+      parts <- regmatches(x, regexec(tail_re, x, perl = TRUE))[[1]]
+      dates <- list(date_extracted = .qci_date(parts[[2]]), due_extraction = .qci_date(parts[[3]]),
+                    d_ext = .qci_num(parts[[4]]), date_analysed = .qci_date(parts[[5]]),
+                    due_analysis = .qci_date(parts[[6]]), d_an = .qci_num(parts[[7]]))
+      portion <- substr(x, 1, tm - 1L)
+    } else if (in_list) {
+      portion <- x
+    } else {
+      # A container line ("Clear Plastic Bottle - Natural"): it carries no
+      # dates and does not continue a comma list. Its indent is not reliable
+      # (one or two spaces, even within one file), so it is not used.
+      next
+    }
+    if (is.na(method)) {
+      warn <- c(warn, sprintf("holding-time client line with no method (page %d)", page[[i]]))
+      next
+    }
+    in_list <- grepl(",\\s*$", portion)
+    ids <- unlist(lapply(strsplit(portion, ",", fixed = TRUE)[[1]], function(p) strsplit(trimws(p), "\\s{2,}")[[1]]))
+    ids <- trimws(ids)
+    ids <- ids[nzchar(ids)]
+    days <- dates$d_an
+    if (is.na(days)) days <- dates$d_ext
+    for (cid in ids) {
+      rows[[length(rows) + 1L]] <- .qci_row(
+        kind = "holding_time", method = method, method_name = method_name, client_id = cid,
+        days_overdue = as.integer(days), date_analysed = dates$date_analysed,
+        due_analysis = dates$due_analysis, date_extracted = dates$date_extracted,
+        due_extraction = dates$due_extraction, source_page = page[[i]])
+    }
+  }
+  out <- if (length(rows)) do.call(rbind, rows) else .qci_empty_outliers()
+  # One row per (method block, client ID). Two blocks may share a method code
+  # (EP080/071 TPH and TRH, ES2608954); they are distinct analyses.
+  out <- out[!duplicated(paste(out$method, out$method_name, out$client_id, sep = "\r")), , drop = FALSE]
+  list(rows = out, warnings = warn)
+}
+
+# ---- frequency table (R-19.20) -------------------------------------------------------------
+
+.qci_parse_freq <- function(text, page, idx) {
+  warn <- character(0)
+  rows <- list()
+  qc_type <- NA_character_
+  row_re <- paste0("^(\\S.*?)\\s{2,}(?:(", .qci_method_re, ")\\s+)?([0-9]+)\\s+([0-9]+)\\s+",
+                   "([0-9]+(?:\\.[0-9]+)?)\\s+([0-9]+(?:\\.[0-9]+)?)\\s*(.*?)\\s*$")
+  for (i in idx) {
+    x <- text[[i]]
+    if (!nzchar(trimws(x))) next
+    if (grepl("^\\s*Matrix\\s*:", x) || grepl("^Quality Control Sample Type", x) ||
+        grepl("^\\s*(Analytical Methods\\s+)?Method\\s+QC\\s+Regular", x)) next
+    m <- regmatches(x, regexec(row_re, x, perl = TRUE))[[1]]
+    if (length(m) == 8) {
+      spec <- if (nzchar(m[[8]])) m[[8]] else NA_character_
+      rows[[length(rows) + 1L]] <- .qci_row(
+        kind = "frequency", method = if (nzchar(m[[3]])) m[[3]] else NA_character_,
+        method_name = trimws(m[[2]]), data_raw = sprintf("QC %s, regular %s", m[[4]], m[[5]]),
+        value_pct = .qci_num(m[[6]]), limit_low = .qci_num(m[[7]]),
+        comment = paste(stats::na.omit(c(qc_type, spec)), collapse = "; "),
+        source_page = page[[i]])
+      next
+    }
+    if (grepl("^\\S", x) && !grepl("[0-9]+\\s+[0-9]+", x)) {
+      qc_type <- trimws(x)
+      next
+    }
+    if (grepl("^\\s+[0-9]+\\s*$", x)) next   # a stray count digit of the PDF layer
+    warn <- c(warn, sprintf("unplaced frequency line (page %d): %s", page[[i]], trimws(x)))
+  }
+  list(rows = if (length(rows)) do.call(rbind, rows) else .qci_empty_outliers(), warnings = warn)
+}
+
+# ---- the parser ------------------------------------------------------------------------------
+
+#' Parse the text of an ALS QCI (R-19.18 - R-19.20)
+#'
+#' @param lines character vector, the PDF text split on "\n" with pages joined
+#'   by "\f".
+#' @return `list(header, summary, outliers, warnings)`: `header` has
+#'   `work_order`, `issue_date` (Date), `n_received`, `n_analysed`; `summary`
+#'   is one logical per Summary-of-Outliers bullet (NA when unrecognised);
+#'   `outliers` a data.frame of lab_qc_outlier columns; `warnings` a character
+#'   vector (any warning makes the stored report `partial`).
+#' @keywords internal
+#' @noRd
+.qci_parse <- function(lines) {
+  lines <- as.character(lines)
+  lines[is.na(lines)] <- ""
+  lines <- enc2utf8(lines)
+  pg <- .qci_pages(lines)
+  text <- pg$text
+  header <- .qci_header(text, pg$page)
+  warn <- character(0)
+  for (k in names(header)) {
+    if (is.na(header[[k]])) warn <- c(warn, sprintf("header field %s not found", k))
+  }
+  sm <- .qci_summary(text, pg$page, pg$skip)
+  warn <- c(warn, sm$warnings)
+  sec <- .qci_sections(text, pg$skip, sm$end)
+  use <- !sec$skip
+  pick <- function(t) which(sec$type %in% t & use)
+  qc <- .qci_parse_qc(text, pg$page, pick("qc"))
+  ht <- .qci_parse_ht(text, pg$page, pick("ht"))
+  fr <- .qci_parse_freq(text, pg$page, pick("freq"))
+  warn <- c(warn, qc$warnings, ht$warnings, fr$warnings)
+  out <- rbind(qc$rows, ht$rows, fr$rows)
+  rownames(out) <- NULL
+  # The Summary and the tables must agree (an outlier table the bullets deny,
+  # or a bullet whose table is empty, is a layout the parser did not follow).
+  have <- c(mb = "mb", dup = "dup", lcs = "lcs", ms = "ms", surrogate = "surrogate",
+            holding_time = "holding_time", frequency = "frequency")
+  for (k in names(have)) {
+    s <- sm$summary[[k]]
+    nk <- sum(out$kind == have[[k]])
+    if (isTRUE(s) && nk == 0) warn <- c(warn, sprintf("Summary reports %s outliers but none were parsed", k))
+    if (isFALSE(s) && nk > 0) warn <- c(warn, sprintf("Summary reports no %s outliers but %d were parsed", k, nk))
+  }
+  list(header = header, summary = sm$summary, outliers = out, warnings = unique(warn))
+}
