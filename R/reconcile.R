@@ -2136,6 +2136,64 @@
   !is.na(a) & !is.na(b) & as.numeric(a) != as.numeric(b)
 }
 
+#' TRUE where a committed sample's datetime is a legacy PLACEHOLDER clock:
+#' exactly 11:00:00 or 11:01:00 Australia/Sydney wall clock (DST-aware - 01:00
+#' / 01:01 UTC in AEST months, 00:00 / 00:01 UTC in AEDT months).
+#'
+#' C1 (2026-10-20). The legacy import stamped every time-unknown sample at
+#' 11:00 Sydney - 2,575 committed samples carry that clock - and migration
+#' 005 gave each one's lab twin 11:01. Neither is a time anyone observed, so
+#' an incoming row with a real clock (09:25) is not PROVABLY a different
+#' sampling event from such a sample. See `.rc_candidate_datetime()` for when
+#' that matters. `x` is POSIXct or numeric epoch seconds; NA -> FALSE.
+#' @keywords internal
+#' @noRd
+.rc_placeholder_datetime <- function(x) {
+  secs <- as.numeric(x)
+  wall <- format(as.POSIXct(secs, origin = "1970-01-01", tz = "UTC"),
+                 "%H:%M:%S", tz = "Australia/Sydney")
+  !is.na(secs) & !is.na(wall) & wall %in% c("11:00:00", "11:01:00")
+}
+
+#' The incoming row's work orders: the event's own, every ALS order its
+#' sources cite, and the row's own report project - the set `.rc_three_way()`
+#' has always passed to `.rc_find_existing()`. One helper so reconcile, the
+#' F.10 guard and commit hand the matchers the SAME set (C1); if they
+#' disagreed, reconcile would place a row on a placeholder sample and commit
+#' would create the duplicate anyway. `event = NULL` gives the row's own
+#' work order alone (or nothing).
+#' @keywords internal
+#' @noRd
+.rc_row_work_orders <- function(event, rows, i) {
+  row_wo <- if ("work_order" %in% names(rows)) rows$work_order[[i]] else NA_character_
+  ev <- if (is.null(event)) character(0) else
+    c(event$work_order, .ct_event_als_work_orders(event))
+  wo <- as.character(c(ev, row_wo))
+  unique(wo[!is.na(wo) & nzchar(wo)])
+}
+
+#' A candidate sample's datetime AS EVIDENCE of distinctness (C1): the stored
+#' instant, except NA where it is a placeholder clock
+#' (`.rc_placeholder_datetime()`) AND the candidate is filed under one of the
+#' incoming row's `work_orders`. Such a candidate is then treated exactly like
+#' a time-unknown one by `.rc_provably_distinct_datetime()`.
+#'
+#' Scoped to the row's own work orders on purpose: the same placeholder in a
+#' DIFFERENT work order is a different sampling round (live ES2006494 /
+#' ES2006927 - two real rounds on one day), so it stays provably distinct.
+#' Exact-instant narrowing still uses the STORED instant, not this one.
+#' `work_orders = character(0)` returns the stored instants unchanged.
+#' @keywords internal
+#' @noRd
+.rc_candidate_datetime <- function(cand_dt, project_name, work_orders) {
+  dt <- as.numeric(cand_dt)
+  wo <- work_orders[!is.na(work_orders)]
+  if (length(wo) == 0 || length(dt) == 0) return(dt)
+  unknown <- .rc_placeholder_datetime(dt) & !is.na(project_name) & project_name %in% wo
+  dt[unknown] <- NA_real_
+  dt
+}
+
 # ---- R-8.7/R-11.7: three-way outcome vs DB ---------------------------------
 
 #' Find an existing `analysis` row matching this measurement (R-11.7; A11/A45).
@@ -2221,9 +2279,12 @@
   # Compare instants as epoch seconds so a tz-tagged incoming POSIXct and the
   # driver's UTC-returned candidate never raise a spurious "inconsistent tzone"
   # warning; equality of instants is tz-independent.
+  # C1: a same-work-order candidate at the legacy 11:00/11:01 placeholder
+  # clock counts as time-unknown here (`.rc_candidate_datetime()`).
   inc_dt <- as.numeric(sample_datetime)
   cand_dt <- as.numeric(cand$s_datetime)
-  create_new <- all(.rc_provably_distinct_datetime(inc_dt, cand_dt))
+  ev_dt <- .rc_candidate_datetime(cand_dt, cand$project_name, work_orders)
+  create_new <- all(.rc_provably_distinct_datetime(inc_dt, ev_dt))
   if (create_new) return(NULL)
 
   if (!is.na(inc_dt)) {
@@ -2531,7 +2592,8 @@
 #' @keywords internal
 #' @noRd
 .rc_find_analyte_twin <- function(con, resolved_feature, uuid_feature_alias, feature_pending,
-                                  sample_date, sample_datetime, uuid_analyte, want) {
+                                  sample_date, sample_datetime, uuid_analyte, want,
+                                  incoming = NULL, work_orders = character(0)) {
   if (is.na(uuid_analyte)) {
     return(NULL)
   }
@@ -2567,9 +2629,11 @@
     con,
     paste0(
       'SELECT a.uuid AS analysis_uuid, a.value, a.value_chr, a.uuid_lab,
-              s.datetime AS s_datetime, lm.name AS lab_name, lm.organisation, lm.method
+              s.datetime AS s_datetime, lm.name AS lab_name, lm.organisation, lm.method,
+              p.name AS project_name
        FROM "sample" s
        JOIN analysis a ON a.uuid_sample = s.uuid
+       LEFT JOIN project p ON p.uuid = s.uuid_project
        JOIN feature_alias fa ON fa.uuid = s.uuid_feature_alias
        JOIN lab_method lm ON lm.uuid = a.uuid_lab
        WHERE ', feat_clause, ' AND ', .ct_sydney_day_sql("s.date"), ' = ? AND lm.uuid_analyte = ?
@@ -2583,7 +2647,9 @@
   }
   inc_dt <- as.numeric(sample_datetime)
   cand_dt <- as.numeric(cand$s_datetime)
-  if (all(.rc_provably_distinct_datetime(inc_dt, cand_dt))) {
+  # C1: the same placeholder rule as `.rc_find_existing()`.
+  ev_dt <- .rc_candidate_datetime(cand_dt, cand$project_name, work_orders)
+  if (all(.rc_provably_distinct_datetime(inc_dt, ev_dt))) {
     return(NULL)                       # a genuinely different sampling event
   }
   if (!is.na(inc_dt)) {
@@ -2653,7 +2719,7 @@
 #' @return `list(kept, skipped, supersede)`.
 #' @keywords internal
 #' @noRd
-.rc_acirl_supersession <- function(rows, con, registry) {
+.rc_acirl_supersession <- function(rows, con, registry, event = NULL) {
   n <- nrow(rows)
   if (n == 0) {
     return(list(kept = rows, skipped = .rc_proto_skip(), supersede = .rc_proto_supersede()))
@@ -2672,7 +2738,8 @@
     want <- if (identical(kind, "acirl_transcription")) "als_lab" else "acirl_transcription"
     twin <- .rc_find_analyte_twin(
       con, rows$uuid_feature[[i]], rows$uuid_feature_alias[[i]], rows$feature_pending[[i]],
-      rows$sample_date[[i]], rows$sample_datetime[[i]], uuid_analyte, want
+      rows$sample_date[[i]], rows$sample_datetime[[i]], uuid_analyte, want,
+      work_orders = .rc_row_work_orders(event, rows, i)
     )
     if (is.null(twin)) {
       next
@@ -2760,7 +2827,7 @@
       rows$sample_date[[i]], rows$sample_datetime[[i]], rows$uuid_lab[[i]],
       incoming = list(value = inc_value, value_chr = inc_chr, quantified = inc_quant,
                       value_raw = rows$value_raw[[i]]),
-      work_orders = c(event$work_order, .ct_event_als_work_orders(event), rows$work_order[[i]])
+      work_orders = .rc_row_work_orders(event, rows, i)
     )
     # 2026-10-19 Bug C (PLAN-15 B.4): a feature-pending row whose structural
     # parse the B.4 gate suppressed ALSO looks on that feature (live at its
@@ -2778,7 +2845,7 @@
         rows$sample_date[[i]], rows$sample_datetime[[i]], rows$uuid_lab[[i]],
         incoming = list(value = inc_value, value_chr = inc_chr, quantified = inc_quant,
                         value_raw = rows$value_raw[[i]]),
-        work_orders = c(event$work_order, .ct_event_als_work_orders(event), rows$work_order[[i]])
+        work_orders = .rc_row_work_orders(event, rows, i)
       )
       if (!is.null(alt) &&
           .rc_values_equal(inc_value, inc_chr, inc_quant, alt$value[[1]], alt$value_chr[[1]],
@@ -2999,7 +3066,7 @@
 #' @return `list(kept, review)`.
 #' @keywords internal
 #' @noRd
-.rc_sample_match_rows <- function(rows, raw, con, registry) {
+.rc_sample_match_rows <- function(rows, raw, con, registry, event = NULL) {
   n <- nrow(rows)
   if (n == 0) return(list(kept = rows, review = .rc_proto_review()))
 
@@ -3008,7 +3075,11 @@
   override <- if ("sample_override" %in% names(rows)) rows$sample_override else rep(NA_character_, n)
   where <- ifelse(keys$pending, keys$alias_uuid, keys$match_feature)
   dt_key <- ifelse(is.na(rows$sample_datetime), "NA", format(as.numeric(rows$sample_datetime)))
-  tuple <- paste(keys$pending, where, as.character(rows$sample_date), dt_key, stream, sep = "\r")
+  # C1: the row's work orders change the answer (a same-WO placeholder
+  # sample is time-unknown), so they are part of the memo key.
+  wos <- lapply(seq_len(n), function(i) .rc_row_work_orders(event, rows, i))
+  wo_key <- vapply(wos, function(w) paste(sort(w, method = "radix"), collapse = ","), character(1))
+  tuple <- paste(keys$pending, where, as.character(rows$sample_date), dt_key, stream, wo_key, sep = "\r")
 
   # One matcher call per tuple: every row of a tuple joins the same sample.
   seen <- new.env(parent = emptyenv())
@@ -3019,7 +3090,8 @@
     if (!exists(k, envir = seen, inherits = FALSE)) {
       assign(k, .ct_sample_match(
         con, keys$pending[[i]], keys$match_feature[[i]], keys$alias_uuid[[i]],
-        rows$sample_date[[i]], rows$sample_datetime[[i]], stream[[i]]
+        rows$sample_date[[i]], rows$sample_datetime[[i]], stream[[i]],
+        work_orders = wos[[i]]
       ), envir = seen)
     }
     match_of[[i]] <- get(k, envir = seen)
@@ -3288,7 +3360,7 @@ reconcile_event <- function(event, con) {
 
   # A91: the sample each row joins, within its stream. Before A79 below, so a
   # withheld ALS row deletes no transcription it has not replaced.
-  sm <- .rc_sample_match_rows(clean, raw, con, registry)
+  sm <- .rc_sample_match_rows(clean, raw, con, registry, event)
   add_review(sm$review)
   clean <- sm$kept
   clean$.rc_row <- NULL
@@ -3297,7 +3369,7 @@ reconcile_event <- function(event, con) {
   # check. A row already skipped as `already_present` or held at
   # `value_conflict` must not also delete a committed transcription - the
   # deletion is justified by the ALS row ACTUALLY committing, nothing less.
-  sp <- .rc_acirl_supersession(clean, con, registry)
+  sp <- .rc_acirl_supersession(clean, con, registry, event)
   add_skip(sp$skipped)
   clean <- sp$kept
 

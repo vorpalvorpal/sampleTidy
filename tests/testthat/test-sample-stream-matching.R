@@ -1056,3 +1056,165 @@ test_that("already_present across streams: a twin on a MERGED sample is found wh
   expect_equal(nrow(ss_samples_at(con, "f-0003")), 3)
   expect_equal(nrow(ss_reviews(con)), 0)
 })
+
+# ================================================================================
+# C1 - legacy placeholder datetimes (11:00 / 11:01 Sydney) are not "provably
+# distinct" within the SAME work order. Spec: C1-placeholder-datetime.md.
+# ================================================================================
+
+c1_match <- function(con, hm, wo, stream = "ALS", day = ss_day, with_wo = TRUE) {
+  args <- list(con, pending = FALSE, match_feature = "f-0003", alias_uuid = NA,
+               sample_date = as.Date(day),
+               sample_datetime = as.POSIXct(ss_utc(day, hm), tz = "UTC"),
+               stream = stream)
+  # Pass work_orders only once the argument exists, so tests fail on the
+  # BEHAVIOUR (outcome) rather than on an "unused argument" error.
+  if (with_wo && "work_orders" %in% names(formals(sampleTidy:::.ct_sample_match))) args$work_orders <- wo
+  do.call(sampleTidy:::.ct_sample_match, args)
+}
+
+test_that("[C1.1] .rc_placeholder_datetime(): Sydney 11:00 / 11:01 are placeholders, DST-aware; nothing else", {
+  f <- sampleTidy:::.rc_placeholder_datetime
+  utc <- function(d, hm) as.POSIXct(ss_utc(d, hm), tz = "UTC")
+  expect_true(f(utc("2025-07-10", "11:00")))
+  expect_true(f(utc("2025-01-10", "11:00")))
+  expect_true(f(utc("2025-01-10", "11:01")))
+  expect_false(f(utc("2025-07-10", "10:00")))
+  expect_false(f(utc("2025-07-10", "11:02")))
+  expect_false(f(utc("2025-07-10", "11:00:30")))
+  expect_false(f(as.POSIXct(NA)))
+  # numeric epoch seconds, vectorised, same length
+  x <- c(as.numeric(utc("2025-07-10", "11:00")), as.numeric(utc("2025-07-10", "10:00")), NA)
+  expect_identical(f(x), c(TRUE, FALSE, FALSE))
+})
+
+test_that("[C1.2] same-WO placeholder candidate is reused, not provably distinct", {
+  db <- ss_db(); con <- db$con
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+  ss_sample(con, "s-leg", hm = "11:00", project = "p-es1", labs = ss_labs$ALS)
+  m <- c1_match(con, "09:25", "ES2527711")
+  expect_identical(m$outcome, "reuse")
+  expect_identical(m$uuid, "s-leg")
+})
+
+test_that("[C1.3] the 11:01 lab-twin placeholder clock also reuses", {
+  db <- ss_db(); con <- db$con
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+  ss_sample(con, "s-leg", hm = "11:01", project = "p-es1", labs = ss_labs$ALS)
+  m <- c1_match(con, "09:25", "ES2527711")
+  expect_identical(m$outcome, "reuse")
+  expect_identical(m$uuid, "s-leg")
+})
+
+test_that("[C1.4] a placeholder in a DIFFERENT work order stays provably distinct", {
+  db <- ss_db(); con <- db$con
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+  ss_sample(con, "s-leg", hm = "11:00", project = "p-es2", labs = ss_labs$ALS)
+  expect_identical(c1_match(con, "09:25", "ES2527711")$outcome, "new")
+})
+
+test_that("[C1.5] a non-placeholder clock in the same work order stays new", {
+  db <- ss_db(); con <- db$con
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+  ss_sample(con, "s-ten", hm = "10:00", project = "p-es1", labs = ss_labs$ALS)
+  ss_sample(con, "s-1102", hm = "11:02", project = "p-es1", labs = ss_labs$ALS)
+  expect_identical(c1_match(con, "09:25", "ES2527711")$outcome, "new")
+})
+
+test_that("[C1.6] default work_orders reproduces today's behaviour", {
+  db <- ss_db(); con <- db$con
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+  ss_sample(con, "s-leg", hm = "11:00", project = "p-es1", labs = ss_labs$ALS)
+  expect_identical(c1_match(con, "09:25", NULL, with_wo = FALSE)$outcome, "new")
+  expect_identical(c1_match(con, "09:25", character(0))$outcome, "new")
+})
+
+test_that("[C1.7] control: exact instant still wins against a same-WO 11:00 placeholder", {
+  db <- ss_db(); con <- db$con
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+  ss_sample(con, "s-leg", hm = "11:00", project = "p-es1", labs = ss_labs$ALS)
+  m <- c1_match(con, "11:00", "ES2527711")
+  expect_identical(m$outcome, "reuse")
+  expect_identical(m$uuid, "s-leg")
+})
+
+test_that("[C1.8] mixed set: real 10:30 + placeholder 11:00 in the same WO", {
+  db <- ss_db(); con <- db$con
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+  ss_sample(con, "s-real", hm = "10:30", project = "p-es1", labs = ss_labs$ALS)
+  ss_sample(con, "s-leg", hm = "11:00", project = "p-es1", labs = ss_labs$ALS)
+  m1 <- c1_match(con, "10:30", "ES2527711")
+  expect_identical(m1$outcome, "reuse")
+  expect_identical(m1$uuid, "s-real")
+  m2 <- c1_match(con, "13:30", "ES2527711")
+  expect_identical(m2$outcome, "ambiguous")
+  expect_identical(m2$candidates, c("s-leg", "s-real"))
+})
+
+test_that("[C1.9] stream scoping happens first: an ACIRL-field-only 11:00 sample is not an ALS candidate", {
+  db <- ss_db(); con <- db$con
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+  ss_sample(con, "s-af", hm = "11:00", project = "p-es1", labs = ss_labs$AF)
+  expect_identical(c1_match(con, "09:25", "ES2527711", stream = "ALS")$outcome, "new")
+})
+
+test_that("[C1.10] .rc_find_existing applies the same rule at analysis level", {
+  db <- ss_db(); con <- db$con
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+  ss_sample(con, "s-leg", hm = "11:00", project = "p-es1", labs = "lm-0001", values = 7.2)
+  find <- function(wo) sampleTidy:::.rc_find_existing(
+    con, "f-0003", NA, FALSE, as.Date(ss_day), as.POSIXct(ss_utc(ss_day, "09:25"), tz = "UTC"),
+    "lm-0001",
+    incoming = list(value = 7.2, value_chr = NA, quantified = TRUE, value_raw = "7.2"),
+    work_orders = wo)
+  hit <- find("ES2527711")
+  expect_false(is.null(hit))
+  expect_equal(nrow(hit), 1)
+  expect_identical(hit$analysis_uuid, "an-s-leg-lm-0001")
+  expect_null(find("ES2527799"))
+})
+
+test_that("[C1.11] end to end: a lab row at 09:25 lands on the same-WO 11:00 legacy sample", {
+  db <- ss_db(); con <- db$con
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+  ss_sample(con, "s-leg", hm = "11:00", project = "p-es1", labs = "lm-0001", values = 7.2)
+  n0 <- nrow(ss_samples_at(con, "f-0003"))
+  r <- ss_als_event(con, dplyr::bind_rows(
+    ss_als("pH", 7.2, when = "04 Sep 2025 09:25"),
+    ss_als("EC", 410, when = "04 Sep 2025 09:25")))
+  ss_expect_ok(r)
+  expect_equal(nrow(ss_samples_at(con, "f-0003")), n0)
+  expect_equal(sum(r$resolved$skipped$reason == "already_present"), 1)
+  expect_equal(nrow(r$resolved$clean), 1)
+  ec <- DBI::dbGetQuery(con, "SELECT uuid_sample FROM analysis WHERE uuid_lab = 'lm-0003'")
+  expect_identical(ec$uuid_sample, "s-leg")
+  expect_equal(nrow(ss_reviews(con)), 0)
+})
+
+test_that("[C1.12] end to end, different work order: a new sample is created (control)", {
+  db <- ss_db(); con <- db$con
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+  ss_sample(con, "s-leg", hm = "11:00", project = "p-es2", labs = "lm-0001", values = 7.2)
+  r <- ss_als_event(con, dplyr::bind_rows(
+    ss_als("pH", 7.2, when = "04 Sep 2025 09:25"),
+    ss_als("EC", 410, when = "04 Sep 2025 09:25")))
+  ss_expect_ok(r)
+  expect_equal(nrow(ss_samples_at(con, "f-0003")), 2)
+})
+
+test_that("[C1.13] idempotent: re-running the C1.11 event adds no rows and no samples", {
+  db <- ss_db(); con <- db$con
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+  ss_sample(con, "s-leg", hm = "11:00", project = "p-es1", labs = "lm-0001", values = 7.2)
+  rows <- dplyr::bind_rows(ss_als("pH", 7.2, when = "04 Sep 2025 09:25"),
+                           ss_als("EC", 410, when = "04 Sep 2025 09:25"))
+  ss_expect_ok(ss_als_event(con, rows, tag = "first"))
+  n_s <- nrow(ss_samples_at(con, "f-0003"))
+  n_a <- DBI::dbGetQuery(con, "SELECT count(*) n FROM analysis")$n
+  r2 <- ss_als_event(con, rows, tag = "second")
+  ss_expect_ok(r2)
+  expect_equal(nrow(r2$resolved$clean), 0)
+  expect_equal(nrow(ss_samples_at(con, "f-0003")), n_s)
+  expect_equal(DBI::dbGetQuery(con, "SELECT count(*) n FROM analysis")$n, n_a)
+  expect_equal(n_s, 1)
+})

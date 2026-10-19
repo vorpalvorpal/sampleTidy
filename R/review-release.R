@@ -140,7 +140,7 @@ release_review <- function(uuid, overrides = list(), resolved_by,
         if (nrow(clean) > 0) {
           clean <- .ct_materialise_feature_aliases(con, clean, event, actor, reason)
           clean <- .ct_materialise_lab_methods(con, clean, event, actor, reason)
-          clean$uuid_sample <- .ct_resolve_samples(con, clean, tree$uuid_project, reason)
+          clean$uuid_sample <- .ct_resolve_samples(con, clean, tree$uuid_project, reason, event)
           .ct_record_resolution_provenance(con, clean, actor)
         }
         .ct_commit_analyses(con, clean, actor, reason)
