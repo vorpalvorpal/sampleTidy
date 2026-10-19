@@ -168,6 +168,12 @@ frontmatter needed (it is embedded with `![[YYYY-MM-DD-imports]]`, like
 
 Paths to source folders are given as `file:///` links (as the invoices note does).
 
+**2026-10-19 bug.** The live dated note said "no sample dates" for deliveries whose samples
+carry only `sample.date` (`datetime` NULL; e.g. ES2626883, and every ACIRL field, gas and
+dust row). The sampling date range of an import line uses `COALESCE(s.datetime, s.date)`,
+the same rule as `LOCAL_DATE` in `dev/epa-monitoring-report.R` and §4.5's sample date.
+Pinned by `tests/testthat/test-inbox-sample-dates.R` (date-only and datetime samples).
+
 ## 3. Wiring (not unit-tested; done after the package code)
 
 **Runs committed code only (2026-10-19).** `dev/auto-import.sh` runs `dev/auto-import.R` from a
