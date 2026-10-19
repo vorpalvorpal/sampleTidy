@@ -12,14 +12,17 @@ import_flags(db = st_config("live_db"), now = Sys.time(), checks)
 \item{now}{current time; "today" is its Australia/Sydney date, and recent
 deliveries are those with a \code{change_log} insert in the 90 days before it.}
 
-\item{checks}{\code{list(schedule, limits, requirements, points, invoices)}. The
+\item{checks}{\code{list(schedule, limits, requirements, points, invoices, qc)}. The
 first four are each a CSV path or a data.frame (\code{expected_schedule.csv},
 \code{epa_licence_limits.csv}, \code{epa_licence_requirements.csv},
-\code{epa_licence_points.csv}); \code{invoices} is \code{data.frame(site, stream, sampled_on, ref)} or \code{NULL}.}
+\code{epa_licence_points.csv}); \code{invoices} is \code{data.frame(site, stream, sampled_on, ref)} or \code{NULL}. \code{qc} (PLAN-19) is \code{list(criteria, requirements)}, each a CSV path or a data.frame (\code{qc_criteria.csv},
+\code{qc_requirements.csv}); \code{NULL} disables the \verb{qc_*} checks.}
 }
 \value{
-a data.frame, one row per flag, columns \verb{check, site, feature, analyte, date, value, unit, threshold, detail, key}, ordered by check then
-date (newest first).
+a data.frame, one row per flag, columns \verb{check, site, feature, analyte, date, value, unit, threshold, detail, key, source, action},
+ordered by check then date (newest first). \code{action} (PLAN-19 R-19.22) is
+one of \code{resample}, \code{reanalyse}, \code{ask_acirl}, \code{chase}, \code{qualify} for a QC
+flag and \code{NA} otherwise.
 }
 \description{
 Overdue and invoiced-but-missing deliveries, incomplete recent deliveries,
