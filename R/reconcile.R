@@ -29,7 +29,9 @@
     feature_mask = DBI::dbGetQuery(con, "SELECT * FROM feature_mask"),
     analyte = DBI::dbGetQuery(con, "SELECT * FROM analyte"),
     lab_method = DBI::dbGetQuery(con, "SELECT * FROM lab_method"),
-    project = DBI::dbGetQuery(con, "SELECT * FROM project")
+    project = DBI::dbGetQuery(con, "SELECT * FROM project"),
+    # PLAN-19: field QC features (empty before migration 048).
+    qc_feature = .qc_features(con)
   )
 }
 
@@ -950,9 +952,42 @@
 
   review <- dplyr::bind_rows(
     .rc_feature_review(rows, status, cand_list, exp_list, struct_site, struct_point, work_order),
-    .rc_self_precedence_notes(rows, uuid_feature, shadowed, work_order)
+    .rc_self_precedence_notes(rows, uuid_feature, shadowed, work_order),
+    .rc_qc_label_conflicts(rows, status, uuid_feature, registry, work_order)
   )
   list(kept = kept, review = review)
+}
+
+#' PLAN-19 R-19.14 use 2: a row whose primary ID resolved to a NON-QC feature
+#' while its Secondary ID names a QC type gets a non-blocking
+#' `qc_label_conflict` item, one per (feature_raw, resolved feature). The rows
+#' still commit; `qc_unresolved` flags the work order while the item is open.
+#' A numeric Secondary ID (an EPA point number) maps to no type and is ignored.
+#' @keywords internal
+#' @noRd
+.rc_qc_label_conflicts <- function(rows, status, uuid_feature, registry, work_order) {
+  if (!"secondary_id" %in% names(rows) || nrow(rows) == 0) return(.rc_proto_review())
+  qtype <- .qc_secondary_type(rows$secondary_id)
+  qc_uuids <- if (is.null(registry$qc_feature)) character(0) else registry$qc_feature$uuid_feature
+  idx <- which(status %in% "hit" & !is.na(qtype) & !is.na(uuid_feature) & !uuid_feature %in% qc_uuids)
+  if (length(idx) == 0) return(.rc_proto_review())
+  groups <- split(idx, paste(rows$feature_raw[idx], uuid_feature[idx], sep = "||"))
+  groups <- groups[order(names(groups), method = "radix")]
+  out <- lapply(groups, function(g) {
+    g <- g[order(rows$source_ref[g], method = "radix")]
+    uf <- uuid_feature[[g[[1]]]]
+    nm <- registry$feature$name[match(uf, registry$feature$uuid)]
+    .rc_review_row(
+      source_ref = rows$source_ref[g], kind = "qc_label_conflict", n_rows = length(g),
+      source_hash = rows$source_hash[[g[[1]]]], work_order = work_order,
+      diagnostics = list(feature_raw = rows$feature_raw[[g[[1]]]],
+                         secondary_id = rows$secondary_id[[g[[1]]]],
+                         qc_hint = qtype[[g[[1]]]], resolved_feature = uf,
+                         resolved_name = if (length(nm) && !is.na(nm)) nm else NA_character_,
+                         blocking = FALSE)
+    )
+  })
+  dplyr::bind_rows(out)
 }
 
 #' The E.7/R2 self-precedence NOTES: one per row a self arm resolved over at
@@ -1214,6 +1249,12 @@
     # typed diagnostics keys, n_rows/subkind are real columns, and candidates/
     # expired are real child rows.
     diagnostics <- list(feature_raw = fr, blocking = TRUE)
+    # PLAN-19 R-19.14 use 1: the Secondary ID names a QC type -> a hint.
+    if ("secondary_id" %in% names(rows)) {
+      hint <- .qc_secondary_type(rows$secondary_id[g])
+      hint <- hint[!is.na(hint)]
+      if (length(hint)) diagnostics$qc_hint <- hint[[1]]
+    }
     if (identical(subkind, "structural")) {
       diagnostics$site <- st_site
       diagnostics$point <- st_point

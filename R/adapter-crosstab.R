@@ -460,6 +460,7 @@ als_enmrg_adapter <- function() {
   sample_date_by_col <- list()
   feature_by_col <- list()
   lab_sample_id_by_col <- list()
+  secondary_by_col <- list()
   sample_number_row <- NA_integer_
   method_raw <- NA_character_
   cas_col <- NA_integer_
@@ -480,6 +481,7 @@ als_enmrg_adapter <- function() {
     sample_date_by_col <<- list()
     feature_by_col <<- list()
     lab_sample_id_by_col <<- list()
+    secondary_by_col <<- list()
     sample_number_row <<- NA_integer_
     method_raw <<- NA_character_
     cas_col <<- NA_integer_
@@ -581,6 +583,15 @@ als_enmrg_adapter <- function() {
       handled <- TRUE
     }
 
+    # -- Client sample ID (2nd)/(Secondary): -> samples$secondary_id
+    # (PLAN-19 R-19.14). ALS fills it only when the COC carried a second ID:
+    # a QC label ("Field Blank") or an EPA point number. Never used to resolve.
+    si_col <- .st_crosstab_find_col(row_trimmed, "Client sample ID.*\\((2nd|Secondary)\\)")
+    if (!is.na(si_col)) {
+      secondary_by_col <- .st_ct_capture_right(row_trimmed, si_col, secondary_by_col)
+      handled <- TRUE
+    }
+
     # -- Other recognised-but-IR-irrelevant labels: consumed so they never
     # fall through and get misread as method-group/analyte rows. ----------
     for (skip_pat in c(
@@ -637,7 +648,8 @@ als_enmrg_adapter <- function() {
           matrix_raw = section_matrix,
           sampler = NA_character_,
           comments = NA_character_,
-          confidence = 1
+          confidence = 1,
+          secondary_id = .st_ct_lookup(secondary_by_col, key)
         )
       }
       handled <- TRUE

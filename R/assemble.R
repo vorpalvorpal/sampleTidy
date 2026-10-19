@@ -298,6 +298,13 @@
       nn <- m_parent[!is.na(m_parent)]
       if (length(nn) > 0) results$parent_sample[[i]] <- nn[[1]]
     }
+    # PLAN-19 R-19.14: the crosstab's Secondary ID, carried for review hints.
+    if ("secondary_id" %in% names(samples) && "secondary_id" %in% names(results) &&
+        is.na(results$secondary_id[[i]])) {
+      nn <- samples$secondary_id[match_idx]
+      nn <- nn[!is.na(nn)]
+      if (length(nn) > 0) results$secondary_id[[i]] <- nn[[1]]
+    }
     # ESdat carries the feature only on Sample2e, so its Chemistry2e results
     # start with feature_raw = NA; fill it from the matched sample. Guarded by
     # is.na() so crosstab results, which already carry feature_raw inline, are
@@ -503,6 +510,7 @@
   final_results$sampler <- NA_character_
   final_results$matrix_raw <- NA_character_
   final_results$parent_sample <- NA_character_
+  final_results$secondary_id <- NA_character_
   # MERGE, never overwrite: a row an adapter already flagged keeps the
   # adapter's kind and payload (first-flag-wins, as `.st_flag_conflict()`
   # does); assembly's foreign_work_order flag only fills rows still unflagged.
