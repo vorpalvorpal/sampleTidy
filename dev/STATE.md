@@ -75,15 +75,19 @@ Suite: **1,484 tests, 0 failing, 11 skipped**. Gated corpus tests are skipped un
    value equals the incoming row, then the one under the incoming work order. Today
    the lowest uuid wins, which gives false value_conflicts on legacy visits split
    across two ALS work orders. This is being built tests-first.
-3. **The corpus run:** about 265 files and 213 ACIRL workbooks, the main milestone.
-   Before it:
-   - the 4 mis-timed 2023-06-14 samples and the `b.eo1` date bound (migration 030);
-   - the letter-O codes are registered, undated (032), and so is KL01 (033). "K.E02/K.SO6" and
-     "B.SO1 S1"/"B.SO3 S3" are still unruled and will go to review;
-   - B.S22 is fine: it has a self alias, plus a non-blocking self_precedence_note
-     about the old B.S06 code, which is Robin's ruling;
-   - check `24006989-02 … Incident Sampling Feb - May 2020.xlsx`: its pre-2020 field
-     readings are on `legacy` methods, so re-importing them will duplicate.
+3. **The corpus run (2026-10-20): fixed and rehearsed, awaiting Robin.**
+   - Code on main: legacy 11:00 Sydney placeholder matching (C1), the ACIRL report-site
+     veto (C2), per-file date overrides in `inst/extdata/sample-date-overrides.csv` (C3),
+     archive copies removed on rollback (C4), the CFU and ESdat "-" units (C5), and test
+     isolation from the OneDrive archive.
+   - Migrations 053 (aliases), 054 (4 held files) and 055 (re-hash 18 assets SharePoint
+     rewrote) are rehearsed and NOT applied.
+   - Run with `dev/corpus-import/apply-corpus-import.sh live <work_dir>`. Two rehearsals
+     gave +1,902 samples, +7,404 analyses, +1,286 review items and 3 likely-duplicate
+     analyses.
+   - Decisions are in `scratchpad/DECISIONS-FOR-ROBIN.md` (2026-10-20); data is in
+     `scratchpad/2026-10-20-corpus/`. The processed/ clean-up is `dev/processed-dedupe.R`
+     (dry run by default).
 4. **Release the A77 dust blocks** for 2400-7453-02 (Jan-2025) and 2400-7538-02
    (Jan-2026, medium confidence) when the corpus run withholds them.
 5. **External:** the list in `DECISIONS-FOR-ROBIN.md`, covering ACIRL (analyser LOD,
