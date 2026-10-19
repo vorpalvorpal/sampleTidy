@@ -347,7 +347,7 @@ test_that("inbox_run(): a backlog folder left by an earlier import (only leftove
 
 test_that("inbox_run(): a second run after filing is a no-op (check says 'none'; archive and inbox unchanged)", {
   s <- inbox_setup()
-  now <- Sys.time()
+  now <- sydney_midday()
   name <- "input2026-10-18 0900 a"
   make_inbox_folder(s$input_dir, name, c(inbox_proj_a_files(), make_leftovers()), now = now)
   run_inbox(s, now = now)
