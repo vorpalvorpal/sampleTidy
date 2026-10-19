@@ -234,6 +234,7 @@
   if (is.null(qs)) return(NULL)
   qs <- qs[qs$live & qs$qc_type %in% "duplicate", , drop = FALSE]
   out <- list()
+  qual <- list()
   for (j in seq_len(nrow(qs))) {
     q <- qs[j, , drop = FALSE]
     ps <- .qc_parent_samples(img, q)
@@ -275,6 +276,10 @@
       action <- "qualify"
       detail <- sprintf("duplicate %s: %s — %s → qualify these results at %s for the event",
                         q$feature, .flags_first_n(txt, 15), round, parent)
+      # R-19.32: the parent's failing results are QC qualified.
+      qual[[length(qual) + 1]] <- data.frame(
+        feature = x$feature_p[fail], analyte = x$analyte_p[fail], date = x$date_p[fail],
+        reason = sprintf("duplicate %s %s", q$feature, txt), stringsAsFactors = FALSE)
     }
     out[[length(out) + 1]] <- .flags_rows(
       "qc_dup_rpd", key = sprintf("qc_dup_rpd|%s|%s", q$feature, format(q$date)),
@@ -284,7 +289,7 @@
                           .flags_fmt(cr$k), .flags_fmt(cr$m)),
       detail = detail, action = action)
   }
-  .flags_dedupe(do.call(rbind, out))
+  .qc_with_qualified(.flags_dedupe(do.call(rbind, out)), qual)
 }
 
 # ---- R-19.25 qc_blank_detect ------------------------------------------------------------
@@ -316,6 +321,7 @@
   a <- img$results
   a$mcode <- .qc_method_code(a$method)
   out <- list()
+  quals <- list()
   for (j in seq_len(nrow(qs))) {
     q <- qs[j, , drop = FALSE]
     b <- .qc_lab_results(img, q$sample)
@@ -334,7 +340,16 @@
       hit <- assoc[assoc$uuid_analyte == det$uuid_analyte[[i]] & assoc$mcode == det$mcode[[i]] &
                      assoc$quantified & !is.na(assoc$value) &
                      assoc$value < f * det$value[[i]], , drop = FALSE]
-      if (nrow(hit)) qual[[length(qual) + 1]] <- hit
+      if (nrow(hit)) {
+        qual[[length(qual) + 1]] <- hit
+        # R-19.32: "field blank B.JFxx Ammonia as N 0.05 mg/L".
+        quals[[length(quals) + 1]] <- data.frame(
+          feature = hit$feature, analyte = hit$analyte, date = hit$date,
+          reason = sprintf("%s %s %s %s%s", .qc_type_label(q$qc_type), q$feature, det$analyte[[i]],
+                           .flags_fmt(det$value[[i]]),
+                           if (is.na(det$units[[i]])) "" else paste0(" ", det$units[[i]])),
+          stringsAsFactors = FALSE)
+      }
     }
     qual <- if (length(qual)) do.call(rbind, qual) else NULL
     if (!is.null(qual)) qual <- qual[order(qual$feature, qual$analyte, method = "radix"), , drop = FALSE]
@@ -371,7 +386,7 @@
                           .flags_fmt(cr$f), .flags_fmt(cr$f_contaminant)),
       detail = paste(detail, "—", round, tail), action = action)
   }
-  .flags_dedupe(do.call(rbind, out))
+  .qc_with_qualified(.flags_dedupe(do.call(rbind, out)), quals)
 }
 
 # ---- R-19.27 qc_missing --------------------------------------------------------------
@@ -518,11 +533,251 @@
   do.call(rbind, out)
 }
 
+# ---- PLAN-19 phase 1b: ALS lab QC (R-19.29, R-19.30, R-19.32) ------------------------------
+
+# Attach a check's QC qualification set (R-19.32): data.frame(feature,
+# analyte, date, reason) of results the finding qualifies.
+.qc_with_qualified <- function(res, qual) {
+  if (is.null(res) || length(qual) == 0) return(res)
+  q <- do.call(rbind, qual)
+  if (!is.null(q) && nrow(q)) attr(res, "qc_qualify") <- q
+  res
+}
+
+# R-19.32: after every check has run, append "; QC qualified: <reasons>" to a
+# licence_limit, site_history or rl_change flag on a qualified result (a lab
+# result: a licence flag on a field result is not qualified by lab QC).
+.qc_apply_qualified <- function(rows) {
+  q <- do.call(rbind, lapply(unname(rows), function(r) attr(r, "qc_qualify")))
+  if (is.null(q) || nrow(q) == 0) return(rows)
+  qk <- paste(q$feature, q$analyte, format(as.Date(q$date)), sep = "\r")
+  for (ck in c("licence_limit", "site_history", "rl_change")) {
+    r <- rows[[ck]]
+    if (is.null(r) || nrow(r) == 0) next
+    rk <- paste(r$feature, r$analyte, format(as.Date(r$date)), sep = "\r")
+    lab <- if (ck == "licence_limit") !grepl("\\|field$", r$key) else rep(TRUE, nrow(r))
+    for (i in which(lab & rk %in% qk)) {
+      why <- unique(q$reason[qk == rk[[i]]])
+      r$detail[[i]] <- paste0(r$detail[[i]], "; QC qualified: ", paste(why, collapse = ", "))
+    }
+    rows[[ck]] <- r
+  }
+  rows
+}
+
+# Work orders with a recent delivery (ruling R1): any of their samples is new.
+.qc_recent_wo <- function(img) {
+  s <- img$samples
+  unique(s$project[s$new %in% TRUE & !is.na(s$project)])
+}
+
+# "<Mon YYYY> quarterly|annual" when the QC requirements are given, else the
+# month alone (the lab-QC checks need only the DB, R-19.23).
+.qc_round_or_month <- function(checks, site, m) {
+  req <- tryCatch(.qc_inputs(checks, need_criteria = FALSE)$requirements, error = function(e) NULL)
+  if (length(req)) .qc_round_label(req, site, m) else .flags_ym_label(m)
+}
+
+.qc_limits_text <- function(lo, hi) {
+  if (!is.na(lo) && !is.na(hi)) return(sprintf("%s–%s%%", .flags_fmt(lo), .flags_fmt(hi)))
+  if (!is.na(lo)) return(sprintf("≥ %s%%", .flags_fmt(lo)))
+  if (!is.na(hi)) return(sprintf("≤ %s%%", .flags_fmt(hi)))
+  "no limits"
+}
+
+# Lab results a lab-QC row applies to: same method code and analyte (by
+# analyte name or lab-method name).
+.qc_results_for <- function(a, method, analyte) {
+  a[a$kind %in% "lab" & a$mcode == method &
+      (a$analyte %in% analyte | a$method_name %in% analyte), , drop = FALSE]
+}
+
+.flags_lab_qc_outlier <- function(img, checks, today) {
+  o <- img$lab_qc_outlier
+  if (is.null(o) || nrow(o) == 0) return(NULL)
+  wos <- .qc_recent_wo(img)
+  o <- o[o$work_order %in% wos & o$kind %in% c("ms", "dup", "mb", "surrogate", "lcs"), , drop = FALSE]
+  # Never flagged: another client's sample, and an MS ALS could not determine
+  # (background >= 4x the spike: information only).
+  anon <- !is.na(o$client_id) & tolower(trimws(o$client_id)) == "anonymous"
+  nd <- o$kind == "ms" & !is.na(o$comment) & grepl("^MS recovery not determined", o$comment)
+  o <- o[!anon & !nd, , drop = FALSE]
+  if (nrow(o) == 0) return(NULL)
+  a <- img$results
+  a$mcode <- .qc_method_code(a$method)
+  s <- img$samples
+  ht <- img$lab_qc_outlier
+  out <- list()
+  qual <- list()
+  for (i in seq_len(nrow(o))) {
+    r <- o[i, , drop = FALSE]
+    v <- r$value_pct
+    outside <- !is.na(v) & ((!is.na(r$limit_low) & v < r$limit_low) |
+                              (!is.na(r$limit_high) & v > r$limit_high))
+    if (r$kind == "lcs") {
+      # Batch level: every result of the work order under that method/analyte.
+      if (!is.na(v) && !outside) next
+      hit <- .qc_results_for(a[a$project %in% r$work_order, , drop = FALSE], r$method, r$analyte_raw)
+    } else {
+      if (!outside || is.na(r$uuid_sample) || !r$uuid_sample %in% s$sample) next
+      hit <- .qc_results_for(a[a$sample %in% r$uuid_sample, , drop = FALSE], r$method, r$analyte_raw)
+      if (nrow(hit) == 0) {
+        ss <- s[s$sample %in% r$uuid_sample, , drop = FALSE]
+        hit <- data.frame(feature = ss$feature, site = ss$site, date = ss$date, ym = ss$ym,
+                          analyte = r$analyte_raw, stringsAsFactors = FALSE)
+      }
+    }
+    if (nrow(hit) == 0) next
+    hit <- hit[order(hit$feature, method = "radix"), , drop = FALSE]
+    pts <- unique(hit$feature)
+    lab <- toupper(r$kind)
+    lim <- .qc_limits_text(r$limit_low, r$limit_high)
+    val <- if (is.na(v)) "not determined" else paste0(.flags_fmt(v), "%")
+    cmt <- if (is.na(r$comment)) "" else paste0(", ", tolower(substr(r$comment, 1, 1)),
+                                               substr(r$comment, 2, nchar(r$comment)))
+    site <- sort(unique(hit$site), method = "radix")[[1]]
+    d <- max(hit$date)
+    m <- .flags_ym(d)
+    # The lab can re-run while the method's ALS due date (from this report's
+    # holding-time rows) has not passed; otherwise the results are qualified.
+    due <- ht$due_analysis[ht$work_order %in% r$work_order & ht$method %in% r$method]
+    due <- suppressWarnings(max(as.Date(due), na.rm = TRUE))
+    reanalyse <- is.finite(due) && due >= today
+    tail <- if (reanalyse) {
+      sprintf("→ ask ALS to re-run %s %s for %s", r$method, r$analyte_raw, paste(pts, collapse = ", "))
+    } else {
+      sprintf("→ qualify %s at %s for the event", r$analyte_raw, paste(pts, collapse = ", "))
+    }
+    ref <- if (!is.na(r$lab_id)) r$lab_id else if (!is.na(r$qc_lot)) r$qc_lot else "-"
+    out[[length(out) + 1]] <- .flags_rows(
+      "lab_qc_outlier",
+      key = sprintf("lab_qc_outlier|%s|%s|%s|%s|%s", r$work_order, r$kind, r$method, r$analyte_raw, ref),
+      site = site, date = d, feature = if (length(pts) == 1) pts else NA, analyte = r$analyte_raw,
+      value = v, unit = "%", threshold = lim,
+      detail = sprintf("ALS QCI %s: %s %s %s %s (%s)%s — affects %s — %s %s", r$work_order, r$method,
+                       r$analyte_raw, lab, val, lim, cmt, paste(pts, collapse = ", "),
+                       .qc_round_or_month(checks, site, m), tail),
+      action = if (reanalyse) "reanalyse" else "qualify")
+    qual[[length(qual) + 1]] <- data.frame(
+      feature = hit$feature, analyte = hit$analyte, date = hit$date,
+      reason = sprintf("ALS %s %s %s %s (%s)", lab, r$method, r$analyte_raw, val, lim),
+      stringsAsFactors = FALSE)
+  }
+  .qc_with_qualified(.flags_dedupe(do.call(rbind, out)), qual)
+}
+
+# Licence-required pollutants per (feature): data.frame(feature, uuid_analyte,
+# pollutant), from the requirements and points tables and the EPA masks.
+.qc_licence_required <- function(img, checks) {
+  if (is.null(checks$requirements) || is.null(checks$points)) return(NULL)
+  req <- .flags_table(checks$requirements, "requirements", c("site", "epa_point", "pollutant"))
+  pts <- .flags_table(checks$points, "points", c("site", "epa_point", "role"))
+  pts <- pts[!pts$role %in% "weather", , drop = FALSE]
+  req <- req[!is.na(req$pollutant) & paste(req$site, req$epa_point) %in% paste(pts$site, pts$epa_point), ,
+             drop = FALSE]
+  if (nrow(req) == 0) return(NULL)
+  fmap <- DBI::dbGetQuery(img$con, "
+    SELECT f.name AS feature, f.site AS site, trim(fm.name) AS epa_point
+      FROM feature_mask fm JOIN feature f ON f.uuid = fm.uuid_feature
+     WHERE fm.variant = 'EPA' AND fm.name IS NOT NULL AND trim(fm.name) <> ''")
+  amap <- DBI::dbGetQuery(img$con, "
+    SELECT uuid_analyte, trim(name) AS pollutant FROM analyte_mask
+     WHERE variant = 'EPA' AND name IS NOT NULL AND trim(name) <> ''")
+  x <- merge(fmap, req[, c("site", "epa_point", "pollutant")], by = c("site", "epa_point"))
+  x <- merge(x, amap, by = "pollutant")
+  unique(x[, c("feature", "uuid_analyte", "pollutant")])
+}
+
+.flags_holding_time <- function(img, checks, today) {
+  o <- img$lab_qc_outlier
+  if (is.null(o) || nrow(o) == 0) return(NULL)
+  wos <- .qc_recent_wo(img)
+  o <- o[o$kind %in% "holding_time" & o$work_order %in% wos, , drop = FALSE]
+  if (nrow(o) == 0) return(NULL)
+  s <- img$samples
+  a <- img$results
+  a$mcode <- .qc_method_code(a$method)
+  i <- match(o$uuid_sample, s$sample)
+  o$feature <- s$feature[i]
+  o$site <- s$site[i]
+  o$date <- s$date[i]
+  # Lab pH (EA005*) at a sample with a field pH: the field pH wins (ruling
+  # 2026-07-24), so its lab holding time does not matter.
+  if (any(grepl("^EA005", o$method) & !is.na(i))) {
+    ph_lab <- unique(a$uuid_analyte[a$kind %in% "lab" & grepl("^EA005", a$mcode)])
+    fph <- unique(a$sample[a$kind %in% "field" &
+                             (a$uuid_analyte %in% ph_lab | grepl("^pH\\b", a$analyte))])
+    o <- o[!(grepl("^EA005", o$method) & o$uuid_sample %in% fph), , drop = FALSE]
+  }
+  if (nrow(o) == 0) return(NULL)
+  lic <- .qc_licence_required(img, checks)
+  out <- list()
+  qual <- list()
+  grp <- unique(o[, c("work_order", "method")])
+  grp <- grp[order(grp$work_order, grp$method, method = "radix"), , drop = FALSE]
+  for (g in seq_len(nrow(grp))) {
+    wo <- grp$work_order[[g]]
+    meth <- grp$method[[g]]
+    x <- o[o$work_order == wo & o$method == meth, , drop = FALSE]
+    linked <- x[!is.na(x$feature), , drop = FALSE]
+    linked <- linked[order(linked$feature, method = "radix"), , drop = FALSE]
+    raw <- unique(x$client_id[is.na(x$feature)])
+    ws <- s[s$project %in% wo, , drop = FALSE]
+    site <- if (nrow(linked)) linked$site[[1]] else if (nrow(ws)) sort(unique(ws$site), method = "radix")[[1]] else NA
+    d <- if (nrow(linked)) max(linked$date) else if (nrow(ws)) max(ws$date, na.rm = TRUE) else NA
+    if (is.na(site) || is.na(d)) next
+    days <- unique(stats::na.omit(x$days_overdue))
+    who <- c(unique(linked$feature), if (length(raw)) sprintf("\"%s\"", raw))
+    if (length(days) <= 1) {
+      late <- if (length(days)) sprintf("%d day%s late", days, if (days == 1) "" else "s") else "late"
+      where <- paste(who, collapse = ", ")
+    } else {
+      late <- "late"
+      dd <- x$days_overdue[match(c(unique(linked$feature), raw),
+                                 ifelse(is.na(x$feature), x$client_id, x$feature))]
+      where <- paste(sprintf("%s (%s day%s)", who, dd, ifelse(dd %in% 1, "", "s")), collapse = ", ")
+    }
+    # The results the breach touches: the linked samples' lab results under it.
+    res <- a[a$kind %in% "lab" & a$mcode == meth & a$sample %in% linked$uuid_sample, , drop = FALSE]
+    # resample: a licence-required pollutant at a linked licence point, with
+    # no field result of the same analyte to stand in for it.
+    rs <- character(0)
+    if (!is.null(lic) && nrow(res)) {
+      fld <- paste(a$sample, a$uuid_analyte)[a$kind %in% "field"]
+      need <- res[paste(res$feature, res$uuid_analyte) %in% paste(lic$feature, lic$uuid_analyte) &
+                    !paste(res$sample, res$uuid_analyte) %in% fld, , drop = FALSE]
+      rs <- unique(sprintf("%s for %s", need$feature, need$analyte))
+    }
+    mname <- x$method_name[[1]]
+    tail <- if (length(rs)) sprintf("→ resample %s", paste(rs, collapse = ", ")) else
+      sprintf("→ qualify %s results at %s for the event", if (is.na(mname)) meth else mname,
+              paste(who, collapse = ", "))
+    out[[length(out) + 1]] <- .flags_rows(
+      "holding_time", key = sprintf("holding_time|%s|%s", wo, meth), site = site, date = d,
+      feature = if (length(who) == 1 && nrow(linked)) linked$feature[[1]] else NA,
+      threshold = "ALS holding time",
+      detail = sprintf("ALS QCI %s: %s %s analysed %s at %s — %s %s", wo, meth,
+                       if (is.na(mname)) "" else mname, late, where,
+                       .qc_round_or_month(checks, site, .flags_ym(d)), tail),
+      action = if (length(rs)) "resample" else "qualify")
+    if (nrow(res)) {
+      dl <- x$days_overdue[match(res$sample, x$uuid_sample)]
+      qual[[length(qual) + 1]] <- data.frame(
+        feature = res$feature, analyte = res$analyte, date = res$date,
+        reason = sprintf("holding time %s %s day%s late (ALS QCI %s)", meth, dl,
+                         ifelse(dl %in% 1, "", "s"), wo), stringsAsFactors = FALSE)
+    }
+  }
+  .qc_with_qualified(.flags_dedupe(do.call(rbind, out)), qual)
+}
+
 # The QC checks join the flag functions (R/flags.R defines the rest).
 .flags_fns <- c(.flags_fns, list(
   qc_dup_rpd = .flags_qc_dup_rpd,
   qc_blank_detect = .flags_qc_blank_detect,
   qc_missing = .flags_qc_missing,
   qc_unresolved = .flags_qc_unresolved,
+  lab_qc_outlier = .flags_lab_qc_outlier,
+  holding_time = .flags_holding_time,
   lab_qc_missing = .flags_lab_qc_missing
 ))
