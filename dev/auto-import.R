@@ -20,6 +20,25 @@ vault <- nz(Sys.getenv("PKM_VAULT")) %||% file.path(path.expand("~"), "pkm")
 report_dir <- nz(Sys.getenv("SAMPLETIDY_AUTOIMPORT_REPORT")) %||%
   file.path(vault, "0 Misc", "00 Misc", "00.09 Import triage")
 
+# Phase 2 (PLAN-18 section 4): the status note's Flags. The package never reads
+# dev/, so the schedule and licence tables are passed from here. Invoice
+# evidence comes from the invoice-automation contractor work ledger (PLAN-18
+# 4.6); a missing ledger gives zero rows, an unreadable one NULL - either way
+# only invoiced_not_received is affected.
+dev_dir <- file.path(repo, "dev")
+ledger <- nz(Sys.getenv("SAMPLETIDY_AUTOIMPORT_LEDGER")) %||%
+  file.path(path.expand("~"), "OneDrive - Blue Mountains City Council",
+            "invoice-automation", "contractor-work.json")
+invoices <- tryCatch(sampling_rounds(ledger)[, c("site", "stream", "sampled_on", "ref")],
+                     error = function(e) NULL)
+checks <- list(
+  schedule = file.path(dev_dir, "expected_schedule.csv"),
+  limits = file.path(dev_dir, "epa_licence_limits.csv"),
+  requirements = file.path(dev_dir, "epa_licence_requirements.csv"),
+  points = file.path(dev_dir, "epa_licence_points.csv"),
+  invoices = invoices
+)
+
 inbox_run(input_dir = input_dir, db = db,
           backup_dir = file.path(dirname(db), "migration-backups"),
-          report_dir = report_dir)
+          report_dir = report_dir, checks = checks)

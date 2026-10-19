@@ -101,6 +101,27 @@ and a footer. It is also written as `<report_dir>/.import-status.json` with the 
 content as data. The daily-note template embeds `![[Import status]]`, so every day shows
 the current list.
 
+**Frontmatter (ruling 2026-10-19 R8).** The vault convention is a YAML frontmatter
+`summary:` list on notes; something in the vault added one to `Import status.md`, which the
+hourly rewrite would wipe or leave stale. So `import_status()` and `import_report()` each
+write their own leading frontmatter, before the existing first line:
+
+```
+---
+summary:
+  - '<one plain-facts sentence>'
+---
+```
+
+Deterministic (no model); a single-quoted YAML scalar with every `'` doubled; built by the
+internal seam `.inbox_frontmatter(summary)` (returns those four lines). The status note's
+sentence gives the updated time (`YYYY-MM-DD HH:MM` Sydney), `<n> review item(s) open`,
+`<n> flag(s)` with the top 3 checks by count, `<w> folder(s) waiting`, and what was
+imported today if anything; the dated note's sentence gives the review items open and the
+work orders imported that day. The whole file is rewritten, so a frontmatter written by
+anything else is replaced, never duplicated. The header line stays the first line *after*
+the frontmatter (tests read notes through `strip_frontmatter()` in `helper-inbox.R`).
+
 The dated `<YYYY-MM-DD>-imports.md` (section 2) is the day's history: it is written only on
 a day something was imported or a run had a problem, and holds **Imported today** and that
 day's **Problems** only (Needs review and Waiting move to the status note).
@@ -175,7 +196,9 @@ lacking required analytes, listed). Field-only or lab-only gaps are shown as suc
 **4.3 Exceedances** (Robin: licence limits, site history, gas LEL/EPA).
 - **Licence limits:** L2 at the discharge points B.E01, K.E01, K.E02 (pH 6.5-8.5 with the
   field pH winning where both exist, NH3-N 0.9 mg/L, TSS 50 mg/L, 100 percentile), and the
-  1.25 % v/v methane trigger at the gas grid (R2.3; stored L/L, ×100). Limits come from a
+  methane triggers (stored L/L, ×100): R2.3 at the gas grid, 1.25 % v/v at Blaxland
+  (Point 10) and 1 % v/v at Katoomba (Point 1), plus Katoomba M7.3, 1 % v/v in any
+  building or structure (K.G367-K.G473). Limits come from a
   data table (not code): `dev/epa_licence_limits.csv`. The storm exemption (L2.5) is not
   assessed automatically; the flag says so.
 - **Gas LEL / EPA criteria:** the `guideline` rows LEL 10 %/50 %, EPA impact assessment
@@ -219,3 +242,229 @@ status note's age at render time and shows "updated N days ago on <host>" when s
   tables; a real change goes through the reviewed blind re-transcription.
 - Drift detection (delivered-but-unscheduled / scheduled-but-missing points) stays as
   the backstop.
+
+### 4.5 Contract (phase 2)
+
+Pinned by `tests/testthat/test-inbox-flags.R` (helpers in `helper-flags.R`) and, for R8,
+`test-inbox-frontmatter.R`. Items marked **[invented]** were not decided by Robin; the
+test-writer chose them (2026-10-19) and they are open to his ruling. Items marked
+**ruling 2026-10-19 R<n>** come from the main agent's rulings after the first read-only
+live smoke gave ~1,000 mostly false flags (`scratchpad/2026-10-19-phase2-impl/RULINGS-1.md`);
+they supersede what they replace.
+
+**API.**
+
+- New export `import_flags(db = st_config("live_db"), now = Sys.time(), checks)` →
+  `data.frame`, one row per flag, columns exactly `check, site, feature, analyte, date,
+  value, unit, threshold, detail, key` (all character except `value`, numeric; `NA` where
+  a column does not apply, e.g. `feature`/`analyte`/`value` of an overdue flag). Rows are
+  ordered by `check` in the order of the list below, then `date` descending. Read-only:
+  opens the DB `read_only = TRUE`, never writes it.
+- `check` ∈ `overdue, invoiced_not_received, missing_point, missing_analytes,
+  licence_limit, gas_criterion, site_history, rl_change, unit_change`.
+- `site` is `feature.site` (or the schedule/invoice site): `"B"`, `"K"`, ...; `date` is
+  `YYYY-MM-DD`; `key` is a stable id built only from the flag's identity (never from
+  `now`, the value, or row order), unique within one result, so `first_seen` survives
+  re-runs.
+- **Per-check errors are contained [invented].** Each check runs inside its own
+  `tryCatch`; a failing check contributes no rows and its message is returned in
+  `attr(result, "errors")`, a named character vector (`names` = check name;
+  `character(0)` when none). `import_flags()` itself errors only on bad arguments.
+- `checks = list(schedule =, limits =, requirements =, points =, invoices =)`. The first
+  four are each a CSV path or a `data.frame`; `invoices` is `data.frame(site, stream,
+  sampled_on (Date), ref)` or `NULL`. A `NULL` element silently disables the checks that
+  need it (no rows, no error); a path that does not exist or a malformed table is an
+  error **of each check that needs it** (schedule → overdue, invoiced_not_received,
+  missing_point; requirements + points → missing_analytes; limits → licence_limit). The
+  DB-only checks (gas_criterion, site_history, rl_change, unit_change) always run. CSVs
+  are read with every column as character; an empty string and `NA` both mean "missing".
+  The package never reads `dev/`; `dev/auto-import.R` passes the `dev/` paths.
+- `import_status(..., checks = NULL)` and `inbox_run(..., checks = NULL)` (passed to every
+  `import_status()` call it makes). `checks = NULL` → the note and JSON are exactly as in
+  phase 1 (no Flags heading, no `flags` key). Non-NULL → a `## Flags` section placed after
+  `## Needs review` and before `## Waiting`: first one line per failed check,
+  `- check <name> failed: <message>`; then the flags grouped by check (fixed order above),
+  each group headed `**<check>** — <plain meaning>` with one `- ` line per flag, newest
+  `date` first, the line carrying the date, site, feature/analyte, value + unit,
+  threshold and detail where present; `No flags.` when there are no flags. **Ruling
+  2026-10-19 R6:** at most 15 flag lines per check (the newest), then one line
+  `+N more — see .import-status.json`; the JSON keeps every flag. The JSON gains
+  `flags` (array of objects: the ten columns plus `first_seen`) and `flag_errors` (array
+  of `{check, message}`). `first_seen` is ISO-8601 UTC (`%Y-%m-%dT%H:%M:%SZ`, as in the run
+  log): carried over by `key` from the previous `.import-status.json` (read before it is
+  overwritten; missing/corrupt → none), else `now`. A flag no longer computed is dropped.
+  The header line is unchanged.
+
+**CSV formats** (another agent builds the real files).
+
+- `expected_schedule.csv`: `site,stream,months,features,due_days,from,to,source`.
+  `stream` ∈ `acirl_water, acirl_gas, acirl_dust, als_lab` (anything else is an error of
+  the schedule checks); `months` = `all` or a `;` list of 1-12 (whitespace tolerated;
+  anything else is an error); `features` = `;` list of feature names, may be empty;
+  `due_days` int; `from`/`to` `YYYY-MM-DD`, empty `to` = open-ended.
+- `epa_licence_limits.csv`: `site,feature_pattern,analyte,min,max,unit,factor,condition,note`.
+  `feature_pattern` is an R regex matched against `feature.name` (of features whose
+  `feature.site == site`); `analyte` is `analyte.name`; `min`/`max` may be empty; `factor`
+  multiplies the stored value into `unit` (empty = 1; methane L/L → % is 100).
+- `epa_licence_requirements.csv` / `epa_licence_points.csv`: the existing files, read as
+  `dev/epa-monitoring-report.R` reads them.
+
+**Common definitions.**
+
+- **Sample date** = the Australia/Sydney calendar day of `COALESCE(sample.datetime,
+  sample.date)` read as a UTC instant — the `LOCAL_DATE` rule of
+  `dev/epa-monitoring-report.R` and migration 022 (gas and dust carry only `date`).
+  "Today" = the Sydney date of `now`.
+- **Stream of a sample [invented, revised by ruling 2026-10-19 R2].** `acirl_dust` if
+  `project.type = 'Dust monitoring'` or the feature name matches `\.D[0-9]` (dust gauges
+  sit inside ALS `ES#######` work orders); else `acirl_gas` if `project.type = 'Monthly gas
+  monitoring'` (the `2400-####-##` projects, including their gas readings at wells) or
+  `feature.matrix = 'air'`; else the sample belongs to **every stream its results
+  evidence, decided per result from the lab method, not from `sample.organisation`**
+  (R2; live ES2604522 has `sample.organisation = 'ACIRL'` but mostly ALS lab results): a
+  field result (below) evidences `acirl_water`, a lab result `als_lab`. A sample with
+  neither (e.g. `Internal` methods) has no stream. One ES work order with ALS lab results
+  and ACIRL field readings therefore counts for both `als_lab` and `acirl_water`.
+- **Field vs lab result (ruling 2026-10-19 R2).** Per result: *field* when
+  `lab_method.organisation` is `ACIRL` or `lab_method.method` contains `Client Supplied`
+  (ALS's `EN67 - Client Supplied Data` field-probe rows); *lab* otherwise when
+  `lab_method.organisation` is `ALS`; neither otherwise. `sample.organisation` plays no
+  part. The field-pH-wins rule uses this classification.
+- **Recent delivery (ruling 2026-10-19 R1, replaces the change_log-90-day rule).** A work
+  order's samples are assessed only if BOTH (a) it was imported **by the pipeline** within
+  the last 90 days: some `change_log` row with `action = 'insert'`, (`tbl = 'sample'`,
+  `uuid_row` = one of its samples) or (`tbl = 'analysis'`, `uuid_row` = an analysis of one
+  of its samples), a **non-NULL `source_hash`**, an `actor` that is not a migration
+  (migration actors match `^[0-9]{3}-` or `migration-`), and `at >= now - 90 days` (`at` a
+  UTC instant); AND (b) the sample's date is within the last 180 days of today
+  (applied per sample). Backfills of old data (legacy gas, the coming corpus run) and
+  migrations never count. Every per-result check (licence_limit, gas_criterion,
+  site_history, rl_change, unit_change) and missing_point/missing_analytes assess only
+  these samples ("new results").
+- **Feature/analyte mapping for 4.2** exactly as `dev/epa-monitoring-report.R`: EPA point
+  → features via `feature_mask` (`variant = 'EPA'`, `name = epa_point`, same site);
+  pollutant → analytes via `analyte_mask` (`variant = 'EPA'`, `name = pollutant`).
+  Points whose role (points CSV) is `weather` and `Special Frequency 1` rows (discharge,
+  per event) are never required.
+- Non-detects (`analysis.quantified = FALSE`) are never flagged by licence_limit,
+  gas_criterion or site_history **[invented: the stored value is the RL, so it can show
+  neither a breach nor an outlier, high or low]**; a raised RL is rl_change's job.
+
+**4.1.**
+
+- `overdue`: for each schedule row and each month M from 12 months before today's month
+  to the month before it (12 months), where M is in `months`, the row is valid in M
+  (`from <= last day of M` and (`to` empty or `to >= first day of M`) — overlap
+  **[invented]**) and the due date `last day of M + due_days` is **before** today (a due
+  date of today is not yet overdue): flag when no sample of that stream at that site has
+  a sample date in M. `date` = first day of M; `threshold` = `expected <Mon YYYY> by
+  <due date>` (C-locale month abbreviation); `detail` names the stream (and `source`).
+  key `overdue|site|stream|YYYY-MM`.
+- `invoiced_not_received`: per invoice row, `due_days` from the first schedule row of that
+  site and stream valid on `sampled_on` (default 30); flag when `sampled_on + due_days` is
+  before today and no sample of that stream at that site has a sample date within ±3 days
+  of `sampled_on` (inclusive). `date` = `sampled_on`; `threshold` = `expected by <date>`;
+  `detail` carries `ref` and the stream. key `invoiced_not_received|site|stream|date|ref`.
+
+**4.2 [invented: round-based, to avoid false flags when one round arrives in two work
+orders].**
+
+- A recent delivery's **rounds** are the (site, Sydney month) pairs of its samples.
+- `missing_point` (aggregated by **ruling 2026-10-19 R3**): for each round and each stream
+  of the delivery's samples, the expected features are the union of `features` of that
+  stream's schedule rows for the site, valid in the month, with the month in `months`. A
+  feature is sampled when it has any sample (any stream, any project) at that site in that
+  month — **for `acirl_gas`, in that month or the month either side** (gas rounds split
+  across adjacent months). **One flag per (site, round month, stream):** `feature = NA`;
+  `detail` contains `k of n expected points not sampled: <first 10 names, sorted, ", "-joined>`
+  then `, +m more` when more than 10, and names the stream and the work order(s); `date` =
+  the earliest assessed sample date of the round's recent deliveries.
+  key `missing_point|site|YYYY-MM|stream`.
+- `missing_analytes`: for each feature sampled in a recent delivery that maps to a
+  licence point, with d = its latest sample date in the delivery: the required pollutants
+  are its requirements rows with frequency Monthly, Quarterly or Yearly; a pollutant is
+  present when any result of a mapped analyte exists at that feature (any project, field
+  or lab) dated within: Monthly — the calendar month of d; Quarterly — `[d - 120 days,
+  end of d's month]`; Yearly — `[d - 395 days, end of d's month]` **[invented: rolling
+  windows, since neither table says which month is "the quarter's round"]**.
+  **One flag per (site, round month) (ruling 2026-10-19 R4):** `feature = NA`; `detail`
+  lists each missing pollutant with its features, `<pollutant>: <feature>, <feature>`,
+  entries joined by `; `, e.g. `Total Phenolics: B.S01, B.S03; pH: B.E01`; a feature that
+  had only field (only lab) results while the site-month had both kinds is written
+  `B.S02 (field only)` / `B.S02 (lab only)` **[invented label]**; at most 15 pollutants,
+  then `+m more`. key `missing_analytes|site|YYYY-MM` (stable while the list changes).
+  **Mapping exactly as `dev/epa-monitoring-report.R` (R4):** requirements are matched by
+  their `pollutant` column — group line items (`group_item` OCP/OPP/TPH) are already
+  expanded into one row per congener/fraction, so the congener name is matched to
+  `analyte_mask.name` and the group's `licence_pollutant` name is never used; a (point,
+  pollutant) listed under two conditions is one requirement; mask rows with a NULL or blank
+  name map nothing. Calibration (not a unit test): Blaxland 2025-08-22..2026-08-21, the
+  (point, pollutant) pairs with zero results must reconcile with the report script's unmet
+  requirements (583 of 593 required counts met).
+
+**4.3.**
+
+- `licence_limit`: each limits row against the new results at matching features and
+  analyte: `v = value × factor`; flag when `v < min` or `v > max` (strict — exactly at a
+  limit is compliant, e.g. TSS 50.00 at 50). Where a (feature, sample date) has both a
+  field and a lab result of that analyte, only the field results are assessed (Robin's
+  pH ruling, 2026-07-24). `value` = v, `unit` = the limit's unit; `threshold` = `> max
+  unit`, `< min unit`, or `outside min-max unit` when both are set; `detail` gives the
+  condition and, for `L2*` conditions, says the storm exemption (L2.5) was not assessed.
+  key `licence_limit|feature|analyte|date|field-or-lab`.
+- `gas_criterion` **[invented matching]**: `guideline` rows whose `guideline` is `LEL` or
+  `EPA` (the 10 %/50 % LEL, EPA impact assessment criteria and solid waste guidelines
+  trigger value rows), applied to new results of the row's `uuid_analyte` at features with
+  `matrix = 'air'` or in samples of stream `acirl_gas`, comparing the stored value
+  directly (guideline values are stored in the analyte's canonical units). Flag when
+  `value > guideline.value`; one flag per result per guideline family (`LEL`, `EPA`), at
+  the highest level exceeded; `threshold` = `> value units (level_name)`. Other families
+  (`dgv`, `ACGIH`, ...) are not used. key `gas_criterion|feature|analyte|date|family`.
+- `site_history`: for each new quantified result, the priors are the quantified results of
+  the same (feature, analyte) with a sample date in `[d - 5 years, d)`. With at least 8
+  priors, flag when the value is outside `[min, max]` of the priors **and** `|z| > 4`,
+  `z = (value - median) / (1.4826 × MAD)`. **MAD = 0 [invented]:** flag whenever the value
+  is outside the prior range (z taken as infinite); `detail` says the priors are all equal.
+  `threshold` = `prior range min-max (n=N)`. key `site_history|feature|analyte|date`.
+- `rl_change` (**ruling 2026-10-19 R5**): flags only a RAISED reporting limit — the new
+  `analysis.rl_low` is greater than the maximum non-NA `rl_low` of that (feature, analyte)
+  over sample dates in `[d - 2 years, d)`; a lower or equal RL, or no prior RL, is not
+  flagged; `detail` gives the prior maximum and the new RL. `unit_change` (unchanged): for
+  each new result, the most recent prior result of the pair is the set of results on the
+  latest sample date before d; unit = `COALESCE(lab_method.units, analyte.units)`; flag when it equals
+  none of the prior results' units (both non-NA); `detail` gives old and new. keys
+  `rl_change|feature|analyte|date`, `unit_change|feature|analyte|date`.
+
+- **Ruling 2026-10-19 R7:** unchanged — gas_criterion including the solid waste guidelines
+  500 ppm trigger (with R1 it covers recent rounds only), the overdue rules, `first_seen`
+  carry-over.
+- **Ruling 2026-10-19 R8:** both notes carry their own `summary:` frontmatter; see 2a.
+
+### 4.6 Contract (sampling rounds from the contractor work ledger)
+
+*Superseded the PDF parser, 2026-10-19: one parser, in t1.* sampleTidy no longer reads
+ACIRL invoice PDFs (`acirl_invoices()` / `acirl_invoice_text_parse()` and `pdftools` are
+gone). The t1 tool writes `contractor-work.json` (spec:
+`invoice-automation/docs/contractor-work-ledger.md`) and sampleTidy reads it. Feeds
+`checks$invoices` (4.5) for `invoiced_not_received`. Pinned by
+`tests/testthat/test-sampling-rounds.R`, fixtures `tests/testthat/fixtures/contractor_work/`.
+
+**API.** New export `sampling_rounds(ledger)`; `ledger` is the path to `contractor-work.json`.
+Returns `data.frame(site, stream, sampled_on, ref, section, note)`: `sampled_on` is `Date`,
+the rest character, `note` `NA` when the ledger's is null.
+
+- Only items with `kind == "sampling_round"`; other kinds are ignored silently (this is what
+  lets other suppliers' works be added to the ledger later).
+- `site`: t1 name mapped to sampleTidy code, `Blaxland` -> `B`, `Katoomba` -> `K`. Any other
+  site name is dropped, no error (design left open).
+- `stream` = the item's `activity`; only `acirl_water, acirl_gas, acirl_dust, als_lab` kept.
+- `ref` = the invoice key; `sampled_on` = `date`; `section`, `note` as in the ledger.
+  A date that disagrees with the invoice period arrives as printed with a `note`.
+- Entries with `items: []` contribute nothing.
+- Missing file -> zero-row frame with the right columns and types (the ledger may not exist
+  on a machine). Corrupt JSON -> `sampletidy_parse_error` naming the path (callers in
+  `dev/auto-import.R` catch it). `version` other than 1 -> error.
+- Read-only. `jsonlite` is already in `Imports`.
+
+`dev/auto-import.R` passes `sampling_rounds(<OneDrive ledger dir>/contractor-work.json)[,
+c("site", "stream", "sampled_on", "ref")]` as `checks$invoices` (wiring, not unit-tested).

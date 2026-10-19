@@ -12,7 +12,8 @@ inbox_run(
   now = Sys.time(),
   settle_minutes = 10,
   keep_backups = 10,
-  dry_run = FALSE
+  dry_run = FALSE,
+  checks = NULL
 )
 }
 \arguments{
@@ -31,6 +32,9 @@ inbox_run(
 \item{keep_backups}{how many \code{monitoring_pre-auto-import_*.duckdb} to keep.}
 
 \item{dry_run}{if \code{TRUE}: no backup, no live-DB write, no removal, no state.}
+
+\item{checks}{\code{NULL} (no Flags section) or the check inputs for
+\code{\link[=import_flags]{import_flags()}}, passed to every status-note refresh.}
 }
 \value{
 (invisibly) a list: action, ran, locked, dry_run, started_at,

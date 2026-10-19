@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "invoices": {
+    "AC101708": { "supplier": "ACIRL", "invoice_date": "2026-08-31", "source": "x.pdf", "read_at": "2026-10-19T03:12:44Z", "parser": "acirl-sampling/1", "items": [
+      { "kind": "sampling_round", "site": "Katoomba", "activity": "acirl_water", "date": "2026-08-17", "section": "Monthly", "note": null },
+      { "kind": "sampling_round", "site": "Katoomba", "activity": "als_lab", "date": "2026-08-17", "section": "Monthly", "note": null } ] },
+    "AC101860": { "supplier": "ACIRL", "invoice_date": "2026-08-31", "source": "x.pdf", "read_at": "2026-10-19T03:12:44Z", "parser": "acirl-sampling/1", "items": [
+      { "kind": "sampling_round", "site": "Blaxland", "activity": "acirl_water", "date": "2026-08-19", "section": "Monthly", "note": null },
+      { "kind": "sampling_round", "site": "Blaxland", "activity": "acirl_gas", "date": "2026-08-19", "section": "Gas Monitoring", "note": null },
+      { "kind": "sampling_round", "site": "Blaxland", "activity": "acirl_dust", "date": "2026-08-19", "section": "Monthly Dust", "note": null },
+      { "kind": "sampling_round", "site": "Blaxland", "activity": "als_lab", "date": "2026-08-19", "section": "Monthly", "note": null } ] },
+    "AC102053": { "supplier": "ACIRL", "invoice_date": "2026-08-31", "source": "x.pdf", "read_at": "2026-10-19T03:12:44Z", "parser": "acirl-sampling/1", "items": [
+      { "kind": "sampling_round", "site": "Blaxland", "activity": "acirl_water", "date": "2026-09-19", "section": "Annual", "note": "date disagrees with period August 2026" },
+      { "kind": "sampling_round", "site": "Blaxland", "activity": "als_lab", "date": "2026-09-19", "section": "Annual", "note": "date disagrees with period August 2026" } ] },
+    "AC102221": { "supplier": "ACIRL", "invoice_date": "2026-08-31", "source": "x.pdf", "read_at": "2026-10-19T03:12:44Z", "parser": "acirl-sampling/1", "items": [
+      { "kind": "sampling_round", "site": "Katoomba", "activity": "acirl_water", "date": "2026-09-14", "section": "Quarterly", "note": null },
+      { "kind": "sampling_round", "site": "Katoomba", "activity": "acirl_gas", "date": "2026-09-14", "section": "Quarterly", "note": null },
+      { "kind": "sampling_round", "site": "Katoomba", "activity": "als_lab", "date": "2026-09-14", "section": "Quarterly", "note": null } ] }
+  }
+}

@@ -43,6 +43,22 @@
        db_mtime = round(as.numeric(file.mtime(db)), 3))
 }
 
+# Ruling R8 (2026-10-19): the vault's `summary:` frontmatter, written by the
+# notes themselves so the hourly rewrite never wipes or stales one.
+.inbox_frontmatter <- function(summary) {
+  c("---", "summary:", paste0("  - '", gsub("'", "''", summary, fixed = TRUE), "'"), "---")
+}
+
+# "XX1234567 (Blaxland), ES2600001 (Katoomba)" for the work orders imported today.
+.inbox_imported_phrase <- function(imports) {
+  if (length(imports) == 0) return(NULL)
+  wos <- vapply(imports, function(w) {
+    site <- .inbox_or(w$site, NA_character_)
+    if (is.na(site)) as.character(w$name) else sprintf("%s (%s)", w$name, site)
+  }, character(1))
+  paste(unique(wos), collapse = ", ")
+}
+
 .inbox_num_same <- function(a, b) {
   a <- suppressWarnings(as.numeric(a))
   b <- suppressWarnings(as.numeric(b))
@@ -546,6 +562,8 @@ inbox_check <- function(input_dir, report_dir, now = Sys.time(),
 #' @param settle_minutes a folder is settled when no file changed this recently.
 #' @param keep_backups how many `monitoring_pre-auto-import_*.duckdb` to keep.
 #' @param dry_run if `TRUE`: no backup, no live-DB write, no removal, no state.
+#' @param checks `NULL` (no Flags section) or the check inputs for
+#'   [import_flags()], passed to every status-note refresh.
 #' @return (invisibly) a list: action, ran, locked, dry_run, started_at,
 #'   ended_at, folders_seen, folders_settled, folders_processed,
 #'   folders_arriving, folders, backup_path, errors, stale_lock.
@@ -553,7 +571,8 @@ inbox_check <- function(input_dir, report_dir, now = Sys.time(),
 inbox_run <- function(input_dir = st_config("input_dir"),
                       db = st_config("live_db"),
                       backup_dir, report_dir, now = Sys.time(),
-                      settle_minutes = 10, keep_backups = 10, dry_run = FALSE) {
+                      settle_minutes = 10, keep_backups = 10, dry_run = FALSE,
+                      checks = NULL) {
   checkmate::assert_string(input_dir)
   checkmate::assert_string(db)
   checkmate::assert_string(backup_dir)
@@ -561,6 +580,7 @@ inbox_run <- function(input_dir = st_config("input_dir"),
   checkmate::assert_number(settle_minutes, lower = 0)
   checkmate::assert_count(keep_backups)
   checkmate::assert_flag(dry_run)
+  checkmate::assert_list(checks, null.ok = TRUE)
 
   res <- list(
     action = NA_character_, ran = FALSE, locked = FALSE, dry_run = dry_run,
@@ -578,7 +598,8 @@ inbox_run <- function(input_dir = st_config("input_dir"),
   }
   dir.create(report_dir, recursive = TRUE, showWarnings = FALSE)
   if (action == "status") {
-    import_status(db, input_dir, report_dir, now = now, settle_minutes = settle_minutes)
+    import_status(db, input_dir, report_dir, now = now, settle_minutes = settle_minutes,
+                  checks = checks)
     .inbox_write_state(report_dir, input_dir, db, now, pending = FALSE)
     return(invisible(res))
   }
@@ -720,7 +741,7 @@ inbox_run <- function(input_dir = st_config("input_dir"),
       would_file
     )
     import_status(db, input_dir, report_dir, now = now,
-                  settle_minutes = settle_minutes, dry_run = banner)
+                  settle_minutes = settle_minutes, dry_run = banner, checks = checks)
     return(invisible(res))
   }
 
@@ -729,7 +750,8 @@ inbox_run <- function(input_dir = st_config("input_dir"),
   if (.inbox_day_has_news(report_dir, now)) {
     import_report(db, report_dir, now = now)
   }
-  import_status(db, input_dir, report_dir, now = now, settle_minutes = settle_minutes)
+  import_status(db, input_dir, report_dir, now = now, settle_minutes = settle_minutes,
+                checks = checks)
   if (!aborted) {
     .inbox_write_state(report_dir, input_dir, db, now,
                        pending = length(res$folders_arriving) > 0)
@@ -799,7 +821,11 @@ import_report <- function(db = st_config("live_db"), report_dir, now = Sys.time(
   n_folders <- length(unique(vapply(imports, function(w) w$folder, character(1))))
   n_open <- nrow(.inbox_open_reviews(db))
 
-  out <- c(sprintf("*Imports · %s · %d folder(s) imported today, %d review item(s) open*",
+  imp <- .inbox_imported_phrase(imports)
+  summary <- sprintf("Imports %s: %s; %d review item(s) open.", .inbox_syd(now, "%Y-%m-%d"),
+                     if (is.null(imp)) "nothing imported" else paste("imported", imp), n_open)
+  out <- c(.inbox_frontmatter(summary),
+           sprintf("*Imports · %s · %d folder(s) imported today, %d review item(s) open*",
                    last_time, n_folders, n_open),
            "", "## Imported today", "")
   if (length(imports) == 0) {
@@ -898,7 +924,9 @@ import_report <- function(db = st_config("live_db"), report_dir, now = Sys.time(
 #'
 #' Rewrites `<report_dir>/Import status.md` and `.import-status.json`: open
 #' review items, folders waiting in the inbox, the latest run's problems and
-#' the last 14 days of imports. Read-only on the DB.
+#' the last 14 days of imports. Read-only on the DB. With `checks`, also a
+#' Flags section from [import_flags()], each flag's `first_seen` carried over
+#' by key from the previous `.import-status.json`.
 #'
 #' @param db the live database.
 #' @param input_dir the inbox directory.
@@ -906,14 +934,20 @@ import_report <- function(db = st_config("live_db"), report_dir, now = Sys.time(
 #' @param now current time.
 #' @param settle_minutes settle window used to tell arriving from waiting.
 #' @param dry_run optional banner lines (a dry run).
+#' @param checks `NULL` (no Flags section, phase-1 output) or the `checks`
+#'   list of [import_flags()].
 #' @return the note's path, invisibly.
 #' @export
 import_status <- function(db = st_config("live_db"), input_dir, report_dir,
-                          now = Sys.time(), settle_minutes = 10, dry_run = NULL) {
+                          now = Sys.time(), settle_minutes = 10, dry_run = NULL,
+                          checks = NULL) {
   checkmate::assert_string(db)
   checkmate::assert_string(input_dir)
   checkmate::assert_string(report_dir)
+  checkmate::assert_list(checks, null.ok = TRUE)
   dir.create(report_dir, recursive = TRUE, showWarnings = FALSE)
+  # Read before .import-status.json is overwritten (first_seen carry-over).
+  fs <- if (is.null(checks)) NULL else .flags_for_status(db, now, checks, report_dir)
 
   rv <- .inbox_open_reviews(db)
   rv$created_at <- as.numeric(rv$created_at)
@@ -983,7 +1017,15 @@ import_status <- function(db = st_config("live_db"), input_dir, report_dir,
     }
   }
 
-  out <- c(sprintf("*Import status · updated %s · %d review item(s) open, %d folder(s) waiting*",
+  imp <- .inbox_imported_phrase(unlist(lapply(.inbox_today_lines(report_dir, now),
+                                                .inbox_line_imports), recursive = FALSE))
+  summary <- paste0(
+    sprintf("Import status updated %s: %d review item(s) open", .inbox_syd(now, "%Y-%m-%d %H:%M"), n_open),
+    if (!is.null(fs)) paste0("; ", .flags_summary(fs)) else "",
+    sprintf("; %d folder(s) waiting", n_waiting),
+    if (is.null(imp)) "; nothing imported today." else paste0("; imported today: ", imp, "."))
+  out <- c(.inbox_frontmatter(summary),
+           sprintf("*Import status · updated %s · %d review item(s) open, %d folder(s) waiting*",
                    .inbox_syd(now, "%Y-%m-%d %H:%M"), n_open, n_waiting), "")
   if (!is.null(dry_run)) out <- c(out, dry_run, "")
 
@@ -1012,6 +1054,8 @@ import_status <- function(db = st_config("live_db"), input_dir, report_dir,
       out <- c(out, sprintf("%d non-blocking self-precedence note(s), not itemised.", n_notes), "")
     }
   }
+
+  if (!is.null(fs)) out <- c(out, .flags_note_lines(fs))
 
   out <- c(out, "## Waiting", "")
   out <- c(out, if (length(waiting)) waiting else "Nothing waiting.", "")
@@ -1043,6 +1087,7 @@ import_status <- function(db = st_config("live_db"), input_dir, report_dir,
     problems = as.list(problems),
     recent_imports = recent
   )
+  if (!is.null(fs)) js <- c(js, .flags_json(fs))
   jsonlite::write_json(js, file.path(report_dir, ".import-status.json"),
                        auto_unbox = TRUE, pretty = TRUE, na = "null", digits = NA)
   invisible(path)

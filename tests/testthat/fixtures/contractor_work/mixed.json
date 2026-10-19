@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "invoices": {
+    "AC200001": { "supplier": "ACIRL", "invoice_date": "2026-08-31", "source": "x.pdf", "read_at": "2026-10-19T03:12:44Z", "parser": "acirl-sampling/1", "items": [
+      { "kind": "sampling_round", "site": "Blaxland", "activity": "acirl_water", "date": "2026-10-01", "section": "Monthly", "note": null },
+      { "kind": "works_period", "site": "Blaxland", "activity": "acirl_water", "date": "2026-10-02", "section": "X", "note": null },
+      { "kind": "sampling_round", "site": "Lithgow", "activity": "acirl_gas", "date": "2026-10-01", "section": "Monthly", "note": null },
+      { "kind": "sampling_round", "site": "Katoomba", "activity": "bogus_stream", "date": "2026-10-01", "section": "Monthly", "note": null },
+      { "kind": "sampling_round", "site": "Katoomba", "activity": "acirl_dust", "date": "2026-10-03", "section": "Monthly Dust", "note": null } ] },
+    "AC200002": { "supplier": "ACIRL", "invoice_date": "2026-08-31", "source": "x.pdf", "read_at": "2026-10-19T03:12:44Z", "parser": "acirl-sampling/1", "items": [], "note": "could not read" },
+    "INV-7875": { "supplier": "BLUETONGUE", "invoice_date": "2026-10-05", "source": "y.pdf", "read_at": "2026-10-19T03:12:44Z", "parser": "bt-works/1", "items": [
+      { "kind": "works_period", "site": "Katoomba", "from": "2026-10-06", "to": "2026-10-09" } ] }
+  }
+}

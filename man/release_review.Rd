@@ -17,7 +17,10 @@ release_review(
 \item{overrides}{a named list; \code{date_start} (exposure, the sample's
 \code{date_start}) and \code{date} (collection, the sample's \code{date}) are each a
 \code{Date} (or an ISO string) that replaces the withheld rows' own. Omit a
-name to keep the date the row arrived with.}
+name to keep the date the row arrived with. \code{sample} places the rows of
+a \code{sample_ambiguous} item (A91): one of the item's candidate sample
+uuids, or \code{"new"} for a new sample. It is required for that kind, and any
+other uuid is refused.}
 
 \item{resolved_by}{who released it - mandatory, no default (A55).}
 

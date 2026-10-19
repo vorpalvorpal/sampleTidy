@@ -103,9 +103,16 @@ release_review(uuid, overrides = list(), resolved_by, db = st_config("live_db"))
 # the dated "<date>-imports.md" and standing "Import status.md" notes.
 inbox_signature(input_dir)
 inbox_check(input_dir, report_dir, now = Sys.time(), db = st_config("live_db"))
-inbox_run(input_dir = st_config("input_dir"), db = st_config("live_db"), backup_dir, report_dir, now = Sys.time(), settle_minutes = 10, keep_backups = 10, dry_run = FALSE)
+inbox_run(input_dir = st_config("input_dir"), db = st_config("live_db"), backup_dir, report_dir, now = Sys.time(), settle_minutes = 10, keep_backups = 10, dry_run = FALSE, checks = NULL)
 import_report(db, report_dir, now = Sys.time())
-import_status(db, input_dir, report_dir, now = Sys.time(), settle_minutes = 10)
+import_status(db, input_dir, report_dir, now = Sys.time(), settle_minutes = 10, checks = NULL)
+# PLAN-18 section 4 / 4.5 (phase 2, added 2026-10-19): the status note's Flags.
+# checks = list(schedule, limits, requirements, points, invoices); read-only.
+import_flags(db = st_config("live_db"), now = Sys.time(), checks)
+# PLAN-18 4.6 (rewritten 2026-10-19; superseded the PDF parser acirl_invoices()):
+# t1's contractor-work.json -> checks$invoices rows (site, stream, sampled_on,
+# ref, section, note); read-only; missing file -> zero rows.
+sampling_rounds(ledger)
 
 # plan 09 R-9.7 / R-9.11, added 2026-07-28 (Robin's ruling). Both operator-run
 # tools, hence the A16 human-callable convention.

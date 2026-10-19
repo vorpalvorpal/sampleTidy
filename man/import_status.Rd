@@ -10,7 +10,8 @@ import_status(
   report_dir,
   now = Sys.time(),
   settle_minutes = 10,
-  dry_run = NULL
+  dry_run = NULL,
+  checks = NULL
 )
 }
 \arguments{
@@ -25,6 +26,9 @@ import_status(
 \item{settle_minutes}{settle window used to tell arriving from waiting.}
 
 \item{dry_run}{optional banner lines (a dry run).}
+
+\item{checks}{\code{NULL} (no Flags section, phase-1 output) or the \code{checks}
+list of \code{\link[=import_flags]{import_flags()}}.}
 }
 \value{
 the note's path, invisibly.
@@ -32,5 +36,7 @@ the note's path, invisibly.
 \description{
 Rewrites \verb{<report_dir>/Import status.md} and \code{.import-status.json}: open
 review items, folders waiting in the inbox, the latest run's problems and
-the last 14 days of imports. Read-only on the DB.
+the last 14 days of imports. Read-only on the DB. With \code{checks}, also a
+Flags section from \code{\link[=import_flags]{import_flags()}}, each flag's \code{first_seen} carried over
+by key from the previous \code{.import-status.json}.
 }
