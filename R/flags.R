@@ -9,10 +9,13 @@
 
 .flags_checks <- c("overdue", "invoiced_not_received", "missing_point",
                    "missing_analytes", "licence_limit", "gas_criterion",
-                   "site_history", "rl_change", "unit_change")
+                   "site_history", "rl_change", "unit_change",
+                   # PLAN-19 phase 1 (section 6 order; phase-1b/2 checks slot in between)
+                   "qc_dup_rpd", "qc_blank_detect", "qc_missing", "qc_unresolved",
+                   "lab_qc_missing")
 
 .flags_cols <- c("check", "site", "feature", "analyte", "date", "value", "unit",
-                 "threshold", "detail", "key", "source")
+                 "threshold", "detail", "key", "source", "action")
 
 .flags_streams <- c("acirl_water", "acirl_gas", "acirl_dust", "als_lab")
 
@@ -25,8 +28,17 @@
   gas_criterion = "a gas or dust result is above an LEL or EPA criterion",
   site_history = "a result is far outside the point's own history",
   rl_change = "the reporting limit rose above its 2-year maximum",
-  unit_change = "the reporting unit changed since the last result"
+  unit_change = "the reporting unit changed since the last result",
+  qc_dup_rpd = "a field duplicate disagrees with its parent point",
+  qc_blank_detect = "a field QC blank has a detection",
+  qc_missing = "a QC round lacks a required QC sample",
+  qc_unresolved = "a QC sample cannot be paired with its point or round",
+  lab_qc_missing = "no readable ALS QC report (QCI) for a work order"
 )
+
+# PLAN-19 R-19.5: these checks never see a QC sample.
+.flags_qc_blind <- c("missing_point", "missing_analytes", "licence_limit", "gas_criterion",
+                     "site_history", "rl_change", "unit_change")
 
 # ---- small helpers ------------------------------------------------------------
 
@@ -34,12 +46,14 @@
   data.frame(check = character(), site = character(), feature = character(),
              analyte = character(), date = character(), value = numeric(),
              unit = character(), threshold = character(), detail = character(),
-             key = character(), source = character(), stringsAsFactors = FALSE)
+             key = character(), source = character(), action = character(),
+             stringsAsFactors = FALSE)
 }
 
 # One check's rows; `date` is a Date (formatted at the end, after sorting).
 .flags_rows <- function(check, key, site, date, feature = NA, analyte = NA,
-                        value = NA, unit = NA, threshold = NA, detail = NA, source = NA) {
+                        value = NA, unit = NA, threshold = NA, detail = NA, source = NA,
+                        action = NA) {
   n <- length(key)
   if (n == 0) return(NULL)
   ch <- function(x) rep_len(as.character(x), n)
@@ -47,7 +61,7 @@
              analyte = ch(analyte), date = rep_len(as.Date(date), n),
              value = rep_len(as.numeric(value), n), unit = ch(unit),
              threshold = ch(threshold), detail = ch(detail), key = ch(key),
-             source = ch(source), stringsAsFactors = FALSE)
+             source = ch(source), action = ch(action), stringsAsFactors = FALSE)
 }
 
 .flags_fmt <- function(x) trimws(formatC(x, digits = 6, format = "fg"))
@@ -166,20 +180,29 @@
 .flags_load <- function(con, now) {
   s <- DBI::dbGetQuery(con, "
     SELECT s.uuid AS sample, s.uuid_project AS project_uuid, p.name AS project,
-           p.type AS ptype, f.name AS feature, f.site AS site, f.matrix AS matrix,
+           p.type AS ptype, f.uuid AS feature_uuid, f.name AS feature, f.site AS site,
+           f.matrix AS matrix,
            COALESCE(s.datetime, s.date) AS ts
       FROM \"sample\" s
       LEFT JOIN feature_alias fa ON fa.uuid = s.uuid_feature_alias
       LEFT JOIN feature f ON f.uuid = fa.uuid_feature
       LEFT JOIN project p ON p.uuid = s.uuid_project")
-  a <- DBI::dbGetQuery(con, "
+  an_cols <- DBI::dbListFields(con, "analyte")
+  a <- DBI::dbGetQuery(con, sprintf("
     SELECT a.uuid AS analysis, a.uuid_sample AS sample, lm.uuid_analyte AS uuid_analyte,
            an.name AS analyte, a.value AS value, a.quantified AS quantified,
            a.rl_low AS rl_low, lm.organisation AS lorg, lm.method AS method,
-           COALESCE(lm.units, an.units) AS units, an.units AS analyte_units
+           COALESCE(lm.units, an.units) AS units, an.units AS analyte_units,
+           %s AS atype, %s AS lab_contaminant
       FROM analysis a
       JOIN lab_method lm ON lm.uuid = a.uuid_lab
-      JOIN analyte an ON an.uuid = lm.uuid_analyte")
+      JOIN analyte an ON an.uuid = lm.uuid_analyte",
+    if ("type" %in% an_cols) "an.type" else "CAST(NULL AS VARCHAR)",
+    if ("lab_contaminant" %in% an_cols) "an.lab_contaminant" else "CAST(FALSE AS BOOLEAN)"))
+  a$lab_contaminant <- a$lab_contaminant %in% TRUE
+  # PLAN-19 R-19.5: a sample on a QC feature is `qc`.
+  qcf <- .qc_features(con)
+  s$qc <- !is.na(s$feature_uuid) & s$feature_uuid %in% qcf$uuid_feature
   cl <- if (DBI::dbExistsTable(con, "change_log")) DBI::dbGetQuery(con, "
     SELECT tbl, uuid_row, \"at\" AS at, actor, source_hash FROM change_log
      WHERE action = 'insert' AND tbl IN ('sample', 'analysis')") else
@@ -230,12 +253,38 @@
 
   i <- match(a$sample, s$sample)
   for (cl_name in c("feature", "site", "matrix", "date", "ym", "gas", "new", "project",
-                    "project_uuid")) {
+                    "project_uuid", "qc")) {
     a[[cl_name]] <- s[[cl_name]][i]
   }
   a$quantified <- a$quantified %in% TRUE
   a <- a[!is.na(a$feature) & !is.na(a$date), , drop = FALSE]
-  list(con = con, samples = s, streams = ss, results = a)
+  # PLAN-19 inputs: QC features, open qc_label_conflict work orders, lab QC
+  # reports (NULL before migration 048).
+  rq <- if (DBI::dbExistsTable(con, "review_queue")) DBI::dbGetQuery(con, "
+    SELECT DISTINCT work_order FROM review_queue
+     WHERE kind = 'qc_label_conflict' AND status = 'open' AND work_order IS NOT NULL")$work_order else
+    character(0)
+  lqr <- if (DBI::dbExistsTable(con, "lab_qc_report")) DBI::dbGetQuery(con, "
+    SELECT work_order, kind, status, message FROM lab_qc_report") else NULL
+  # Work orders holding an archived QCI asset (parsed or not).
+  qci_wo <- if (!is.null(lqr) && DBI::dbExistsTable(con, "asset") &&
+                all(c("filename", "uuid_project") %in% DBI::dbListFields(con, "asset"))) {
+    DBI::dbGetQuery(con, "SELECT DISTINCT p.name FROM asset a JOIN project p ON p.uuid = a.uuid_project
+                           WHERE a.filename ILIKE '%\\_QCI%' ESCAPE '\\'")$name
+  } else character(0)
+  list(con = con, samples = s, streams = ss, results = a, qc_features = qcf,
+       qc_tables = DBI::dbExistsTable(con, "qc_feature"),
+       qc_label_conflict_wo = as.character(rq), lab_qc_report = lqr,
+       qci_asset_wo = as.character(qci_wo))
+}
+
+# The image without QC samples (R-19.5), for the checks in .flags_qc_blind.
+.flags_drop_qc <- function(img) {
+  keep <- img$samples$sample[!(img$samples$qc %in% TRUE)]
+  img$samples <- img$samples[img$samples$sample %in% keep, , drop = FALSE]
+  img$streams <- img$streams[img$streams$sample %in% keep, , drop = FALSE]
+  img$results <- img$results[img$results$sample %in% keep, , drop = FALSE]
+  img
 }
 
 # ---- 4.1 overdue / invoiced, not received -----------------------------------------
@@ -700,6 +749,7 @@
   site_history = .flags_site_history,
   rl_change = .flags_rl_change,
   unit_change = .flags_unit_change
+  # PLAN-19's QC checks are appended in R/qc.R (sourced after this file).
 )
 
 #' Deterministic checks behind the status note's Flags section
@@ -717,20 +767,24 @@
 #' @param db the database file.
 #' @param now current time; "today" is its Australia/Sydney date, and recent
 #'   deliveries are those with a `change_log` insert in the 90 days before it.
-#' @param checks `list(schedule, limits, requirements, points, invoices)`. The
+#' @param checks `list(schedule, limits, requirements, points, invoices, qc)`. The
 #'   first four are each a CSV path or a data.frame (`expected_schedule.csv`,
 #'   `epa_licence_limits.csv`, `epa_licence_requirements.csv`,
 #'   `epa_licence_points.csv`); `invoices` is `data.frame(site, stream,
-#'   sampled_on, ref)` or `NULL`.
+#'   sampled_on, ref)` or `NULL`. `qc` (PLAN-19) is `list(criteria,
+#'   requirements)`, each a CSV path or a data.frame (`qc_criteria.csv`,
+#'   `qc_requirements.csv`); `NULL` disables the `qc_*` checks.
 #' @return a data.frame, one row per flag, columns `check, site, feature,
-#'   analyte, date, value, unit, threshold, detail, key`, ordered by check then
-#'   date (newest first).
+#'   analyte, date, value, unit, threshold, detail, key, source, action`,
+#'   ordered by check then date (newest first). `action` (PLAN-19 R-19.22) is
+#'   one of `resample`, `reanalyse`, `ask_acirl`, `chase`, `qualify` for a QC
+#'   flag and `NA` otherwise.
 #' @export
 import_flags <- function(db = st_config("live_db"), now = Sys.time(), checks) {
   checkmate::assert_string(db)
   checkmate::assert_posixct(now, len = 1, any.missing = FALSE)
   checkmate::assert_list(checks, names = "unique")
-  bad <- setdiff(names(checks), c("schedule", "limits", "requirements", "points", "invoices"))
+  bad <- setdiff(names(checks), c("schedule", "limits", "requirements", "points", "invoices", "qc"))
   if (length(bad)) stop("Unknown element(s) of `checks`: ", paste(bad, collapse = ", "))
   if (!file.exists(db)) stop("Database not found: ", db)
   con <- .inbox_read_con(db)
@@ -741,9 +795,12 @@ import_flags <- function(db = st_config("live_db"), now = Sys.time(), checks) {
   errors <- character(0)
   rows <- list()
   img <- tryCatch(.flags_load(con, now), error = function(e) e)
+  img_nq <- if (inherits(img, "error")) img else .flags_drop_qc(img)
   for (ck in .flags_checks) {
-    r <- if (inherits(img, "error")) img else
-      tryCatch(.flags_fns[[ck]](img, checks, today), error = function(e) e)
+    im <- if (ck %in% .flags_qc_blind) img_nq else img
+    if (!inherits(im, "error")) im$prior <- rows
+    r <- if (inherits(im, "error")) im else
+      tryCatch(.flags_fns[[ck]](im, checks, today), error = function(e) e)
     if (inherits(r, "error")) {
       errors[[ck]] <- conditionMessage(r)
     } else if (!is.null(r) && nrow(r) > 0) {
