@@ -84,7 +84,46 @@
 #' @keywords internal
 #' @noRd
 .st_in_txn <- function(con) {
-  isTRUE(attr(con, "sampletidy_mutate_txn", exact = TRUE))
+  !is.null(.st_txn_token(con))
+}
+
+# The tag is a per-transaction token string (not a bare TRUE) so that side
+# effects outside the DB (archive_file()'s copied directories) can be
+# registered against the enclosing transaction and undone if it rolls back.
+#' @keywords internal
+#' @noRd
+.st_txn_token <- function(con) {
+  tok <- attr(con, "sampletidy_mutate_txn", exact = TRUE)
+  if (is.character(tok) && length(tok) == 1L) tok else NULL
+}
+
+# token -> list of cleanup functions, run (errors swallowed) on rollback and
+# discarded on commit. Only populated while a transaction is open.
+.st_txn_cleanups <- new.env(parent = emptyenv())
+
+#' Register `fn` to run if the enclosing db_transaction() rolls back
+#'
+#' No-op (returns FALSE) outside a transaction.
+#' @keywords internal
+#' @noRd
+.st_on_rollback <- function(con, fn) {
+  tok <- .st_txn_token(con)
+  if (is.null(tok)) return(invisible(FALSE))
+  .st_txn_cleanups[[tok]] <- c(.st_txn_cleanups[[tok]], list(fn))
+  invisible(TRUE)
+}
+
+#' @keywords internal
+#' @noRd
+.st_run_cleanups <- function(tok, run) {
+  fns <- .st_txn_cleanups[[tok]]
+  if (exists(tok, envir = .st_txn_cleanups, inherits = FALSE)) {
+    rm(list = tok, envir = .st_txn_cleanups)
+  }
+  if (run) {
+    for (f in rev(fns)) try(f(), silent = TRUE)
+  }
+  invisible(NULL)
 }
 
 #' Run `fn(con)` inside exactly one mutation-layer transaction
@@ -112,16 +151,19 @@ db_transaction <- function(con, fn) {
   }
 
   DBI::dbBegin(con)
-  attr(con, "sampletidy_mutate_txn") <- TRUE
+  tok <- uuid::UUIDgenerate()
+  attr(con, "sampletidy_mutate_txn") <- tok
 
   result <- tryCatch(
     {
       out <- fn(con)
       DBI::dbCommit(con)
+      .st_run_cleanups(tok, run = FALSE)
       out
     },
     error = function(e) {
       try(DBI::dbRollback(con), silent = TRUE)
+      .st_run_cleanups(tok, run = TRUE)
       cli::cli_abort(
         "Mutation transaction failed and was rolled back: {conditionMessage(e)}",
         class = "sampletidy_error",
