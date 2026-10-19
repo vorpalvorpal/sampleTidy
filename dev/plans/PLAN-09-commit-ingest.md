@@ -613,3 +613,40 @@ implementation of it, and that drift is exactly what
   `.ct_ensure_project(event$work_order)` and produces no review rows;
 - the archived ACIRL workbook lands on its **report** project, not the anonymous
   orphan row.
+
+### 2026-10-19 corpus finding: never UPDATE a referenced project row (Bug D)
+
+**Measured** (`scratchpad/2026-10-19-corpus/`, pass 1, A111–A115): all five
+`2400-7399-04 April 2024 Monthly Blaxland WMF` workbooks failed with *"Violates
+foreign key constraint because key uuid_parent: ebecc431… is still referenced"*,
+and the whole event rolled back. The live state they meet (live since 2026-10-17):
+report `2400-7399-04` is a **root** (`uuid_parent` NULL) and is already the parent
+of `ES2610538`. The April workbook cites an order sitting under the campaign
+`Monthly monitoring`, so `.ct_ensure_report_project()` derives a grandparent and
+takes rule 3's "fill the parent in later" branch: `db_update(project,
+uuid_parent, uuid_root)` on the report row. duckdb 1.4.1 runs that UPDATE as
+delete+insert and the live `project.uuid_parent → project.uuid` self-FK refuses
+it (STATE.md quirk 1; the same limitation as F.14 / migrations 008, 021). The test
+schema in `helper-db.R` has no project self-FK, which is why no test saw it.
+
+**Decided behaviour.** Inside `commit_event()`, a project row that any other
+project row references (`EXISTS (SELECT 1 FROM project WHERE uuid_parent = it)`)
+is **never UPDATEd**. When rule 3 would fill such a report's parent, the report
+is treated exactly like a report whose parent is already set: it stays as it is
+(a root here) and the grandparent passed on is its **current** parent. Rule 5
+then applies unchanged to each cited order: one under a campaign that is not the
+report's parent keeps that campaign, raises `project_parent_conflict` (target:
+the order), and the samples still attach to the order. The data commits. The
+campaign link the report did not get is recorded by that review item, and if it
+is wanted it is applied by a numbered migration in separate commits. It is not
+done in the commit transaction, because no ordering inside one transaction
+avoids the quirk ("FK checks do not see deletes made inside an open transaction").
+A report with **no** referencing rows keeps rule 3's fill-in as today.
+
+Criteria (`tests/testthat/test-corpus-2026-10-19-regressions.R`, `fk_project_table()`
+rebuilds `project` with the live FK and indexes):
+- the fixture really refuses an UPDATE of a referenced project row (pins the premise);
+- the event commits, its file reaches a terminal state, the analysis lands;
+- the report row is unchanged (still a root, no `change_log` update), its child too;
+- the cited order keeps its campaign, exactly one `project_parent_conflict`
+  targets it, and the new samples sit on it.

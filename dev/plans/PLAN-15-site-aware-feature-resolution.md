@@ -260,6 +260,30 @@ test writer would otherwise have to guess it. Adjudication record:
   already-committed sample, because that sample's alias has `uuid_feature IS NULL`.
   **The same measurement would commit twice.** Promotion stays with
   `confirm_feature_aliases()`, which already re-points and merges collisions.
+- **2026-10-19 corpus finding: the REVERSE flip duplicates too (Bug C).** The
+  bullet above covers *first pending, later resolved*. The corpus produced
+  *first resolved, later pending*: `B.G1` in `2400-7127-05 May 2021 …Blaxland
+  WMF.XLS` resolved structurally onto `B.G001` (live until 2023-02-08). The 2023
+  Blaxland gas workbooks then carried `B.G1` dated after that `date_end`, B.5
+  emptied the hit, and commit minted the dangling alias `b.g1`. That alias is
+  date-blind, so from then on this gate keeps `b.g1` away from Layer 2 on
+  **every** date. Re-ingesting the May-2021 workbook in other bytes made its rows
+  `feature_pending`. `.rc_find_existing()` then looked only at `b.g1`'s own samples
+  and could not see the committed `B.G001` sample, so 99 gas readings committed
+  twice (pass 3, `scratchpad/2026-10-19-corpus/`; +4×2 more are the K.G365/366
+  rows migration 032 deleted, re-created by the deliberate re-import, which is
+  expected and separate). Gas has no work-order re-ingest guard, so
+  this lookup is all that protects it. **Decided behaviour:** the gate stays as it
+  is: a key with a dangling alias is **never auto-resolved**, so NEW data still
+  goes pending and to review. But the existing-row lookup for a feature-pending
+  row ALSO searches the feature that the row's Layer-2/Layer-3 structural parse
+  reaches **live at its `sample_date`** (the hit that the gate suppressed:
+  `.rc_structural_hit()` plus B.5). An A14/A92-equal committed analysis there makes
+  the row `already_present`, with no new sample and no new analysis. With no
+  such match the row behaves as today. Re-ingesting
+  the same measurement adds 0 rows whichever side of the pending/resolved
+  boundary each ingest fell on. Test: `test-corpus-2026-10-19-regressions.R`
+  ("2026-10-19 C"), on `f-0006 T.S06` (`date_end 2020-06-30`) with raw `T S6`.
 
 <!-- block: B-15.B5 -->
 ### B.5 Liveness

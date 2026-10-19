@@ -701,6 +701,10 @@
 #' campaigns (measured: exactly one workbook, `2400-7286-03`, whose two orders
 #' sit under `EPL annual` and `2022 March pollution incidents`) leave the report
 #' a root rather than asserting a campaign membership we cannot justify.
+#'
+#' **Never UPDATE a referenced row** (2026-10-19 Bug D, PLAN-09): an existing
+#' report that is already some project's parent keeps its (empty) parent, as
+#' duckdb 1.4.1's self-FK refuses the UPDATE; rule 5 flags the cited orders.
 #' @keywords internal
 #' @noRd
 .ct_ensure_report_project <- function(con, report_no, cited, reason,
@@ -754,7 +758,18 @@
 
   existing <- .ct_project_by_name(con, report_no)
   if (!is.null(existing)) {
-    if (is.na(existing$uuid_parent[[1]]) && !is.na(grandparent)) {
+    # 2026-10-19 Bug D (PLAN-09): a project row another project row references
+    # is NEVER UPDATEd here. duckdb 1.4.1 runs the UPDATE as delete+insert and
+    # the live `project.uuid_parent -> project.uuid` self-FK refuses it, rolling
+    # the whole event back. Such a report is treated like one whose parent is
+    # already set: it stays as it is and its CURRENT parent is passed on, so
+    # rule 5 flags each cited order under another campaign
+    # (`project_parent_conflict`) and the samples still attach to the order.
+    referenced <- DBI::dbGetQuery(
+      con, "SELECT EXISTS (SELECT 1 FROM project WHERE uuid_parent = ?) AS r",
+      params = list(existing$uuid[[1]])
+    )$r[[1]]
+    if (is.na(existing$uuid_parent[[1]]) && !is.na(grandparent) && !isTRUE(referenced)) {
       root <- .ct_project_root_of(.ct_project_by_uuid(con, grandparent))
       db_update(
         con, "project",
