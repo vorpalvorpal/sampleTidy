@@ -77,10 +77,10 @@ test_that("Appendix A: the QCI parser reproduces the corpus counts", {
   expect_setequal(unique(lcs$wo), c("ES2011067", "ES2011595", "ES2027610", "ES2027611",
                                     "ES2027719", "ES2027720", "ES2028155", "ES2028156",
                                     "ES2028157", "ES2028911", "ES2303512", "ES2401369"))
-  expect_equal(sum(lcs$method == "EA010P" & lcs$value_pct < lcs$limit_low), 11)
+  expect_equal(sum(lcs$method == "EA010P" & lcs$value_pct < lcs$limit_low), 10)
   expect_true(all(lcs$value_pct[lcs$method == "EA010P"] >= 89.8 &
                     lcs$value_pct[lcs$method == "EA010P"] <= 94.2))
-  expect_equal(sum(lcs$method == "EK061G" & lcs$value_pct > lcs$limit_high), 2)
+  expect_equal(sum(lcs$method == "EK061G" & lcs$value_pct > lcs$limit_high), 3)
   expect_true(all(is.na(lcs$lab_id)))
 
   # A.3 MS: 184 rows, 176 not determined, 8 numeric - all on Anonymous samples.
@@ -104,7 +104,10 @@ test_that("Appendix A: the QCI parser reproduces the corpus counts", {
   expect_equal(as.vector(table(factor(substr(ms$lab_id, 1, 2), c("ES", "EN", "ED", "EM")))),
                c(164, 12, 7, 1))
 
-  # A.4 holding time: method blocks = distinct (file, method).
+  # A.4 holding time: method blocks = distinct (file, method). Corrected
+  # 2026-10-19 against the corpus: Appendix A counted method title lines
+  # (ES2608954 has two EP080/071 blocks; ES2413933 repeats EK067G across a
+  # page break), and its LCS split was 10 EC-low / 3 TKN-high (ES2401369).
   ht <- o[o$kind == "holding_time", , drop = FALSE]
   expect_equal(length(unique(ht$file)), 143)
   blocks <- unique(ht[, c("file", "method")])
@@ -112,11 +115,12 @@ test_that("Appendix A: the QCI parser reproduces the corpus counts", {
   expect_equal(as.vector(tb[c("EA005P", "EP030", "EK057G", "EK071G", "ED093F", "EA065",
                               "EA006", "EP005", "EA025", "EP080/071", "EK067G", "EK061G",
                               "EK059G", "EK055G", "EA015")]),
-               c(137, 44, 22, 17, 8, 8, 8, 4, 3, 2, 2, 1, 1, 1, 1))
-  expect_equal(nrow(blocks), 259)
+               c(137, 44, 22, 17, 8, 8, 8, 4, 3, 1, 1, 1, 1, 1, 1))
+  expect_equal(nrow(blocks), 257)
   expect_equal(length(unique(blocks$file[blocks$method != "EA005P"])), 66)
   expect_equal(range(as.integer(ht$days_overdue)), c(1L, 16L))
-  expect_equal(nrow(unique(ht[, c("wo", "client_id")])), 412)
+  # 412 by method block; ES2608954's two EP080/071 blocks share a client ID
+  expect_equal(nrow(unique(ht[, c("wo", "method", "client_id")])), 411)
 
   # A.5 frequency outliers in 76 files.
   expect_equal(length(unique(o$file[o$kind == "frequency"])), 76)

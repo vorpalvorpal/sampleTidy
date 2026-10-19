@@ -454,7 +454,11 @@ test_that("R-10.6: NAMESPACE exports equal the CONTRACT-pinned public API exactl
     # 2026-07-23 until they were found by hand. A backlog nobody can list is a
     # backlog nobody drains - the same reasoning that put `resolve_review`
     # above on the public surface.
-    "ingest_inbox", "quarantine_report"
+    "ingest_inbox", "quarantine_report",
+    # PLAN-19 R-19.17, added 2026-10-19 and added to CONTRACT.md's public-API
+    # list in the same change: operator-run backfill of ALS QC reports from
+    # retained assets (migration 052 calls it).
+    "lab_qc_backfill"
   )
   actual <- getNamespaceExports("sampleTidy")
   expect_setequal(actual, pinned)
@@ -476,7 +480,11 @@ test_that("R-10.6: DESCRIPTION Imports equal the CONTRACT-pinned set", {
               # offers JSON serialisation, so dropping it would mean
               # hand-writing escaping and full-precision number formatting,
               # which is the defect class PLAN-16 exists to eliminate.
-              "jsonlite")
+              "jsonlite",
+              # `pdftools` added by PLAN-19 R-19.16 (Robin 2026-10-19: parse ALS
+              # lab QC now) and added to CONTRACT.md in the same change: the
+              # QA/QC Compliance Assessment is a PDF, read at ingest.
+              "pdftools")
   # Read the package's OWN metadata rather than walking up to the source
   # tree: under `R CMD check` the tests run from `sampleTidy.Rcheck/tests/
   # testthat`, where `../../DESCRIPTION` does not exist, so a path-walk makes

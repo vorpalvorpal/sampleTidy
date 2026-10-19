@@ -751,3 +751,10 @@ byte-for-byte; map point and place names):
 | ES2607384_0_QCI (0 bytes) | `unreadable` path |
 | ES2626883_0_ENMRG.CSV | Secondary-ID row with blank types and EPA numbers |
 | ES2609470_0_QC.pdf (phase 3) | DUP/MB/LCS/MS with QC lots, single-dash IDs |
+
+**Appendix A corrections (2026-10-19, verified against the raw corpus text when the
+parser was calibrated):** the LCS failures are 10 EC-low and 3 TKN-high; the third
+TKN row is ES2401369 (102% vs 69.0–101%). Holding-time method blocks counted as
+distinct (file, method) number 257, not 259: ES2608954 has two EP080/071 blocks
+(TPH and TRH), and ES2413933 repeats its EK067G title across a page break.
+Distinct (work order, method, client ID) is 411.
