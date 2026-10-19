@@ -759,6 +759,7 @@
     rows$feature_pending <- logical(0)
     rows$alias_key <- character(0)
     rows$feature_resolution <- character(0)
+    rows$uuid_feature_gated <- character(0)
     return(list(kept = rows, review = .rc_proto_review()))
   }
 
@@ -792,6 +793,10 @@
   resolution <- rep(NA_character_, n)
   # E.7/R2: per row, the features a self arm SHADOWED (NULL = no override).
   shadowed <- vector("list", n)
+  # 2026-10-19 Bug C (PLAN-15 B.4): the live structural hit the B.4 gate
+  # SUPPRESSED, per row. Never a resolution - only a second place for
+  # `.rc_three_way()` to look for an already-committed equal measurement.
+  gated_hit <- rep(NA_character_, n)
   feat_name <- function(u) {
     nm <- registry$feature$name[match(u, registry$feature$uuid)]
     if (length(nm) == 0 || is.na(nm)) u else nm
@@ -867,7 +872,13 @@
     struct_point[[i]] <- p$point
     # B.4 gate: any alias row at all (live, expired or dangling) keeps this
     # key with Layer 1 / the operator. B.2: a direct boundary suggests only.
-    if (!p$boundary || .rc_alias_rows_exist(alias_key[[i]], registry)) next
+    if (!p$boundary) next
+    if (.rc_alias_rows_exist(alias_key[[i]], registry)) {
+      # 2026-10-19 Bug C: the gate suppresses the hit but the row still
+      # remembers it, for the existing-row lookup ONLY (`.rc_three_way()`).
+      gated_hit[[i]] <- .rc_structural_hit(p$site, p$point, index, row_dates[[i]], registry)
+      next
+    }
     hit <- .rc_structural_hit(p$site, p$point, index, row_dates[[i]], registry)
     if (is.na(hit)) next
     self <- .rc_self_alias(hit, registry)
@@ -899,7 +910,10 @@
       struct_point[[i]] <- point
       # B.4/C.3: curation (including a dangling pending alias) always wins -
       # suggest, never resolve.
-      if (.rc_alias_rows_exist(alias_key[[i]], registry)) next
+      if (.rc_alias_rows_exist(alias_key[[i]], registry)) {
+        gated_hit[[i]] <- .rc_structural_hit(l3, point, index, row_dates[[i]], registry)
+        next
+      }
       hit <- .rc_structural_hit(l3, point, index, row_dates[[i]], registry)
       if (is.na(hit)) next
       self <- .rc_self_alias(hit, registry)
@@ -919,6 +933,7 @@
   rows$alias_key <- alias_key
   # Rides to COMMIT, which writes the `change_log` provenance row (C.4).
   rows$feature_resolution <- resolution
+  rows$uuid_feature_gated <- gated_hit
   # C.4: confidence rides on the clean row's OWN field (change_log has no
   # confidence column). A re-derived resolution is never as good as curation.
   if ("confidence" %in% names(rows)) {
@@ -2113,6 +2128,11 @@
 #' physical storage order happens to emit first - not a stable property
 #' across compaction/checkpoint - and that uuid becomes `existing_uuid` /
 #' `uuid_existing` / `supersedes` on the caller's outcome.
+#'
+#' 2026-10-19 Bug C (PLAN-15 B.4): for a feature-pending row the caller makes a
+#' SECOND call on `uuid_feature_gated` (the live structural hit the B.4 gate
+#' suppressed) and accepts it only when the values are equal - see
+#' `.rc_three_way()`.
 #' @return a one-row data frame, or `NULL` if no candidate.
 #' @keywords internal
 #' @noRd
@@ -2701,6 +2721,30 @@
                       value_raw = rows$value_raw[[i]]),
       work_orders = c(event$work_order, .ct_event_als_work_orders(event), rows$work_order[[i]])
     )
+    # 2026-10-19 Bug C (PLAN-15 B.4): a feature-pending row whose structural
+    # parse the B.4 gate suppressed ALSO looks on that feature (live at its
+    # date). Only an EQUAL measurement there counts - it is the same reading
+    # committed before the dangling alias existed - so it can only turn the
+    # outcome into already_present, never into a conflict or a supersession.
+    gated <- if ("uuid_feature_gated" %in% names(rows)) rows$uuid_feature_gated[[i]] else NA_character_
+    if (isTRUE(rows$feature_pending[[i]]) && !is.na(gated) &&
+        (is.null(existing) ||
+         !.rc_values_equal(inc_value, inc_chr, inc_quant, existing$value[[1]],
+                           existing$value_chr[[1]], existing$quantified[[1]],
+                           inc_raw = rows$value_raw[[i]]))) {
+      alt <- .rc_find_existing(
+        con, gated, NA_character_, FALSE,
+        rows$sample_date[[i]], rows$sample_datetime[[i]], rows$uuid_lab[[i]],
+        incoming = list(value = inc_value, value_chr = inc_chr, quantified = inc_quant,
+                        value_raw = rows$value_raw[[i]]),
+        work_orders = c(event$work_order, .ct_event_als_work_orders(event), rows$work_order[[i]])
+      )
+      if (!is.null(alt) &&
+          .rc_values_equal(inc_value, inc_chr, inc_quant, alt$value[[1]], alt$value_chr[[1]],
+                           alt$quantified[[1]], inc_raw = rows$value_raw[[i]])) {
+        existing <- alt
+      }
+    }
     if (is.null(existing)) next
     exist_value <- existing$value[[1]]
     exist_chr <- existing$value_chr[[1]]
