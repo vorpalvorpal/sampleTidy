@@ -12,7 +12,7 @@
                    "site_history", "rl_change", "unit_change")
 
 .flags_cols <- c("check", "site", "feature", "analyte", "date", "value", "unit",
-                 "threshold", "detail", "key")
+                 "threshold", "detail", "key", "source")
 
 .flags_streams <- c("acirl_water", "acirl_gas", "acirl_dust", "als_lab")
 
@@ -34,12 +34,12 @@
   data.frame(check = character(), site = character(), feature = character(),
              analyte = character(), date = character(), value = numeric(),
              unit = character(), threshold = character(), detail = character(),
-             key = character(), stringsAsFactors = FALSE)
+             key = character(), source = character(), stringsAsFactors = FALSE)
 }
 
 # One check's rows; `date` is a Date (formatted at the end, after sorting).
 .flags_rows <- function(check, key, site, date, feature = NA, analyte = NA,
-                        value = NA, unit = NA, threshold = NA, detail = NA) {
+                        value = NA, unit = NA, threshold = NA, detail = NA, source = NA) {
   n <- length(key)
   if (n == 0) return(NULL)
   ch <- function(x) rep_len(as.character(x), n)
@@ -47,7 +47,7 @@
              analyte = ch(analyte), date = rep_len(as.Date(date), n),
              value = rep_len(as.numeric(value), n), unit = ch(unit),
              threshold = ch(threshold), detail = ch(detail), key = ch(key),
-             stringsAsFactors = FALSE)
+             source = ch(source), stringsAsFactors = FALSE)
 }
 
 .flags_fmt <- function(x) trimws(formatC(x, digits = 6, format = "fg"))
@@ -257,8 +257,8 @@
                                  format(.flags_ym_start(m), "%Y-%m")),
         site = r$site, date = .flags_ym_start(m),
         threshold = sprintf("expected %s by %s", .flags_ym_label(m), format(due)),
-        detail = sprintf("no %s sample dated in %s%s", r$stream, .flags_ym_label(m),
-                         if (is.na(r$source)) "" else paste0(" (schedule: ", r$source, ")")))
+        detail = sprintf("no %s sample dated in %s", r$stream, .flags_ym_label(m)),
+        source = r$source)
     }
   }
   .flags_dedupe(do.call(rbind, out))
@@ -309,11 +309,17 @@
   paste0(paste(x[seq_len(n)], collapse = ", "), ", +", length(x) - n, " more")
 }
 
+.flags_water_streams <- c("acirl_water", "als_lab")
+
 .flags_missing_point <- function(img, checks, today) {
   if (is.null(checks$schedule)) return(NULL)
   rows <- .flags_schedule(checks$schedule)
   s <- img$samples[!is.na(img$samples$site) & !is.na(img$samples$date), , drop = FALSE]
-  sampled <- unique(paste(s$site, s$ym, s$feature))
+  sampled_any <- unique(paste(s$site, s$ym, s$feature))
+  # Ruling R10: a water round is met by water-stream evidence only (a gas
+  # reading at a well does not make the well sampled).
+  ws <- img$streams[img$streams$stream %in% .flags_water_streams, , drop = FALSE]
+  sampled_water <- unique(paste(ws$site, ws$ym, ws$feature))
   ns <- img$streams[img$streams$new, , drop = FALSE]
   # One flag per (site, round month, stream) of the recent deliveries' samples.
   rounds <- unique(ns[, c("site", "ym", "stream")])
@@ -328,6 +334,7 @@
     })))
     if (length(exp) == 0) next
     exp <- sort(exp, method = "radix")
+    sampled <- if (stream %in% .flags_water_streams) sampled_water else sampled_any
     # Gas rounds straddle month ends: a neighbouring month's sample counts.
     months <- if (stream == "acirl_gas") (m - 1L):(m + 1L) else m
     hit <- Reduce(`|`, lapply(months, function(mm) paste(site, mm, exp) %in% sampled))
@@ -349,7 +356,8 @@
 .flags_missing_analytes <- function(img, checks, today) {
   if (is.null(checks$requirements) || is.null(checks$points)) return(NULL)
   req <- .flags_table(checks$requirements, "requirements",
-                      c("site", "epa_point", "pollutant", "frequency"))
+                      c("site", "epa_point", "pollutant", "frequency", "licence_pollutant",
+                        "group_item"))
   pts <- .flags_table(checks$points, "points", c("site", "epa_point", "role"))
   weather <- paste(pts$site, pts$epa_point)[pts$role %in% "weather"]
   # Matched by `pollutant` (group line items are already expanded into one row
@@ -359,6 +367,10 @@
                !paste(req$site, req$epa_point) %in% weather &
                !is.na(req$pollutant), , drop = FALSE]
   if (nrow(req) == 0) return(NULL)
+  # Gas-grid and dust points are met by their own rounds; every other point
+  # by water-stream evidence only (ruling R10).
+  own_round <- paste(pts$site, pts$epa_point)[pts$role %in% c("gas_grid", "dust")]
+  req$water <- !paste(req$site, req$epa_point) %in% own_round
 
   # EPA point -> features, pollutant -> analytes (as dev/epa-monitoring-report.R).
   fmap <- DBI::dbGetQuery(img$con, "
@@ -370,57 +382,91 @@
      WHERE variant = 'EPA' AND name IS NOT NULL AND trim(name) <> ''")
 
   a <- img$results
+  water_s <- unique(img$streams$sample[img$streams$stream %in% .flags_water_streams])
+  a$water <- a$sample %in% water_s
   ns <- img$samples[img$samples$new & img$samples$feature %in% fmap$feature, , drop = FALSE]
+  ns$water <- ns$sample %in% water_s
   if (nrow(ns) == 0) return(NULL)
-  # d = the feature's latest sample date in a delivery; one assessment per
-  # (feature, month of d), at the latest such d.
-  ns <- ns[order(-as.numeric(ns$date)), , drop = FALSE]
-  cand <- ns[!duplicated(paste(ns$feature, ns$project_uuid)), , drop = FALSE]
-  cand <- cand[!duplicated(paste(cand$feature, cand$ym)), , drop = FALSE]
 
-  # Per (site, month): pollutant -> labelled features; the latest d; work orders.
+  # Per (site, month): pollutant -> labelled features; group membership; the
+  # latest d; work orders.
   acc <- list()
-  for (k in seq_len(nrow(cand))) {
-    f <- cand$feature[[k]]
-    site <- cand$site[[k]]
-    d <- cand$date[[k]]
-    m <- cand$ym[[k]]
-    points <- fmap$epa_point[fmap$feature == f & fmap$site %in% site]
-    r <- req[req$site %in% site & req$epa_point %in% points, , drop = FALSE]
-    if (nrow(r) == 0) next
-    r <- r[!duplicated(paste(r$pollutant, r$frequency)), , drop = FALSE]
-    af <- a[a$feature == f, , drop = FALSE]
-    eom <- .flags_ym_end(m)
-    present <- vapply(seq_len(nrow(r)), function(j) {
-      lo <- switch(r$frequency[[j]], Monthly = .flags_ym_start(m),
-                   Quarterly = d - 120, Yearly = d - 395)
-      any(af$uuid_analyte %in% amap$uuid_analyte[amap$pollutant == r$pollutant[[j]]] &
-            af$date >= lo & af$date <= eom)
-    }, logical(1))
-    # A pollutant listed at two frequencies is present if any window holds it.
-    ok <- tapply(present, r$pollutant, any)
-    miss <- names(ok)[!ok]
-    if (length(miss) == 0) next
-    kinds_site <- unique(stats::na.omit(a$kind[a$site %in% site & a$ym == m]))
-    kinds_f <- unique(stats::na.omit(af$kind[af$ym == m]))
-    label <- if (length(kinds_site) == 2 && length(kinds_f) == 1) {
-      paste0(f, " (", kinds_f, " only)")
-    } else f
-    key <- sprintf("missing_analytes|%s|%s", site, format(.flags_ym_start(m), "%Y-%m"))
-    x <- acc[[key]]
-    if (is.null(x)) x <- list(site = site, m = m, date = d, by = list(), wos = character(0))
-    x$date <- max(x$date, d)
-    x$wos <- union(x$wos, ns$project[ns$feature == f & ns$ym == m])
-    for (p in miss) x$by[[p]] <- c(x$by[[p]], label)
-    acc[[key]] <- x
+  for (water in c(TRUE, FALSE)) {
+    nsw <- ns[ns$water == water, , drop = FALSE]
+    if (nrow(nsw) == 0) next
+    aw <- if (water) a[a$water, , drop = FALSE] else a
+    # d = the feature's latest sample date in a delivery; one assessment per
+    # (feature, month of d), at the latest such d.
+    nsw <- nsw[order(-as.numeric(nsw$date)), , drop = FALSE]
+    cand <- nsw[!duplicated(paste(nsw$feature, nsw$project_uuid)), , drop = FALSE]
+    cand <- cand[!duplicated(paste(cand$feature, cand$ym)), , drop = FALSE]
+    for (k in seq_len(nrow(cand))) {
+      f <- cand$feature[[k]]
+      site <- cand$site[[k]]
+      d <- cand$date[[k]]
+      m <- cand$ym[[k]]
+      points <- fmap$epa_point[fmap$feature == f & fmap$site %in% site]
+      r <- req[req$site %in% site & req$epa_point %in% points & req$water == water, , drop = FALSE]
+      if (nrow(r) == 0) next
+      r <- r[!duplicated(paste(r$pollutant, r$frequency)), , drop = FALSE]
+      af <- aw[aw$feature == f, , drop = FALSE]
+      eom <- .flags_ym_end(m)
+      present <- vapply(seq_len(nrow(r)), function(j) {
+        lo <- switch(r$frequency[[j]], Monthly = .flags_ym_start(m),
+                     Quarterly = d - 120, Yearly = d - 395)
+        any(af$uuid_analyte %in% amap$uuid_analyte[amap$pollutant == r$pollutant[[j]]] &
+              af$date >= lo & af$date <= eom)
+      }, logical(1))
+      # A pollutant listed at two frequencies is present if any window holds it.
+      ok <- tapply(present, r$pollutant, any)
+      miss <- names(ok)[!ok]
+      if (length(miss) == 0) next
+      kinds_site <- unique(stats::na.omit(aw$kind[aw$site %in% site & aw$ym == m]))
+      kinds_f <- unique(stats::na.omit(af$kind[af$ym == m]))
+      label <- if (length(kinds_site) == 2 && length(kinds_f) == 1) {
+        paste0(f, " (", kinds_f, " only)")
+      } else f
+      key <- sprintf("missing_analytes|%s|%s", site, format(.flags_ym_start(m), "%Y-%m"))
+      x <- acc[[key]]
+      if (is.null(x)) {
+        x <- list(site = site, m = m, date = d, by = list(), groups = list(), wos = character(0))
+      }
+      x$date <- max(x$date, d)
+      x$wos <- union(x$wos, nsw$project[nsw$feature == f & nsw$ym == m])
+      for (p in miss) x$by[[p]] <- c(x$by[[p]], label)
+      # Group members required at this feature (ruling R11).
+      g <- r[!is.na(r$group_item), , drop = FALSE]
+      for (gi in unique(g$group_item)) {
+        gname <- paste(gi, stats::na.omit(g$licence_pollutant[g$group_item == gi])[1], sep = "\r")
+        x$groups[[gname]][[label]] <- unique(g$pollutant[g$group_item == gi])
+      }
+      acc[[key]] <- x
+    }
   }
   if (length(acc) == 0) return(NULL)
   do.call(rbind, lapply(names(acc), function(key) {
     x <- acc[[key]]
-    pols <- sort(names(x$by), method = "radix")
-    ent <- vapply(pols, function(p) {
-      paste0(p, ": ", paste(sort(unique(x$by[[p]]), method = "radix"), collapse = ", "))
-    }, character(1))
+    feats <- lapply(x$by, function(v) sort(unique(v), method = "radix"))
+    ent <- list()
+    used <- character(0)
+    # A group whose members are all missing at one and the same feature set
+    # collapses to one entry.
+    for (gname in names(x$groups)) {
+      grp <- x$groups[[gname]]
+      hit <- intersect(unique(unlist(grp)), names(feats))
+      if (length(hit) == 0) next
+      labs <- intersect(names(grp), unique(unlist(feats[hit])))
+      mem <- unique(unlist(grp[labs]))
+      if (length(mem) < 2 || !all(mem %in% names(feats)) || any(mem %in% used)) next
+      fs <- feats[mem]
+      if (!all(vapply(fs, identical, logical(1), fs[[1]]))) next
+      lp <- strsplit(gname, "\r", fixed = TRUE)[[1]]
+      lp <- if (length(lp) > 1 && !is.na(lp[[2]]) && lp[[2]] != "NA") lp[[2]] else lp[[1]]
+      ent[[lp]] <- sprintf("%s (%d analytes): %s", lp, length(mem), paste(fs[[1]], collapse = ", "))
+      used <- c(used, mem)
+    }
+    for (p in setdiff(names(feats), used)) ent[[p]] <- paste0(p, ": ", paste(feats[[p]], collapse = ", "))
+    ent <- unlist(ent[sort(names(ent), method = "radix")])
     shown <- if (length(ent) > 15) c(ent[1:15], sprintf("+%d more", length(ent) - 15)) else ent
     .flags_rows("missing_analytes", key = key, site = x$site, date = x$date,
                 threshold = sprintf("licence requirements, %s", .flags_ym_label(x$m)),
@@ -503,6 +549,12 @@
   if (nrow(gl) == 0 || nrow(a) == 0) return(NULL)
   x <- merge(a, gl, by = "uuid_analyte")
   x <- x[x$value > x$gv, , drop = FALSE]
+  # Ruling R9: the solid waste guidelines trigger is a surface-gas criterion,
+  # applied only at the licence gas grid (limits rows with condition R2.3). An
+  # unreadable limits table is licence_limit's error; here it means no grid.
+  trig <- grepl("solid waste", x$level_name, ignore.case = TRUE)
+  grid <- .flags_gas_grid(checks, x$site, x$feature)
+  x <- x[!trig | grid, , drop = FALSE]
   if (nrow(x) == 0) return(NULL)
   # Highest level exceeded per result and family, then the highest result per key.
   x <- x[order(x$analysis, x$family, -x$level, -x$gv), , drop = FALSE]
@@ -516,6 +568,22 @@
     threshold = sprintf("> %s %s (%s)", .flags_fmt(x$gv), ifelse(is.na(x$analyte_units), "", x$analyte_units),
                         x$level_name),
     detail = sprintf("%s guideline; %s", x$family, x$project)))
+}
+
+# Which (site, feature) pairs are licence gas-grid points: they match the
+# feature_pattern of a limits row of that site with condition R2.3.
+.flags_gas_grid <- function(checks, site, feature) {
+  out <- rep(FALSE, length(feature))
+  if (is.null(checks$limits) || length(feature) == 0) return(out)
+  lim <- tryCatch(.flags_table(checks$limits, "limits", c("site", "feature_pattern", "condition")),
+                  error = function(e) NULL)
+  if (is.null(lim)) return(out)
+  lim <- lim[lim$condition %in% "R2.3" & !is.na(lim$feature_pattern), , drop = FALSE]
+  for (i in seq_len(nrow(lim))) {
+    hit <- tryCatch(grepl(lim$feature_pattern[[i]], feature), error = function(e) FALSE)
+    out <- out | (site %in% lim$site[[i]] & hit)
+  }
+  out
 }
 
 .flags_site_history <- function(img, checks, today) {
@@ -552,7 +620,7 @@
     site = x$site, date = x$date, feature = x$feature, analyte = x$analyte, value = x$value,
     unit = x$units,
     threshold = sprintf("prior range %s-%s (n=%d)", .flags_fmt(h$lo), .flags_fmt(h$hi), h$n),
-    detail = ifelse(h$mad0, sprintf("the %d priors (5 years) are all equal; %s", h$n, x$project),
+    detail = ifelse(h$mad0, sprintf("prior results have no spread (MAD 0), n=%d over 5 years; %s", h$n, x$project),
                     sprintf("robust z %+.1f (median %s, 5-year priors); %s", h$z,
                             .flags_fmt(h$med), x$project))))
 }
@@ -681,6 +749,16 @@ import_flags <- function(db = st_config("live_db"), now = Sys.time(), checks) {
     } else if (!is.null(r) && nrow(r) > 0) {
       rows[[ck]] <- r
     }
+  }
+  # Ruling R12: an invoiced-not-received flag is the more specific statement
+  # of an overdue month's gap, so it replaces the overdue flag.
+  if (!is.null(rows$overdue) && !is.null(rows$invoiced_not_received)) {
+    inr <- rows$invoiced_not_received
+    od <- rows$overdue
+    stream_of <- function(k) vapply(strsplit(k, "|", fixed = TRUE), `[`, "", 3L)
+    gap <- paste(inr$site, stream_of(inr$key), format(inr$date, "%Y-%m"))
+    rows$overdue <- od[!paste(od$site, stream_of(od$key), format(od$date, "%Y-%m")) %in% gap, ,
+                       drop = FALSE]
   }
   out <- if (length(rows)) do.call(rbind, unname(rows)) else NULL
   if (is.null(out)) {
