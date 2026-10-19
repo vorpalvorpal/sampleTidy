@@ -550,7 +550,10 @@ test_that("gas_criterion: LEL and EPA guideline rows, highest level per family, 
     gas("B.G06", 0.5, project = "2400-7538-05-01", ingested = fl_now() - 100 * 86400)
     fl_sample(con, "B.S01", "ES2600070", "2026-09-14", results = list(`NH3-N` = 5))
   })
-  gc <- fl_of(fl_run(db, fl_checks()), "gas_criterion")
+  # R9: the solid-waste trigger needs the R2.3 grid rows of the limits table
+  gc <- fl_of(fl_run(db, fl_checks(limits = fl_limits(list(
+    site = "B", feature_pattern = "^B\\.G[0-9]", analyte = "CH4", max = "1.25",
+    unit = "%v/v", factor = "100", condition = "R2.3")))), "gas_criterion")
   expect_equal(nrow(gc), 5)
   lel <- grepl("lower explosive", gc$threshold)
   expect_setequal(gc$feature[lel], c("B.G01", "B.G02"))
@@ -657,6 +660,170 @@ test_that("unit_change: the reporting unit (lab_method.units, else analyte.units
   expect_identical(uc$feature, "B.MW05")
   expect_match(uc$detail, "mg/L", fixed = TRUE)
   expect_match(uc$detail, "µg/L", fixed = TRUE)
+})
+
+# ---- round-2 rulings (2026-10-19 R9-R13) ---------------------------------------------------
+
+gas_grid_limits <- function() {
+  fl_limits(list(site = "B", feature_pattern = "^B\\.G[0-9]", analyte = "CH4", max = "1.25",
+                 unit = "%v/v", factor = "100", condition = "R2.3"))
+}
+
+test_that("gas_criterion (R9): the 500 ppm solid-waste trigger applies only at R2.3 grid points; LEL and other EPA rows keep their scope", {
+  db <- fl_db()
+  fl_with(db, function(con) {
+    fl_analyte(con, "CH4", units = "L/L")
+    fl_analyte(con, "dust-total", units = "g/m2/month")
+    fl_guideline(con, "CH4", "LEL", 3, "10% of lower explosive limit", 0.005)
+    fl_guideline(con, "CH4", "EPA", 2, "solid waste guidelines trigger value", 0.0005)
+    fl_guideline(con, "dust-total", "EPA", 2, "EPA impact assessment criteria", 4)
+    gas <- function(feature, v, matrix = "air") {
+      fl_sample(con, feature, "2400-7538-09-01", "2026-09-28", org = "ACIRL", matrix = matrix,
+                type = "Monthly gas monitoring", ts_col = "date", results = list(CH4 = v))
+    }
+    gas("B.G01", 0.001)                          # grid point: trigger -> flag
+    gas("B.MW01", 0.001, matrix = "freshwater")  # well: no trigger flag
+    gas("B.TG01", 0.001)                         # building point: no trigger flag
+    gas("B.MW02", 0.006, matrix = "freshwater")  # well above 10% LEL: LEL flag only
+    fl_sample(con, "B.D01", "ES2600300", "2026-09-01", org = "ACIRL", matrix = "air",
+              results = list(`dust-total` = 5))  # dust criterion unaffected
+  })
+  gc <- fl_of(fl_run(db, fl_checks(limits = gas_grid_limits())), "gas_criterion")
+  trig <- grepl("solid waste", gc$threshold, fixed = TRUE)
+  expect_identical(gc$feature[trig], "B.G01")
+  expect_identical(gc$feature[grepl("lower explosive", gc$threshold, fixed = TRUE)], "B.MW02")
+  expect_identical(gc$feature[grepl("impact assessment", gc$threshold, fixed = TRUE)], "B.D01")
+  expect_equal(nrow(gc), 3)
+  # with no limits table there are no grid points: the trigger applies nowhere
+  gc0 <- fl_of(fl_run(db, fl_checks()), "gas_criterion")
+  expect_false(any(grepl("solid waste", gc0$threshold, fixed = TRUE)))
+})
+
+test_that("missing_point (R10): a gas-round reading at a water point does not make it sampled for a water round", {
+  db <- fl_db()
+  fl_with(db, function(con) {
+    fl_sample(con, "K.S01", "ES2600310", "2026-09-14", results = list(pH = 7))
+    fl_sample(con, "K.MW01", "2400-7539-09", "2026-09-14", org = "ACIRL",
+              type = "Monthly gas monitoring", ts_col = "date",
+              results = list(list(analyte = "CH4", value = 0.0001, lab_org = "ACIRL")))
+  })
+  sched <- fl_schedule(list(site = "K", stream = "als_lab", features = "K.S01;K.MW01"))
+  mp <- fl_of(fl_run(db, fl_checks(schedule = sched)), "missing_point")
+  expect_equal(nrow(mp), 1)
+  expect_match(mp$detail, "1 of 2 expected points not sampled: K.MW01", fixed = TRUE)
+})
+
+test_that("missing_analytes (R10): a gas-round reading is not 'field' evidence; (field only)/(lab only) use water results only", {
+  db <- fl_db()
+  fl_with(db, function(con) {
+    fl_feature(con, "K.S01", epa = "4")
+    fl_feature(con, "K.MW01", epa = "11")
+    fl_analyte(con, "pH", units = "pH", epa = "pH")
+    fl_analyte(con, "NH3-N", epa = "Ammonia (as N)")
+    fl_analyte(con, "CH4", units = "L/L")
+    # K.S01: field + lab water results, complete
+    fl_sample(con, "K.S01", "ES2600320", "2026-09-14", org = "ALS",
+              results = list(pH = 7, `NH3-N` = 0.1))
+    fl_sample(con, "K.S01", "ES2600320", "2026-09-14", org = "ACIRL", results = list(pH = 7))
+    # K.MW01: an ALS lab sample without ammonia, plus a GAS-round ACIRL reading
+    fl_sample(con, "K.MW01", "ES2600320", "2026-09-14", org = "ALS", results = list(pH = 6.9))
+    fl_sample(con, "K.MW01", "2400-7539-09", "2026-09-15", org = "ACIRL",
+              type = "Monthly gas monitoring", ts_col = "date",
+              results = list(list(analyte = "CH4", value = 0.0001, lab_org = "ACIRL")))
+  })
+  req <- fl_requirements(
+    list(site = "K", licence = "13089", epa_point = "4", pollutant = "pH"),
+    list(site = "K", licence = "13089", epa_point = "4", pollutant = "Ammonia (as N)"),
+    list(site = "K", licence = "13089", epa_point = "11", pollutant = "pH"),
+    list(site = "K", licence = "13089", epa_point = "11", pollutant = "Ammonia (as N)"))
+  pts <- fl_points(list("K", "4", "surface_water"), list("K", "11", "groundwater"))
+  ma <- ma_run(db, list(requirements = req, points = pts))
+  expect_equal(nrow(ma), 1)
+  expect_match(ma$detail, "Ammonia (as N): K.MW01 (lab only)", fixed = TRUE)
+})
+
+ocp_req <- function(p, point = "12") {
+  list(epa_point = point, pollutant = p, licence_pollutant = "Organochlorine pesticides",
+       frequency = "Yearly", required = "1", group_item = "OCP")
+}
+
+test_that("missing_analytes (R11): a licence group missing in full at one feature set collapses to one entry", {
+  db <- fl_db()
+  fl_with(db, function(con) {
+    fl_feature(con, "B.MW01", epa = "12")
+    for (a in c("Aldrin", "Dieldrin", "Endrin")) fl_analyte(con, a, epa = a)
+    fl_analyte(con, "pH", units = "pH")
+    fl_sample(con, "B.MW01", "ES2600330", "2026-09-14", results = list(pH = 7))
+  })
+  req <- fl_requirements(ocp_req("Aldrin"), ocp_req("Dieldrin"), ocp_req("Endrin"))
+  ma <- ma_run(db, list(requirements = req, points = fl_points(list("B", "12", "groundwater"))))
+  expect_equal(nrow(ma), 1)
+  expect_match(ma$detail, "Organochlorine pesticides (3 analytes): B.MW01", fixed = TRUE)
+  for (a in c("Aldrin", "Dieldrin", "Endrin")) expect_false(grepl(a, ma$detail, fixed = TRUE), info = a)
+})
+
+test_that("missing_analytes (R11): a group missing at DIFFERENT feature sets is listed member by member", {
+  db <- fl_db()
+  fl_with(db, function(con) {
+    fl_feature(con, "B.MW01", epa = "12")
+    fl_feature(con, "B.MW02", epa = "14")
+    for (a in c("Aldrin", "Dieldrin")) fl_analyte(con, a, epa = a)
+    fl_sample(con, "B.MW01", "ES2600331", "2026-09-14", results = list(Endosulfan = 1))
+    fl_sample(con, "B.MW02", "ES2600331", "2026-09-14", results = list(Aldrin = 0.0001))
+  })
+  req <- fl_requirements(ocp_req("Aldrin"), ocp_req("Dieldrin"),
+                         ocp_req("Aldrin", "14"), ocp_req("Dieldrin", "14"))
+  pts <- fl_points(list("B", "12", "groundwater"), list("B", "14", "groundwater"))
+  ma <- ma_run(db, list(requirements = req, points = pts))
+  expect_equal(nrow(ma), 1)
+  expect_match(ma$detail, "Aldrin: B.MW01", fixed = TRUE)
+  expect_match(ma$detail, "Dieldrin: B.MW01, B.MW02", fixed = TRUE)
+  expect_false(grepl("Organochlorine", ma$detail, fixed = TRUE))
+})
+
+test_that("overdue (R12): short detail 'no <stream> sample dated in <Mon YYYY>'; the schedule source is its own column", {
+  db <- fl_db()
+  f <- fl_run(db, fl_checks(schedule = fl_schedule(
+    list(site = "B", months = "8", source = "ACIRL revised schedule Aug 2026"))))
+  od <- fl_of(f, "overdue")
+  expect_identical(od$detail, "no acirl_water sample dated in Aug 2026")
+  expect_identical(od$source, "ACIRL revised schedule Aug 2026")
+  expect_type(f$source, "character")
+})
+
+test_that("overdue (R12): suppressed when an invoiced_not_received flag covers the same site, stream and month", {
+  db <- fl_db()
+  inv <- data.frame(site = c("B", "B"), stream = c("acirl_water", "als_lab"),
+                    sampled_on = as.Date(c("2026-08-19", "2026-07-10")),
+                    ref = c("AC101860", "AC101700"), stringsAsFactors = FALSE)
+  f <- fl_run(db, fl_checks(schedule = fl_schedule(list(site = "B", months = "7;8")),
+                            invoices = inv))
+  expect_identical(fl_of(f, "overdue")$date, "2026-07-01")        # Aug acirl_water suppressed
+  expect_setequal(fl_of(f, "invoiced_not_received")$date, c("2026-08-19", "2026-07-10"))
+})
+
+test_that("status note and JSON (R12): the overdue line omits the source; the JSON flag carries it", {
+  s <- fl_status_setup()
+  fl_status(s, checks = fl_checks(schedule = fl_schedule(
+    list(site = "K", months = "8", source = "ACIRL revised schedule Aug 2026"))))
+  sec <- md_section(read_status_note(s$report_dir), "Flags")
+  line <- sec[grepl("^- .*2026-08-01", sec)]
+  expect_length(line, 1)
+  expect_match(line, "no acirl_water sample dated in Aug 2026", fixed = TRUE)
+  expect_false(grepl("revised schedule", line, fixed = TRUE))
+  fl <- fl_status_json(s)$flags[[1]]
+  expect_identical(fl$source, "ACIRL revised schedule Aug 2026")
+})
+
+test_that("site_history (R13): MAD-0 wording is 'prior results have no spread (MAD 0)', never 'all equal'", {
+  db <- fl_db()
+  fl_with(db, function(con) {
+    sh_seed(con, "B.MW08", c(rep(5, 7), 7), 8)   # range 5-7, MAD 0
+  })
+  sh <- fl_of(fl_run(db, fl_checks()), "site_history")
+  expect_identical(sh$feature, "B.MW08")
+  expect_match(sh$detail, "prior results have no spread (MAD 0)", fixed = TRUE)
+  expect_false(grepl("all equal", sh$detail, fixed = TRUE))
 })
 
 # ---- keys, ordering, inputs as files ------------------------------------------------------

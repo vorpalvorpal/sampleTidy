@@ -256,8 +256,10 @@ they supersede what they replace.
 
 - New export `import_flags(db = st_config("live_db"), now = Sys.time(), checks)` →
   `data.frame`, one row per flag, columns exactly `check, site, feature, analyte, date,
-  value, unit, threshold, detail, key` (all character except `value`, numeric; `NA` where
-  a column does not apply, e.g. `feature`/`analyte`/`value` of an overdue flag). Rows are
+  value, unit, threshold, detail, key, source` (all character except `value`, numeric;
+  `NA` where a column does not apply, e.g. `feature`/`analyte`/`value` of an overdue flag).
+  `source` (**ruling 2026-10-19 R12**) is the schedule row's `source` for overdue flags,
+  `NA` otherwise; it is written to each JSON flag object but never shown in the note line. Rows are
   ordered by `check` in the order of the list below, then `date` descending. Read-only:
   opens the DB `read_only = TRUE`, never writes it.
 - `check` ∈ `overdue, invoiced_not_received, missing_point, missing_analytes,
@@ -358,8 +360,11 @@ they supersede what they replace.
   **[invented]**) and the due date `last day of M + due_days` is **before** today (a due
   date of today is not yet overdue): flag when no sample of that stream at that site has
   a sample date in M. `date` = first day of M; `threshold` = `expected <Mon YYYY> by
-  <due date>` (C-locale month abbreviation); `detail` names the stream (and `source`).
-  key `overdue|site|stream|YYYY-MM`.
+  <due date>` (C-locale month abbreviation). **Ruling 2026-10-19 R12:** `detail` is exactly
+  `no <stream> sample dated in <Mon YYYY>`; `source` goes to its own column/JSON field; an
+  overdue flag is **suppressed** when an `invoiced_not_received` flag exists for the same
+  site, stream and month (of `sampled_on`) — the invoice flag is the more specific
+  statement of the same gap. key `overdue|site|stream|YYYY-MM`.
 - `invoiced_not_received`: per invoice row, `due_days` from the first schedule row of that
   site and stream valid on `sampled_on` (default 30); flag when `sampled_on + due_days` is
   before today and no sample of that stream at that site has a sample date within ±3 days
@@ -401,6 +406,18 @@ orders].**
   name map nothing. Calibration (not a unit test): Blaxland 2025-08-22..2026-08-21, the
   (point, pollutant) pairs with zero results must reconcile with the report script's unmet
   requirements (583 of 593 required counts met).
+  **Group collapse (ruling 2026-10-19 R11):** when every member of a licence group (rows
+  sharing a `group_item` at a point, mapped as above) is missing and the members' feature
+  sets are identical, the group is rendered once as `<licence_pollutant> (<n> analytes):
+  <features>` (e.g. `Organochlorine pesticides (3 analytes): B.MW01`) and the member names
+  are not listed; otherwise (any member present, or differing feature sets) the members
+  are listed individually as before. A collapsed group counts as one entry toward the
+  15-entry cap.
+  **Water evidence only (ruling 2026-10-19 R10):** for `acirl_water`/`als_lab` rounds,
+  missing_point and missing_analytes consider only results whose stream is `acirl_water`
+  or `als_lab`. A gas- or dust-round reading at a water point (live: 2400-7539-06-02 gas
+  readings at Katoomba wells) neither makes the point sampled nor counts as a field result;
+  `(field only)` / `(lab only)` are computed from water-stream results only.
 
 **4.3.**
 
@@ -420,11 +437,18 @@ orders].**
   `value > guideline.value`; one flag per result per guideline family (`LEL`, `EPA`), at
   the highest level exceeded; `threshold` = `> value units (level_name)`. Other families
   (`dgv`, `ACGIH`, ...) are not used. key `gas_criterion|feature|analyte|date|family`.
+  **Ruling 2026-10-19 R9:** the EPA `solid waste guidelines trigger value` row (CH4 500
+  ppm = 0.0005 L/L) is a surface-gas criterion, applied only at the site's surface gas grid
+  points = features of that site matching the `feature_pattern` of a limits row with
+  `condition = 'R2.3'` (B.G grid, K.G01-364). Not at wells, building points or other
+  features; with no limits table it applies nowhere. LEL rows and the other EPA rows (dust
+  impact assessment criteria) keep the scope above.
 - `site_history`: for each new quantified result, the priors are the quantified results of
   the same (feature, analyte) with a sample date in `[d - 5 years, d)`. With at least 8
   priors, flag when the value is outside `[min, max]` of the priors **and** `|z| > 4`,
   `z = (value - median) / (1.4826 × MAD)`. **MAD = 0 [invented]:** flag whenever the value
-  is outside the prior range (z taken as infinite); `detail` says the priors are all equal.
+  is outside the prior range (z taken as infinite); `detail` says `prior results have no spread (MAD 0)`
+  (**ruling 2026-10-19 R13**; never "all equal" — the priors may still have a range).
   `threshold` = `prior range min-max (n=N)`. key `site_history|feature|analyte|date`.
 - `rl_change` (**ruling 2026-10-19 R5**): flags only a RAISED reporting limit — the new
   `analysis.rl_low` is greater than the maximum non-NA `rl_low` of that (feature, analyte)
