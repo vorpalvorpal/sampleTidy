@@ -727,34 +727,38 @@ lab_qc_ingest <- function(con, uuid_asset, path, actor = "ingest") {
 lab_qc_backfill <- function(db = st_config("live_db"), actor = "lab_qc_backfill") {
   checkmate::assert_string(db)
   checkmate::assert_string(actor)
-  arch <- st_config("archive_dir")
   with_db_write(function(con) {
     if (!DBI::dbExistsTable(con, "lab_qc_report")) {
       cli::cli_abort("lab_qc_backfill(): {.path {db}} has no lab_qc_report table (migration 048 first).",
                      class = "sampletidy_error")
     }
-    a <- DBI::dbGetQuery(con, "
-      SELECT a.uuid, a.filename, r.parser_version
-        FROM asset a LEFT JOIN lab_qc_report r ON r.uuid_asset = a.uuid
-       WHERE a.type = 'QC' ORDER BY a.filename, a.uuid")
-    res <- character(nrow(a))
-    for (i in seq_len(nrow(a))) {
-      if (identical(a$parser_version[[i]], .qci_parser_version)) {
-        res[[i]] <- "current"
-        next
-      }
-      path <- file.path(arch, a$uuid[[i]], a$filename[[i]])
-      if (is.na(a$filename[[i]]) || !file.exists(path)) {
-        res[[i]] <- "no_archive"
-        next
-      }
-      st <- lab_qc_ingest(con, a$uuid[[i]], path, actor = actor)
-      res[[i]] <- if (is.null(st)) "skipped" else st
-    }
-    out <- data.frame(uuid_asset = a$uuid, filename = a$filename, result = res,
-                      stringsAsFactors = FALSE)
+    out <- .lab_qc_backfill_con(con, actor)
     tb <- table(out$result)
     cli::cli_inform("lab_qc_backfill(): {paste(names(tb), tb, sep = ' ', collapse = ', ')}")
     invisible(out)
   }, db = db)
+}
+
+# The backfill on an open connection (migration 052 runs it inside its own
+# transaction). The archived copy is `<archive_dir>/<asset uuid>/<filename>`.
+.lab_qc_backfill_con <- function(con, actor, archive_dir = st_config("archive_dir")) {
+  a <- DBI::dbGetQuery(con, "
+    SELECT a.uuid, a.filename, r.parser_version
+      FROM asset a LEFT JOIN lab_qc_report r ON r.uuid_asset = a.uuid
+     WHERE a.type = 'QC' ORDER BY a.filename, a.uuid")
+  res <- character(nrow(a))
+  for (i in seq_len(nrow(a))) {
+    if (identical(a$parser_version[[i]], .qci_parser_version)) {
+      res[[i]] <- "current"
+      next
+    }
+    path <- file.path(archive_dir, a$uuid[[i]], a$filename[[i]])
+    if (is.na(a$filename[[i]]) || !file.exists(path)) {
+      res[[i]] <- "no_archive"
+      next
+    }
+    st <- lab_qc_ingest(con, a$uuid[[i]], path, actor = actor)
+    res[[i]] <- if (is.null(st)) "skipped" else st
+  }
+  data.frame(uuid_asset = a$uuid, filename = a$filename, result = res, stringsAsFactors = FALSE)
 }
