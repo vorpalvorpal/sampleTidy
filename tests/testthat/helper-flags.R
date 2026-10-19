@@ -235,8 +235,9 @@ fl_checks <- function(schedule = NULL, limits = NULL, requirements = NULL,
 }
 
 # `source` added by ruling 2026-10-19 R12 (the schedule row's source, overdue only).
+# `action` added by PLAN-19 R-19.22 (after `source`; NA for every pre-PLAN-19 check).
 fl_flag_cols <- c("check", "site", "feature", "analyte", "date", "value", "unit",
-                  "threshold", "detail", "key", "source")
+                  "threshold", "detail", "key", "source", "action")
 
 #' import_flags() on a DB, warnings/messages muffled.
 fl_run <- function(db, checks, now = fl_now()) {
