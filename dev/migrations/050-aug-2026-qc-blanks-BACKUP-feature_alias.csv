@@ -1,0 +1,4 @@
+"uuid","uuid_feature","name","alias_key","kind","n_seen","auto_assign","first_seen","last_seen","confirmed_by","comments","date_start","date_end"
+"0f78567e-2b6d-40bd-8a30-a8c19b7090e9",,"Bailer/Scoop","bailer/scoop","pending",1,FALSE,"2026-10-19 00:48:25.235368","2026-10-19 00:48:25.235368",,,"2026-08-19",
+"2ed9d959-9298-4a08-a44b-2b10b9893831",,"Sealed","sealed","pending",1,FALSE,"2026-10-19 00:48:25.235368","2026-10-19 00:48:25.235368",,,"2026-08-19",
+"39826a2f-3311-4f4e-98d0-fc3e59716c31",,"Lab sample","lab sample","pending",1,FALSE,"2026-10-19 00:48:25.235368","2026-10-19 00:48:25.235368",,,"2026-08-19",
