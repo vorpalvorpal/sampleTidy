@@ -143,6 +143,38 @@ alternate; (c) a clean read is not re-read (probe == 0 path); (d) an
 irrecoverable case (alternate no cleaner, or a different row count) keeps the
 primary read.
 
+### R-5.4a Genuinely latin-1 crosstabs (2026-10-19 corpus finding)
+
+**Finding.** R-5.4's premise "every real XTAB.csv is valid UTF-8" is false for
+part of the corpus: 103 real crosstabs (101 `als_xtab`, 2 `als_enmrg`, e.g.
+`ES2422258_0_XTAB.csv`, `ES2407054_0_ENMRG.CSV`, `ES2537446_0_ENMRG.CSV`) are
+**genuinely latin-1** — bare `0xB0` (°), `0xB5` (µ), `0xB1` (±) bytes — and all
+103 ended `failed` with `input string N is invalid UTF-8`. Root cause: the
+UTF-8 primary read (`readr`, UTF-8 locale) returns those bytes unconverted as
+invalid-UTF-8 strings; `.st_read_grid_with_encoding_fallback` then scores the
+primary with `.st_mojibake_probe` (`R/read-encoding.R`), which runs
+`normalise_lab_text()` → `gsub()` on them and **aborts**. The probe is not
+guarded, so the latin-1 alternate is never tried, and even a non-aborting probe
+would have scored the read 0 (no U+FFFD marker) and kept it. ESdat is immune
+only because its primary is latin-1 (A35).
+
+**Rule.** A read whose text contains any string that is **not valid UTF-8** is
+a damaged read: the probe must not abort on it and must count it as damaged, so
+the symmetric fallback re-reads with the alternate (latin-1 for the crosstab
+dialects) and adopts it under R-5.4's existing conditions (same row count,
+strictly lower probe), with the usual `cli_inform` note. The parse of a
+latin-1 crosstab must **equal the parse of its UTF-8 twin** (every IR column but
+`source_hash`). Valid-UTF-8 files (including the pre-destroyed-U+FFFD XTABs of
+R-5.4) are unaffected.
+
+Criteria (`test-crosstab-latin1.R`): the latin-1 real XTAB
+`fixtures/corpus-2026-10-19/latin1/ES2422258_0_XTAB.csv` parses without error, equal to
+its archived UTF-8 twin `fixtures/corpus-2026-10-19/utf8-twin/ES2422258_0_XTAB.csv`,
+with `°`/`µ`/`±` decoded and every emitted string valid UTF-8; a latin-1
+transcoding of the real ENMRG fixture parses equal to the original; the helper,
+given a UTF-8 primary holding invalid UTF-8, does not error and adopts the
+latin-1 alternate.
+
 ## Fixtures
 
 `fixtures/crosstab/XX1234567_0_XTAB.csv` (latin-1 bytes, two sections),

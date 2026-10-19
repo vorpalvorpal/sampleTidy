@@ -151,3 +151,11 @@ Structure is real; data is synthetic. Sites are `T.S01`/`T.S02`, gauges
 `T.D01`/`T.D02`, work orders `ES9999001`/`ES9999002`, reports `2400-9999-*`.
 No real lab values are committed — the numeric values are invented, and are
 internally consistent only where a test needs them to be.
+
+## Serial-0 date fixture (2026-10-19 corpus finding, PLAN-06 R-6.3c)
+
+`../corpus-2026-10-19/2400-9999-16_SerialZeroDate_WMF.xlsx` (kept outside `acirl/` so the e2e fixture sweeps do not ingest it) is **not** synthetic: it is the real
+`Front Page` + `Groundwater Sites` of `2400-7223-09-1 September 2022 Quarterly
+Katoomba WMF.xls`, copied cell-by-cell (types kept) and anonymized by
+`generate-serial-zero.R`. Its `Date of Sample` row reads 44823 in D11:J11 and
+**0** in K11 (`PZ # 4`, real `MP # 4`) - the cell that produced 1899-12-30.

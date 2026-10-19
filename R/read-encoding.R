@@ -40,11 +40,20 @@
   if (length(text) == 0) {
     return(0L)
   }
+  # R-5.4a: a cell that is not valid UTF-8 is a damaged read in its own right
+  # (a latin-1 file read as UTF-8). It is counted, and kept away from
+  # normalise_lab_text()/gsub(), which abort on invalid input.
+  invalid <- !validUTF8(text)
+  n_invalid <- sum(invalid)
+  text <- text[!invalid]
+  if (length(text) == 0) {
+    return(as.integer(n_invalid))
+  }
   normalised <- suppressWarnings(normalise_lab_text(text))
   markers <- grepl(.ST_FFFD_SINGLE, normalised, fixed = TRUE) |
     grepl(.ST_FFFD_TRIPLE, normalised, fixed = TRUE) |
     grepl(.ST_FFFD_ESCAPE, normalised, fixed = TRUE)
-  sum(markers, na.rm = TRUE)
+  as.integer(sum(markers, na.rm = TRUE) + n_invalid)
 }
 
 #' Read a data grid with a defensive encoding fallback

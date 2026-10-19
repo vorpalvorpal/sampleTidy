@@ -1,0 +1,69 @@
+Matrix:,WATER,,Sample Type:,,REG
+Workgroup:,ES2422258,,ALS Sample Number:,,ES2422258001
+Project name/number:,SITEA Apirl 2024 - Rain Event,,Sample Date:,,03/07/2024
+,,,Client sample ID (1st):,,Q.E01
+,,,Client sample ID (2nd):,,
+,,,Depth Type:,,
+,,,Depth (m):      ,,
+,,,Site:      ,,
+,,,Purchase Order:      ,,P000002782
+,,,,,
+Analyte grouping/Analyte,CAS Number,Unit,Limit of reporting,,
+,,,,,
+EA005P: pH by PC Titrator,,,,,
+pH Value,,pH Unit,0.01,,7.19
+,,,,,
+EA010P: Conductivity by PC Titrator,,,,,
+Electrical Conductivity @ 25°C,,µS/cm,1,,313
+,,,,,
+EA016: Calculated TDS (from Electrical Conductivity),,,,,
+Total Dissolved Solids (Calc.),,mg/L,1,,203
+,,,,,
+EA025: Total Suspended Solids dried at 104 ± 2°C,,,,,
+Suspended Solids (SS),,mg/L,5,,84
+,,,,,
+EA065: Total Hardness as CaCO3,,,,,
+Total Hardness as CaCO3,,mg/L,1,,74
+,,,,,
+ED037P: Alkalinity by PC Titrator,,,,,
+Hydroxide Alkalinity as CaCO3,DMO-210-001,mg/L,1,,<1
+Carbonate Alkalinity as CaCO3,3812-32-6,mg/L,1,,<1
+Bicarbonate Alkalinity as CaCO3,71-52-3,mg/L,1,,54
+Total Alkalinity as CaCO3,,mg/L,1,,54
+,,,,,
+ED041G: Sulfate (Turbidimetric) as SO4 2- by DA,,,,,
+Sulfate as SO4 - Turbidimetric,14808-79-8,mg/L,1,,23
+,,,,,
+ED045G: Chloride by Discrete Analyser,,,,,
+Chloride,16887-00-6,mg/L,1,,32
+,,,,,
+ED093F: Dissolved Major Cations,,,,,
+Calcium,7440-70-2,mg/L,1,,23
+Magnesium,7439-95-4,mg/L,1,,4
+Sodium,7440-23-5,mg/L,1,,26
+Potassium,7440-09-7,mg/L,1,,10
+,,,,,
+EK040P: Fluoride by PC Titrator,,,,,
+Fluoride,16984-48-8,mg/L,0.1,,<0.1
+,,,,,
+EK055G: Ammonia as N by Discrete Analyser,,,,,
+Ammonia as N,7664-41-7,mg/L,0.01,,0.02
+,,,,,
+EK057G:  Nitrite as N by Discrete Analyser,,,,,
+Nitrite as N,14797-65-0,mg/L,0.01,,0.02
+,,,,,
+EK058G:  Nitrate as N by Discrete Analyser,,,,,
+Nitrate as N,14797-55-8,mg/L,0.01,,3.50
+,,,,,
+EK059G:  Nitrite plus Nitrate as N (NOx)  by Discrete Analyser,,,,,
+Nitrite + Nitrate as N,,mg/L,0.01,,3.52
+,,,,,
+EK071G: Reactive Phosphorus as P by discrete analyser,,,,,
+Reactive Phosphorus as P,14265-44-2,mg/L,0.01,,<0.01
+,,,,,
+EN055: Ionic Balance,,,,,
+Total Anions,,meq/L,0.01,,2.71
+Total Cations,,meq/L,0.01,,2.86
+,,,,,
+EP005: Total Organic Carbon (TOC),,,,,
+Total Organic Carbon,,mg/L,1,,6

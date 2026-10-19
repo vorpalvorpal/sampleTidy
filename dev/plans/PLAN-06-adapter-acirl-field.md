@@ -160,6 +160,39 @@ Two criteria are **RETIRED** by this rewrite:
 Mutation-verified: reverting `label_col` to the hardcoded `1L`, or searching for
 the date row only *below* the header, each turns 12 tests red.
 
+### R-6.3c Date-row serial 0 is an empty date cell (2026-10-19 corpus finding)
+
+**Finding.** `Groundwater Sites` in `2400-7223-09-1 September 2022 Quarterly
+Katoomba WMF.xls` and `24006990-11 November 2020 Quarterly Katoomba WMF.xls`
+carries the visit serial (44823 / 44151) in every `Date of Sample` cell except
+the last column's (`MP # 4`, cell K11), which holds **0** — Excel's display of a
+formula over an empty cell. `.st_acirl_parse_water_sheet`'s date fill-down
+(`R/adapter-acirl-field.R`, the `date_serial_by_col` / `sample_datetime_by_col`
+block) treats any non-empty cell as a date and converts it with
+`excel_date(0)` = **1899-12-30**, so `MP # 4` was emitted as
+`sample_datetime_raw = "30/12/1899"`. Both workbooks then collided on
+(MP # 4, 1899-12-30): five field readings committed under ES2233700 against a
+date that does not exist, and three false `value_conflict`s from the Nov 2020
+file.
+
+**Rule.** A date-row cell whose numeric value is **<= 0** is not a date: it is
+treated exactly as an **empty** date cell. The layout contract above ("the same
+sheet can hold multiple visits (date filled down)") then applies unchanged —
+the column inherits the last real date to its left (here the round's own visit
+date, 44823 / 44151). With no real date to its left the column's
+`sample_datetime_raw` is **NA**, which reconcile already routes to review as
+`parse_error` / subkind `datetime` (PLAN-08 R-8.5). The adapter never emits a
+1899 date. The column's field readings are kept unchanged — only the date is
+corrected. (Not chosen: routing every serial-0 column to review — the sheet's
+own fill-down rule already says what an empty date cell means, and the
+measured cases are visibly the same visit: same sheet, same ALS report.)
+
+Criteria (`test-acirl-serial-zero-date.R`, fixture
+`fixtures/corpus-2026-10-19/2400-9999-16_SerialZeroDate_WMF.xlsx` = the real Sep 2022 sheet, anonymized by
+`generate-serial-zero.R`): no sample dated 1899; `PZ # 4` (K) carries the same
+date as column J; its 5 readings are still emitted; with D11 also set to 0, the
+first column's date is NA and the others keep their real date.
+
 ### Layer note — cross-report concerns are NOT adapter concerns
 
 An adapter's `parse(path, file_meta)` sees **one file and no database**, so it

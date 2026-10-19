@@ -91,3 +91,13 @@ Every count/name/value documented above (and asserted in
 `test-adapter-crosstab.R`) was derived by actually parsing the fixture with
 the corrected adapter and reading off the result - not hand-guessed. See
 `generate.R` for the exact synthetic fixture content.
+
+## Latin-1 pair (2026-10-19 corpus finding, PLAN-05 R-5.4a)
+
+| file | notes |
+|---|---|
+| `../corpus-2026-10-19/latin1/ES2422258_0_XTAB.csv` | real XTAB, **genuinely latin-1** (raw `0xB0`/`0xB5`/`0xB1`). One of 103 corpus crosstabs that failed with "invalid UTF-8"; must parse equal to its twin below. |
+| `../corpus-2026-10-19/utf8-twin/ES2422258_0_XTAB.csv` | the archived UTF-8 copy of the same report. Kept in its own directory so both keep the real filename. |
+
+So the "Finding" above holds only for some XTAB exports: others are real
+latin-1. Both kinds occur in the corpus.

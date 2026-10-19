@@ -714,7 +714,12 @@ acirl_field_xlsx_adapter <- function() {
   last_val <- NA_character_
   for (j in sample_cols) {
     v <- cell(date_row, j)
-    if (nonempty(v)) last_val <- v
+    # R-6.3c: a serial <= 0 is an empty date cell (Excel renders 0 as
+    # 1900-01-00), so it fills down like a blank rather than being a value.
+    if (nonempty(v)) {
+      num_v <- suppressWarnings(as.numeric(v))
+      if (is.na(num_v) || num_v > 0) last_val <- v
+    }
     date_serial_by_col[[as.character(j)]] <- last_val
   }
   sample_datetime_by_col <- lapply(date_serial_by_col, function(raw) {
