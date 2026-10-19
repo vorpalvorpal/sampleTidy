@@ -1,5 +1,5 @@
 # Apply migration 054 to the live DB: dry run, migrate, re-run (no-op), with the
-# held workbook's ingest_file row before and after. Apply AFTER 053. Run from
+# four held files' ingest_file rows before and after. Apply AFTER 053. Run from
 # the repo root:
 #   Rscript dev/migrations/apply-054-hold-2400-7400-07.R
 # Set SAMPLETIDY_MIG054_DB / SAMPLETIDY_MIG054_SNAPSHOT_DIR /
@@ -22,7 +22,8 @@ report <- function(label) {
     (SELECT count(*) FROM change_log WHERE actor = '054-hold-2400-7400-07') AS log_054
     FROM schema_version"))
   print(DBI::dbGetQuery(con, "SELECT hash, filename, state, state_reason, adapter, tier FROM ingest_file
-    WHERE hash = 'd1597914e52ce9077f376b8ded30791c'"), right = FALSE)
+    WHERE hash IN ('d1597914e52ce9077f376b8ded30791c', '07bcecfc6312255ae6f21cc6c977daaa',
+    'e11b438cfd496070dc2fef28effdbbe3', 'b66193946f485819e4b0e1451f1e70ac')"), right = FALSE)
 }
 report("before")
 for (dr in c(TRUE, FALSE, FALSE)) {

@@ -1,11 +1,18 @@
-# Operator-run migration: seed ONE `ingest_file` row (state `ignored`) that holds
-# the ACIRL Katoomba field workbook "2400-7400-07 July 2024 Monthly Katoomba
-# WMF.xls" out of the import until Robin rules (D1). Marker 1054. Requires 1053.
+# Operator-run migration: seed FOUR `ingest_file` rows (state `ignored`) that hold
+# four files out of the import until Robin rules. Marker 1054. Requires 1053.
 #
 # ---- WHY -----------------------------------------------------------------------
-# The workbook, its sheets and ALS ES2421689 all say 1 Jul 2024, but live
-# already holds ES2421689's ALS values on 19 Jun 2024 samples. Importing the
-# workbook would split one visit across two days. Held pending Robin (D1).
+# D1: the ACIRL Katoomba field workbook "2400-7400-07 July 2024 Monthly Katoomba
+# WMF.xls", its sheets and ALS ES2421689 all say 1 Jul 2024, but live already
+# holds ES2421689's ALS values on 19 Jun 2024 samples. Importing the workbook
+# would split one visit across two days.
+# D11: the ESdat revision-1 files of ALS ES2006927 (Chemistry2e.CSV, Header.XML,
+# Sample2e.CSV) report K.S01A/S05/S09/TS01 sampled 25 Feb 2020 18:34 with values
+# equal to live ES2006494's 25 Feb samples, while live holds ES2006927 on 27 Feb
+# with other values; importing would duplicate ES2006494. NB the hash keys
+# content: the revision-0 Chemistry2e.CSV is byte-identical to the revision-1
+# one, so it is held too (the revision-0 Header.XML and Sample2e.CSV differ and
+# are not held).
 #
 # ---- REVERSIBLE ----------------------------------------------------------------
 # Once Robin rules, reset the row with ingest_file_set_state(..., reset = TRUE)
@@ -15,6 +22,13 @@
 #   file                                                    xxHash128 (ingest_file key)
 #   2400-7400-07 July 2024 Monthly Katoomba WMF.xls         d1597914e52ce9077f376b8ded30791c
 #     size 205824, md5 ccfafa7626d57cf853aa7061838f6c7a
+#   Katoomba Incident.ESDAT_ES2006927_1.Chemistry2e.CSV     07bcecfc6312255ae6f21cc6c977daaa
+#     size 200204, md5 8682f959da29a700f97b8761c88ed5ab
+#   Katoomba Incident.ESDAT_ES2006927_1.Header.XML          e11b438cfd496070dc2fef28effdbbe3
+#     size 786, md5 7850eed5c30adb385ac063095d5175e9
+#   Katoomba Incident.ESDAT_ES2006927_1.Sample2e.CSV        b66193946f485819e4b0e1451f1e70ac
+#     size 16381, md5 7882107fe8bec58f1f8a179965a2bd0c
+#   (ESdat rows: adapter esdat / tier exact, per the B1 rehearsal DB.)
 #   * state = 'ignored', in the shape of 047's rows: filename, path_first_seen
 #     (the OneDrive path where the file sits, assets/unprocessed/), size,
 #     first_seen_at = updated_at = the migration time, adapter/tier = what the
@@ -25,13 +39,13 @@
 #
 # ---- PRECONDITIONS (any failure aborts; nothing is written) ---------------------
 #   * marker 1053 present;
-#   * no ingest_file row for the hash or the filename.
+#   * no ingest_file row for any of the four hashes or filenames.
 #
-# Writes, in one transaction: db_append of the ingest_file row (change_log
-# insert, uuid_row NULL, source_hash = the hash), actor "054-hold-2400-7400-07",
+# Writes, in one transaction: db_append of the four ingest_file rows (change_log
+# inserts, uuid_row NULL, source_hash = the file's hash), actor "054-hold-2400-7400-07",
 # and the marker; every other table, row and column is checksummed before and
 # after. Backups: verified whole-file snapshot, plus
-# `054-hold-2400-7400-07-BACKUP-ingest_file.csv` (header-only: the row does not
+# `054-hold-2400-7400-07-BACKUP-ingest_file.csv` (header-only: the rows do not
 # exist yet).
 #
 # Idempotent: marker present -> re-verify, no-op.
@@ -46,18 +60,32 @@
 .mig054_requires <- 1053L
 .mig054_name <- "054-hold-2400-7400-07"
 .mig054_actor <- .mig054_name
-.mig054_hash <- "d1597914e52ce9077f376b8ded30791c"
-.mig054_md5 <- "ccfafa7626d57cf853aa7061838f6c7a"
-.mig054_filename <- "2400-7400-07 July 2024 Monthly Katoomba WMF.xls"
-.mig054_path <- paste0("/Users/rjs/Library/CloudStorage/OneDrive-BlueMountainsCityCouncil/Sharepoint/",
-                       "waste_data - Environmental monitoring/assets/unprocessed/", .mig054_filename)
-.mig054_size <- 205824
-.mig054_adapter <- "acirl_field_xlsx"
-.mig054_tier <- "format"
+.mig054_assets <- paste0("/Users/rjs/Library/CloudStorage/OneDrive-BlueMountainsCityCouncil/Sharepoint/",
+                         "waste_data - Environmental monitoring/assets/unprocessed/")
+.mig054_files <- data.frame(
+  hash = c("d1597914e52ce9077f376b8ded30791c", "07bcecfc6312255ae6f21cc6c977daaa",
+           "e11b438cfd496070dc2fef28effdbbe3", "b66193946f485819e4b0e1451f1e70ac"),
+  md5 = c("ccfafa7626d57cf853aa7061838f6c7a", "8682f959da29a700f97b8761c88ed5ab",
+          "7850eed5c30adb385ac063095d5175e9", "7882107fe8bec58f1f8a179965a2bd0c"),
+  filename = c("2400-7400-07 July 2024 Monthly Katoomba WMF.xls",
+               "Katoomba Incident.ESDAT_ES2006927_1.Chemistry2e.CSV",
+               "Katoomba Incident.ESDAT_ES2006927_1.Header.XML",
+               "Katoomba Incident.ESDAT_ES2006927_1.Sample2e.CSV"),
+  size = c(205824, 200204, 786, 16381),
+  adapter = c("acirl_field_xlsx", "esdat", "esdat", "esdat"),
+  tier = c("format", "exact", "exact", "exact"),
+  decision = c("D1", "D11", "D11", "D11"),
+  stringsAsFactors = FALSE)
 .mig054_state <- "ignored"
-.mig054_state_reason <- paste0("held pending Robin (D1): file, sheets and ALS ES2421689 say 1 Jul 2024 but live files ",
-                               "ES2421689's ALS values on 19 Jun 2024 samples; importing would split one visit across two days - migration 054")
-.mig054_reason_file <- "054 (D1): held out of the import pending Robin's ruling; seeded ignored so the router skips it"
+.mig054_state_reason <- function(i) {
+  if (.mig054_files$decision[[i]] == "D1")
+    paste0("held pending Robin (D1): file, sheets and ALS ES2421689 say 1 Jul 2024 but live files ES2421689's ALS values on 19 Jun 2024 samples; importing would split one visit across two days - migration 054")
+  else
+    paste0("held pending Robin (D11): ES2006927 revision 1 reports K.S01A/S05/S09/TS01 sampled 25 Feb 2020 18:34 with values equal to live ES2006494's 25 Feb samples, while live holds ES2006927 on 27 Feb with other values; importing would duplicate ES2006494 - migration 054")
+}
+.mig054_reason_file <- function(i) sprintf("054 (%s): held out of the import pending Robin's ruling; seeded ignored so the router skips it",
+                                           .mig054_files$decision[[i]])
+.mig054_inlist <- function(x) paste0("(", paste0("'", x, "'", collapse = ","), ")")
 
 .mig054_scalar <- function(con, sql, ...) as.integer(DBI::dbGetQuery(con, sql, params = list(...))[[1]][[1]])
 .mig054_fail <- function(msg) cli::cli_abort(paste0(.mig054_name, ": ", msg), class = "sampletidy_error")
@@ -69,9 +97,10 @@
 }
 
 .mig054_problems <- function(con) {
-  n <- .mig054_scalar(con, "SELECT COUNT(*) FROM ingest_file WHERE hash = ? OR filename = ?",
-                      .mig054_hash, .mig054_filename)
-  if (n != 0L) return(sprintf("%d ingest_file row(s) already exist for this hash/filename", n))
+  f <- .mig054_files
+  n <- .mig054_scalar(con, sprintf("SELECT COUNT(*) FROM ingest_file WHERE hash IN %s OR filename IN %s",
+                                   .mig054_inlist(f$hash), .mig054_inlist(f$filename)))
+  if (n != 0L) return(sprintf("%d ingest_file row(s) already exist for these hashes/filenames", n))
   character(0)
 }
 
@@ -83,11 +112,12 @@
   invisible(TRUE)
 }
 
-.mig054_row <- function(at) {
-  data.frame(hash = .mig054_hash, filename = .mig054_filename, path_first_seen = .mig054_path,
-             size = .mig054_size, first_seen_at = at, updated_at = at,
-             state = .mig054_state, state_reason = .mig054_state_reason,
-             adapter = .mig054_adapter, tier = .mig054_tier,
+.mig054_rows <- function(at) {
+  f <- .mig054_files
+  data.frame(hash = f$hash, filename = f$filename, path_first_seen = paste0(.mig054_assets, f$filename),
+             size = f$size, first_seen_at = rep(at, nrow(f)), updated_at = rep(at, nrow(f)),
+             state = .mig054_state, state_reason = vapply(seq_len(nrow(f)), .mig054_state_reason, character(1)),
+             adapter = f$adapter, tier = f$tier,
              work_order = NA_character_, revision = NA_integer_, org = NA_character_,
              uuid_asset = NA_character_, registry_fingerprint = NA_character_, stringsAsFactors = FALSE)
 }
@@ -99,7 +129,7 @@
   touched <- c("ingest_file", "change_log", "schema_version")
   out <- lapply(setdiff(tabs, touched), function(t) q(sprintf('SELECT * FROM "%s" ORDER BY ALL', t)))
   names(out) <- setdiff(tabs, touched)
-  out$ingest_file_rest <- q(sprintf("SELECT * FROM ingest_file WHERE hash <> '%s' ORDER BY hash", .mig054_hash))
+  out$ingest_file_rest <- q(sprintf("SELECT * FROM ingest_file WHERE hash NOT IN %s ORDER BY hash", .mig054_inlist(.mig054_files$hash)))
   out$change_log_rest <- q(sprintf("SELECT * FROM change_log WHERE actor <> '%s' ORDER BY ALL", .mig054_actor))
   out$schema_version_rest <- q(sprintf("SELECT * FROM schema_version WHERE version <> %d ORDER BY ALL", .mig054_marker_version))
   out$views <- q("SELECT view_name, sql FROM duckdb_views() WHERE NOT internal ORDER BY view_name")
@@ -110,22 +140,26 @@
 .mig054_done_problem <- function(con) {
   if (.mig054_scalar(con, "SELECT COUNT(*) FROM schema_version WHERE version = ?", .mig054_marker_version) != 1L)
     return("marker 1054 missing")
-  r <- DBI::dbGetQuery(con, "SELECT * FROM ingest_file WHERE hash = ?", params = list(.mig054_hash))
-  if (nrow(r) != 1L) return(sprintf("%d ingest_file rows for the hash, expected 1", nrow(r)))
-  if (!identical(r$state[[1]], .mig054_state) || !identical(r$state_reason[[1]], .mig054_state_reason) ||
-      !identical(r$adapter[[1]], .mig054_adapter) || !identical(r$tier[[1]], .mig054_tier))
-    return(sprintf("ingest_file %s is %s/%s/%s/%s", .mig054_hash, r$state[[1]], r$state_reason[[1]], r$adapter[[1]], r$tier[[1]]))
-  # Honoured by the router and inbox exactly as their own code reads it:
-  # terminal, never reconsidered, never re-decided on a fingerprint change, done to the inbox.
-  if (!(r$state[[1]] %in% .st_ingest_terminal_states) ||
-      .st_is_registry_verdict(r$state[[1]], r$state_reason[[1]]) ||
-      .st_is_router_verdict(r$state[[1]], r$state_reason[[1]], r$adapter[[1]]) ||
-      !(r$state[[1]] %in% .inbox_done_states))
-    return(sprintf("ingest_file %s would be re-decided by the router or inbox", .mig054_hash))
+  f <- .mig054_files
+  r <- DBI::dbGetQuery(con, sprintf("SELECT * FROM ingest_file WHERE hash IN %s", .mig054_inlist(f$hash)))
+  if (nrow(r) != nrow(f)) return(sprintf("%d ingest_file rows for the hashes, expected %d", nrow(r), nrow(f)))
+  r <- r[match(f$hash, r$hash), , drop = FALSE]
+  for (i in seq_len(nrow(f))) {
+    if (!identical(r$state[[i]], .mig054_state) || !identical(r$state_reason[[i]], .mig054_state_reason(i)) ||
+        !identical(r$adapter[[i]], f$adapter[[i]]) || !identical(r$tier[[i]], f$tier[[i]]))
+      return(sprintf("ingest_file %s is %s/%s/%s/%s", f$hash[[i]], r$state[[i]], r$state_reason[[i]], r$adapter[[i]], r$tier[[i]]))
+    # Honoured by the router and inbox exactly as their own code reads it:
+    # terminal, never reconsidered, never re-decided on a fingerprint change, done to the inbox.
+    if (!(r$state[[i]] %in% .st_ingest_terminal_states) ||
+        .st_is_registry_verdict(r$state[[i]], r$state_reason[[i]]) ||
+        .st_is_router_verdict(r$state[[i]], r$state_reason[[i]], r$adapter[[i]]) ||
+        !(r$state[[i]] %in% .inbox_done_states))
+      return(sprintf("ingest_file %s would be re-decided by the router or inbox", f$hash[[i]]))
+  }
   cl <- DBI::dbGetQuery(con, "SELECT tbl, action, uuid_row, source_hash FROM change_log WHERE actor = ?",
                         params = list(.mig054_actor))
-  if (nrow(cl) != 1L || cl$tbl != "ingest_file" || cl$action != "insert" || !identical(cl$source_hash, .mig054_hash))
-    return(sprintf("054 change_log is %d row(s), not 1 ingest_file insert as planned", nrow(cl)))
+  if (nrow(cl) != nrow(f) || any(cl$tbl != "ingest_file") || any(cl$action != "insert") || !setequal(cl$source_hash, f$hash))
+    return(sprintf("054 change_log is %d row(s), not %d ingest_file inserts as planned", nrow(cl), nrow(f)))
   NULL
 }
 
@@ -166,20 +200,22 @@ mig054_backup <- function(db, snapshot_dir, .now = NULL) {
 .mig054_apply <- function(con, recorded_at) {
   sums_before <- .mig054_checksum(con)
   want <- .mig054_counts(con)
-  want$ingest_file <- want$ingest_file + 1L
-  want$change_log <- want$change_log + 1L
+  want$ingest_file <- want$ingest_file + nrow(.mig054_files)
+  want$change_log <- want$change_log + nrow(.mig054_files)
   want$schema_version <- want$schema_version + 1L
-  row <- .mig054_row(recorded_at)
+  rows <- .mig054_rows(recorded_at)
   db_transaction(con, function(con) {
-    db_append(con, "ingest_file", row, actor = .mig054_actor, reason = .mig054_reason_file, source_hash = .mig054_hash)
+    for (i in seq_len(nrow(rows)))
+      db_append(con, "ingest_file", rows[i, , drop = FALSE], actor = .mig054_actor,
+                reason = .mig054_reason_file(i), source_hash = rows$hash[[i]])
     DBI::dbExecute(con, "INSERT INTO schema_version (version, applied_at) VALUES (?, ?)",
                    params = list(.mig054_marker_version, recorded_at))
     .mig054_verify(con)
     got <- .mig054_counts(con)
     if (!identical(got, want))
-      .mig054_fail(sprintf("counts are not before + 1 ingest_file, + 1 change_log, + 1 marker: %s",
+      .mig054_fail(sprintf("counts are not before + 4 ingest_file, + 4 change_log, + 1 marker: %s",
                            paste(names(got), unlist(got), unlist(want), sep = ":", collapse = ", ")))
-    if (!identical(sums_before, .mig054_checksum(con))) .mig054_fail("something outside the planned row moved.")
+    if (!identical(sums_before, .mig054_checksum(con))) .mig054_fail("something outside the planned rows moved.")
     NULL
   })
   invisible(NULL)
@@ -204,7 +240,8 @@ mig054_run <- function(db, snapshot_dir, dry_run = FALSE, .now = NULL, csv_dir =
 
   pre_con <- st_connect(db, read_only = TRUE)
   tryCatch(.mig054_check_preconditions(pre_con), finally = DBI::dbDisconnect(pre_con, shutdown = TRUE))
-  logf("Seed ingest_file %s (%s) ignored: %s", .mig054_hash, .mig054_filename, .mig054_state_reason)
+  for (i in seq_len(nrow(.mig054_files)))
+    logf("Seed ingest_file %s (%s) ignored: %s", .mig054_files$hash[[i]], .mig054_files$filename[[i]], .mig054_state_reason(i))
   if (isTRUE(dry_run)) {
     logf("DRY RUN: every precondition passed. No backup taken, nothing written.")
     return(invisible(list(status = "dry_run", backup_path = NA_character_, restore_command = NA_character_,
@@ -213,7 +250,7 @@ mig054_run <- function(db, snapshot_dir, dry_run = FALSE, .now = NULL, csv_dir =
 
   bk_con <- st_connect(db, read_only = TRUE)
   tryCatch({
-    .mig054_write_csv(DBI::dbGetQuery(bk_con, "SELECT * FROM ingest_file WHERE hash = ?", params = list(.mig054_hash)),
+    .mig054_write_csv(DBI::dbGetQuery(bk_con, sprintf("SELECT * FROM ingest_file WHERE hash IN %s ORDER BY hash", .mig054_inlist(.mig054_files$hash))),
                       file.path(csv_dir, sprintf("%s-BACKUP-ingest_file.csv", .mig054_name)), "hash")
   }, finally = DBI::dbDisconnect(bk_con, shutdown = TRUE))
   logf("Row backups written to %s", csv_dir)
@@ -228,7 +265,7 @@ mig054_run <- function(db, snapshot_dir, dry_run = FALSE, .now = NULL, csv_dir =
     .mig054_apply(con, recorded_at)
   }, db = db)
 
-  logf("%s migrated successfully (marker %d): 1 ingest_file row (ignored).", .mig054_name, .mig054_marker_version)
+  logf("%s migrated successfully (marker %d): 4 ingest_file rows (ignored).", .mig054_name, .mig054_marker_version)
   invisible(list(status = "migrated", backup_path = backup_path,
                  restore_command = restore_command, recorded_at = recorded_at))
 }
