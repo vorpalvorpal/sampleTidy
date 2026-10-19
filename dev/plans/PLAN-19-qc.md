@@ -60,7 +60,7 @@ Corpus measurements are in Appendix A.
   duplicate (LAB_D/DUP) that ALS reports is judged only by ALS's limits (QCI/QC report).
   sampleTidy never recomputes it. `qc_dup_rpd` applies only to Council's blind field
   duplicates, which ALS cannot recognise.
-- **R19-12 [proposed 2026-10-19, pending Robin] Field-duplicate pairing has no ±3-day
+- **R19-12 (Robin, 2026-10-19) Field-duplicate pairing has no ±3-day
   fallback.** The parent is the parent point's sample in the same work order. Failing
   that, it is the parent point's sample on the **same Sydney date** in any work order.
   Failing that, the pair is unresolved (a `qc_unresolved` flag), not guessed.
