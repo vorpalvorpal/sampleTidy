@@ -140,6 +140,98 @@
   invisible(NULL)
 }
 
+# ---- per-file sample-date overrides (C3) ---------------------------------
+
+#' Load the sample-date override table
+#'
+#' Reads `inst/extdata/sample-date-overrides.csv` (or the file named by option
+#' `sampletidy.date_overrides_path`, which tests use to inject a table).
+#' Columns: `hash` (xxHash128 of the source file), `date_from` and `date_to`
+#' (ISO `YYYY-MM-DD`), `authority`, `reason`. Aborts with class
+#' `sampletidy_error` on a malformed or round-trip-failing date, a duplicate
+#' `(hash, date_from)` key, or `date_from == date_to`.
+#' @return data.frame with the five columns, dates as `Date`.
+#' @keywords internal
+#' @noRd
+.ig_date_overrides <- function(path = getOption(
+                                 "sampletidy.date_overrides_path",
+                                 system.file("extdata", "sample-date-overrides.csv",
+                                             package = "sampleTidy"))) {
+  cols <- c("hash", "date_from", "date_to", "authority", "reason")
+  if (!is.character(path) || length(path) != 1L || !nzchar(path) || !file.exists(path)) {
+    cli::cli_abort("Sample-date overrides file not found: {.path {path}}.",
+                   class = "sampletidy_error")
+  }
+  raw <- utils::read.csv(path, colClasses = "character", na.strings = character(0),
+                         stringsAsFactors = FALSE)
+  if (!identical(names(raw), cols)) {
+    cli::cli_abort("Sample-date overrides {.path {path}} must have columns {.val {cols}}.",
+                   class = "sampletidy_error")
+  }
+  parse_iso <- function(x, nm) {
+    d <- as.Date(x, format = "%Y-%m-%d")
+    bad <- is.na(d) | format(d, "%Y-%m-%d") != x
+    if (any(bad)) {
+      cli::cli_abort("Sample-date overrides: {.field {nm}} is not an ISO date: {.val {x[bad]}}.",
+                     class = "sampletidy_error")
+    }
+    d
+  }
+  raw$date_from <- parse_iso(raw$date_from, "date_from")
+  raw$date_to <- parse_iso(raw$date_to, "date_to")
+  if (any(raw$date_from == raw$date_to)) {
+    cli::cli_abort("Sample-date overrides: {.field date_from} equals {.field date_to}.",
+                   class = "sampletidy_error")
+  }
+  if (anyDuplicated(raw[c("hash", "date_from")]) > 0L) {
+    cli::cli_abort("Sample-date overrides: duplicate (hash, date_from) key.",
+                   class = "sampletidy_error")
+  }
+  raw[cols]
+}
+
+#' Apply sample-date overrides to an IR samples (or results) table
+#'
+#' For each row whose `source_hash` matches an override and whose
+#' `sample_datetime_raw` parses (reconcile's parser and formats) to the
+#' Sydney date `date_from`, rewrites `sample_datetime_raw` to `date_to`,
+#' keeping the Sydney clock time. A date-only value is rewritten as
+#' `%d/%m/%Y`; a datetime as `%d %b %Y %H:%M`; both are in
+#' `.rc_datetime_formats`. Nothing else changes. NA / unparseable values are
+#' untouched.
+#' @return `samples` with attribute `"date_overrides_applied"`: a data.frame
+#'   (hash, date_from, date_to, n_rows) of overrides that matched >= 1 row.
+#' @keywords internal
+#' @noRd
+.ig_apply_date_overrides <- function(samples, overrides) {
+  applied <- data.frame(hash = character(0), date_from = as.Date(character(0)),
+                        date_to = as.Date(character(0)), n_rows = integer(0),
+                        stringsAsFactors = FALSE)
+  if (nrow(overrides) > 0L && nrow(samples) > 0L &&
+      all(c("source_hash", "sample_datetime_raw") %in% names(samples))) {
+    raw <- samples$sample_datetime_raw
+    ct <- parse_lab_datetime(raw, .rc_datetime_formats)
+    day <- as.Date(format(ct, "%Y-%m-%d", tz = "Australia/Sydney"))
+    timed <- has_clock_time(raw)
+    for (i in seq_len(nrow(overrides))) {
+      hit <- which(!is.na(day) & samples$source_hash == overrides$hash[[i]] &
+                     day == overrides$date_from[[i]])
+      if (length(hit) == 0L) next
+      to <- overrides$date_to[[i]]
+      raw[hit] <- ifelse(
+        timed[hit],
+        paste(format(to, "%d %b %Y"), format(ct[hit], "%H:%M", tz = "Australia/Sydney")),
+        format(to, "%d/%m/%Y")
+      )
+      applied[nrow(applied) + 1L, ] <- list(overrides$hash[[i]], overrides$date_from[[i]],
+                                            to, length(hit))
+    }
+    samples$sample_datetime_raw <- raw
+  }
+  attr(samples, "date_overrides_applied") <- applied
+  samples
+}
+
 # ---- reconcile + commit stage --------------------------------------------
 
 #' Reconcile and (unless `dry_run`) commit every assembled event
@@ -174,7 +266,17 @@
   events_failed <- 0L
   tally <- list(new = 0L, superseded = 0L, already_present = 0L, skipped = 0L, review_opened = 0L)
 
+  # C3: load the override table once per run, apply per event below.
+  date_overrides <- .ig_date_overrides()
+
   for (event in events) {
+    if (nrow(date_overrides) > 0L) {
+      for (nm in c("results", "samples")) {
+        if (is.data.frame(event[[nm]])) {
+          event[[nm]] <- .ig_apply_date_overrides(event[[nm]], date_overrides)
+        }
+      }
+    }
     kept_hashes <- event$files$hash[.ig_kept_rows(event$files)]
 
     # R-12.2/A60: contain a per-event reconcile/commit failure so it never
