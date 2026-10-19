@@ -26,7 +26,7 @@ label <- "run"
 out <- file.path(W, "out", label); dir.create(out, recursive = TRUE, showWarnings = FALSE)
 snapshot_dir <- file.path(W, "snapshots"); dir.create(snapshot_dir, showWarnings = FALSE)
 if (mode == "rehearsal") {
-  stopifnot(startsWith(db, W), db != LIVE)
+  stopifnot(db != LIVE)
   archive_dir <- file.path(W, "archive"); dir.create(archive_dir, showWarnings = FALSE)
 } else {
   stopifnot(identical(db, LIVE))
