@@ -8,6 +8,15 @@
 # alias for the dimensionless unit `"1"`.
 .unitless_aliases <- c("pH", "pH Unit", "pH_Units")
 
+# C5 (2026-10-20): unit spelling map, Robin-approved corpus step 3. Lab
+# spellings of colony counts that udunits cannot parse are rewritten to
+# parseable equivalents before any comparison or conversion. Exact keys
+# only - no case folding - because the corpus vocabulary has just these two.
+.unit_spelling_map <- c(
+  "CFU/mL" = "count/mL",
+  "CFU/100mL" = "count/(100 mL)"
+)
+
 #' Canonical form of a unit string for internal comparisons
 #'
 #' Collapses any of `.unitless_aliases` to the dimensionless udunits symbol
@@ -17,7 +26,10 @@
 #' @return character vector, same length.
 #' @keywords internal
 .canonical_unit <- function(unit) {
-  ifelse(unit %in% .unitless_aliases, "1", unit)
+  out <- ifelse(unit %in% .unitless_aliases, "1", unit)
+  hit <- !is.na(out) & out %in% names(.unit_spelling_map)
+  out[hit] <- unname(.unit_spelling_map[out[hit]])
+  out
 }
 
 #' Is a string a valid, recognised unit?
@@ -43,7 +55,7 @@ is_valid_unit <- function(unit) {
       }
       isTRUE(tryCatch(
         {
-          units::as_units(u)
+          units::as_units(.canonical_unit(u))
           TRUE
         },
         error = function(e) FALSE
