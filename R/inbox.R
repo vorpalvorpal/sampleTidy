@@ -896,7 +896,8 @@ import_report <- function(db = st_config("live_db"), report_dir, now = Sys.time(
   "project_parent_conflict" = "work order's parent project disagrees",
   "other/foreign_work_order" = "file belongs to a different work order",
   "adapter_tie" = "two readers claimed the same file",
-  "parse_error" = "file could not be read"
+  "parse_error" = "file could not be read",
+  "qc_label_conflict" = "lab's second sample ID names a QC type, but the point is not a QC code"
 )
 
 .inbox_meaning <- function(kind, subkind) {

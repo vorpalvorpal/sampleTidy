@@ -1866,6 +1866,35 @@
   sample_uuid
 }
 
+# PLAN-19 R-19.6: one `sample_lab_id` row per (committed sample, ALS lab
+# number), for the adapters whose `lab_sample_id` IS a real lab number
+# (crosstab, ESdat). ACIRL's synthetic `<sheet>!c<col>` id never qualifies
+# (A45: a lookup, never an identity key). An existing (work_order, lab_id) is
+# kept, not overwritten. A DB older than migration 048 has no table: no-op.
+.ct_lab_id_adapters <- c("als_xtab", "als_enmrg", "esdat")
+
+.ct_record_lab_ids <- function(con, clean, reason) {
+  if (nrow(clean) == 0 || !DBI::dbExistsTable(con, "sample_lab_id")) return(invisible(0L))
+  if (!all(c("lab_sample_id", "adapter", "uuid_sample") %in% names(clean))) return(invisible(0L))
+  aid <- vapply(clean$adapter, .st_adapter_id, character(1))
+  lab_id <- .qc_norm_lab_id(clean$lab_sample_id)
+  keep <- aid %in% .ct_lab_id_adapters & !is.na(lab_id) & !is.na(clean$uuid_sample)
+  if (!any(keep)) return(invisible(0L))
+  rows <- data.frame(uuid_sample = clean$uuid_sample[keep],
+                     work_order = sub("-[0-9]{3}$", "", lab_id[keep]),
+                     lab_id = lab_id[keep],
+                     client_id = if ("feature_raw" %in% names(clean)) clean$feature_raw[keep] else NA_character_,
+                     source_hash = clean$source_hash[keep], stringsAsFactors = FALSE)
+  rows <- rows[!duplicated(paste(rows$work_order, rows$lab_id)), , drop = FALSE]
+  have <- DBI::dbGetQuery(con, "SELECT work_order, lab_id FROM sample_lab_id")
+  rows <- rows[!paste(rows$work_order, rows$lab_id) %in% paste(have$work_order, have$lab_id), , drop = FALSE]
+  for (h in unique(rows$source_hash)) {
+    r <- rows[rows$source_hash %in% h, , drop = FALSE]
+    db_append(con, "sample_lab_id", r, actor = .ct_actor, reason = reason, source_hash = h)
+  }
+  invisible(nrow(rows))
+}
+
 # ---- step 3: analyses ---------------------------------------------------------
 
 #' The matched method's `conversion_constant` (NA when none / no method).
@@ -2437,6 +2466,8 @@ commit_event <- function(event, resolved, con) {
       clean <- .ct_materialise_lab_methods(con, clean, event, .ct_actor, reason)
 
       clean$uuid_sample <- .ct_resolve_samples(con, clean, uuid_project, reason)
+      # PLAN-19 R-19.6: the ALS lab sample numbers of the committed samples.
+      .ct_record_lab_ids(con, clean, reason)
       # PLAN-15 C.4: provenance for every structural / WO-site-inferred
       # resolution, written once the sample uuid it attaches to exists.
       .ct_record_resolution_provenance(con, clean, .ct_actor)

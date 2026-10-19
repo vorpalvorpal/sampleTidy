@@ -7,5 +7,5 @@ blank_detect,any,any,threshold,LOR,—,,SQMP s8.4 (PLAN-19 R-19.25),proposed
 blank_factor,any,any,f,5,x_blank,qualify,SQMP s8.4 (PLAN-19 R-19.25),proposed
 blank_factor,any,lab_contaminant,f,10,x_blank,qualify,SQMP s8.4 (PLAN-19 R-19.25),proposed
 carryover,field_blank;rinsate_blank,any,min_analytes,2,count,ask_acirl,SQMP s8.4 (PLAN-19 R-19.26),proposed
-filtered_method_regex,any,any,regex,^(E[A-Z][0-9]{3}[A-Z]?F|EG053FG[^:]*|EP002):,—,,SQMP s8.3 (PLAN-19 R-19.33),proposed
+filtered_method_regex,any,any,regex,^(E[A-Z][0-9]{3}F|EG005\(ED093\)F|EG053FG[^:]*|EP002):,—,,SQMP s8.3 (PLAN-19 R-19.33; re-measured on live ALS methods 2026-10-19: adds EG005(ED093)F and drops EP035SF total phenol),proposed
 completeness,any,any,min,100,percent,chase,SQMP s8 (PLAN-19 R-19.27),proposed

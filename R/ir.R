@@ -35,6 +35,11 @@
   review_payload = "list", review_withhold = "logical"
 )
 
+# Optional PLAN-19 column on `samples` (R-19.14): the crosstab's
+# `Client sample ID (Secondary)` per column. Accepted and type-checked when
+# present, never part of the prototype.
+.st_ir_samples_optional_types <- c(secondary_id = "character")
+
 # Fields required to be non-NA (R-3.1): base set for both kinds, extended
 # for results with analyte_raw/value_raw.
 .st_ir_required <- list(
@@ -116,7 +121,8 @@ ir_samples <- function(...) {
   }
   ir_validate(out, "samples")
   if (length(args) > 0) {
-    out <- out[, .st_ir_samples_cols, drop = FALSE]
+    out <- out[, c(.st_ir_samples_cols,
+                   intersect(names(.st_ir_samples_optional_types), names(out))), drop = FALSE]
   }
   out
 }
@@ -162,7 +168,7 @@ ir_validate <- function(x, kind) {
   optional <- if (kind == "results") {
     .st_ir_results_optional_types[names(.st_ir_results_optional_types) %in% names(x)]
   } else {
-    character(0)
+    .st_ir_samples_optional_types[names(.st_ir_samples_optional_types) %in% names(x)]
   }
   extra_cols <- setdiff(names(x), c(cols, names(optional)))
   if (length(extra_cols) > 0) {
