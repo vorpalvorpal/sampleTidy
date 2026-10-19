@@ -403,3 +403,31 @@ test_that("R-4.4: real ES2617126 Header.XML yields the pinned report metadata", 
   expect_identical(h$project_id, "SITEA Apirl 2024 - Rain Event")
   expect_identical(h$lab_name, "ALSE-Sydney")
 })
+
+# ---- C5 S2: ESdat Result_Unit "-" is unitless -------------------------------
+
+c5_parse_units <- function(rows) {
+  d <- withr::local_tempdir(.local_envir = parent.frame())
+  p <- file.path(d, "PROJ_A.ESDAT_XX1234567_0.Chemistry2e.CSV")
+  writeLines(c(paste(chemistry2e_header, collapse = ","), rows), p, useBytes = TRUE)
+  out <- esdat_adapter()$parse(p, sampleTidy:::file_meta(p))
+  out$results
+}
+
+test_that("C5-S2: ESdat Result_Unit '-' on Sodium Adsorption Ratio is emitted as units_raw '1'", {
+  res <- c5_parse_units(c(
+    "XX1234567001,,Sodium Adsorption Ratio,,0.5,-,T,Numeric,SAR,ED0xx: SAR,26 May 2025,26 May 2025,,,,,,",
+    "XX1234567001,16984-48-8,Fluoride,,2.3,mg/L,T,Numeric,Fluoride by PC Titrator,EK040P: Fluoride by PC Titrator,26 May 2025,26 May 2025,0.1,mg/L,,,,"
+  ))
+  expect_identical(res$units_raw[res$analyte_raw == "Sodium Adsorption Ratio"], "1")
+  # control: other units untouched
+  expect_identical(res$units_raw[res$analyte_raw == "Fluoride"], "mg/L")
+})
+
+test_that("C5-S2: only an exact '-' is mapped (a unit merely containing '-' is left alone)", {
+  res <- c5_parse_units(c(
+    "XX1234567001,,Sodium Adsorption Ratio,,0.5,-,T,Numeric,SAR,ED0xx: SAR,26 May 2025,26 May 2025,,,,,,",
+    "XX1234567001,,Odd,,1,mg-N/L,T,Numeric,x,y,26 May 2025,26 May 2025,,,,,,"
+  ))
+  expect_identical(res$units_raw[res$analyte_raw == "Odd"], "mg-N/L")
+})
