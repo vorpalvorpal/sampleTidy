@@ -21,9 +21,12 @@ RSCRIPT="${SAMPLETIDY_AUTOIMPORT_RSCRIPT:-Rscript}"
 LOG="${SAMPLETIDY_AUTOIMPORT_LOG:-$HOME/Library/Logs/sampletidy-autoimport.log}"
 STATE="$REPORT/.imports.state"; GATE="$REPORT/.imports.gate"
 
+# The Sydney date is hashed too (ruling R14): the first tick of each Sydney day
+# passes the gate, so R can refresh the status note's dates.
 snapshot() {
   { find "$INPUT" -mindepth 1 -maxdepth 2 ! -name .DS_Store -exec stat -f '%N|%z|%m' {} + 2>/dev/null | LC_ALL=C sort
-    stat -f 'DB|%z|%m' "$DB"; } | shasum -a 256 | cut -d' ' -f1
+    stat -f 'DB|%z|%m' "$DB"
+    TZ=Australia/Sydney date +%F; } | shasum -a 256 | cut -d' ' -f1
 }
 
 NOW="$(snapshot)"

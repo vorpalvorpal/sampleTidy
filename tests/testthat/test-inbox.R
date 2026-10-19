@@ -127,6 +127,68 @@ test_that("inbox_check(): only the DB file's stat changed -> 'status'", {
   expect_identical(tree_snapshot(s$report_dir), before)
 })
 
+# ---- ruling 2026-10-19 R14: a new Sydney day is a "status" reason ----------------
+
+# A state written by a real run at `t0`, then checked at `t`.
+r14_check <- function(s, t) inbox_check(s$input_dir, s$report_dir, now = t, db = s$db)
+
+test_that("inbox_check() (R14): same Sydney day -> 'none'; the next Sydney day -> 'status'; writes nothing", {
+  s <- inbox_setup()
+  t0 <- as.POSIXct("2026-10-19 01:00:00", tz = "UTC")        # 12:00 AEDT, 19 Oct
+  run_inbox(s, now = t0)
+  expect_identical(read_inbox_state(s$report_dir)$checked_at, "2026-10-19T01:00:00Z")
+  before <- tree_snapshot(s$report_dir)
+  # AEDT = UTC+11: Sydney midnight 19->20 Oct is 2026-10-19 13:00 UTC
+  expect_identical(r14_check(s, as.POSIXct("2026-10-19 12:30:00", tz = "UTC")), "none")    # 23:30 on the 19th
+  expect_identical(r14_check(s, as.POSIXct("2026-10-19 13:30:00", tz = "UTC")), "status")  # 00:30 on the 20th
+  expect_identical(tree_snapshot(s$report_dir), before)
+})
+
+test_that("inbox_check() (R14): the day boundary is Sydney's, not UTC's", {
+  s <- inbox_setup()
+  run_inbox(s, now = as.POSIXct("2026-10-19 13:30:00", tz = "UTC"))  # 00:30 AEDT, 20 Oct
+  # 2026-10-20 01:00 UTC: a different UTC day, the same Sydney day (12:00, 20 Oct)
+  expect_identical(r14_check(s, as.POSIXct("2026-10-20 01:00:00", tz = "UTC")), "none")
+  # 2026-10-20 12:59 UTC is still the 20th in Sydney; 13:00 UTC is the 21st
+  expect_identical(r14_check(s, as.POSIXct("2026-10-20 12:59:00", tz = "UTC")), "none")
+  expect_identical(r14_check(s, as.POSIXct("2026-10-20 13:00:00", tz = "UTC")), "status")
+})
+
+test_that("inbox_check() (R14): a state without a usable checked_at -> 'status'; 'run' reasons still win", {
+  s <- inbox_setup()
+  t0 <- as.POSIXct("2026-10-19 01:00:00", tz = "UTC")
+  run_inbox(s, now = t0)
+  mutate_inbox_state(s$report_dir, checked_at = "not a time")
+  expect_identical(r14_check(s, t0 + 60), "status")
+  mutate_inbox_state(s$report_dir, checked_at = NULL)
+  expect_identical(r14_check(s, t0 + 60), "status")
+  # a new day AND a changed signature (or pending) -> "run"
+  mutate_inbox_state(s$report_dir, checked_at = "2026-10-19T01:00:00Z",
+                     signature = "not-the-current-signature")
+  expect_identical(r14_check(s, t0 + 86400), "run")
+  mutate_inbox_state(s$report_dir, signature = inbox_signature(s$input_dir), pending = TRUE)
+  expect_identical(r14_check(s, t0 + 86400), "run")
+})
+
+test_that("inbox_run() (R14): a new-day 'status' rewrites the note read-only and records the new day", {
+  s <- inbox_setup()
+  t0 <- as.POSIXct("2026-10-19 01:00:00", tz = "UTC")
+  run_inbox(s, now = t0)
+  backups <- list.files(s$backup_dir)
+  db_md5 <- file_md5(s$db)
+  unlink(status_note_path(s$report_dir))
+  t1 <- as.POSIXct("2026-10-20 01:00:00", tz = "UTC")
+  r <- run_inbox(s, now = t1)
+  expect_identical(r$action, "status")
+  expect_false(r$ran)
+  l <- read_status_note(s$report_dir)
+  expect_match(l[nzchar(trimws(l))][[1]], "updated 2026-10-20 12:00", fixed = TRUE)
+  expect_identical(file_md5(s$db), db_md5)
+  expect_identical(list.files(s$backup_dir), backups)
+  expect_identical(read_inbox_state(s$report_dir)$checked_at, "2026-10-20T01:00:00Z")
+  expect_identical(r14_check(s, t1 + 3600), "none")
+})
+
 # ---- section 1: inbox_run() ----------------------------------------------------
 
 test_that("inbox_run(): a 'none' check does nothing at all (ran = FALSE)", {
@@ -505,7 +567,7 @@ test_that("inbox_run(dry_run = TRUE): no backup, no DB write, no removal, no sta
 
 test_that("inbox_run(): a DB change alone refreshes the status note read-only; a resolved item disappears", {
   s <- inbox_setup()
-  now <- Sys.time()
+  now <- sydney_midday()
   make_inbox_folder(s$input_dir, "input2026-10-18 0900 a", inbox_rain_files(), now = now)
   run_inbox(s, now = now)
   nr <- md_section(read_status_note(s$report_dir), "Needs review")
@@ -535,20 +597,28 @@ test_that("inbox_run(): a DB change alone refreshes the status note read-only; a
   expect_identical(inbox_check(s$input_dir, s$report_dir, now = now + 120, db = s$db), "none")
 })
 
-test_that("inbox_run(): the status note persists unchanged across days with no activity", {
+test_that("inbox_run(): quiet days get one status-only refresh per Sydney day, never an import (R14)", {
   s <- inbox_setup()
-  now <- Sys.time()
+  now <- sydney_midday()
   make_inbox_folder(s$input_dir, "input2026-10-18 0900 a", inbox_rain_files(), now = now)
   run_inbox(s, now = now)
-  before <- tree_snapshot(s$report_dir)
+  dated <- tree_snapshot(s$report_dir)[paste0(sydney_date(now), "-imports.md")]
+  log_n <- length(read_inbox_log(s$report_dir))
+  backups <- list.files(s$backup_dir)
+  db_md5 <- file_md5(s$db)
   for (k in 1:3) {
+    unlink(status_note_path(s$report_dir))
     r <- run_inbox(s, now = now + k * 86400)
-    expect_identical(r$action, "none")
+    expect_identical(r$action, "status")
+    expect_false(r$ran)
+    expect_true(file.exists(status_note_path(s$report_dir)))       # rewritten
+    expect_identical(run_inbox(s, now = now + k * 86400 + 3600)$action, "none")  # once a day
   }
-  expect_identical(tree_snapshot(s$report_dir), before)
+  expect_identical(file_md5(s$db), db_md5)
+  expect_identical(list.files(s$backup_dir), backups)
+  expect_length(read_inbox_log(s$report_dir), log_n)                 # nothing imported or logged
+  expect_identical(tree_snapshot(s$report_dir)[paste0(sydney_date(now), "-imports.md")], dated)
 })
-
-# ---- section 2: import_report() (the dated note) ------------------------------
 
 test_that("import_report(): the dated note is named for the Sydney date of now; header and footer use Sydney time", {
   s <- inbox_setup()

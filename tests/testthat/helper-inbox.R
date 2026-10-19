@@ -8,7 +8,10 @@
 #                 "<ISO-8601 UTC, e.g. 2026-10-18T01:00:00Z>"}
 #   * state file: <report_dir>/.imports.state, JSON with at least
 #                 "signature" (string), "pending" (bool), "checked_at", plus the
-#                 DB stat fields (names not pinned) (SPEC section 0)
+#                 DB stat fields (names not pinned) (SPEC section 0).
+#                 "checked_at" is ISO-8601 UTC of the `now` of the run (or
+#                 status refresh) that wrote the state; inbox_check() compares
+#                 its Sydney day with now's (ruling 2026-10-19 R14).
 #   * status:     <report_dir>/Import status.md and .import-status.json (2a)
 #   * run log:    <report_dir>/.imports.log, one JSON object per line
 #   * report:     <report_dir>/<YYYY-MM-DD>-imports.md (Sydney date of `now`)
@@ -92,6 +95,14 @@ live_child_pid <- function(env = parent.frame()) {
 
 # Above macOS/Linux pid_max: no such process can exist.
 dead_pid <- function() 99999999L
+
+#' Today's 12:00 in Sydney as a POSIXct: a `now` far from the Sydney day boundary,
+#' for tests that compare two checks a little apart (ruling 2026-10-19 R14 makes a
+#' new Sydney day a "status" reason, so a Sys.time() base could straddle midnight).
+sydney_midday <- function() {
+  as.POSIXct(paste(format(Sys.time(), "%Y-%m-%d", tz = "Australia/Sydney"), "12:00:00"),
+             tz = "Australia/Sydney")
+}
 
 sydney_date <- function(now) format(now, "%Y-%m-%d", tz = "Australia/Sydney")
 sydney_hhmm <- function(now) format(now, "%H:%M", tz = "Australia/Sydney")

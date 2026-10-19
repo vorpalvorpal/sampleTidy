@@ -36,6 +36,18 @@ since the last check, or the last check left a folder still arriving (unsettled)
   size + mtime (stat only). If those differ from the state file, `inbox_check()` returns
   `"status"`: refresh the standing status note (below) read-only, no import, no backup.
   So `inbox_check()` returns one of `"none"`, `"status"`, `"run"`.
+- **Third trigger: a new Sydney day (ruling 2026-10-19 R14).** Flags change with the date
+  alone (a round becomes overdue on its due date), so a quiet day must still refresh the
+  note. `inbox_check()` also returns `"status"` when the Australia/Sydney calendar day of
+  the state's `checked_at` (ISO-8601 UTC, `%Y-%m-%dT%H:%M:%SZ`, already written by every
+  run and every status refresh as the `now` of that call) differs from the Sydney day of
+  `now`; a missing or unparseable `checked_at` also gives `"status"`. Precedence is
+  unchanged: the `"run"` reasons (no state, signature changed, `pending`) are checked
+  first, then the DB stat and the day, either giving `"status"`. Because the status refresh
+  rewrites the state with the new `checked_at`, there is at most one day-triggered refresh
+  per Sydney day, and it never imports, backs up or logs. `inbox_check()` still writes
+  nothing. (In AEDT, Sydney midnight is 13:00 UTC: 12:30 UTC and 13:30 UTC on 19 Oct fall
+  on Sydney days 19 and 20.)
 
 ## 1. `inbox_run()` (package function, R/inbox.R)
 

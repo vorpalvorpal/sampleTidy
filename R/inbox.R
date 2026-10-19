@@ -108,10 +108,12 @@ inbox_signature <- function(input_dir) {
 #'
 #' @param input_dir the inbox directory.
 #' @param report_dir directory holding `.imports.state`.
-#' @param now current time (unused by the rule; kept for symmetry).
+#' @param now current time; a Sydney day other than that of the state's
+#'   `checked_at` is a `"status"` reason (ruling R14).
 #' @param db the live database file, stat-ed for the second trigger.
 #' @return `"run"` (inbox changed, nothing recorded yet, or a folder was left
-#'   arriving), `"status"` (only the database file changed) or `"none"`.
+#'   arriving), `"status"` (the database file changed, or this is the first
+#'   check of a new Sydney day) or `"none"`.
 #' @export
 inbox_check <- function(input_dir, report_dir, now = Sys.time(),
                         db = st_config("live_db")) {
@@ -125,6 +127,13 @@ inbox_check <- function(input_dir, report_dir, now = Sys.time(),
   if (is.null(st) || is.null(st$signature)) return("run")
   if (!identical(as.character(st$signature), inbox_signature(input_dir))) return("run")
   if (isTRUE(st$pending)) return("run")
+  # Ruling R14: the first check of each Sydney day refreshes the status note
+  # (dates and ages in it move on even when nothing else did).
+  last <- if (is.character(st$checked_at) && length(st$checked_at) == 1)
+    .inbox_parse_utc(st$checked_at) else NA
+  if (is.na(last) || .inbox_syd(last, "%Y-%m-%d") != .inbox_syd(now, "%Y-%m-%d")) {
+    return("status")
+  }
   cur <- .inbox_db_stat(db)
   if (!.inbox_num_same(st$db_size, cur$db_size) ||
       !.inbox_num_same(st$db_mtime, cur$db_mtime)) {
