@@ -63,3 +63,29 @@ test_that("R-2.2: unify_value() converts between pH unitless aliases without cha
   expect_equal(unify_value(6.4, "pH Unit", "pH"), 6.4)
   expect_equal(unify_value(7.0, "pH_Units", "pH"), 7.0)
 })
+
+# ---- C5 S1: CFU spelling map (exact keys only) ----------------------------
+
+test_that("C5-S1: unify_value() converts CFU/100mL to CFU/mL (6500 -> 65, 1 -> 0.01, 120000 -> 1200)", {
+  expect_equal(unify_value(c(6500, 1, 120000), "CFU/100mL", "CFU/mL"), c(65, 0.01, 1200))
+})
+
+test_that("C5-S1: CFU/mL -> CFU/mL is the identity short-circuit (control)", {
+  expect_identical(unify_value(590000, "CFU/mL", "CFU/mL"), 590000)
+})
+
+test_that("C5-S1: CFU/100mL is not convertible to mg/L (still sampletidy_units_error)", {
+  expect_error(unify_value(5, "CFU/100mL", "mg/L"), class = "sampletidy_units_error")
+})
+
+test_that("C5-S1: unlisted spellings still raise sampletidy_units_error (exact-key map, no case folding)", {
+  # non-vacuous: the listed spelling works in the same session
+  expect_equal(unify_value(100, "CFU/100mL", "CFU/mL"), 1)
+  expect_error(unify_value(5, "cfu/100ml", "CFU/mL"), class = "sampletidy_units_error")
+  expect_error(unify_value(5, "MPN/100mL", "CFU/mL"), class = "sampletidy_units_error")
+})
+
+test_that("C5-S1: is_valid_unit() accepts the two CFU spellings but not unlisted ones", {
+  expect_true(all(is_valid_unit(c("CFU/mL", "CFU/100mL"))))
+  expect_false(any(is_valid_unit(c("cfu/100ml", "MPN/100mL"))))
+})
