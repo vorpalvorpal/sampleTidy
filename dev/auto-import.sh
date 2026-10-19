@@ -41,7 +41,7 @@ mkdir -p "$(dirname "$LOG")"
 # is moved to main's commit on every run. CODE overrides it (tests).
 RUN="${SAMPLETIDY_AUTOIMPORT_CODE:-}"
 if [ -z "$RUN" ]; then
-  REPO="$(dirname "$HERE")"; RUN="$HOME/Library/Application Support/sampleTidy-run"
+  REPO="$(dirname "$HERE")"; RUN="$HOME/.local/share/sampleTidy-run"   # no spaces: Rscript mangles them in --file
   if [ -d "$RUN/.git" ] || [ -f "$RUN/.git" ]; then
     git -C "$RUN" checkout -q --detach "$(git -C "$REPO" rev-parse main)" >>"$LOG" 2>&1
   else
