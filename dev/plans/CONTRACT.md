@@ -134,6 +134,12 @@ ingest_inbox(root, db = st_config("live_db"), dry_run = FALSE,
 # nobody drains. Read-only, and derives work_order_guess from the STORED
 # filename (the file itself is routinely gone by report time).
 quarantine_report(db = st_config("live_db"))   # -> tibble
+
+# lab_qc_backfill(): PLAN-19 R-19.17. Parses every archived ALS QC report
+# (_QCI.pdf / _QC.pdf asset) that has no lab_qc_report row at the current
+# parser version. EXPORTED as an operator-run tool (A16 convention: a
+# `db = st_config("live_db")` default); migration 052 runs its body.
+lab_qc_backfill(db = st_config("live_db"), actor = "lab_qc_backfill")
 ```
 
 `ingest_dir()` gained a fourth argument in the same change:
@@ -171,8 +177,10 @@ Internal seams (not exported, stable for tests via `:::`):
 - Every function that skips/drops a row must return counts of what it skipped
   and why. Silent drops are defects.
 - New Imports allowed: `readxl`, `readr`, `xml2`, `stringr`,
-  `rlang`, `digest`, `uuid`, `fs`, `jsonlite` (Suggests: `withr`, `ellmer`,
+  `rlang`, `digest`, `uuid`, `fs`, `jsonlite`, `pdftools` (Suggests: `withr`, `ellmer`,
   `processx`, `sf`). Do not add others without a plan-change request.
+  (`pdftools` added by PLAN-19 R-19.16, Robin 2026-10-19: the ALS QCI is a
+  PDF, parsed once at ingest with `pdftools::pdf_text()`.)
   (`tidyr` was pinned here but never used by any module - dropped in A47.)
   (`jsonlite` added by plan-change request, Robin 2026-07-25. PLAN-16 stores
   `review_queue.payload` as JSON and had added it to DESCRIPTION without
