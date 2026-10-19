@@ -1,0 +1,5 @@
+%PDF-1.4
+% Synthetic stand-in for ES2602084_0_QC.pdf: a PDF header with no body,
+% no xref and no trailer, so poppler fails as it does on the real file.
+1 0 obj
+<< /Type /Catalog

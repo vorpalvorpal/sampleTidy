@@ -72,3 +72,38 @@ byte counts match exactly, and no original point/place/person string survives in
 any committed file.
 
 Anonymizer: `/tmp/anon.pl` (byte-level; see git history / this doc for the map).
+
+## ALS QCI text extracts (PLAN-19 phase 1b, `qci/`)
+
+The QCI parser's input is the text of the PDF, not the PDF (R-19.18), so the
+fixtures are **`pdftotext -layout` extracts** (poppler 25.09) of real QCIs,
+which equal `pdftools::pdf_text()` pages joined with `"\f"` line for line
+(measured on ES2609470, ES2011067, ES2028911; pdftotext only adds a final
+`\f`). A line starting with `\f` begins a new page. The real PDFs are **not**
+committed: a PDF cannot be anonymised byte-for-byte.
+
+Anonymisation is **length-preserving** (every line keeps its length, so the
+column x-positions the parser reads are untouched); ALS data, lab sample IDs,
+methods, values and dates are unchanged. Script:
+`qci/anon-qci.pl` (stdin to stdout), rules:
+
+| real | anonymised | | real | anonymised |
+|---|---|---|---|---|
+| `Contact` / `Sampler` value (person) | `A. Contact` / `A. Sampler`, space-padded | | `Lawson` | `Hamlet` |
+| `BLUE MOUNTAINS` | `EXAMPLE CLIENT` | | `Attunga` / `attunga` | `Ridgely` / `ridgely` |
+| `Blackheath` | `Brookfield` | | `Katooma` (sic) | `Kingswy` |
+| `BWMF` | `SITA` | | `BH.S0n` | `QH.S0n` |
+| `K. Effluent` | `P. Effluent` | | | |
+
+| fixture | source (assets/…) | layout covered |
+|---|---|---|
+| `qci/ES2609470_0_QCI.txt` | processed/257634a2…/ES2609470_0_QCI.pdf | MS "not determined" on Anonymous, `--` lab IDs, pH + BOD holding-time breaches, a frequency outlier, long surrogate phrasing |
+| `qci/ES2027611_0_QCI.txt` | unprocessed/ES2027611_0_QCI.pdf | LCS low recovery, `QC-MRG2-…` lot on the method line, `----` on the next, wrapped analyte, short surrogate phrasing |
+| `qci/ES2011067_0_QCI.txt` | unprocessed/ES2011067_0_QCI.pdf | two LCS rows (EC low, TKN high, wrapped comment), an MS row |
+| `qci/ES2028911_0_QCI.txt` | unprocessed/ES2028911_0_QCI.pdf | holding-time client-ID lists, two per line over 4 lines, 3 methods; frequency rows with no method-code column |
+| `qci/ES2028716_0_QCI.txt` | unprocessed/ES2028716_0_QCI.pdf | own-sample MS rows, lab ID alone on its own line |
+| `qci/ES2519223_0_QCI.txt` | processed/799577f2…/ES2519223_0_QCI.pdf | 5 numeric MS failures, ED/EN lab IDs, a lab ID glued to the method name |
+| `qci/ES2314145_0_QCI.txt` | processed/c7ec933f…/ES2314145_0_QCI.pdf | frequency outliers only |
+| `qci/ES2014537_0_QCI.txt` | unprocessed/ES2014537_0_QCI.pdf | fully clean |
+| `qci/ES2607384_0_QCI.pdf` | processed/b7ab659f…/ES2607384_0_QCI.pdf | the real 0-byte archived copy (`unreadable`) |
+| `qci/ES2602084_0_QC.pdf` | **synthetic** stand-in for processed/ed2c1409…/ES2602084_0_QC.pdf | a PDF header with no xref/trailer: poppler fails as on the real (736 KB, not anonymisable) file |
