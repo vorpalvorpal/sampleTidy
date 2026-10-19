@@ -238,7 +238,7 @@ inbox_check <- function(input_dir, report_dir, now = Sys.time(),
   if (is.null(con)) return(NULL)
   on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
   samples <- DBI::dbGetQuery(con, "
-    SELECT s.uuid AS uuid, p.name AS wo, s.datetime AS dt, f.site AS site
+    SELECT s.uuid AS uuid, p.name AS wo, COALESCE(s.datetime, s.date) AS dt, f.site AS site
       FROM \"sample\" s
       JOIN project p ON p.uuid = s.uuid_project
       LEFT JOIN feature_alias fa ON fa.uuid = s.uuid_feature_alias
@@ -290,10 +290,11 @@ inbox_check <- function(input_dir, report_dir, now = Sys.time(),
     basis <- if (nrow(ns) > 0) ns else post$samples[post$samples$wo == w, , drop = FALSE]
     sites <- stats::na.omit(basis$site)
     site <- if (length(sites)) names(sort(table(sites), decreasing = TRUE))[[1]] else NA_character_
-    dts <- basis$dt[!is.na(basis$dt)]
+    # Sydney calendar days (the LOCAL_DATE rule; gas/dust/field rows carry only `date`).
+    dts <- .flags_syd_date(basis$dt[!is.na(basis$dt)])
     list(name = w, kind = kind, site = .inbox_site_label(site),
-         date_start = if (length(dts)) format(min(dts), "%Y-%m-%d", tz = "UTC") else NA_character_,
-         date_end = if (length(dts)) format(max(dts), "%Y-%m-%d", tz = "UTC") else NA_character_,
+         date_start = if (length(dts)) format(min(dts)) else NA_character_,
+         date_end = if (length(dts)) format(max(dts)) else NA_character_,
          samples = nrow(ns), analyses = as.integer(d_an))
   })
 }
