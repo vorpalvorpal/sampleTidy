@@ -849,7 +849,8 @@ import_flags <- function(db = st_config("live_db"), now = Sys.time(), checks) {
 # ---- the status note's Flags section ---------------------------------------------
 
 .flags_prev_seen <- function(report_dir) {
-  p <- file.path(report_dir, ".import-status.json")
+  p <- file.path(report_dir, "status.json")
+  if (!file.exists(p)) p <- file.path(report_dir, ".import-status.json")
   js <- tryCatch(jsonlite::fromJSON(p, simplifyVector = FALSE), error = function(e) NULL)
   fl <- if (is.list(js)) js$flags else NULL
   if (!is.list(fl) || length(fl) == 0) return(character(0))

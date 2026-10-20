@@ -34,9 +34,10 @@ list of \code{\link[=import_flags]{import_flags()}}.}
 the note's path, invisibly.
 }
 \description{
-Rewrites \verb{<report_dir>/Import status.md} and \code{.import-status.json}: open
+Rewrites \verb{<report_dir>/Import status.md}, \code{.import-status.json} and
+\code{status.json} (the two json files are identical): open
 review items, folders waiting in the inbox, the latest run's problems and
 the last 14 days of imports. Read-only on the DB. With \code{checks}, also a
 Flags section from \code{\link[=import_flags]{import_flags()}}, each flag's \code{first_seen} carried over
-by key from the previous \code{.import-status.json}.
+by key from the previous \code{status.json} (else \code{.import-status.json}).
 }

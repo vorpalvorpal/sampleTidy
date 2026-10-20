@@ -42,7 +42,9 @@
   "project", "sample", "analysis", "asset", "review_queue", "review_queue_candidate",
   "feature_alias",
   # PLAN-19 (migration 048): QC features, stored lab sample numbers, ALS lab QC.
-  "qc_feature", "sample_lab_id", "lab_qc_report", "lab_qc_outlier"
+  "qc_feature", "sample_lab_id", "lab_qc_report", "lab_qc_outlier",
+  # PLAN-20 phase 1 (migration 060): external filing records.
+  "asset_filing"
 )
 
 #' @keywords internal

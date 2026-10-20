@@ -176,6 +176,28 @@
   list(
     version = 8L,
     ddl = "ALTER TABLE ingest_file ADD COLUMN IF NOT EXISTS registry_fingerprint VARCHAR"
+  ),
+  # PLAN-20 phase 1 (P20.5): external filing records - which asset was filed
+  # into which external system (TRIM, SharePoint, ...) under what id. The core
+  # never interprets `system`. No declared FOREIGN KEY: ensure_schema() runs on
+  # a bare DB with no `asset` table, and a declared FK would block later asset
+  # deletes; register_filing() checks the asset exists. Also created on the
+  # live DB by operator migration 060 (dev/migrations/060-asset-filing.R), as
+  # v8 was by 023, so this entry is a no-op there (CREATE TABLE IF NOT EXISTS).
+  list(
+    version = 9L,
+    ddl = "
+      CREATE TABLE IF NOT EXISTS asset_filing (
+        uuid_asset   VARCHAR NOT NULL,
+        system       VARCHAR NOT NULL,
+        external_id  VARCHAR NOT NULL,
+        external_uri VARCHAR,
+        container    VARCHAR,
+        filed_at     TIMESTAMP NOT NULL,
+        title        VARCHAR,
+        comments     VARCHAR,
+        PRIMARY KEY (uuid_asset, system)
+      )"
   )
 )
 
