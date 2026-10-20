@@ -29,7 +29,8 @@ pd_fixture <- function(env = parent.frame()) {
   u <- c(A = "aaaaaaaa-0000-4000-8000-000000000001", B = "bbbbbbbb-0000-4000-8000-000000000002",
          C = "cccccccc-0000-4000-8000-000000000003", K = "dddddddd-0000-4000-8000-000000000004",
          M = "eeeeeeee-0000-4000-8000-000000000005", O = "ffffffff-0000-4000-8000-000000000006",
-         E = "abababab-0000-4000-8000-000000000007", D = "cdcdcdcd-0000-4000-8000-000000000008")
+         E = "abababab-0000-4000-8000-000000000007", D = "cdcdcdcd-0000-4000-8000-000000000008",
+         Z = "efefefef-0000-4000-8000-000000000009")
   put(file.path("processed", u[["A"]], "a.pdf"), "bytes of report A")
   put(file.path("processed", u[["B"]], "b.pdf"), "bytes of report B")
   put(file.path("processed", u[["C"]], "c.xls"), "c REWRITTEN by sharepoint")   # asset.hash = original bytes
@@ -38,16 +39,17 @@ pd_fixture <- function(env = parent.frame()) {
   put(file.path("processed", u[["O"]], "lost.pdf"), "orphan unique bytes")
   put(file.path("processed", u[["D"]], "a again.pdf"), "bytes of report A")      # orphan dir, bytes = A
   dir.create(file.path(root, "processed", u[["E"]]))                              # empty orphan dir
+  put(file.path("processed", u[["Z"]], "z.pdf"), "")                               # a 0-byte asset file
   put("unprocessed/a.pdf", "bytes of report A")                                   # ingested -> duplicate
   put("unprocessed/b.pdf", "bytes of report B")                                   # made "non-local" below
   put("unprocessed/c.xls", "c original bytes")                                    # = asset C's hash
   put("unprocessed/new.csv", "never ingested")
   h <- function(s) { f <- tempfile(); writeBin(charToRaw(s), f); rlang::hash_file(f) }
   assets <- data.frame(
-    uuid = u[c("A", "B", "C", "K", "M")],
-    filename = c("a.pdf", "b.pdf", "c.xls", "k.csv", "k[1].csv"),
+    uuid = u[c("A", "B", "C", "K", "M", "Z")],
+    filename = c("a.pdf", "b.pdf", "c.xls", "k.csv", "k[1].csv", "z.pdf"),
     hash = c(h("bytes of report A"), h("bytes of report B"), h("c original bytes"),
-             h("same bytes K/M"), h("same bytes K/M")), stringsAsFactors = FALSE)
+             h("same bytes K/M"), h("same bytes K/M"), h("")), stringsAsFactors = FALSE)
   db <- file.path(base, "db.duckdb")
   con <- DBI::dbConnect(duckdb::duckdb(), db)
   DBI::dbWriteTable(con, "asset", assets)
@@ -57,7 +59,11 @@ pd_fixture <- function(env = parent.frame()) {
   utils::write.csv(data.frame(uuid = u[["M"]], filename = "k[1].csv", hash = assets$hash[5],
                               merged_into = u[["K"]], merged_into_filename = "k.csv"),
                    merged, row.names = FALSE)
-  list(base = base, root = root, db = db, u = u, merged = merged, hash_b = assets$hash[2])
+  ruled <- file.path(base, "ruled.csv")
+  utils::write.csv(data.frame(uuid = u[c("K", "M", "Z")], filename = c("k.csv", "k[1].csv", "z.pdf"),
+                              hash = assets$hash[4:6], merged_into = NA, action = c("keep", "keep", "retire"),
+                              migration = "061"), ruled, row.names = FALSE, na = "")
+  list(base = base, root = root, db = db, u = u, merged = merged, ruled = ruled, hash_b = assets$hash[2])
 }
 
 pd_plan <- function(fx, extra = character(), name = "plan.csv") {
@@ -157,4 +163,27 @@ test_that("--apply refuses a name+size duplicate row and a canonical whose size 
   expect_equal(r$status, 2L)
   expect_true(any(grepl("not hash-verified", r$out)))
   expect_true(file.exists(file.path(fx$root, "unprocessed/b.pdf")))
+})
+
+test_that("--merged action keep / retire (061-style): ruled rows are kept; a retired row's file is an orphan once gone", {
+  skip_if_not(file.exists(script), "dev/processed-dedupe.R not available")
+  fx <- pd_fixture()
+  u <- fx$u; zf <- file.path("processed", u[["Z"]], "z.pdf")
+  before <- pd_plan(fx, c("--merged", shQuote(fx$ruled)))
+  expect_equal(before[[file.path("processed", u[["M"]], "k[1].csv")]], "keep")
+  expect_equal(before[[file.path("processed", u[["K"]], "k.csv")]], "keep")
+  expect_equal(before[[zf]], "keep")
+  con <- DBI::dbConnect(duckdb::duckdb(), fx$db)
+  DBI::dbExecute(con, "DELETE FROM asset WHERE uuid = ?", params = list(u[["Z"]]))
+  DBI::dbDisconnect(con, shutdown = TRUE)
+  out <- file.path(fx$base, "post.csv")
+  r <- pd_run(c("--post-import", "--db", shQuote(fx$db), "--root", shQuote(fx$root), "--plan-out", shQuote(out),
+                "--date", "20261020", "--merged", shQuote(paste(fx$merged, fx$ruled, sep = ","))))
+  expect_equal(r$status, 0L, info = paste(r$out, collapse = "\n"))
+  q <- file.path(fx$root, "_dedupe_quarantine", "20261020")
+  expect_true(file.exists(file.path(q, zf)))
+  expect_false(dir.exists(file.path(fx$root, "processed", u[["Z"]])))
+  # M is "keep" by the ruling CSV but still an asset here: untouched
+  expect_true(file.exists(file.path(fx$root, "processed", u[["M"]], "k[1].csv")))
+  expect_true(file.exists(file.path(fx$root, "processed", u[["O"]], "lost.pdf")))
 })

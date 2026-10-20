@@ -34,8 +34,9 @@
 #       For the end of a corpus import (after its dupcheck has passed). Builds
 #       the plan FRESH against the post-import DB and tree (exactly as the dry
 #       run does), writes it, then applies only the import-dependent subset:
-#       quarantine-duplicate rows under unprocessed/ or input/ and rows whose
-#       basis is a 057-merged asset row, plus the uuid dirs those empty. That
+#       quarantine-duplicate rows under unprocessed/ or input/, the own files of
+#       rows a --merged migration merged away (duplicates) or retired (orphans),
+#       plus the uuid dirs those empty. That
 #       subset is written as <plan>-post-import.csv (+ -undo.csv) and applied
 #       with the same per-row re-checks as --apply. Everything else in the plan
 #       is left for review. Never run it on a stale CSV: it has no CSV input.
@@ -65,15 +66,20 @@
 #                      seconds). Used for a non-local file only while its size
 #                      AND mtime still equal the recorded ones (hash_basis
 #                      "read"). Lets a re-run reuse a one-off hydration.
-#   --merged CSV       asset rows merged away by migration 057 (columns uuid,
-#                      filename, hash, merged_into; 057 writes it as
-#                      057-...-MERGED.csv). Before 057 is applied, the listed
-#                      rows are still assets and are reported "keep" (merge
-#                      pending). Once their asset row is gone, the file at
+#   --merged CSV[,CSV] asset rows a migration merges away, deletes or rules on
+#                      (columns uuid, filename, hash, merged_into; optional
+#                      action = merge | retire | keep, default merge when
+#                      merged_into is set, else retire; optional migration,
+#                      default 057). E.g. 057's and 061's -INPUT.csv, comma-
+#                      separated. Before the migration is applied the listed
+#                      rows are still assets and are reported "keep" (pending).
+#                      Once a merge/retire row is gone, the file at
 #                      processed/<uuid>/<filename> is a byte duplicate of the
-#                      kept asset (hash_basis "merged_asset": the deleted row's
-#                      recorded hash, unless a local/mirror hash is available,
-#                      which must then agree).
+#                      kept asset (merge; hash_basis "merged_asset": the deleted
+#                      row's recorded hash, unless a local/mirror hash is
+#                      available, which must then agree) or an orphan (retire).
+#                      "keep" rows are legacy duplicate-hash rows a ruling keeps
+#                      as separate rows: reported "keep", not "ask-robin".
 #   --date YYYYMMDD    the quarantine folder date (default: today).
 #   --post-import      see above.
 #   --test-nonlocal RE test only: relpaths matching RE are treated as not local.
@@ -292,13 +298,10 @@ make_plan <- function(o) {
     if (as.numeric(known$size[k]) != size || floor(as.numeric(known$mtime[k])) != floor(mtime)) return(NA_character_)
     known$hash[k]
   }
-  # --merged: rows 057 merged away (only effective once the asset row is gone)
-  merged <- if (!is.null(o$merged)) read_csv_chr(o$merged) else
-    data.frame(uuid = character(), filename = character(), hash = character(), merged_into = character())
-  if (!all(c("uuid", "filename", "hash", "merged_into") %in% names(merged)))
-    stop("--merged CSV needs columns uuid, filename, hash, merged_into", call. = FALSE)
-  merged$filename[is.na(merged$filename)] <- ""
-  merged_gone <- merged[!merged$uuid %in% A$uuid, , drop = FALSE]
+  # --merged: rows a migration merges away / retires / keeps (merge and retire
+  # are only effective once the asset row is gone)
+  merged <- read_merged(o$merged)
+  merged_gone <- merged[merged$action != "keep" & !merged$uuid %in% A$uuid, , drop = FALSE]
   merged_gone_key <- paste(merged_gone$uuid, merged_gone$filename, sep = "/")
 
   # canonical verification, cached per asset row: "" = verified, else why not
@@ -340,7 +343,9 @@ make_plan <- function(o) {
   where_txt <- function(i) switch(loc[i],
     uuid = if (dir_uuid[i] %in% A$uuid) " (extra file in an asset dir)" else
       paste0(" (orphan dir", if (dir_uuid[i] %in% f18) ", row deleted by F.18" else "",
-             if (own_key[i] %in% merged_gone_key) ", row merged away by 057" else "", ")"),
+             if (own_key[i] %in% merged_gone_key) sprintf(", row %s by %s",
+               ifelse(merged_gone$action[match(own_key[i], merged_gone_key)] == "merge", "merged away", "deleted"),
+               merged_gone$migration[match(own_key[i], merged_gone_key)]) else "", ")"),
     root = " (loose root file)", staging = " (already ingested)", other = " (unexpected location)", "")
   orphan_txt <- function(i) paste0("not referenced by any asset row", where_txt(i))
 
@@ -373,22 +378,30 @@ make_plan <- function(o) {
         c(mirror_hash(rel, sz, mt), "mirror")
       if (!is.na(hb[1]) && !identical(hb[1], A$hash[ai]))
         note <- sprintf("; NOTE bytes no longer match asset.hash (%s hash %s) - SharePoint rewrite?", hb[2], hb[1])
-      if (A$hash[ai] %in% dup_hash) {
+      mm <- match(A$uuid[ai], merged$uuid)
+      if (!is.na(mm) && merged$action[mm] == "retire") {
+        r$action <- "keep"
+        r$reason <- sprintf("migration %s deletes this asset row - its file is quarantined only after %s is applied%s",
+                            merged$migration[mm], merged$migration[mm], note)
+      } else if (A$hash[ai] %in% dup_hash) {
         others <- setdiff(A$uuid[A$hash %in% A$hash[ai]], A$uuid[ai])
-        mm <- match(A$uuid[ai], merged$uuid)
-        if (!is.na(mm)) {
+        if (!is.na(mm) && merged$action[mm] == "merge") {
           r$action <- "keep"
-          r$reason <- sprintf("legacy duplicate asset row; migration 057 merges it into %s - its file is quarantined only after 057 is applied%s",
-                              merged$merged_into[mm], note)
-        } else if (A$uuid[ai] %in% merged$merged_into) {
+          r$reason <- sprintf("legacy duplicate asset row; migration %s merges it into %s - its file is quarantined only after %s is applied%s",
+                              merged$migration[mm], merged$merged_into[mm], merged$migration[mm], note)
+        } else if (!is.na(mm) && merged$action[mm] == "keep") {
+          r$action <- "keep"
+          r$reason <- sprintf("legacy duplicate asset rows share this hash (also %s); kept as separate rows by migration %s (ruling)%s",
+                              paste(others, collapse = " "), merged$migration[mm], note)
+        } else if (A$uuid[ai] %in% merged$merged_into[merged$action == "merge"]) {
           r$action <- "keep"
           r$reason <- sprintf("canonical of a 057 merge (absorbs %s)%s",
-                              paste(merged$uuid[merged$merged_into == A$uuid[ai]], collapse = " "), note)
+                              paste(merged$uuid[merged$action == "merge" & merged$merged_into %in% A$uuid[ai]], collapse = " "), note)
         } else {
           r$action <- "ask-robin"
           r$reason <- paste0("legacy duplicate asset rows share this hash (also ",
                              paste(others, collapse = " "),
-                             "); not merged by 057 - needs a ruling", note)
+                             "); not covered by --merged - needs a ruling", note)
         }
       } else {
         r$action <- "keep"; r$reason <- paste0("asset's own file", note)
@@ -407,7 +420,7 @@ make_plan <- function(o) {
       r$hash <- hb[1]; r$hash_basis <- hb[2]
       if (!is.na(r$hash)) {
         m <- which(A$hash == r$hash)
-        pref <- if (!is.na(mi)) A$uuid[m] != merged_gone$merged_into[mi] else rep(FALSE, length(m))
+        pref <- if (!is.na(mi) && !is.na(merged_gone$merged_into[mi])) A$uuid[m] != merged_gone$merged_into[mi] else rep(FALSE, length(m))
         # prefer the kept row of a 057 merge; never a row 057 will delete
         m <- m[order(pref, A$uuid[m] %in% merged$uuid, A$src[m] != "db", is.na(A$size[m]), A$uuid[m])]
         probs <- character(); ok <- NA_integer_
@@ -549,6 +562,26 @@ extra_sources <- function(A, mirror) {
   h <- vapply(file.path(mirror, fs), rlang::hash_file, "")
   e <- A[A$src == "extra", ]
   for (j in seq_len(nrow(e))) out[[e$uuid[j]]] <- fs[h == e$hash[j]]
+  out
+}
+
+# --merged CSV[,CSV]: uuid, filename, hash, merged_into[, action][, migration]
+read_merged <- function(paths) {
+  out <- data.frame(uuid = character(), filename = character(), hash = character(),
+                    merged_into = character(), action = character(), migration = character())
+  if (is.null(paths)) return(out)
+  for (f in strsplit(paths, ",", fixed = TRUE)[[1]]) {
+    x <- read_csv_chr(f)
+    if (!all(c("uuid", "filename", "hash", "merged_into") %in% names(x)))
+      stop("--merged CSV needs columns uuid, filename, hash, merged_into: ", f, call. = FALSE)
+    if (!"action" %in% names(x)) x$action <- ifelse(is.na(x$merged_into) | !nzchar(x$merged_into), "retire", "merge")
+    if (!"migration" %in% names(x)) x$migration <- "057"
+    x$action[is.na(x$action)] <- ifelse(is.na(x$merged_into[is.na(x$action)]), "retire", "merge")
+    if (!all(x$action %in% c("merge", "retire", "keep")))
+      stop("--merged action must be merge, retire or keep: ", f, call. = FALSE)
+    out <- rbind(out, x[, names(out)])
+  }
+  out$filename[is.na(out$filename)] <- ""
   out
 }
 
@@ -777,11 +810,14 @@ main <- function() {
 # input/ (their bytes became assets in the import), the own files of rows 057
 # merged away, and the uuid dirs those moves empty.
 post_import_subset <- function(P, o) {
-  merged_uuid <- if (!is.null(o$merged)) read_csv_chr(o$merged)$uuid else character()
+  M <- read_merged(o$merged)
+  merged_uuid <- M$uuid[M$action != "keep"]
+  retired_uuid <- M$uuid[M$action == "retire"]
   rp <- strsplit(P$relpath, "/", fixed = TRUE)
   udir <- vapply(rp, function(x) if (length(x) >= 2 && x[1] == "processed") x[2] else "", "")
-  f <- P$kind == "file" & P$action == "quarantine-duplicate" &
-    (startsWith(P$relpath, "unprocessed/") | startsWith(P$relpath, "input/") | udir %in% merged_uuid)
+  f <- P$kind == "file" & ((P$action == "quarantine-duplicate" &
+    (startsWith(P$relpath, "unprocessed/") | startsWith(P$relpath, "input/") | udir %in% merged_uuid)) |
+    (P$action == "quarantine-orphan" & udir %in% retired_uuid))
   d <- P$kind == "dir" & P$action == "quarantine-orphan-empty-dir" & udir %in% merged_uuid
   for (k in which(d)) {
     inside <- P$kind == "file" & startsWith(P$relpath, paste0(P$relpath[k], "/"))
