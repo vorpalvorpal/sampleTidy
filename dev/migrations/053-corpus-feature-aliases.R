@@ -7,7 +7,9 @@
 # Authority: Robin (B accepted: Aug 2020 "Lined leachate dam" is
 # Katoomba K.L01). A and C/D AWAIT Robin's check of the alias list
 # (dev/MIGRATIONS.md) - do not apply before he has seen
-# 053-corpus-feature-aliases-INPUT.csv.
+# 053-corpus-feature-aliases-INPUT.csv. F: Robin's ruling of 2026-10-20 (a raw
+# point whose same-day values equal a named point's live values takes that
+# point); its 28 rows await his check of 053-corpus-feature-aliases-INPUT-F.csv.
 #
 # ---- WHAT ----------------------------------------------------------------------
 # A. 162 CONFIDENT proposals (149 descriptive, 13 transcription_error), read
@@ -52,6 +54,25 @@
 #    K.MW01/02/04 in Nov 2020 - May 2021; the features start 2021-09-08). The
 #    resolver reads feature.date_end only (.rc_narrow_live_feature), never
 #    date_start, so they resolve and ARE included; asserted at 9.
+# F. 28 SAME-DAY VALUE-MATCH arms (26 descriptive, 2 transcription_error) on
+#    23 spellings, read from `053-corpus-feature-aliases-INPUT-F.csv` (same
+#    columns as E). Robin, 2026-10-20: where a raw point's values equal the
+#    values live already holds for a named point on the same Sydney day,
+#    Robin resolved that alias when he filed it - use that mapping unless
+#    there is strong reason not to. Evidence: every pending corpus sample of
+#    the spelling on that day has a unique conflict-free match (>= 2 equal
+#    analytes, field and lab readings compared separately, no conflicting
+#    analyte) to one named feature's live (1052) sample of that day, at the
+#    report's site (corpus alias analysis phase 2, proposed_value_aliases.csv;
+#    rejects and parked spellings are listed there). Built exactly as E: one
+#    arm per row, date_start = date_end = day, auto, confirmed_by NULL,
+#    comments "053 F: same-day value match <wo> <day>: <n_equal>/<n_overlap>
+#    equal to live". No F (key, day) repeats an E (key, day); F arms sit on
+#    other days of E keys, to the same feature. 'S22' 2020-03-06 -> B.S06
+#    contradicts its label (B.S22 has no live sample before 2020-03-23; the
+#    report has no S06 row and live ES2007947 holds B.S06 and no S22).
+#    4 arms (MP # 1..4 -> K.MW01..04, 2020-08-11) predate their feature's
+#    date_start 2021-09-08 - kept, as for E; asserted at 4.
 #
 # C and D deliberately leave TWO live auto arms on four keys inside their
 # windows (the new arm and the existing K.S03 / K.MW08 / B.MW02 / B.MW04 arm):
@@ -70,9 +91,10 @@
 #   * marker 1052 present;
 #   * the A input is 162 rows, kinds descriptive/transcription_error, keys unique
 #     and equal to .rc_feature_key of every spelling, ISO dates, start <= end;
-#     the E input is 84 rows, no empty cell, one row per (key, day);
+#     the E input is 84 rows and the F input 28, no empty cell, one row per
+#     (key, day) within each and across the two;
 #   * every target names exactly one feature, not ended (feature date_end)
-#     before the alias window opens; exactly 9 E arms before feature date_start; B.S03/B.MW08 live over all of C's window,
+#     before the alias window opens; exactly 9 E and 4 F arms before feature date_start; B.S03/B.MW08 live over all of C's window,
 #     K.MW01..04 on 2023-09-20;
 #   * alias 8cfed697 is exactly as described above, and no other alias row has
 #     key 'lined leachate dam';
@@ -80,7 +102,7 @@
 #     s3 -> K.S03, bore 8 -> K.MW08, b.mw0n -> B.MW0n (self), and the pending
 #     'B.E01 Effluent' (uuid_feature NULL, auto FALSE; left as it is - it holds
 #     3 live samples and 3 open unknown_feature items, see MIGRATIONS.md);
-#     no E key has any pre-existing row;
+#     no E or F key has any pre-existing row;
 #   * the planned key collisions (inserted arm vs live auto arm to another
 #     feature, overlapping windows - alias bounds narrowed by the feature's
 #     date_end, as the resolver does - after B's split) are exactly the four of
@@ -89,13 +111,13 @@
 #     ES2332504, and no B.MW01..04 sample exists on Sydney 2023-09-20;
 #   * no planned uuid exists yet.
 #
-# Writes, in one transaction (actor "053-corpus-feature-aliases"): 254
-# feature_alias inserts by db_append (162 A + 2 B + 2 C + 4 D + 84 E; one change_log
+# Writes, in one transaction (actor "053-corpus-feature-aliases"): 282
+# feature_alias inserts by db_append (162 A + 2 B + 2 C + 4 D + 84 E + 28 F; one change_log
 # insert row each), 1 db_update (B's date_end; one change_log row), the marker.
 # Every other table, and every untouched feature_alias row and column, is
 # checksummed before and after. Backups: verified whole-file snapshot,
 # `053-...-BACKUP-feature_alias.csv` (the updated row, before) and
-# `053-...-INSERTED-feature_alias.csv` (the 254 rows, after).
+# `053-...-INSERTED-feature_alias.csv` (the 282 rows, after).
 #
 # Idempotent: marker present -> re-verify, no-op.
 #
@@ -110,11 +132,14 @@
 .mig053_name <- "053-corpus-feature-aliases"
 .mig053_actor <- .mig053_name
 .mig053_input_default <- c(A = file.path("dev", "migrations", "053-corpus-feature-aliases-INPUT.csv"),
-                           E = file.path("dev", "migrations", "053-corpus-feature-aliases-INPUT-E.csv"))
-.mig053_expected_n <- c(A = 162L, B = 2L, C = 2L, D = 4L, E = 84L)
+                           E = file.path("dev", "migrations", "053-corpus-feature-aliases-INPUT-E.csv"),
+                           F = file.path("dev", "migrations", "053-corpus-feature-aliases-INPUT-F.csv"))
+.mig053_expected_n <- c(A = 162L, B = 2L, C = 2L, D = 4L, E = 84L, F = 28L)
 # E arms dated before their target feature's date_start (K.MW01/02/04 start
 # 2021-09-08). The resolver does not read feature.date_start, so they resolve.
 .mig053_expected_pre_start <- 9L
+# F arms dated before their feature's date_start (MP # 1..4 -> K.MW01..04 on 2020-08-11).
+.mig053_expected_pre_start_f <- 4L
 .mig053_kinds <- c("descriptive", "transcription_error")
 .mig053_confirmed_by <- "R. Shannon"
 
@@ -144,7 +169,8 @@
   B = "053 (Robin, accepted): Aug 2020 'Lined leachate dam' is Katoomba K.L01; split the B.L02 alias around it",
   C = "053: site-less Blaxland labels S3 / Bore 8 in ACIRL reports 24006989-09/-10/-12, 2400-7127-03 (Sep 2020-Mar 2021)",
   D = "053: Katoomba Sep-2023 quarterly 2400-7287-08-01 (ES2332504) labels Katoomba bores B.MW01-04",
-  E = "053 E (corpus alias analysis, visit-bounded proposals; awaiting Robin's check): alias for one Sydney day, same-visit evidence")
+  E = "053 E (corpus alias analysis, visit-bounded proposals; awaiting Robin's check): alias for one Sydney day, same-visit evidence",
+  F = "053 F (Robin 2026-10-20: same-day values equal live -> Robin's own resolution): alias for one Sydney day")
 .mig053_comment_b_copy <- paste0("053: 'Lined leachate dam' is Blaxland B.L02 again from Sep 2020; copy of alias ",
                                  "8cfed697 (ended 2020-07-31) - Aug 2020 is Katoomba K.L01 (lined_leachate_verdicts.csv)")
 .mig053_comment_b_k <- paste0("053: Aug 2020 'Lined leachate dam' samples (ES2027524 .. ES2028983) are Katoomba K.L01: ",
@@ -209,33 +235,36 @@
   x
 }
 
-# Part E: one visit-bounded arm per row (date_start = date_end = day).
-.mig053_read_input_e <- function(input) {
+# Parts E and F: one visit-bounded arm per row (date_start = date_end = day).
+.mig053_read_input_e <- function(input, section = "E") {
   if (!file.exists(input)) .mig053_fail(sprintf("input %s not found (run from the repo root).", input))
   x <- utils::read.csv(input, stringsAsFactors = FALSE, na.strings = "", encoding = "UTF-8", colClasses = "character")
   need <- c("raw_spelling", "alias_key", "target_feature", "kind", "day", "wo", "n_equal", "n_overlap")
-  if (!identical(names(x), need)) .mig053_fail(sprintf("E input columns are %s", paste(names(x), collapse = ",")))
+  if (!identical(names(x), need)) .mig053_fail(sprintf("%s input columns are %s", section, paste(names(x), collapse = ",")))
   probs <- character(0)
-  if (nrow(x) != .mig053_expected_n[["E"]])
-    probs <- c(probs, sprintf("E input has %d rows, expected %d", nrow(x), .mig053_expected_n[["E"]]))
-  if (any(is.na(as.matrix(x)))) probs <- c(probs, "E input has an empty cell")
-  if (any(!(x$kind %in% .mig053_kinds))) probs <- c(probs, "E input has a kind other than descriptive/transcription_error")
+  if (nrow(x) != .mig053_expected_n[[section]])
+    probs <- c(probs, sprintf("%s input has %d rows, expected %d", section, nrow(x), .mig053_expected_n[[section]]))
+  if (any(is.na(as.matrix(x)))) probs <- c(probs, paste(section, "input has an empty cell"))
+  if (any(!(x$kind %in% .mig053_kinds))) probs <- c(probs, paste(section, "input has a kind other than descriptive/transcription_error"))
   if (any(!.mig053_same_chr(.rc_feature_key(x$raw_spelling), x$alias_key)))
-    probs <- c(probs, "E input has a spelling not folding to its alias_key")
-  if (any(!grepl("^\\d{4}-\\d{2}-\\d{2}$", x$day))) probs <- c(probs, "E input has a non-ISO day")
-  if (anyDuplicated(x[, c("alias_key", "day")])) probs <- c(probs, "E input has two rows for one key and day")
+    probs <- c(probs, paste(section, "input has a spelling not folding to its alias_key"))
+  if (any(!grepl("^\\d{4}-\\d{2}-\\d{2}$", x$day))) probs <- c(probs, paste(section, "input has a non-ISO day"))
+  if (anyDuplicated(x[, c("alias_key", "day")])) probs <- c(probs, paste(section, "input has two rows for one key and day"))
   if (any(!grepl("^[0-9]+$", x$n_equal) | !grepl("^[0-9]+$", x$n_overlap)))
-    probs <- c(probs, "E input has a non-integer n_equal/n_overlap")
+    probs <- c(probs, paste(section, "input has a non-integer n_equal/n_overlap"))
   if (length(probs)) .mig053_fail(sprintf("%s. Nothing written.", paste(probs, collapse = " | ")))
   x$day <- as.Date(x$day)
   x
 }
 
-# The 254 rows to insert. A pure function of the input files and feature names,
+# The 282 rows to insert. A pure function of the input files and feature names,
 # so verify can rebuild it after the migration.
 .mig053_plan <- function(con, input) {
   x <- .mig053_read_input(input[["A"]])
-  xe <- .mig053_read_input_e(input[["E"]])
+  xe <- .mig053_read_input_e(input[["E"]], "E")
+  xf <- .mig053_read_input_e(input[["F"]], "F")
+  if (any(paste(xf$alias_key, xf$day) %in% paste(xe$alias_key, xe$day)))
+    .mig053_fail("an F row repeats an E (key, day). Nothing written.")
   feat <- DBI::dbGetQuery(con, "SELECT uuid, name, site, date_start, date_end FROM feature")
   ll <- DBI::dbGetQuery(con, "SELECT * FROM feature_alias WHERE uuid = ?", params = list(.mig053_ll_uuid))
   if (nrow(ll) != 1L) .mig053_fail(sprintf("alias %s is %d rows, expected 1. Nothing written.", .mig053_ll_uuid, nrow(ll)))
@@ -255,7 +284,9 @@
     mk("D", sprintf("B.MW%02d", 1:4), k_targets, "transcription_error", TRUE, NA_character_, .mig053_d_day,
        .mig053_d_day, .mig053_comment_d(k_targets)),
     mk("E", xe$raw_spelling, xe$target_feature, xe$kind, TRUE, NA_character_, xe$day, xe$day,
-       sprintf("053 E: same-visit evidence %s %s: %s/%s equal", xe$wo, format(xe$day), xe$n_equal, xe$n_overlap)))
+       sprintf("053 E: same-visit evidence %s %s: %s/%s equal", xe$wo, format(xe$day), xe$n_equal, xe$n_overlap)),
+    mk("F", xf$raw_spelling, xf$target_feature, xf$kind, TRUE, NA_character_, xf$day, xf$day,
+       sprintf("053 F: same-day value match %s %s: %s/%s equal to live", xf$wo, format(xf$day), xf$n_equal, xf$n_overlap)))
   if (any(plan$section == "A" & plan$alias_key != x$alias_key[match(plan$name, x$name)]))
     .mig053_fail("an A row's .rc_feature_key differs from the input's alias_key. Nothing written.")
   n_feat <- table(feat$name)
@@ -268,7 +299,7 @@
   plan$uuid <- mapply(.mig053_uuid, plan$alias_key, plan$target, plan$date_start, plan$date_end, USE.NAMES = FALSE)
   if (anyDuplicated(plan$uuid)) .mig053_fail("the plan holds a duplicate uuid.")
   got <- vapply(names(.mig053_expected_n), function(s) sum(plan$section == s), integer(1))
-  if (!identical(got, .mig053_expected_n)) .mig053_fail("plan section counts differ from the expected 162/2/2/4/84.")
+  if (!identical(got, .mig053_expected_n)) .mig053_fail("plan section counts differ from the expected 162/2/2/4/84/28.")
   rownames(plan) <- NULL
   plan
 }
@@ -310,6 +341,9 @@
   pre <- sum(plan$section == "E" & !is.na(plan$f_date_start) & plan$date_end < plan$f_date_start)
   if (pre != .mig053_expected_pre_start)
     probs <- c(probs, sprintf("%d E arm(s) before their feature's date_start, measured %d", pre, .mig053_expected_pre_start))
+  pre_f <- sum(plan$section == "F" & !is.na(plan$f_date_start) & plan$date_end < plan$f_date_start)
+  if (pre_f != .mig053_expected_pre_start_f)
+    probs <- c(probs, sprintf("%d F arm(s) before their feature's date_start, measured %d", pre_f, .mig053_expected_pre_start_f))
   cd <- plan$section %in% c("C", "D")
   live_all <- (is.na(plan$f_date_start) | plan$f_date_start <= plan$date_start) &
     (is.na(plan$f_date_end) | plan$f_date_end >= plan$date_end)
@@ -466,10 +500,11 @@
       return(sprintf("%s: arms in/out of %s..%s are not (new + existing) / (existing)", plan$name[[i]],
                      plan$date_start[[i]], plan$date_end[[i]]))
   }
-  # E: every arm resolves ALONE on its day (no planned co-arm exists for E).
-  for (i in which(plan$section == "E")) {
+  # E and F: every arm resolves ALONE on its day (no planned co-arm exists for E or F).
+  for (i in which(plan$section %in% c("E", "F"))) {
     if (!identical(.mig053_resolve(plan$name[[i]], plan$date_start[[i]], reg), plan$uuid[[i]]))
-      return(sprintf("E: %s does not resolve to %s alone on %s", plan$name[[i]], plan$target[[i]], plan$date_start[[i]]))
+      return(sprintf("%s: %s does not resolve to %s alone on %s", plan$section[[i]], plan$name[[i]], plan$target[[i]],
+                     plan$date_start[[i]]))
   }
   NULL
 }
@@ -556,10 +591,11 @@ mig053_run <- function(db, snapshot_dir, dry_run = FALSE, .now = NULL, csv_dir =
 
   pre_con <- st_connect(db, read_only = TRUE)
   plan <- tryCatch(.mig053_check_preconditions(pre_con, input), finally = DBI::dbDisconnect(pre_con, shutdown = TRUE))
-  logf("Plan: %d aliases - A %d (descriptive %d, transcription_error %d), B %d, C %d, D %d, E %d; 1 update (%s date_end -> %s).",
+  logf("Plan: %d aliases - A %d (descriptive %d, transcription_error %d), B %d, C %d, D %d, E %d, F %d; 1 update (%s date_end -> %s).",
        nrow(plan), sum(plan$section == "A"), sum(plan$section == "A" & plan$kind == "descriptive"),
        sum(plan$section == "A" & plan$kind == "transcription_error"), sum(plan$section == "B"),
-       sum(plan$section == "C"), sum(plan$section == "D"), sum(plan$section == "E"), .mig053_ll_uuid, .mig053_ll_end)
+       sum(plan$section == "C"), sum(plan$section == "D"), sum(plan$section == "E"), sum(plan$section == "F"),
+       .mig053_ll_uuid, .mig053_ll_end)
   for (i in which(plan$section %in% c("B", "C", "D")))
     logf("  %s: '%s' -> %s, %s, %s..%s", plan$section[[i]], plan$name[[i]], plan$target[[i]], plan$kind[[i]],
          format(plan$date_start[[i]]), format(plan$date_end[[i]]))

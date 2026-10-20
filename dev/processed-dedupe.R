@@ -15,7 +15,8 @@
 #   Rscript dev/processed-dedupe.R [--db PATH] [--root ASSETS_DIR]
 #                                  [--plan-out CSV] [--mirror DIR]
 #                                  [--extra-assets DB2] [--extra-archive DIR]
-#                                  [--date YYYYMMDD]
+#                                  [--known-hashes CSV] [--merged CSV]
+#                                  [--date YYYYMMDD] [--post-import]
 #       DRY RUN (the default). Opens the DB read-only, lists the tree with
 #       find/stat only, writes the plan CSV and an undo CSV next to it
 #       (<plan>-undo.csv), prints a summary. Changes nothing under --root.
@@ -28,6 +29,16 @@
 #   Rscript dev/processed-dedupe.R --undo UNDO.csv
 #       Moves quarantined paths back (only rows whose quarantine copy exists
 #       and whose original path is free). Also idempotent.
+#   Rscript dev/processed-dedupe.R --post-import --db DB --root DIR --mirror SRC
+#                                  [--merged CSV] --plan-out CSV
+#       For the end of a corpus import (after its dupcheck has passed). Builds
+#       the plan FRESH against the post-import DB and tree (exactly as the dry
+#       run does), writes it, then applies only the import-dependent subset:
+#       quarantine-duplicate rows under unprocessed/ or input/ and rows whose
+#       basis is a 057-merged asset row, plus the uuid dirs those empty. That
+#       subset is written as <plan>-post-import.csv (+ -undo.csv) and applied
+#       with the same per-row re-checks as --apply. Everything else in the plan
+#       is left for review. Never run it on a stale CSV: it has no CSV input.
 #
 # Options
 #   --db PATH          the DuckDB holding `asset` (always opened read_only).
@@ -49,35 +60,60 @@
 #                      canonical copy exists and is an asset of --db.
 #   --extra-archive D  where the rehearsal archived those extra assets; only
 #                      used to stat their sizes (fallback ingest_file.size).
+#   --known-hashes CSV hashes computed earlier by reading OneDrive files
+#                      (columns relpath, size, mtime, hash; mtime = epoch
+#                      seconds). Used for a non-local file only while its size
+#                      AND mtime still equal the recorded ones (hash_basis
+#                      "read"). Lets a re-run reuse a one-off hydration.
+#   --merged CSV       asset rows merged away by migration 057 (columns uuid,
+#                      filename, hash, merged_into; 057 writes it as
+#                      057-...-MERGED.csv). Before 057 is applied, the listed
+#                      rows are still assets and are reported "keep" (merge
+#                      pending). Once their asset row is gone, the file at
+#                      processed/<uuid>/<filename> is a byte duplicate of the
+#                      kept asset (hash_basis "merged_asset": the deleted row's
+#                      recorded hash, unless a local/mirror hash is available,
+#                      which must then agree).
 #   --date YYYYMMDD    the quarantine folder date (default: today).
+#   --post-import      see above.
 #   --test-nonlocal RE test only: relpaths matching RE are treated as not local.
 #
 # Hashing: a file under --root is hashed ONLY if it is local (stat blocks > 0,
 # or size 0). OneDrive Files-On-Demand placeholders have blocks = 0 and reading
 # them downloads them, so they are never read: such a file is identified by
-# its mirror copy, by the DB hash when it is an asset's own file, or by
-# name + size. `hash_basis` says which:
+# its mirror copy, a --known-hashes record, the DB hash when it is an asset's
+# own file, or name + size. `hash_basis` says which:
 #   local      hashed from the file itself
-#   mirror     hashed from the --mirror copy (same relpath, same size)
+#   mirror     hashed from the --mirror copy (same relpath, same size, same
+#              mtime - the mirror is a cp -p copy of the tree)
+#   read       a --known-hashes record (same size and mtime)
 #   db_asset   asset.hash of the asset whose own file this is
+#   merged_asset  asset.hash of the 057-merged row whose own file this was
 #   extra_asset  asset.hash of a simulated (--extra-assets) asset
-#   name_size  no hash; matched on basename + size only
+#   name_size  no hash; matched on basename + size only. NEVER enough to
+#              quarantine a file as a duplicate (Robin, 2026-10-20).
+#
+# A duplicate is only quarantined once its canonical copy is verified: the
+# canonical asset's own file exists in the tree with the same size, and, when
+# that file is local (or has a mirror copy of the same size and mtime), its
+# hash equals asset.hash.
 #
 # Plan actions
 #   keep                          an asset's own file; _emails content that is
 #                                 not a duplicate; unprocessed/ files not yet
 #                                 ingested; Finder .DS_Store
 #   quarantine-duplicate          a file outside its asset's <uuid>/<filename>
-#                                 whose hash (or, unhashable, name+size
-#                                 matching exactly one asset) equals an asset's
+#                                 whose hash equals an asset's, and whose
+#                                 canonical copy verifies
+#   quarantine-orphan             a file in processed/ (outside _emails) that no
+#                                 asset row references and that is not a
+#                                 verified duplicate (Robin, 2026-10-20:
+#                                 orphans are quarantined; reversible)
 #   quarantine-orphan-empty-dir   a processed/<uuid>/ dir with no asset row that
-#                                 is empty, or will be once its duplicates move
-#   ask-robin                     anything needing a ruling: orphan dirs whose
-#                                 content matches no asset, legacy duplicate
-#                                 asset rows (merging those is a DB migration,
-#                                 not a file move), _emails byte duplicates,
-#                                 loose root files, missing asset files,
-#                                 ambiguous name+size matches
+#                                 is empty, or will be once its files move
+#   ask-robin                     anything needing a ruling: legacy duplicate
+#                                 asset rows not covered by --merged, _emails
+#                                 byte duplicates, missing asset files
 # =============================================================================
 
 suppressPackageStartupMessages({
@@ -89,17 +125,19 @@ QDIR <- "_dedupe_quarantine"
 UUID_RE <- "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
 LIVE_DB <- file.path(path.expand("~"), "Library", "Application Support",
                      "org.R-project.R", "R", "sampleTidy", "monitoring.duckdb")
-BYTE_BASES <- c("local", "mirror", "db_asset", "extra_asset")
+BYTE_BASES <- c("local", "mirror", "read", "db_asset", "merged_asset", "extra_asset")
 
 # ---- arguments ---------------------------------------------------------------
 parse_args <- function(a) {
   flags <- c("--db", "--root", "--plan-out", "--apply", "--undo", "--mirror",
-             "--extra-assets", "--extra-archive", "--date", "--test-nonlocal")
+             "--extra-assets", "--extra-archive", "--date", "--test-nonlocal",
+             "--known-hashes", "--merged")
   out <- list()
   i <- 1
   while (i <= length(a)) {
     k <- a[[i]]
     if (k %in% c("-h", "--help")) { out$help <- TRUE; i <- i + 1; next }
+    if (k == "--post-import") { out[["post-import"]] <- TRUE; i <- i + 1; next }
     if (grepl("^--[a-z-]+=", k)) {
       v <- sub("^--[a-z-]+=", "", k); k <- sub("=.*$", "", k)
     } else {
@@ -154,24 +192,25 @@ list_tree <- function(root) {
     "find",
     c(shQuote(root), "-mindepth", "1",
       "-path", shQuote(file.path(root, QDIR)), "-prune", "-o",
-      "-exec", "stat", "-f", shQuote("%b\t%z\t%HT\t%N"), "{}", "+"),
+      "-exec", "stat", "-f", shQuote("%b\t%z\t%m\t%HT\t%N"), "{}", "+"),
     stdout = TRUE))
   if (!is.null(attr(out, "status")) && attr(out, "status") != 0)
     stop("find/stat failed under ", root, call. = FALSE)
   if (!length(out))
     return(data.frame(relpath = character(), kind = character(),
-                      size = numeric(), blocks = numeric()))
+                      size = numeric(), blocks = numeric(), mtime = numeric()))
   p <- strsplit(out, "\t", fixed = TRUE)
-  ok <- lengths(p) >= 4
+  ok <- lengths(p) >= 5
   if (any(!ok)) stop("unparseable stat line: ", out[!ok][1], call. = FALSE)
-  path <- vapply(p, function(x) paste(x[-(1:3)], collapse = "\t"), "")
-  type <- vapply(p, `[`, "", 3)
+  path <- vapply(p, function(x) paste(x[-(1:4)], collapse = "\t"), "")
+  type <- vapply(p, `[`, "", 4)
   data.frame(
     relpath = substring(path, nchar(root) + 2),
     kind = ifelse(type == "Directory", "dir",
                   ifelse(type == "Regular File", "file", "other")),
     size = as.numeric(vapply(p, `[`, "", 2)),
     blocks = as.numeric(vapply(p, `[`, "", 1)),
+    mtime = as.numeric(vapply(p, `[`, "", 3)),
     stringsAsFactors = FALSE
   )
 }
@@ -179,6 +218,16 @@ list_tree <- function(root) {
 blocks_of <- function(path) {
   b <- suppressWarnings(system2("stat", c("-f", "%b", shQuote(path)), stdout = TRUE))
   as.numeric(b[1])
+}
+mtime_of <- function(path) {
+  b <- suppressWarnings(system2("stat", c("-f", "%m", shQuote(path)), stdout = TRUE))
+  as.numeric(b[1])
+}
+# bytes this run read from files under --root (local files only)
+READ <- new.env(); READ$n <- 0; READ$bytes <- 0
+hash_root_file <- function(path) {
+  READ$n <- READ$n + 1; READ$bytes <- READ$bytes + file.info(path)$size
+  rlang::hash_file(path)
 }
 is_local <- function(blocks, size) !is.na(blocks) & (blocks > 0 | size == 0)
 # test hook: --test-nonlocal REGEX makes matching relpaths behave like OneDrive
@@ -222,14 +271,54 @@ make_plan <- function(o) {
   }
   dup_hash <- unique(A$hash[duplicated(A$hash) & !is.na(A$hash)])
 
-  # mirror hashes (local copy; reading it never touches OneDrive)
+  # mirror hashes (local copy; reading it never touches OneDrive). The mirror is
+  # a cp -p copy, so a copy counts only while its size AND mtime equal the tree's.
   mirror <- o$mirror
-  mirror_hash <- function(rel, size) {
+  mirror_hash <- function(rel, size, mtime = NA) {
     if (is.null(mirror)) return(NA_character_)
     m <- file.path(mirror, rel)
     if (!file.exists(m) || is.na(size)) return(NA_character_)
-    if (!identical(as.numeric(file.info(m)$size), as.numeric(size))) return(NA_character_)
+    fi <- file.info(m)
+    if (!identical(as.numeric(fi$size), as.numeric(size))) return(NA_character_)
+    if (!is.na(mtime) && !identical(floor(as.numeric(fi$mtime)), floor(as.numeric(mtime)))) return(NA_character_)
     rlang::hash_file(m)
+  }
+  # --known-hashes: earlier reads of OneDrive files, valid while size + mtime hold
+  known <- if (!is.null(o[["known-hashes"]])) read_csv_chr(o[["known-hashes"]]) else
+    data.frame(relpath = character(), size = character(), mtime = character(), hash = character())
+  known_hash <- function(rel, size, mtime) {
+    k <- match(rel, known$relpath)
+    if (is.na(k) || is.na(size) || is.na(mtime)) return(NA_character_)
+    if (as.numeric(known$size[k]) != size || floor(as.numeric(known$mtime[k])) != floor(mtime)) return(NA_character_)
+    known$hash[k]
+  }
+  # --merged: rows 057 merged away (only effective once the asset row is gone)
+  merged <- if (!is.null(o$merged)) read_csv_chr(o$merged) else
+    data.frame(uuid = character(), filename = character(), hash = character(), merged_into = character())
+  if (!all(c("uuid", "filename", "hash", "merged_into") %in% names(merged)))
+    stop("--merged CSV needs columns uuid, filename, hash, merged_into", call. = FALSE)
+  merged$filename[is.na(merged$filename)] <- ""
+  merged_gone <- merged[!merged$uuid %in% A$uuid, , drop = FALSE]
+  merged_gone_key <- paste(merged_gone$uuid, merged_gone$filename, sep = "/")
+
+  # canonical verification, cached per asset row: "" = verified, else why not
+  Fidx <- stats::setNames(seq_len(nrow(F)), F$relpath)
+  canon_cache <- character()
+  canon_problem <- function(j, sz) {
+    if (!is.na(A$size[j]) && !is.na(sz) && A$size[j] != sz)
+      return(sprintf("canonical %s is %s bytes, this file %s", A$canonical[j], A$size[j], sz))
+    if (A$src[j] != "db") return(if (is.na(A$size[j])) "simulated canonical has no known size" else "")
+    k <- Fidx[A$canonical[j]]
+    if (is.na(k)) return(sprintf("canonical %s is missing from the tree", A$canonical[j]))
+    key <- A$uuid[j]
+    if (!is.na(canon_cache[key])) return(canon_cache[[key]])
+    rel <- F$relpath[k]
+    h <- if (is_local(F$blocks[k], F$size[k]) && !test_nonlocal(rel)) hash_root_file(file.path(root, rel)) else
+      mirror_hash(rel, F$size[k], F$mtime[k])
+    res <- if (!is.na(h) && !identical(h, A$hash[j]))
+      sprintf("canonical %s bytes no longer match asset.hash (now %s)", A$canonical[j], h) else ""
+    canon_cache[key] <<- res
+    res
   }
 
   # F.18 backup (annotation only)
@@ -248,19 +337,27 @@ make_plan <- function(o) {
   dir_uuid <- ifelse(loc == "uuid", second, "")
   base <- basename(F$relpath)
   own_key <- paste(dir_uuid, base, sep = "/")
+  where_txt <- function(i) switch(loc[i],
+    uuid = if (dir_uuid[i] %in% A$uuid) " (extra file in an asset dir)" else
+      paste0(" (orphan dir", if (dir_uuid[i] %in% f18) ", row deleted by F.18" else "",
+             if (own_key[i] %in% merged_gone_key) ", row merged away by 057" else "", ")"),
+    root = " (loose root file)", staging = " (already ingested)", other = " (unexpected location)", "")
+  orphan_txt <- function(i) paste0("not referenced by any asset row", where_txt(i))
 
   rows <- vector("list", nrow(F))
   for (i in seq_len(nrow(F))) {
-    rel <- F$relpath[i]; sz <- F$size[i]
+    rel <- F$relpath[i]; sz <- F$size[i]; mt <- F$mtime[i]
     local <- is_local(F$blocks[i], sz) && !test_nonlocal(rel)
-    r <- list(relpath = rel, kind = "file", size = sz, local = local,
+    r <- list(relpath = rel, kind = "file", size = sz, mtime = mt, local = local,
               hash = NA_character_, hash_basis = NA_character_,
               asset_uuid = NA_character_, canonical_path = NA_character_,
               action = NA_character_, reason = NA_character_)
     hash_now <- function() {
-      if (local) return(c(rlang::hash_file(file.path(root, rel)), "local"))
-      h <- mirror_hash(rel, sz)
+      if (local) return(c(hash_root_file(file.path(root, rel)), "local"))
+      h <- mirror_hash(rel, sz, mt)
       if (!is.na(h)) return(c(h, "mirror"))
+      h <- known_hash(rel, sz, mt)
+      if (!is.na(h)) return(c(h, "read"))
       c(NA_character_, "name_size")
     }
     ai <- if (loc[i] == "uuid") match(own_key[i], A$key) else NA_integer_
@@ -272,81 +369,108 @@ make_plan <- function(o) {
       r$asset_uuid <- A$uuid[ai]; r$canonical_path <- rel
       r$hash <- A$hash[ai]; r$hash_basis <- if (A$src[ai] == "db") "db_asset" else "extra_asset"
       note <- ""
-      hb <- if (local) c(rlang::hash_file(file.path(root, rel)), "local") else
-        c(mirror_hash(rel, sz), "mirror")
+      hb <- if (local) c(hash_root_file(file.path(root, rel)), "local") else
+        c(mirror_hash(rel, sz, mt), "mirror")
       if (!is.na(hb[1]) && !identical(hb[1], A$hash[ai]))
         note <- sprintf("; NOTE bytes no longer match asset.hash (%s hash %s) - SharePoint rewrite?", hb[2], hb[1])
       if (A$hash[ai] %in% dup_hash) {
         others <- setdiff(A$uuid[A$hash %in% A$hash[ai]], A$uuid[ai])
-        r$action <- "ask-robin"
-        r$reason <- paste0("legacy duplicate asset rows share this hash (also ",
-                           paste(others, collapse = " "),
-                           "); merging needs a DB migration (repoint references, drop surplus row), not a file move", note)
+        mm <- match(A$uuid[ai], merged$uuid)
+        if (!is.na(mm)) {
+          r$action <- "keep"
+          r$reason <- sprintf("legacy duplicate asset row; migration 057 merges it into %s - its file is quarantined only after 057 is applied%s",
+                              merged$merged_into[mm], note)
+        } else if (A$uuid[ai] %in% merged$merged_into) {
+          r$action <- "keep"
+          r$reason <- sprintf("canonical of a 057 merge (absorbs %s)%s",
+                              paste(merged$uuid[merged$merged_into == A$uuid[ai]], collapse = " "), note)
+        } else {
+          r$action <- "ask-robin"
+          r$reason <- paste0("legacy duplicate asset rows share this hash (also ",
+                             paste(others, collapse = " "),
+                             "); not merged by 057 - needs a ruling", note)
+        }
       } else {
         r$action <- "keep"; r$reason <- paste0("asset's own file", note)
       }
     } else {
       hb <- hash_now()
+      mi <- if (loc[i] == "uuid") match(own_key[i], merged_gone_key) else NA_integer_
+      mnote <- ""
+      if (!is.na(mi)) {
+        if (is.na(hb[1])) hb <- c(merged_gone$hash[mi], "merged_asset")
+        else if (!identical(hb[1], merged_gone$hash[mi])) {
+          mnote <- sprintf("; NOTE bytes (%s) differ from the merged row's hash %s", hb[2], merged_gone$hash[mi])
+          mi <- NA_integer_
+        }
+      }
       r$hash <- hb[1]; r$hash_basis <- hb[2]
-      m <- integer()
-      how <- ""
       if (!is.na(r$hash)) {
         m <- which(A$hash == r$hash)
+        pref <- if (!is.na(mi)) A$uuid[m] != merged_gone$merged_into[mi] else rep(FALSE, length(m))
+        # prefer the kept row of a 057 merge; never a row 057 will delete
+        m <- m[order(pref, A$uuid[m] %in% merged$uuid, A$src[m] != "db", is.na(A$size[m]), A$uuid[m])]
+        probs <- character(); ok <- NA_integer_
+        for (j in m) {
+          pj <- canon_problem(j, sz)
+          if (!nzchar(pj)) { ok <- j; break }
+          probs <- c(probs, pj)
+        }
         how <- sprintf("byte duplicate (%s hash)", r$hash_basis)
-      } else {
-        m <- which(A$filename == base[i] & !is.na(A$size) & A$size == sz)
-        how <- "name+size match, NOT hash-verified (file not local)"
-      }
-      if (length(m)) {
-        m <- m[order(A$src[m] != "db", is.na(A$size[m]), A$uuid[m])]
-        r$canonical_path <- A$canonical[m[1]]
-      }
-      if (length(m) > 1 && is.na(r$hash)) {
-        r$action <- "ask-robin"
-        r$reason <- sprintf("name+size match %d assets (%s); not hash-verified", length(m),
-                            paste(A$uuid[m], collapse = " "))
-      } else if (length(m) >= 1) {
-        dup_of <- sprintf("%s of asset %s%s", how, A$uuid[m[1]],
-                          if (length(m) > 1) sprintf(" (and %d more asset rows with that hash)", length(m) - 1) else "")
-        if (loc[i] == "emails") {
-          r$action <- "ask-robin"; r$reason <- paste0("_emails copy is a ", dup_of)
+        if (!is.na(ok)) {
+          r$canonical_path <- A$canonical[ok]
+          dup_of <- sprintf("%s of asset %s%s", how, A$uuid[ok],
+                            if (length(m) > 1) sprintf(" (and %d more asset rows with that hash)", length(m) - 1) else "")
+          if (loc[i] == "emails") {
+            r$action <- "ask-robin"; r$reason <- paste0("_emails copy is a ", dup_of)
+          } else if (loc[i] == "outside") {
+            r$action <- "keep"; r$reason <- paste0("outside processed/unprocessed/input; ", dup_of)
+          } else {
+            r$action <- "quarantine-duplicate"; r$reason <- paste0(dup_of, where_txt(i), mnote)
+          }
+        } else if (length(m)) {
+          why <- sprintf("%s of asset %s, but the canonical copy is not verified: %s", how,
+                         A$uuid[m[1]], paste(probs, collapse = "; "))
+          r$canonical_path <- A$canonical[m[1]]
+          if (loc[i] %in% c("uuid", "root", "other")) {
+            r$action <- "quarantine-orphan"; r$reason <- paste0(orphan_txt(i), "; ", why, mnote)
+          } else { r$action <- "keep"; r$reason <- why }
         } else {
-          r$action <- "quarantine-duplicate"
-          r$reason <- paste0(dup_of, switch(loc[i],
-            uuid = if (dir_uuid[i] %in% A$uuid) " (extra file in an asset dir)" else
-              paste0(" (orphan dir", if (dir_uuid[i] %in% f18) ", row deleted by F.18" else "", ")"),
-            root = " (loose root file)", staging = " (already ingested)", ""))
+          r$action <- switch(loc[i], uuid = , root = , other = "quarantine-orphan", "keep")
+          r$reason <- switch(loc[i],
+            uuid = , root = , other = paste0(orphan_txt(i), "; content matches no asset (unique bytes, kept in quarantine)", mnote),
+            emails = "_emails content, not a duplicate of any asset",
+            staging = "not ingested yet (not an asset)",
+            outside = "outside processed/unprocessed/input; not examined")
         }
       } else {
-        uh <- if (is.na(r$hash)) " (unhashable: not local and no mirror copy)" else ""
-        r$action <- "ask-robin"
+        m <- which(A$filename == base[i] & !is.na(A$size) & A$size == sz)
+        ns <- if (length(m)) sprintf("name+size match %d asset(s) (%s), NOT hash-verified (not local, no mirror copy)",
+                                     length(m), paste(A$uuid[m], collapse = " ")) else
+          "unhashable (not local, no mirror copy) and no name+size match"
+        r$action <- switch(loc[i], uuid = , root = , other = "quarantine-orphan", "keep")
         r$reason <- switch(loc[i],
-          uuid = if (dir_uuid[i] %in% A$uuid)
-            sprintf("extra file in asset dir (the asset's file is %s); matches no asset%s",
-                    A$filename[match(dir_uuid[i], A$uuid)], uh)
-          else paste0("orphan dir with no asset row", if (dir_uuid[i] %in% f18) " (row deleted by F.18 2026-07-23)" else "",
-                      "; content matches no asset", uh),
-          emails = { r$action <- "keep"; "_emails content, not a duplicate of any asset" },
-          root = paste0("loose file in processed/ root (old flat layout?)", uh),
-          other = paste0("unexpected location under processed/", uh),
-          staging = { r$action <- "keep"; "not ingested yet (not an asset)" },
-          outside = { r$action <- "keep"; "outside processed/unprocessed/input; not examined" })
+          uuid = , root = , other = paste0(orphan_txt(i), "; ", ns),
+          emails = "_emails content (not hashed)",
+          staging = if (length(m)) paste0(ns, " - left in place") else "not ingested yet (not an asset; not hashed)",
+          outside = "outside processed/unprocessed/input; not examined")
+        if (length(m)) r$canonical_path <- A$canonical[m[1]]
       }
     }
     rows[[i]] <- r
   }
-  cols <- c("relpath", "kind", "size", "local", "hash", "hash_basis", "asset_uuid",
+  cols <- c("relpath", "kind", "size", "mtime", "local", "hash", "hash_basis", "asset_uuid",
             "canonical_path", "action", "reason")
   P <- as.data.frame(setNames(lapply(cols, function(k) {
     v <- unlist(lapply(rows, `[[`, k), use.names = FALSE)
-    if (is.null(v)) v <- if (k == "size") numeric() else if (k == "local") logical() else character()
+    if (is.null(v)) v <- if (k %in% c("size", "mtime")) numeric() else if (k == "local") logical() else character()
     if (k %in% c("hash", "hash_basis", "asset_uuid", "canonical_path")) v <- as.character(v)
     v
   }), cols), stringsAsFactors = FALSE)
 
   # non-regular entries (symlinks etc.)
   for (i in seq_len(nrow(O))) {
-    P[nrow(P) + 1, ] <- list(O$relpath[i], "other", O$size[i], FALSE, NA, NA, NA, NA,
+    P[nrow(P) + 1, ] <- list(O$relpath[i], "other", O$size[i], O$mtime[i], FALSE, NA, NA, NA, NA,
                              "ask-robin", "not a regular file or directory (symlink?)")
   }
 
@@ -354,14 +478,14 @@ make_plan <- function(o) {
   have <- A$canonical %in% F$relpath
   for (j in which(!have)) {
     if (A$src[j] == "db") {
-      P[nrow(P) + 1, ] <- list(A$canonical[j], "file", NA, FALSE, A$hash[j], "db_asset", A$uuid[j],
+      P[nrow(P) + 1, ] <- list(A$canonical[j], "file", NA, NA, FALSE, A$hash[j], "db_asset", A$uuid[j],
                                A$canonical[j], "ask-robin", "asset row's own file is MISSING from the tree")
     } else {
       act <- "keep"; why <- "simulated: archived by the import (--extra-assets)"
       if (A$hash[j] %in% dup_hash) {
         act <- "ask-robin"; why <- paste(why, "- shares its hash with another asset row")
       }
-      P[nrow(P) + 1, ] <- list(A$canonical[j], "file", A$size[j], FALSE, A$hash[j], "extra_asset",
+      P[nrow(P) + 1, ] <- list(A$canonical[j], "file", A$size[j], NA, FALSE, A$hash[j], "extra_asset",
                                A$uuid[j], A$canonical[j], act, why)
     }
   }
@@ -403,12 +527,12 @@ make_plan <- function(o) {
     inside_any <- tr$relpath[startsWith(tr$relpath, paste0(d, "/"))]
     if (u %in% A$uuid) next  # an asset dir: its own file has a row (or a MISSING row)
     if (!length(inside_any)) {
-      P[nrow(P) + 1, ] <- list(d, "dir", NA, NA, NA, NA, NA, NA, "quarantine-orphan-empty-dir",
+      P[nrow(P) + 1, ] <- list(d, "dir", NA, NA, NA, NA, NA, NA, NA, "quarantine-orphan-empty-dir",
                                paste0("empty uuid dir with no asset row",
                                       if (u %in% f18) " (row deleted by F.18)" else ""))
     } else if (nrow(inside) == length(inside_any) && all(startsWith(inside$action, "quarantine-"))) {
-      P[nrow(P) + 1, ] <- list(d, "dir", NA, NA, NA, NA, NA, NA, "quarantine-orphan-empty-dir",
-                               sprintf("orphan uuid dir, empty once its %d duplicate file(s) are quarantined",
+      P[nrow(P) + 1, ] <- list(d, "dir", NA, NA, NA, NA, NA, NA, NA, "quarantine-orphan-empty-dir",
+                               sprintf("orphan uuid dir, empty once its %d file(s) are quarantined",
                                        nrow(inside)))
     }
   }
@@ -455,6 +579,7 @@ summarise_plan <- function(P) {
   print(addmargins(table(action = P$action, where = loc)))
   q <- P[P$action == "quarantine-duplicate", ]
   if (nrow(q)) { cat("\nquarantine-duplicate by hash_basis:\n"); print(table(q$hash_basis)) }
+  cat(sprintf("\nfiles read under the root (local only): %d, %.1f MB\n", READ$n, READ$bytes / 1e6))
 }
 
 # ---- apply -------------------------------------------------------------------
@@ -476,6 +601,7 @@ do_apply <- function(o) {
   A <- read_assets(o$db)$asset
   A$filename[is.na(A$filename)] <- ""
   akey <- paste(A$uuid, A$filename, sep = "/")
+  has_mtime <- "mtime" %in% names(P)
   Q <- P[startsWith(P$action, "quarantine-"), , drop = FALSE]
   Q <- Q[order(Q$kind == "dir"), , drop = FALSE]  # files before dirs
   log_out <- sub("(\\.csv)?$", "-apply-log.csv", o$apply)
@@ -506,6 +632,9 @@ do_apply <- function(o) {
       if (is.na(q$size) || !identical(as.numeric(q$size), as.numeric(sz))) {
         logrow(q, "REFUSED", sprintf("size changed (plan %s, now %s)", q$size, sz)); next
       }
+      if (has_mtime && !is.na(q$mtime) && !identical(floor(as.numeric(q$mtime)), floor(mtime_of(src)))) {
+        logrow(q, "REFUSED", sprintf("mtime changed (plan %s, now %s)", q$mtime, mtime_of(src))); next
+      }
       if (length(parts) == 3 && paste(u, parts[3], sep = "/") %in% akey) {
         logrow(q, "REFUSED", "the DB has an asset row pointing at this path"); next
       }
@@ -527,9 +656,20 @@ do_apply <- function(o) {
         if (identical(norm(file.path(root, cp)), norm(src))) {
           logrow(q, "REFUSED", "source is its own canonical copy"); next
         }
-        if (q$hash_basis == "name_size" &&
-            !identical(as.numeric(file.info(file.path(root, cp))$size), as.numeric(sz))) {
+        if (q$hash_basis == "name_size" || is.na(q$hash)) {
+          logrow(q, "REFUSED", "not hash-verified (name+size only)"); next
+        }
+        if (!identical(as.numeric(file.info(file.path(root, cp))$size), as.numeric(sz))) {
           logrow(q, "REFUSED", "canonical copy size differs"); next
+        }
+        ah <- A$hash[match(ck, akey)]
+        if (!identical(ah, q$hash)) {
+          logrow(q, "REFUSED", sprintf("canonical asset hash %s differs from the plan's %s", ah, q$hash)); next
+        }
+        cpath <- file.path(root, cp)
+        if (is_local(blocks_of(cpath), file.info(cpath)$size) && !test_nonlocal(cp)) {
+          ch <- hash_root_file(cpath)
+          if (!identical(ch, ah)) { logrow(q, "REFUSED", sprintf("canonical copy bytes changed (now %s)", ch)); next }
         }
       }
       dir.create(dirname(dst), recursive = TRUE, showWarnings = FALSE)
@@ -606,9 +746,12 @@ main <- function() {
   if (!dir.exists(o$root)) stop("root not found: ", o$root, call. = FALSE)
   if (!is.null(o$undo)) return(do_undo(o))
   if (!is.null(o$apply)) {
+    if (isTRUE(o[["post-import"]])) stop("--post-import builds its own plan; do not pass --apply", call. = FALSE)
     if (!is.null(o[["extra-assets"]])) stop("--extra-assets is a simulation; it cannot be applied", call. = FALSE)
     return(do_apply(o))
   }
+  if (isTRUE(o[["post-import"]]) && !is.null(o[["extra-assets"]]))
+    stop("--extra-assets is a simulation; it cannot be combined with --post-import", call. = FALSE)
   o[["plan-out"]] <- o[["plan-out"]] %||% file.path(getwd(), sprintf("processed-dedupe-plan-%s.csv", o$date))
   if (is_inside(o[["plan-out"]], o$root))
     stop("--plan-out must not be inside --root (the dry run never writes there)", call. = FALSE)
@@ -619,6 +762,32 @@ main <- function() {
   undo_out <- write_plan(P, o$root, o[["plan-out"]])
   summarise_plan(P)
   cat(sprintf("\nplan: %s\nundo: %s\n", o[["plan-out"]], undo_out))
+  if (isTRUE(o[["post-import"]])) {
+    S <- post_import_subset(P, o)
+    sub_out <- sub("(\\.csv)?$", "-post-import.csv", o[["plan-out"]])
+    sub_undo <- write_plan(S, o$root, sub_out)
+    cat(sprintf("\nPOST-IMPORT: applying %d import-dependent row(s) (%d file(s), %d dir(s)); the rest of the plan is NOT applied\nsubset: %s\nundo:   %s\n",
+                nrow(S), sum(S$kind == "file"), sum(S$kind == "dir"), sub_out, sub_undo))
+    o$apply <- sub_out
+    return(do_apply(o))
+  }
+}
+
+# The import-dependent part of a fresh plan: duplicates under unprocessed/ or
+# input/ (their bytes became assets in the import), the own files of rows 057
+# merged away, and the uuid dirs those moves empty.
+post_import_subset <- function(P, o) {
+  merged_uuid <- if (!is.null(o$merged)) read_csv_chr(o$merged)$uuid else character()
+  rp <- strsplit(P$relpath, "/", fixed = TRUE)
+  udir <- vapply(rp, function(x) if (length(x) >= 2 && x[1] == "processed") x[2] else "", "")
+  f <- P$kind == "file" & P$action == "quarantine-duplicate" &
+    (startsWith(P$relpath, "unprocessed/") | startsWith(P$relpath, "input/") | udir %in% merged_uuid)
+  d <- P$kind == "dir" & P$action == "quarantine-orphan-empty-dir" & udir %in% merged_uuid
+  for (k in which(d)) {
+    inside <- P$kind == "file" & startsWith(P$relpath, paste0(P$relpath[k], "/"))
+    if (!all(f[inside])) d[k] <- FALSE
+  }
+  P[f | d, , drop = FALSE]
 }
 
 if (sys.nframe() == 0L) main()
