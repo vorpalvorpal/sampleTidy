@@ -276,16 +276,19 @@ test_that("12: an existing report project is MERGED into, not duplicated; same d
   expect_false(any(gas_reviews(con)$kind == "duplicate_report_number"))
 })
 
-test_that("12: duplicate_report_number fires when the existing project holds samples on a DIFFERENT date; data still imports", {
+test_that("12: duplicate_report_number fires when the existing project holds samples on a DIFFERENT date in the SAME year; data still imports", {
   db <- gas_db_setup()
-  gas_add_legacy(db, "2400-9901-07-01", "2024-07-21 14:00:00", list(`f-g182` = 0, `f-g183` = 2e-4))
+  # C8/D14: a different date in a different YEAR is keyed apart as
+  # "<report_no> (<yyyy>)" instead (test-report-year-key-c8.R); inside one
+  # year the acirl_gas flag is unchanged. 2025-06-24 Sydney, a month earlier.
+  gas_add_legacy(db, "2400-9901-07-01", "2025-06-23 14:00:00", list(`f-g182` = 0, `f-g183` = 2e-4))
   gas_ingest(db)
   con <- gas_ro(db)
   rv <- gas_reviews(con)
   expect_true(any(rv$kind == "duplicate_report_number"))
   expect_true(any(rv$work_order[rv$kind == "duplicate_report_number"] == "2400-9901-07-01"))
   a <- gas_analyses_at(con, "f-g183")
-  expect_equal(nrow(a), 2)                                     # 2024 legacy + 2025 new
+  expect_equal(nrow(a), 2)                                     # June legacy + July new
   expect_true(gas_sample_date %in% gas_sydney_day(a$date))
 })
 

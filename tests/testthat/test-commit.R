@@ -2691,7 +2691,11 @@ a80_project <- function(con, name) {
 # An ACIRL event as assembly really builds one: no home work order (the header
 # carries a report number, never a work order, and `2400-*` is never parsed
 # from a filename), with PLAN-07 R-7.5b's per-hash `sources`.
-a80_event <- function(con, src_dir, report_no, cited = character(0), tag = "a") {
+# `dates` (optional, ISO strings) fills `samples$sample_datetime_raw` the way
+# the field adapter emits it (date-only "%d/%m/%Y"); C8/D14 keys the report
+# project by the Sydney years of those dates.
+a80_event <- function(con, src_dir, report_no, cited = character(0), tag = "a",
+                      dates = NULL) {
   path <- file.path(src_dir, sprintf("%s_%s_WMF.xls", report_no, tag))
   writeLines(sprintf("acirl workbook %s %s", report_no, tag), path)
   hash <- hash_file(path)
@@ -2706,7 +2710,10 @@ a80_event <- function(con, src_dir, report_no, cited = character(0), tag = "a") 
     path = path,
     event = list(
       work_order = NA_character_, orphan = TRUE,
-      results = tibble::tibble(), samples = tibble::tibble(),
+      results = tibble::tibble(),
+      samples = if (is.null(dates)) tibble::tibble() else tibble::tibble(
+        source_hash = hash, sample_datetime_raw = format(as.Date(dates), "%d/%m/%Y")
+      ),
       files = tibble::tibble(hash = hash, kept = TRUE),
       report = list(sources = stats::setNames(list(list(
         hash = hash, filename = basename(path), report_no = report_no,
@@ -2860,19 +2867,21 @@ test_that("A80: a report number colliding with an existing project MERGES into i
   )
 })
 
-test_that("A80: a report number reused for a DIFFERENT sampling event raises duplicate_report_number - and still imports", {
+test_that("A80: a report number reused for a DIFFERENT sampling event in the SAME year raises duplicate_report_number - and still imports", {
   s <- a80_setup()
   con <- s$con
-  ev1 <- a80_event(con, s$src, "2400-7430-01", cited = "ES2417748", tag = "a")
+  ev1 <- a80_event(con, s$src, "2400-7430-01", cited = "ES2417748", tag = "a",
+                   dates = "2024-05-29")
   commit_event(ev1$event, mk_resolved(clean = a80_clean(ev1$hash, "2400-7430-01", date = "2024-05-29")), con)
 
-  # The worst of the three real collisions: the May 2025 report carrying the
-  # 2024 filename AND the 2024 report number; only its date and ALS order are
-  # right.
-  ev2 <- a80_event(con, s$src, "2400-7430-01", cited = "ES2515829", tag = "b")
+  # C8/D14: a reuse in a LATER year is keyed apart (next test). Inside one
+  # year a second ALS order under the same report number is still an ACIRL
+  # numbering slip (measured: 2400-7222-12-05, 2400-7286-01-03) and flags.
+  ev2 <- a80_event(con, s$src, "2400-7430-01", cited = "ES2418001", tag = "b",
+                   dates = "2024-06-03")
   res <- commit_event(
     ev2$event,
-    mk_resolved(clean = a80_clean(ev2$hash, "2400-7430-01", feature = "T.S02", date = "2025-05-27")),
+    mk_resolved(clean = a80_clean(ev2$hash, "2400-7430-01", feature = "T.S02", date = "2024-06-03")),
     con
   )
 
@@ -2883,14 +2892,46 @@ test_that("A80: a report number reused for a DIFFERENT sampling event raises dup
   expect_equal(nrow(flag), 1)
   expect_identical(flag$work_order[[1]], "2400-7430-01")
   diag <- jsonlite::fromJSON(flag$payload[[1]])
-  expect_identical(unlist(diag$als_work_orders_incoming), "ES2515829")
+  expect_identical(unlist(diag$als_work_orders_incoming), "ES2418001")
   expect_identical(unlist(diag$als_work_orders_already_filed), "ES2417748")
 
   # One parent, two children - which is what makes the reuse survivable.
   report <- a80_project(con, "2400-7430-01")
+  expect_equal(nrow(report), 1)
   kids <- DBI::dbGetQuery(con, "SELECT name FROM project WHERE uuid_parent = ? ORDER BY name",
                           params = list(report$uuid[[1]]))
-  expect_identical(kids$name, c("ES2417748", "ES2515829"))
+  expect_identical(kids$name, c("ES2417748", "ES2418001"))
+  expect_equal(
+    DBI::dbGetQuery(con, "SELECT count(*) n FROM project WHERE name LIKE '2400-7430-01 (%'")$n, 0
+  )
+})
+
+test_that("C8/D14: the same report number reused a YEAR later gets its own '(yyyy)' project and raises no duplicate_report_number", {
+  s <- a80_setup()
+  con <- s$con
+  ev1 <- a80_event(con, s$src, "2400-7430-01", cited = "ES2417748", tag = "a",
+                   dates = "2024-05-29")
+  commit_event(ev1$event, mk_resolved(clean = a80_clean(ev1$hash, "2400-7430-01", date = "2024-05-29")), con)
+
+  # The real collision: the May 2025 report carrying the 2024 report number.
+  ev2 <- a80_event(con, s$src, "2400-7430-01", cited = "ES2515829", tag = "b",
+                   dates = "2025-05-27")
+  res <- commit_event(
+    ev2$event,
+    mk_resolved(clean = a80_clean(ev2$hash, "2400-7430-01", feature = "T.S02", date = "2025-05-27")),
+    con
+  )
+  expect_false(isTRUE(res$blocked))
+
+  expect_equal(
+    DBI::dbGetQuery(con, "SELECT count(*) n FROM review_queue WHERE kind = 'duplicate_report_number'")$n, 0
+  )
+  bare <- a80_project(con, "2400-7430-01")
+  y25 <- a80_project(con, "2400-7430-01 (2025)")
+  expect_equal(nrow(bare), 1)
+  expect_equal(nrow(y25), 1)
+  expect_identical(a80_project(con, "ES2417748")$uuid_parent[[1]], bare$uuid[[1]])
+  expect_identical(a80_project(con, "ES2515829")$uuid_parent[[1]], y25$uuid[[1]])
 })
 
 test_that("A80: a re-saved report (same number, same cited order) does NOT raise duplicate_report_number", {
