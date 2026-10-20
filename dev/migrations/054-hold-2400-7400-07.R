@@ -1,18 +1,23 @@
-# Operator-run migration: seed FOUR `ingest_file` rows (state `ignored`) that hold
-# four files out of the import until Robin rules. Marker 1054. Requires 1053.
+# Operator-run migration: seed THREE `ingest_file` rows (state `ignored`) that hold
+# three files out of the import until Robin rules. Marker 1054. Requires 1053.
 #
 # ---- WHY -----------------------------------------------------------------------
-# D1: the ACIRL Katoomba field workbook "2400-7400-07 July 2024 Monthly Katoomba
-# WMF.xls", its sheets and ALS ES2421689 all say 1 Jul 2024, but live already
-# holds ES2421689's ALS values on 19 Jun 2024 samples. Importing the workbook
-# would split one visit across two days.
 # D11: the ESdat revision-1 files of ALS ES2006927 (Chemistry2e.CSV, Header.XML,
-# Sample2e.CSV) report K.S01A/S05/S09/TS01 sampled 25 Feb 2020 18:34 with values
-# equal to live ES2006494's 25 Feb samples, while live holds ES2006927 on 27 Feb
-# with other values; importing would duplicate ES2006494. NB the hash keys
+# Sample2e.CSV; Date_Reported 2020-03-10) re-date K.S01A/S03/S05/S09/TS01 and the
+# lined stormwater dam to 25 Feb 2020 (revision 0, reported 2020-03-06, has S3 and
+# the dam on 27 Feb, the rest 25 Feb 18:34). Live holds ES2006927 on 27 Feb with
+# the comment "COC incorrectly recorded date as 25-02-2020" (both revisions' COC
+# number is "ALSE-Sydney 27-Feb-20"). Revision 1 does NOT repeat ES2006494's
+# 25 Feb results (the detected values differ at every point), so it is not a
+# duplicate of ES2006494; importing it would duplicate ES2006927's results onto
+# 25 Feb. Held until Robin rules on the date (056 header, D11). NB the hash keys
 # content: the revision-0 Chemistry2e.CSV is byte-identical to the revision-1
 # one, so it is held too (the revision-0 Header.XML and Sample2e.CSV differ and
 # are not held).
+# D1 (2400-7400-07 July 2024 Monthly Katoomba WMF.xls, d1597914...) was held here
+# until Robin ruled (2026-10-20): the file is right (1 Jul 2024) and live is
+# wrong; migration 056 moves live's ES2421689 ALS results to 1 Jul 2024, so the
+# workbook is no longer held.
 #
 # ---- REVERSIBLE ----------------------------------------------------------------
 # Once Robin rules, reset the row with ingest_file_set_state(..., reset = TRUE)
@@ -20,8 +25,6 @@
 #
 # ---- WHAT ----------------------------------------------------------------------
 #   file                                                    xxHash128 (ingest_file key)
-#   2400-7400-07 July 2024 Monthly Katoomba WMF.xls         d1597914e52ce9077f376b8ded30791c
-#     size 205824, md5 ccfafa7626d57cf853aa7061838f6c7a
 #   Katoomba Incident.ESDAT_ES2006927_1.Chemistry2e.CSV     07bcecfc6312255ae6f21cc6c977daaa
 #     size 200204, md5 8682f959da29a700f97b8761c88ed5ab
 #   Katoomba Incident.ESDAT_ES2006927_1.Header.XML          e11b438cfd496070dc2fef28effdbbe3
@@ -32,16 +35,16 @@
 #   * state = 'ignored', in the shape of 047's rows: filename, path_first_seen
 #     (the OneDrive path where the file sits, assets/unprocessed/), size,
 #     first_seen_at = updated_at = the migration time, adapter/tier = what the
-#     current registry claims it with (acirl_field_xlsx / format; B1 rehearsal),
+#     current registry claims it with (esdat / exact; B1 rehearsal),
 #     work_order/revision/org/uuid_asset/registry_fingerprint NULL. The router
 #     looks a file up by content hash ONLY; `ignored` is terminal, outside the
 #     reconsider and fingerprint re-decision sets, and an inbox done state.
 #
 # ---- PRECONDITIONS (any failure aborts; nothing is written) ---------------------
 #   * marker 1053 present;
-#   * no ingest_file row for any of the four hashes or filenames.
+#   * no ingest_file row for any of the three hashes or filenames.
 #
-# Writes, in one transaction: db_append of the four ingest_file rows (change_log
+# Writes, in one transaction: db_append of the three ingest_file rows (change_log
 # inserts, uuid_row NULL, source_hash = the file's hash), actor "054-hold-2400-7400-07",
 # and the marker; every other table, row and column is checksummed before and
 # after. Backups: verified whole-file snapshot, plus
@@ -63,25 +66,21 @@
 .mig054_assets <- paste0("/Users/rjs/Library/CloudStorage/OneDrive-BlueMountainsCityCouncil/Sharepoint/",
                          "waste_data - Environmental monitoring/assets/unprocessed/")
 .mig054_files <- data.frame(
-  hash = c("d1597914e52ce9077f376b8ded30791c", "07bcecfc6312255ae6f21cc6c977daaa",
+  hash = c("07bcecfc6312255ae6f21cc6c977daaa",
            "e11b438cfd496070dc2fef28effdbbe3", "b66193946f485819e4b0e1451f1e70ac"),
-  md5 = c("ccfafa7626d57cf853aa7061838f6c7a", "8682f959da29a700f97b8761c88ed5ab",
+  md5 = c("8682f959da29a700f97b8761c88ed5ab",
           "7850eed5c30adb385ac063095d5175e9", "7882107fe8bec58f1f8a179965a2bd0c"),
-  filename = c("2400-7400-07 July 2024 Monthly Katoomba WMF.xls",
-               "Katoomba Incident.ESDAT_ES2006927_1.Chemistry2e.CSV",
+  filename = c("Katoomba Incident.ESDAT_ES2006927_1.Chemistry2e.CSV",
                "Katoomba Incident.ESDAT_ES2006927_1.Header.XML",
                "Katoomba Incident.ESDAT_ES2006927_1.Sample2e.CSV"),
-  size = c(205824, 200204, 786, 16381),
-  adapter = c("acirl_field_xlsx", "esdat", "esdat", "esdat"),
-  tier = c("format", "exact", "exact", "exact"),
-  decision = c("D1", "D11", "D11", "D11"),
+  size = c(200204, 786, 16381),
+  adapter = c("esdat", "esdat", "esdat"),
+  tier = c("exact", "exact", "exact"),
+  decision = c("D11", "D11", "D11"),
   stringsAsFactors = FALSE)
 .mig054_state <- "ignored"
 .mig054_state_reason <- function(i) {
-  if (.mig054_files$decision[[i]] == "D1")
-    paste0("held pending Robin (D1): file, sheets and ALS ES2421689 say 1 Jul 2024 but live files ES2421689's ALS values on 19 Jun 2024 samples; importing would split one visit across two days - migration 054")
-  else
-    paste0("held pending Robin (D11): ES2006927 revision 1 reports K.S01A/S05/S09/TS01 sampled 25 Feb 2020 18:34 with values equal to live ES2006494's 25 Feb samples, while live holds ES2006927 on 27 Feb with other values; importing would duplicate ES2006494 - migration 054")
+  paste0("held pending Robin (D11): ES2006927 revision 1 (reported 2020-03-10) re-dates its samples to 25 Feb 2020, while live holds ES2006927 on 27 Feb 2020 (comment: COC incorrectly recorded date as 25-02-2020; COC number ALSE-Sydney 27-Feb-20); its results are ES2006927's own, not a repeat of ES2006494; importing would duplicate ES2006927 onto 25 Feb - migration 054")
 }
 .mig054_reason_file <- function(i) sprintf("054 (%s): held out of the import pending Robin's ruling; seeded ignored so the router skips it",
                                            .mig054_files$decision[[i]])
@@ -213,7 +212,8 @@ mig054_backup <- function(db, snapshot_dir, .now = NULL) {
     .mig054_verify(con)
     got <- .mig054_counts(con)
     if (!identical(got, want))
-      .mig054_fail(sprintf("counts are not before + 4 ingest_file, + 4 change_log, + 1 marker: %s",
+      .mig054_fail(sprintf("counts are not before + %d ingest_file, + %d change_log, + 1 marker: %s",
+                           nrow(.mig054_files), nrow(.mig054_files),
                            paste(names(got), unlist(got), unlist(want), sep = ":", collapse = ", ")))
     if (!identical(sums_before, .mig054_checksum(con))) .mig054_fail("something outside the planned rows moved.")
     NULL
@@ -265,7 +265,7 @@ mig054_run <- function(db, snapshot_dir, dry_run = FALSE, .now = NULL, csv_dir =
     .mig054_apply(con, recorded_at)
   }, db = db)
 
-  logf("%s migrated successfully (marker %d): 4 ingest_file rows (ignored).", .mig054_name, .mig054_marker_version)
+  logf("%s migrated successfully (marker %d): %d ingest_file rows (ignored).", .mig054_name, .mig054_marker_version, nrow(.mig054_files))
   invisible(list(status = "migrated", backup_path = backup_path,
                  restore_command = restore_command, recorded_at = recorded_at))
 }

@@ -1,19 +1,26 @@
 #!/bin/bash
-# Historical corpus import: migrations 053-055, the corpus run, checks, and a
-# Sharepoint snapshot. Robin's 5-step plan (2026-10-19). Run from the repo root.
+# Historical corpus import: migrations 053-059 and 061, the corpus run, the
+# post-import review actions, checks, a Sharepoint snapshot and the post-import
+# processed/ dedupe. Robin's 5-step plan (2026-10-19). Run from the repo root.
 #
 #   dev/corpus-import/apply-corpus-import.sh rehearsal <copy.duckdb> <work_dir>
 #   dev/corpus-import/apply-corpus-import.sh live <work_dir>
 #
 # live: pauses the hourly auto-import (~/.sampletidy-autoimport-off) and removes the
 # pause on exit; refuses if an auto-import run is in progress; takes a verified local
-# backup of the live DB first (restore = cp it back); applies 053, 054, 055 (each
-# takes its own verified backup and writes its BACKUP CSVs to dev/migrations/);
-# ingests the local corpus copy SRC into live with archive_dir = Sharepoint
-# assets/processed; runs the duplicate check and summary against the backup; then
-# takes ONE Sharepoint snapshot (snapshot_db() to st_config("snapshot_dir")) and
-# writes the processed/ dedupe plan (dry run only: nothing is moved).
-# rehearsal: the same on a copy, everything under <work_dir>, no pause, no Sharepoint.
+# backup of the live DB first (restore = cp it back); applies the migrations in
+# MIGS below (each takes its own verified backup and writes its BACKUP CSVs to
+# dev/migrations/); ingests the local corpus copy SRC into live with archive_dir =
+# Sharepoint assets/processed; applies dev/corpus-import/post-import-review.R
+# (TRIAGE D4/D6/D12/D15); runs the summary and the duplicate check against the
+# backup and STOPS unless the check reports 0 likely duplicates; takes ONE
+# Sharepoint snapshot (snapshot_db() to st_config("snapshot_dir")); then runs
+# dev/processed-dedupe.R --post-import, which re-plans against the post-import DB
+# and tree and moves only the import-dependent duplicates (unprocessed/ copies whose
+# processed copy is now recorded and present, and the files of asset rows 057/061
+# merged away) into assets/_dedupe_quarantine/<date>/ (reversible; nothing deleted).
+# rehearsal: the same on a copy, everything under <work_dir>, no pause, no
+# Sharepoint, no processed/ moves.
 set -euo pipefail
 MODE="${1:?mode: rehearsal|live}"
 LIVE="$HOME/Library/Application Support/org.R-project.R/R/sampleTidy/monitoring.duckdb"
@@ -32,6 +39,8 @@ mkdir -p "$WORK"; WORK="$(cd "$WORK" && pwd)"
 LOG="$WORK/apply.log"; exec > >(tee -a "$LOG") 2>&1
 echo "=== $(date '+%F %T') corpus import ($MODE) at $(git rev-parse --short HEAD); db=$DB"
 
+MERGED="dev/migrations/057-merge-duplicate-hash-assets-INPUT.csv"
+MERGED="$MERGED,dev/migrations/061-resolve-ask-robin-assets-INPUT.csv"
 PAUSE="$HOME/.sampletidy-autoimport-off"
 if [ "$MODE" = live ]; then
   if pgrep -f "dev/auto-import.R" >/dev/null; then echo "an auto-import run is in progress; try again later"; exit 1; fi
@@ -56,8 +65,11 @@ v <- DBI::dbConnect(duckdb::duckdb(), a[[2]], read_only = TRUE); n1 <- cnt(v); D
 stopifnot(identical(n0, n1)); cat("backup verified:", a[[2]], "\n"); print(n0)' "$DB" "$BEFORE"
 echo "restore if needed: cp '$BEFORE' '$DB'"
 
-# 2. migrations 053-055 (each: dry run, migrate, re-run = already_migrated)
-for m in 053-corpus-feature-aliases 054-hold-2400-7400-07 055-rehash-sharepoint-rewritten-assets; do
+# 2. migrations (each: dry run, migrate, re-run = already_migrated)
+MIGS="053-corpus-feature-aliases 054-hold-2400-7400-07 055-rehash-sharepoint-rewritten-assets
+  056-corpus-live-corrections 057-merge-duplicate-hash-assets 058-bound-b-lo2-alias
+  059-split-reused-report-numbers 061-resolve-ask-robin-assets"
+for m in $MIGS; do
   n="${m%%-*}"
   if [ "$MODE" = live ]; then
     Rscript "dev/migrations/apply-$m.R"
@@ -71,16 +83,28 @@ done
 # 3. the corpus run
 Rscript dev/corpus-import/run-corpus.R "$DB" "$WORK" "$MODE" "$SRC"
 
-# 4. checks against the pre-import backup
+# 4. post-import review actions (TRIAGE D4/D6/D12/D15): dry run, apply, re-run = nothing to do
+Rscript dev/corpus-import/post-import-review.R "$DB" "$WORK/post-review"
+Rscript dev/corpus-import/post-import-review.R "$DB" "$WORK/post-review" --apply
+Rscript dev/corpus-import/post-import-review.R "$DB" "$WORK/post-review-rerun"
+
+# 5. checks against the pre-import backup; the duplicate check gates step 6
 Rscript dev/corpus-import/summary.R "$DB" "$BEFORE" "$WORK" > "$WORK/summary.txt" 2>&1 || true
 sed -n '1,45p' "$WORK/summary.txt"
-Rscript dev/corpus-import/dupcheck.R "$DB" "$BEFORE" "$WORK/dupcheck"
+Rscript dev/corpus-import/dupcheck.R "$DB" "$BEFORE" "$WORK/dupcheck" | tee "$WORK/dupcheck.txt"
+if ! grep -q '^LIKELY DUPLICATES.*: 0 analyses in 0 samples' "$WORK/dupcheck.txt"; then
+  echo "DUPLICATE CHECK FAILED: likely duplicates found (see $WORK/dupcheck.txt)."
+  echo "Stopping before the snapshot and the processed/ dedupe. Restore if needed: cp '$BEFORE' '$DB'"
+  exit 1
+fi
 
-# 5. live only: one Sharepoint snapshot, then the processed/ dedupe plan (dry run)
+# 6. live only: one Sharepoint snapshot, then the post-import processed/ dedupe
 if [ "$MODE" = live ]; then
   Rscript -e 'suppressMessages(devtools::load_all(".", quiet = TRUE)); p <- snapshot_db(); cat("Sharepoint snapshot:", p, "\n")'
   ASSETS="$(dirname "$(sed -n 's/^SAMPLETIDY_ARCHIVE_DIR=//p' "$HOME/.Renviron" | tail -1)")"
-  Rscript dev/processed-dedupe.R --db "$DB" --root "$ASSETS" --mirror "$SRC" --plan-out "$WORK/processed-plan.csv"
-  echo "processed/ dedupe plan written (NOT applied): $WORK/processed-plan.csv"
+  [ "$(basename "$ASSETS")" = assets ] || { echo "unexpected assets root: $ASSETS"; exit 1; }
+  Rscript dev/processed-dedupe.R --post-import --db "$DB" --root "$ASSETS" --mirror "$SRC" \
+    --merged "$MERGED" --plan-out "$WORK/processed-plan.csv"
+  echo "post-import dedupe applied; undo with: Rscript dev/processed-dedupe.R --undo $WORK/processed-plan-post-import-undo.csv"
 fi
 echo "=== $(date '+%F %T') done"
