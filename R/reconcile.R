@@ -2364,6 +2364,15 @@
 #' @noRd
 .rc_row_work_orders <- function(event, rows, i) {
   row_wo <- if ("work_order" %in% names(rows)) rows$work_order[[i]] else NA_character_
+  # C8/D14: an ACIRL row carries the bare report number, but its report
+  # project may be year-keyed ("<report_no> (<yyyy>)"); the matchers compare
+  # with `project.name`, so they get the resolved name
+  # (`.ct_with_report_project_name()`).
+  resolved <- if (is.null(event)) NULL else event$report$project_name
+  if (!is.null(resolved) && length(resolved) == 1 && !is.na(resolved) && !is.na(row_wo) &&
+      identical(as.character(row_wo), .ct_event_report_no(event))) {
+    row_wo <- resolved
+  }
   ev <- if (is.null(event)) character(0) else
     c(event$work_order, .ct_event_als_work_orders(event))
   wo <- as.character(c(ev, row_wo))
@@ -3360,6 +3369,8 @@
 #' @keywords internal
 #' @noRd
 reconcile_event <- function(event, con) {
+  # C8/D14: ACIRL rows compare against their year-keyed report project.
+  event <- .ct_with_report_project_name(con, event)
   results <- event$results
 
   # PLAN-16: widened to carry the typed columns .rq_row()/.rq_skip() emit
