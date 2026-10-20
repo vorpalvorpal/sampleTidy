@@ -168,9 +168,12 @@ fl_result <- function(con, sample, r, default_org = "ALS") {
   q <- if (is.null(r$quantified)) TRUE else r$quantified
   rl <- if (is.null(r$rl)) NA_real_ else r$rl
   au <- fl_uuid()
-  DBI::dbExecute(con, "INSERT INTO analysis (uuid, uuid_sample, uuid_lab, value, quantified, rl_low)
-                       VALUES (?, ?, ?, ?, ?, ?)",
-                 params = list(au, sample, mu, as.numeric(r$value), q, rl))
+  # r$value NULL/NA -> NULL value; r$value_chr (default NULL) -> analysis.value_chr.
+  v <- if (is.null(r$value)) NA_real_ else as.numeric(r$value)
+  vc <- if (is.null(r$value_chr)) NA_character_ else as.character(r$value_chr)
+  DBI::dbExecute(con, "INSERT INTO analysis (uuid, uuid_sample, uuid_lab, value, value_chr, quantified, rl_low)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)",
+                 params = list(au, sample, mu, v, vc, q, rl))
   invisible(au)
 }
 

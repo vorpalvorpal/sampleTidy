@@ -9,7 +9,7 @@
 
 .flags_checks <- c("overdue", "invoiced_not_received", "missing_point",
                    "missing_analytes", "licence_limit", "gas_criterion",
-                   "site_history", "rl_change", "unit_change",
+                   "site_history", "rl_change", "unit_change", "missing_result",
                    # PLAN-19 phase 1 (section 6 order; phase-1b/2 checks slot in between)
                    "qc_dup_rpd", "qc_blank_detect", "qc_missing", "qc_unresolved",
                    # PLAN-19 phase 1b
@@ -31,6 +31,8 @@
   site_history = "a result is far outside the point's own history",
   rl_change = "the reporting limit rose above its 2-year maximum",
   unit_change = "the reporting unit changed since the last result",
+  missing_result = paste0("a result is blank on the report (\"_\" or similar) ",
+                          "\u2014 ask the supplier for the value or why it wasn't measured"),
   qc_dup_rpd = "a field duplicate disagrees with its parent point",
   qc_blank_detect = "a field QC blank has a detection",
   qc_missing = "a QC round lacks a required QC sample",
@@ -185,7 +187,7 @@
   s <- DBI::dbGetQuery(con, "
     SELECT s.uuid AS sample, s.uuid_project AS project_uuid, p.name AS project,
            p.type AS ptype, f.uuid AS feature_uuid, f.name AS feature, f.site AS site,
-           f.matrix AS matrix,
+           f.matrix AS matrix, s.organisation AS organisation,
            COALESCE(s.datetime, s.date) AS ts
       FROM \"sample\" s
       LEFT JOIN feature_alias fa ON fa.uuid = s.uuid_feature_alias
@@ -194,10 +196,10 @@
   an_cols <- DBI::dbListFields(con, "analyte")
   a <- DBI::dbGetQuery(con, sprintf("
     SELECT a.uuid AS analysis, a.uuid_sample AS sample, lm.uuid_analyte AS uuid_analyte,
-           an.name AS analyte, a.value AS value, a.quantified AS quantified,
+           an.name AS analyte, a.value AS value, a.value_chr AS value_chr, a.quantified AS quantified,
            a.rl_low AS rl_low, lm.organisation AS lorg, lm.method AS method,
            lm.name AS method_name,
-           COALESCE(lm.units, an.units) AS units, an.units AS analyte_units,
+           COALESCE(NULLIF(TRIM(lm.units), ''), an.units) AS units, an.units AS analyte_units,
            %s AS atype, %s AS lab_contaminant
       FROM analysis a
       JOIN lab_method lm ON lm.uuid = a.uuid_lab
@@ -258,7 +260,7 @@
 
   i <- match(a$sample, s$sample)
   for (cl_name in c("feature", "site", "matrix", "date", "ym", "gas", "new", "project",
-                    "project_uuid", "qc")) {
+                    "project_uuid", "qc", "organisation")) {
     a[[cl_name]] <- s[[cl_name]][i]
   }
   a$quantified <- a$quantified %in% TRUE
@@ -752,6 +754,42 @@
     detail = sprintf("unit %s -> %s (last result %s); %s", h$old, x$units, h$last, x$project)))
 }
 
+# missing_result: a number is expected (the result has a unit) but there is none
+# (value NULL). Window: the image's `new` column - ruling R1, the recent-delivery
+# window (work order with a pipeline insert in the last 90 days; of it, samples
+# dated in the last 180 days). QC samples are included. One row per (project,
+# feature, Sydney date, sample organisation).
+.flags_missing_result <- function(img, checks, today) {
+  a <- img$results
+  m <- a[a$new & is.na(a$value) & !is.na(a$units) & nzchar(trimws(a$units)), , drop = FALSE]
+  if (nrow(m) == 0) return(NULL)
+  # Case-insensitive, locale-independent analyte order (pH before SAR).
+  m <- m[order(m$date, tolower(m$analyte), m$analyte), , drop = FALSE]
+  grp <- paste(m$project, m$feature, format(m$date), m$organisation, sep = "\r")
+  parts <- lapply(split(seq_len(nrow(m)), factor(grp, levels = unique(grp))), function(ix) {
+    x <- m[ix, , drop = FALSE]
+    vc <- ifelse(is.na(x$value_chr) | !nzchar(x$value_chr), "(blank)",
+                 sprintf("\"%s\"", x$value_chr))
+    org <- x$organisation[[1]]
+    acirl <- !is.na(org) && toupper(org) == "ACIRL"
+    n <- nrow(x)
+    data.frame(
+      site = x$site[[1]], date = x$date[[1]], feature = x$feature[[1]],
+      analyte = paste(unique(x$analyte), collapse = ", "),
+      threshold = sprintf("%d blank result%s", n, if (n == 1) "" else "s"),
+      detail = paste0(paste(paste(x$analyte, vc), collapse = "; "), "; ", x$project[[1]],
+                      if (acirl) " \u2192 ask ACIRL for the value or why it wasn't measured"
+                      else " \u2192 ask the lab for the value or why it wasn't measured"),
+      key = sprintf("missing_result|%s|%s|%s|%s", x$project[[1]], x$feature[[1]],
+                    format(x$date[[1]]), org),
+      action = if (acirl) "ask_acirl" else "ask_lab", stringsAsFactors = FALSE)
+  })
+  x <- do.call(rbind, parts)
+  .flags_dedupe(.flags_rows(
+    "missing_result", key = x$key, site = x$site, date = x$date, feature = x$feature,
+    analyte = x$analyte, threshold = x$threshold, detail = x$detail, action = x$action))
+}
+
 .flags_fns <- list(
   overdue = .flags_overdue,
   invoiced_not_received = .flags_invoiced,
@@ -761,7 +799,8 @@
   gas_criterion = .flags_gas_criterion,
   site_history = .flags_site_history,
   rl_change = .flags_rl_change,
-  unit_change = .flags_unit_change
+  unit_change = .flags_unit_change,
+  missing_result = .flags_missing_result
   # PLAN-19's QC checks are appended in R/qc.R (sourced after this file).
 )
 
@@ -769,7 +808,8 @@
 #'
 #' Overdue and invoiced-but-missing deliveries, incomplete recent deliveries,
 #' licence-limit and gas-criterion exceedances, site-history outliers and
-#' reporting-limit / unit changes (PLAN-18 section 4). Read-only: the database
+#' reporting-limit / unit changes (PLAN-18 section 4), and `missing_result`
+#' (a result with a unit but no number, e.g. "_" on a field sheet). Read-only: the database
 #' is opened `read_only = TRUE` and never written.
 #'
 #' Each check runs on its own: one that fails contributes no rows, and its
@@ -790,8 +830,9 @@
 #' @return a data.frame, one row per flag, columns `check, site, feature,
 #'   analyte, date, value, unit, threshold, detail, key, source, action`,
 #'   ordered by check then date (newest first). `action` (PLAN-19 R-19.22) is
-#'   one of `resample`, `reanalyse`, `ask_acirl`, `chase`, `qualify` for a QC
-#'   flag and `NA` otherwise.
+#'   one of `resample`, `reanalyse`, `ask_acirl`, `ask_lab` (ask the non-ACIRL
+#'   lab or supplier), `chase`, `qualify` for a QC flag, and `ask_acirl` or
+#'   `ask_lab` for `missing_result`; `NA` otherwise.
 #' @export
 import_flags <- function(db = st_config("live_db"), now = Sys.time(), checks) {
   checkmate::assert_string(db)

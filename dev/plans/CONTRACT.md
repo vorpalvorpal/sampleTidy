@@ -109,6 +109,10 @@ import_status(db, input_dir, report_dir, now = Sys.time(), settle_minutes = 10, 
 # PLAN-18 section 4 / 4.5 (phase 2, added 2026-10-19): the status note's Flags.
 # checks = list(schedule, limits, requirements, points, invoices); read-only.
 import_flags(db = st_config("live_db"), now = Sys.time(), checks)
+# 2026-10-20 (dev/plans/SPEC-flag-missing-result.md): check `missing_result`
+# (a unit-bearing result with no value, in a recent delivery), after
+# unit_change. `action` vocabulary: resample, reanalyse, ask_acirl, ask_lab
+# (ask the non-ACIRL lab/supplier), chase, qualify; NA otherwise.
 # PLAN-18 4.6 (rewritten 2026-10-19; superseded the PDF parser acirl_invoices()):
 # t1's contractor-work.json -> checks$invoices rows (site, stream, sampled_on,
 # ref, section, note); read-only; missing file -> zero rows.
