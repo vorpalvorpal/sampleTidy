@@ -21,13 +21,15 @@ first four are each a CSV path or a data.frame (\code{expected_schedule.csv},
 \value{
 a data.frame, one row per flag, columns \verb{check, site, feature, analyte, date, value, unit, threshold, detail, key, source, action},
 ordered by check then date (newest first). \code{action} (PLAN-19 R-19.22) is
-one of \code{resample}, \code{reanalyse}, \code{ask_acirl}, \code{chase}, \code{qualify} for a QC
-flag and \code{NA} otherwise.
+one of \code{resample}, \code{reanalyse}, \code{ask_acirl}, \code{ask_lab} (ask the non-ACIRL
+lab or supplier), \code{chase}, \code{qualify} for a QC flag, and \code{ask_acirl} or
+\code{ask_lab} for \code{missing_result}; \code{NA} otherwise.
 }
 \description{
 Overdue and invoiced-but-missing deliveries, incomplete recent deliveries,
 licence-limit and gas-criterion exceedances, site-history outliers and
-reporting-limit / unit changes (PLAN-18 section 4). Read-only: the database
+reporting-limit / unit changes (PLAN-18 section 4), and \code{missing_result}
+(a result with a unit but no number, e.g. "_" on a field sheet). Read-only: the database
 is opened \code{read_only = TRUE} and never written.
 }
 \details{
