@@ -89,7 +89,7 @@ Suite: **1,484 tests, 0 failing, 11 skipped**. Gated corpus tests are skipped un
      - a dupcheck gate, which must report 0;
      - one Sharepoint snapshot;
      - `processed-dedupe.R --post-import`, which only quarantines and can be undone.
-   - Both final rehearsals were identical: +1,885 samples, +7,596 analyses, +641 assets, +770 review items, 0 likely duplicates.
+   - Both final rehearsals were identical: +1,885 samples, +7,596 analyses, +643 assets, +770 review items, 0 likely duplicates.
    - Decisions and open asks are in `scratchpad/DECISIONS-FOR-ROBIN.md` (2026-10-20 phase 2). Data is in `scratchpad/2026-10-20-corpus/`.
 4. **Release the A77 dust blocks** for 2400-7453-02 (Jan-2025) and 2400-7538-02
    (Jan-2026, medium confidence) when the corpus run withholds them.
