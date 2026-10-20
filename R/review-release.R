@@ -130,6 +130,8 @@ release_review <- function(uuid, overrides = list(), resolved_by,
         reason <- sprintf("release_review(): uuid=%s", uuid)
         actor <- resolved_by
 
+        # C8/D14: the sample matchers below see the year-keyed report name.
+        event <- .ct_with_report_project_name(con, event)
         resolved <- reconcile_event(event, con)
         tree <- .ct_ensure_project_tree(con, event, reason)
         clean <- resolved$clean
