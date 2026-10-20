@@ -292,7 +292,7 @@ test_that("P20.5 register_filing(): an insert writes change_log rows with tbl 'a
   expect_true(all(lg$actor == "register_filing"))
   expect_gt(af_n_log(db), n0)
   # nothing was logged against any other table by this call
-  expect_identical(af_n_log(db) - n0, nrow(lg))
+  expect_equal(af_n_log(db) - n0, nrow(lg))
 })
 
 test_that("P20.5 register_filing(): an update logs only the differing field(s) with actor 'register_filing'; 'unchanged' logs nothing", {
