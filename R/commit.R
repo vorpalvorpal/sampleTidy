@@ -455,6 +455,7 @@
 #' @keywords internal
 #' @noRd
 .ct_reingest_guard_preview <- function(con, event, resolved) {
+  event <- .ct_with_report_project_name(con, event)   # as commit_event() does (C8)
   guard_rows <- .ct_reingest_guard(con, event, resolved)
   if (is.null(guard_rows)) {
     return(list(blocked = FALSE))
@@ -681,14 +682,195 @@
   row$uuid[[1]]
 }
 
+# ---- C8 / TRIAGE D14: report projects keyed by (report number, year) ---------
+#
+# ACIRL reuses report numbers across years (measured: 2400-7399-04 Apr 2024 /
+# Apr 2026, 2400-7430-01 May 2024 / May 2025, 2400-7453-03 Mar 2025 / Mar 2026,
+# gas 2400-7453-03-01 Mar 2025 / Mar 2026). With `project.name = report_no` as
+# the only key, the second year merged into the first year's report (one
+# report spanning two years and two lab jobs, flagged `duplicate_report_number`)
+# or, when its ALS order sat under another campaign, could not be adopted at
+# all (`project_parent_conflict`). Robin, 2026-10-20: key by year instead.
+#
+#   * The year already holding the bare name keeps it. A new year gets
+#     "<report_no> (<yyyy>)", yyyy = the MIN of the event's years. An existing
+#     project is never renamed (duckdb 1.4.1 self-FK, Bug D below), so import
+#     order decides which year is bare - deterministically.
+#   * The event's years are a SET (`.ct_event_report_years()`), so a December
+#     report carrying January samples is one report, not two.
+#   * Inside one year nothing changes: a second ALS order under a year-matched
+#     report still raises `duplicate_report_number/acirl` (measured same-year
+#     numbering slips 2400-7222-12-05 and 2400-7286-01-03), and a gas report
+#     with no shared day still raises `/acirl_gas`.
+
+.ct_report_project_types <- c("ACIRL report", "Monthly gas monitoring")
+
+#' The Sydney years of raw date strings (`.rc_datetime_formats`, or an Excel
+#' serial as a front-page cell may hold one), sorted and de-duplicated
+#' @keywords internal
+#' @noRd
+.ct_raw_years <- function(raw) {
+  raw <- trimws(as.character(raw))
+  raw <- raw[!is.na(raw) & nzchar(raw)]
+  if (length(raw) == 0) {
+    return(integer(0))
+  }
+  ct <- parse_lab_datetime(raw, .rc_datetime_formats)
+  y <- suppressWarnings(as.integer(format(ct, "%Y", tz = "Australia/Sydney")))
+  serial <- is.na(y) & grepl("^[0-9]{5}(\\.[0-9]+)?$", raw)
+  if (any(serial)) {
+    y[serial] <- as.integer(format(excel_date(as.numeric(raw[serial])), "%Y"))
+  }
+  y <- y[!is.na(y) & y >= 1900L]
+  sort(unique(y))
+}
+
+#' The report year SET of an ACIRL event (C8/D14)
+#'
+#' The Sydney years of the event's own sample dates
+#' (`event$samples$sample_datetime_raw`, which ingest has already passed
+#' through the C3 per-file overrides), else of the front-page `SAMPLE DATE:`
+#' carried into `event$report$sources[[h]]$sample_date`. `integer(0)` when
+#' neither parses - `.ct_report_project_key()` then falls back to the bare name.
+#' @keywords internal
+#' @noRd
+.ct_event_report_years <- function(event) {
+  smp <- event$samples
+  raw <- if (is.data.frame(smp) && "sample_datetime_raw" %in% names(smp)) {
+    smp$sample_datetime_raw
+  } else {
+    character(0)
+  }
+  yrs <- .ct_raw_years(raw)
+  if (length(yrs) > 0) {
+    return(yrs)
+  }
+  front <- unlist(lapply(event$report$sources, function(s) {
+    v <- s$sample_date
+    if (is.null(v)) character(0) else as.character(v)
+  }), use.names = FALSE)
+  .ct_raw_years(front)
+}
+
+#' Which report project a (report number, year set) files under (C8/D14)
+#'
+#' Read-only. Candidates are the rows named `report_no` or
+#' `"<report_no> (<yyyy>)"` whose type is `ACIRL report` or `Monthly gas
+#' monitoring`. A candidate MATCHES when its name carries a year in `years`, or
+#' when it is bare-named and either holds no samples (its own plus its child
+#' projects') or holds samples in a year in `years`. More than one match is
+#' resolved deterministically, the bare name first and then by name, and
+#' reported as `ambiguous`. With an empty `years` (no parseable date) the bare
+#' row matches, as before D14.
+#'
+#' @return a list: `create` (logical), `name` (the matched row's name, or the
+#'   name to create), `uuid` (`NA` when creating), `row` (the matched project
+#'   row, or `NULL`), `ambiguous` (logical) and `matches` (matched names).
+#' @keywords internal
+#' @noRd
+.ct_report_project_key <- function(con, report_no, years) {
+  years <- sort(unique(suppressWarnings(as.integer(years))))
+  years <- years[!is.na(years)]
+  rows <- DBI::dbGetQuery(
+    con,
+    sprintf(
+      "SELECT uuid, uuid_parent, uuid_root, name, type FROM project
+        WHERE (name = ? OR starts_with(name, ?)) AND type IN (%s)",
+      paste(sprintf("'%s'", .ct_report_project_types), collapse = ", ")
+    ),
+    params = list(report_no, paste0(report_no, " ("))
+  )
+  suffix <- substring(rows$name, nchar(report_no) + 1L)
+  bare <- rows$name == report_no
+  keyed <- grepl("^ \\([0-9]{4}\\)$", suffix)
+  rows <- rows[bare | keyed, , drop = FALSE]
+  bare <- bare[bare | keyed]
+  name_year <- ifelse(bare, NA_integer_,
+                      suppressWarnings(as.integer(sub("^.* \\(([0-9]{4})\\)$", "\\1", rows$name))))
+
+  match <- vapply(seq_len(nrow(rows)), function(k) {
+    if (!bare[[k]]) {
+      return(name_year[[k]] %in% years)
+    }
+    if (length(years) == 0) {
+      return(TRUE)
+    }
+    held <- DBI::dbGetQuery(
+      con,
+      sprintf(
+        "SELECT DISTINCT CAST(year(%s) AS INTEGER) AS y FROM \"sample\" s
+          WHERE (s.uuid_project = ?
+                 OR s.uuid_project IN (SELECT uuid FROM project WHERE uuid_parent = ?))
+            AND coalesce(s.date, s.datetime) IS NOT NULL",
+        .ct_sydney_day_sql("coalesce(s.date, s.datetime)")
+      ),
+      params = list(rows$uuid[[k]], rows$uuid[[k]])
+    )$y
+    length(held) == 0 || any(held %in% years)
+  }, logical(1))
+
+  hit <- rows[match, , drop = FALSE]
+  if (nrow(hit) > 0) {
+    hit <- hit[order(hit$name != report_no, hit$name, method = "radix"), , drop = FALSE]
+    return(list(
+      create = FALSE, name = hit$name[[1]], uuid = hit$uuid[[1]],
+      row = hit[1, , drop = FALSE], ambiguous = nrow(hit) > 1, matches = hit$name
+    ))
+  }
+  # No match. The first year to arrive takes the bare name; a later year whose
+  # bare row belongs to another year gets its own "(yyyy)" row.
+  name <- if (any(bare) && length(years) > 0) {
+    sprintf("%s (%d)", report_no, min(years))
+  } else {
+    report_no
+  }
+  list(create = TRUE, name = name, uuid = NA_character_, row = NULL,
+       ambiguous = FALSE, matches = character(0))
+}
+
+#' `event` with `event$report$project_name` set to the report project its
+#' ACIRL rows file under (C8/D14 criterion 6)
+#'
+#' An ACIRL row's `work_order` is the bare report number. Reconcile's
+#' own-work-order preference and the C1 placeholder rule compare it with
+#' `project.name`, so once a report is year-keyed they must see the RESOLVED
+#' name; `.rc_row_work_orders()` substitutes it. Read-only, so reconcile, the
+#' F.10 guard and commit can all call it and agree. A no-op for an event with
+#' no report number.
+#' @keywords internal
+#' @noRd
+.ct_with_report_project_name <- function(con, event) {
+  report_no <- .ct_event_report_no(event)
+  if (is.na(report_no)) {
+    return(event)
+  }
+  event$report$project_name <-
+    .ct_report_project_key(con, report_no, .ct_event_report_years(event))$name
+  event
+}
+
+#' Whether an ACIRL event is a monthly gas workbook (PLAN-17), identified by
+#' the adapter that produced its rows
+#' @keywords internal
+#' @noRd
+.ct_event_is_gas <- function(event) {
+  !is.null(event$results) && "adapter" %in% names(event$results) &&
+    any(startsWith(as.character(event$results$adapter), "acirl_gas_xlsx/"), na.rm = TRUE)
+}
+
 #' Find-or-create the ACIRL report project, filling an EMPTY parent only (A80)
 #'
-#' Returns `list(uuid, grandparent, root)`.
+#' Returns `list(uuid, grandparent, root, name, ambiguous, matches)`.
+#'
+#' **Which row** is `.ct_report_project_key()`'s answer for (`report_no`,
+#' `years`) - C8/D14: a report number reused in a new year gets its own
+#' `"<report_no> (<yyyy>)"` row rather than merging into the earlier year's.
 #'
 #' **Collisions merge** (Robin, 2026-08-02): six of the corpus's 132 report
 #' numbers already exist as `Monthly gas monitoring` projects carrying 169-178
 #' samples each. The incoming water data attaches to that existing row rather
-#' than minting a parallel one - find-by-name, no namespacing, no flag.
+#' than minting a parallel one - find-by-name, no namespacing, no flag (within
+#' the year: a gas row holding another year's samples is not a match).
 #'
 #' **Never overwrite a parent that is already set.** That is what makes the
 #' merge safe (those six already sit under their own campaign), and it is also
@@ -710,7 +892,8 @@
 #' @noRd
 .ct_ensure_report_project <- function(con, report_no, cited, reason,
                                       campaign = NA_character_,
-                                      type = "ACIRL report") {
+                                      type = "ACIRL report",
+                                      years = integer(0)) {
   # A candidate grandparent must be a CAMPAIGN - never another ACIRL report.
   # Both exclusions are load-bearing and both were caught by a failing test
   # rather than reasoned about in advance:
@@ -757,8 +940,10 @@
     }
   }
 
-  existing <- .ct_project_by_name(con, report_no)
-  if (!is.null(existing)) {
+  key <- .ct_report_project_key(con, report_no, years)
+  found <- list(name = key$name, ambiguous = key$ambiguous, matches = key$matches)
+  if (!key$create) {
+    existing <- key$row
     # 2026-10-19 Bug D (PLAN-09): a project row another project row references
     # is NEVER UPDATEd here. duckdb 1.4.1 runs the UPDATE as delete+insert and
     # the live `project.uuid_parent -> project.uuid` self-FK refuses it, rolling
@@ -778,13 +963,13 @@
         changes = list(uuid_parent = grandparent, uuid_root = root),
         actor = .ct_actor, reason = reason
       )
-      return(list(uuid = existing$uuid[[1]], grandparent = grandparent, root = root))
+      return(c(list(uuid = existing$uuid[[1]], grandparent = grandparent, root = root), found))
     }
-    return(list(
+    return(c(list(
       uuid = existing$uuid[[1]],
       grandparent = existing$uuid_parent[[1]],
       root = .ct_project_root_of(existing)
-    ))
+    ), found))
   }
 
   new_uuid <- uuid::UUIDgenerate()
@@ -805,13 +990,13 @@
   # visible instead.
   row <- tibble::tibble(
     uuid = new_uuid, uuid_parent = grandparent, uuid_root = root,
-    uuid_project = NA_character_, name = report_no, type = type,
+    uuid_project = NA_character_, name = key$name, type = type,
     purpose = NA_character_, date_start = as.POSIXct(NA), date_end = as.POSIXct(NA),
     regulated_by = NA_character_, cypher = NA_character_, site = NA_character_,
     value = NA_character_
   )
   db_append(con, "project", row, actor = .ct_actor, reason = reason)
-  list(uuid = new_uuid, grandparent = grandparent, root = root)
+  c(list(uuid = new_uuid, grandparent = grandparent, root = root), found)
 }
 
 #' Resolve the project an event's samples attach to, building A80's tree (R-9.14)
@@ -831,22 +1016,42 @@
   }
 
   cited <- .ct_event_als_work_orders(event)
+  years <- .ct_event_report_years(event)
   # PLAN-17: the monthly gas workbooks file under their own campaign and
   # project type (identified by the adapter that produced the rows).
-  is_gas <- !is.null(event$results) && "adapter" %in% names(event$results) &&
-    any(startsWith(as.character(event$results$adapter), "acirl_gas_xlsx/"), na.rm = TRUE)
+  is_gas <- .ct_event_is_gas(event)
   rp <- if (is_gas) {
     .ct_ensure_report_project(con, report_no, cited, reason,
                               campaign = "Monthly gas monitoring",
-                              type = "Monthly gas monitoring")
+                              type = "Monthly gas monitoring", years = years)
   } else {
-    .ct_ensure_report_project(con, report_no, cited, reason)
+    .ct_ensure_report_project(con, report_no, cited, reason, years = years)
   }
   review <- list()
+  if (isTRUE(rp$ambiguous)) {
+    # C8/D14 criterion 1: more than one report row fits this event's years (a
+    # sample-less bare row matches every year). The bare row was taken; the
+    # choice is made loud rather than silent.
+    rq <- .rq_row(
+      kind = "duplicate_report_number", subkind = "ambiguous_year",
+      work_order = report_no,
+      source_hash = .ct_event_first_hash(event),
+      diagnostics = list(
+        report_no = report_no,
+        years = as.list(years),
+        matching_projects = as.list(rp$matches),
+        chosen = rp$name
+      )
+    )
+    rq$review$uuid_target <- rp$uuid
+    review[[length(review) + 1L]] <- rq$review
+  }
   if (is_gas) {
-    # A reused report number: the project already holds samples, and none of
-    # them is on a day this workbook samples. (A re-save of the same month
-    # shares its days, so it is not flagged.) The data still imports.
+    # A reused report number IN THE SAME YEAR: the project already holds
+    # samples, and none of them is on a day this workbook samples. (A re-save
+    # of the same month shares its days, so it is not flagged; a different
+    # year never gets here - C8/D14 keys it to its own "(yyyy)" row.) The data
+    # still imports.
     inc <- suppressWarnings(as.Date(event$samples$sample_datetime_raw, format = "%d/%m/%Y"))
     inc <- unique(as.character(inc[!is.na(inc)]))
     have <- DBI::dbGetQuery(
@@ -874,7 +1079,8 @@
 
   # A80's `duplicate_report_number`, keyed exactly as the contract specifies:
   # "this ACIRL parent already has a child ALS work order, and the incoming
-  # workbook cites a DIFFERENT one". NOT on repetition of the number and NOT on
+  # workbook cites a DIFFERENT one". Since C8/D14 the parent is the
+  # year-matched report row, so this fires within one year only. NOT on repetition of the number and NOT on
   # the content hash - of the 16 numbers appearing on more than one file, 13 are
   # one report re-saved or revised (same date, same cited order) and flagging
   # those would bury the three real ones.
@@ -2389,6 +2595,12 @@ commit_event <- function(event, resolved, con) {
   .ct_check_not_already_committed(con, event$files)
 
   result <- db_transaction(con, function(con) {
+    # C8/D14 criterion 6: the guard and the sample matchers below see an ACIRL
+    # row's work order as its (possibly year-keyed) report project's name,
+    # exactly as reconcile did. Read-only; resolved before the tree is built,
+    # and the tree resolves the same key to the same name.
+    event <- .ct_with_report_project_name(con, event)
+
     # Step 0b (PLAN-15 F.10, R-15.31/R-15.32): a re-download of an
     # already-ingested work order is routed to review INSTEAD of committed.
     # Evaluated first, on reads only, so a blocked event writes no `sample` /

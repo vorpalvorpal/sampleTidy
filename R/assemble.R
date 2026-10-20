@@ -349,6 +349,8 @@
     if (is.null(wo)) wo <- character(0)
     fa <- rep$feature_aliases
     cand <- rep$als_candidates
+    front_date <- rep$header$sample_date
+    if (is.null(front_date) || length(front_date) == 0) front_date <- NA_character_
     list(
       hash = h,
       filename = parsed[[h]]$meta$filename,
@@ -363,7 +365,11 @@
       feature_aliases = fa,
       # A79: the ALS-looking rows kept WITH their values, so supersession can
       # tell a transcription from a field reading at reconcile.
-      als_candidates = cand
+      als_candidates = cand,
+      # C8/D14: the front-page `SAMPLE DATE:` cell, the fallback year source
+      # when the event's own sample dates do not parse
+      # (`.ct_event_report_years()`). Raw text, as the adapter read it.
+      sample_date = as.character(front_date[[1]])
     )
   })
   stats::setNames(out, hashes)

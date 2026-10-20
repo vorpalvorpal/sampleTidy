@@ -112,12 +112,19 @@ archive_file <- function(con, path, hash, event, type = "Chemical analysis") {
   # rewrite the parent of a project row it never committed to.
   # `.ct_ensure_report_project()` fills an empty parent only, so a report row
   # minted here and completed by the later real commit is the same row.
+  # C8/D14: it is handed the same year set and gas campaign/type as
+  # `.ct_ensure_project_tree()`, so both resolve one (report number, year) key
+  # to one row - a reused number's "(yyyy)" row included.
   report_no <- .ct_event_report_no(event)
   uuid_project <- if (is.na(report_no)) {
     .ct_ensure_project(con, event$work_order, "archive source file")
   } else {
+    gas <- .ct_event_is_gas(event)
     .ct_ensure_report_project(
-      con, report_no, .ct_event_als_work_orders(event), "archive source file"
+      con, report_no, .ct_event_als_work_orders(event), "archive source file",
+      campaign = if (gas) "Monthly gas monitoring" else NA_character_,
+      type = if (gas) "Monthly gas monitoring" else "ACIRL report",
+      years = .ct_event_report_years(event)
     )$uuid
   }
 
