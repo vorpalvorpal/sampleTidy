@@ -134,10 +134,15 @@
 #    assumption P for the quotation and the caveat on its scope.
 #
 # L. "No. of samples collected and analysed" = the number of distinct SAMPLING
-#    EVENTS for that EPA point x pollutant, where an event is one (feature,
+#    EVENTS for that EPA point x pollutant, where an event is one (EPA point,
 #    Australia/Sydney local day) - the day being LOCAL_DATE, i.e.
 #    COALESCE(datetime, date) converted from UTC.  It is neither the number of
 #    result rows nor COUNT(DISTINCT sample).
+#
+#    RULED 2026-10-20 (Robin): keyed by EPA POINT, not feature.  The gas grid
+#    is many features under one EPA point, and the licence requirement means
+#    monitoring events, so the grid counts the days it was sampled, not its
+#    location-days.  No methane- or grid-specific rule is needed.
 #
 #    RULED 2026-10-17.  Why not distinct samples: sample-matching rule A91 puts
 #    the ACIRL field readings and the ALS lab readings from one visit into
@@ -319,13 +324,7 @@ SITES <- list(
            special_frequency_condition = "M2.4(a)"),
   B = list(name = "Blaxland WMF", licence = "10039", licence_doc = "V28",
            anniversary = "22 Aug", period_start = "08-22", peek = "1,10",
-           special_frequency_condition = "M2.4(a)",
-           notes = paste0(
-             "Total dissolved solids at points 18, 20 and 22 is reported in ",
-             "milligrams per litre, the unit in which it is measured. Condition ",
-             "M2.3 gives micrograms per litre for these points, which appears to ",
-             "be a typographical error: the same pollutant is specified in ",
-             "milligrams per litre at every other point."))
+           special_frequency_condition = "M2.4(a)")
 )
 
 # Licence frequency -> required number of samples over a 12-month period.
@@ -657,6 +656,29 @@ WHERE f.site = ? AND COALESCE(s.datetime, s.date) IS NOT NULL
   AND %s BETWEEN ?::DATE AND ?::DATE
 ", LOCAL_DATE, LOCAL_DATE), params = bind)
 
+# ------------------------------------------- LICENCE UNITS PER POINT (RULED)
+# A requirements row may name the unit the licence gives for that point. The
+# return must use the licence's unit even where it is a typo: RULED 2026-10-20
+# (Robin), for Blaxland TDS at points 18, 20 and 22, which M2.3 gives in
+# micrograms per litre. The value is converted, so the number is right in the
+# unit it is labelled with.
+UNIT_FACTOR <- c("mg/L>µg/L" = 1000, "µg/L>mg/L" = 1e-3, "ug/L>mg/L" = 1e-3,
+                 "mg/L>ug/L" = 1000)
+if ("units" %in% names(LICENCE_REQUIREMENTS)) {
+  lu <- LICENCE_REQUIREMENTS[!is.na(LICENCE_REQUIREMENTS$units), c("epa_point", "pollutant", "units")]
+  ix <- match(paste(rows$epa_point, rows$pollutant, sep = "\r"),
+              paste(lu$epa_point, lu$pollutant, sep = "\r"))
+  hit <- which(!is.na(ix) & rows$epa_units != lu$units[ix])
+  for (i in hit) {
+    k <- paste0(rows$epa_units[i], ">", lu$units[ix[i]])
+    if (is.na(UNIT_FACTOR[k])) stop("No conversion for licence unit ", k,
+                                    " at point ", rows$epa_point[i], " ", rows$pollutant[i])
+    rows$cc[i] <- rows$cc[i] * UNIT_FACTOR[[k]]
+    rows$epa_units[i] <- lu$units[ix[i]]
+  }
+  if (length(hit)) say(sprintf("  %d results converted to the licence's own unit for that point", length(hit)))
+}
+
 # ------------------------------------------------- UNIT MISMATCH GUARD (J)
 
 unit_check <- unique(rows[, c("pollutant", "stored_analyte", "stored_units", "epa_units", "cc")])
@@ -702,8 +724,8 @@ if (identical(TUNABLES$nondetect, "drop")) {
 
 # --------------------------------------------------------------- AGGREGATION
 
-# Assumption L: one sampling event = one (feature, Sydney local day).
-event_key <- function(d) paste(d$uuid_feature, d$local_date, sep = "\r")
+# Assumption L: one sampling event = one (EPA point, Sydney local day).
+event_key <- function(d) paste(d$epa_point, d$local_date, sep = "\r")
 n_sampling_events <- function(d) length(unique(event_key(d)))
 
 key <- paste(rows$epa_point, rows$pollutant, sep = "\r")
@@ -878,7 +900,7 @@ if (length(rep_keys)) {
   say(sprintf("  %d event/pollutant pairs have more than one result.", length(rep_keys)))
   say("  Pollutants affected: ",
       paste(sort(unique(sub("^.*\r", "", rep_keys))), collapse = ", "))
-  say("  Column 5 counts SAMPLING EVENTS (feature x local day, assumption L);")
+  say("  Column 5 counts SAMPLING EVENTS (EPA point x local day, assumption L);")
   say("  min/mean/max use every result.")
 } else say("  (none)")
 
@@ -914,10 +936,6 @@ if (nrow(short)) {
     say(sprintf("      pt %-3s %-34s %d of %d", s$epa_point[i],
                 substr(s$pollutant[i], 1, 34), s$n_samples[i], s$required[i]))
   }
-}
-for (gp in intersect(PT_GRID, agg$epa_point)) {
-  say("  NOTE point ", gp, ": 'collected' counts grid LOCATION-DAYS, the licence's")
-  say("  '", grid_frequency(gp), "' means monitoring EVENTS. The two are not comparable.")
 }
 if (nrow(new_fractions)) {
   say("  >>> TPH/TRH fraction(s) with no requirements row at a TPH point - add them")
@@ -1063,11 +1081,6 @@ NOTE <- list(
       "of samples"),
     "."
   ),
-  lapply(intersect(PT_GRID, agg$epa_point), function(gp) paste0(
-    "At ", name_points(gp), " the number of samples collected counts individual ",
-    "grid locations. The ", tolower(grid_frequency(gp)), " requirement refers ",
-    "to monitoring events."
-  )),
   S$notes  # site-specific notes, e.g. a unit departure from the licence
 )
 NOTE <- unlist(NOTE)
