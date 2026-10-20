@@ -14,6 +14,10 @@
 #       is 3 Dec 2024, so the brief's condition "confirm 4 Dec" fails. The
 #       items also carry no withheld rows (payload$rows is absent), so
 #       release_review() cannot release them; a re-ingest is needed instead.
+#       RESOLVED 2026-10-20 by C7: a blank-date_from override row in
+#       inst/extdata/sample-date-overrides.csv gives the 21 rows 2024-12-03 at
+#       ingest, so the import raises none of these items. Expected count is now 0
+#       (a non-zero count means the override did not apply: re-triage).
 #   D6  A77 dust in 2400-7399-12 and 2400-7453-06 (4 items, absent from live):
 #       release_review() at the payload's own exposure/collection dates
 #       (2024-11-01 -> 2024-12-01; 2025-05-01 -> 2025-06-01), the same shape as
@@ -85,7 +89,7 @@ rules <- list(
     )
   ),
   list(
-    id = "D5", action = "park", hashes = "d1794cf468afd28d5b87c518a684dfef", expected = 21L,
+    id = "D5", action = "park", hashes = "d1794cf468afd28d5b87c518a684dfef", expected = 0L,
     match = function(it, p) {
       identical(it$kind, "parse_error") && identical(it$subkind, "datetime") &&
         refs_all(p, "^Sampling Sites [24]!")
