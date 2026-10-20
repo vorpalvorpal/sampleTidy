@@ -30,7 +30,7 @@ SRC="${SAMPLETIDY_CORPUS_SRC:-$PWD/scratchpad/2026-10-19-corpus/src}"
 if [ "$MODE" = live ]; then
   DB="$LIVE"; WORK="${2:?work_dir}"
   [ "$(git rev-parse --abbrev-ref HEAD)" = main ] || { echo "not on main"; exit 1; }
-  git diff --quiet -- R dev tests inst DESCRIPTION NAMESPACE || { echo "uncommitted code changes"; exit 1; }
+  git diff --quiet -- R dev tests inst DESCRIPTION NAMESPACE ':(exclude)dev/*.xlsx' ':(exclude)dev/~$*' || { echo "uncommitted code changes"; exit 1; }
 elif [ "$MODE" = rehearsal ]; then
   DB="${2:?copy.duckdb}"; WORK="${3:?work_dir}"
   [ "$(cd "$(dirname "$DB")" && pwd)/$(basename "$DB")" != "$LIVE" ] || { echo "rehearsal DB is the live DB"; exit 1; }
