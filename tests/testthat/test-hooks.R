@@ -701,12 +701,10 @@ test_that("P20.2 failures: a failing work_complete hook is recorded as 'hook wor
   later <- 0L
   register_hook("work_complete", function(x) stop("wcboom"))
   register_hook("work_complete", function(x) later <<- later + 1L)
-  after_status_seen <- 0L
-  register_hook("after_status", function(x) after_status_seen <<- after_status_seen + 1L)
+  # No after_status hook: the default renderer must write the note read below.
   res <- run_inbox(s, now = now)
   expect_true(res$ran)
   expect_identical(later, 1L)
-  expect_identical(after_status_seen, 1L)
   expect_true("hook work_complete[1] failed: wcboom" %in% hk_problems(s$report_dir))
   expect_true("hook work_complete[1] failed: wcboom" %in% hk_problems(s$report_dir, ".import-status.json"))
   prob <- md_section(read_status_note(s$report_dir), "Problems")
