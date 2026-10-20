@@ -75,19 +75,22 @@ Suite: **1,484 tests, 0 failing, 11 skipped**. Gated corpus tests are skipped un
    value equals the incoming row, then the one under the incoming work order. Today
    the lowest uuid wins, which gives false value_conflicts on legacy visits split
    across two ALS work orders. This is being built tests-first.
-3. **The corpus run (2026-10-20): fixed and rehearsed, awaiting Robin.**
-   - Code on main: legacy 11:00 Sydney placeholder matching (C1), the ACIRL report-site
-     veto (C2), per-file date overrides in `inst/extdata/sample-date-overrides.csv` (C3),
-     archive copies removed on rollback (C4), the CFU and ESdat "-" units (C5), and test
-     isolation from the OneDrive archive.
-   - Migrations 053 (aliases), 054 (4 held files) and 055 (re-hash 18 assets SharePoint
-     rewrote) are rehearsed and NOT applied.
-   - Run with `dev/corpus-import/apply-corpus-import.sh live <work_dir>`. Two rehearsals
-     gave +1,902 samples, +7,404 analyses, +1,286 review items and 3 likely-duplicate
-     analyses.
-   - Decisions are in `scratchpad/DECISIONS-FOR-ROBIN.md` (2026-10-20); data is in
-     `scratchpad/2026-10-20-corpus/`. The processed/ clean-up is `dev/processed-dedupe.R`
-     (dry run by default).
+3. **The corpus run (2026-10-20): Robin's rulings applied and rehearsed twice; awaiting his go.**
+   - Code on main:
+     - C1-C5 (placeholder matching, ACIRL site veto, per-file date overrides, archive rollback, units);
+     - C6: a blank ALS SAR unit becomes "1";
+     - C7: blank-date overrides;
+     - C8: reused ACIRL report numbers keyed by year, as `<no> (<yyyy>)`.
+   - Migrations 053-059 and 061 are rehearsed and NOT applied. 060 is PLAN-20's. See `dev/MIGRATIONS.md`.
+   - Run with `dev/corpus-import/apply-corpus-import.sh live <work_dir>` from the repo root on main. It runs, in order:
+     - the migrations;
+     - the import;
+     - `post-import-review.R`;
+     - a dupcheck gate, which must report 0;
+     - one Sharepoint snapshot;
+     - `processed-dedupe.R --post-import`, which only quarantines and can be undone.
+   - Both final rehearsals were identical: +1,885 samples, +7,596 analyses, +641 assets, +770 review items, 0 likely duplicates.
+   - Decisions and open asks are in `scratchpad/DECISIONS-FOR-ROBIN.md` (2026-10-20 phase 2). Data is in `scratchpad/2026-10-20-corpus/`.
 4. **Release the A77 dust blocks** for 2400-7453-02 (Jan-2025) and 2400-7538-02
    (Jan-2026, medium confidence) when the corpus run withholds them.
 5. **External:** the list in `DECISIONS-FOR-ROBIN.md`, covering ACIRL (analyser LOD,
