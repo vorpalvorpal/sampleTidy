@@ -147,9 +147,12 @@
 #' Reads `inst/extdata/sample-date-overrides.csv` (or the file named by option
 #' `sampletidy.date_overrides_path`, which tests use to inject a table).
 #' Columns: `hash` (xxHash128 of the source file), `date_from` and `date_to`
-#' (ISO `YYYY-MM-DD`), `authority`, `reason`. Aborts with class
-#' `sampletidy_error` on a malformed or round-trip-failing date, a duplicate
-#' `(hash, date_from)` key, or `date_from == date_to`.
+#' (ISO `YYYY-MM-DD`), `authority`, `reason`. A BLANK `date_from` is allowed
+#' (loads as `NA`) and means "this file's samples with a blank sample date";
+#' `date_to` may never be blank. Aborts with class `sampletidy_error` on a
+#' malformed or round-trip-failing non-blank date, a blank `date_to`, a
+#' duplicate `(hash, date_from)` key (two blank `date_from` rows for one hash
+#' are a duplicate), or `date_from == date_to`.
 #' @return data.frame with the five columns, dates as `Date`.
 #' @keywords internal
 #' @noRd
@@ -168,18 +171,20 @@
     cli::cli_abort("Sample-date overrides {.path {path}} must have columns {.val {cols}}.",
                    class = "sampletidy_error")
   }
-  parse_iso <- function(x, nm) {
+  parse_iso <- function(x, nm, allow_blank = FALSE) {
     d <- as.Date(x, format = "%Y-%m-%d")
     bad <- is.na(d) | format(d, "%Y-%m-%d") != x
+    if (allow_blank) bad <- bad & nzchar(trimws(x))
+    d[!bad & is.na(d)] <- as.Date(NA)
     if (any(bad)) {
       cli::cli_abort("Sample-date overrides: {.field {nm}} is not an ISO date: {.val {x[bad]}}.",
                      class = "sampletidy_error")
     }
     d
   }
-  raw$date_from <- parse_iso(raw$date_from, "date_from")
+  raw$date_from <- parse_iso(raw$date_from, "date_from", allow_blank = TRUE)
   raw$date_to <- parse_iso(raw$date_to, "date_to")
-  if (any(raw$date_from == raw$date_to)) {
+  if (any(raw$date_from == raw$date_to, na.rm = TRUE)) {
     cli::cli_abort("Sample-date overrides: {.field date_from} equals {.field date_to}.",
                    class = "sampletidy_error")
   }
@@ -192,7 +197,12 @@
 
 #' Apply sample-date overrides to an IR samples (or results) table
 #'
-#' For each row whose `source_hash` matches an override and whose
+#' An override with a BLANK (`NA`) `date_from` instead applies to rows of that
+#' hash whose `sample_datetime_raw` is `NA`, empty or whitespace-only: it sets
+#' them to `format(date_to, "%d/%m/%Y")` (non-blank raws, even unparseable
+#' ones, are untouched). It is recorded with `date_from = NA`.
+#'
+#' For each row whose `source_hash` matches a dated override and whose
 #' `sample_datetime_raw` parses (reconcile's parser and formats) to the
 #' Sydney date `date_from`, rewrites `sample_datetime_raw` to `date_to`,
 #' keeping the Sydney clock time. A date-only value is rewritten as
@@ -213,16 +223,24 @@
     ct <- parse_lab_datetime(raw, .rc_datetime_formats)
     day <- as.Date(format(ct, "%Y-%m-%d", tz = "Australia/Sydney"))
     timed <- has_clock_time(raw)
+    blank <- is.na(raw) | !nzchar(trimws(raw))
     for (i in seq_len(nrow(overrides))) {
-      hit <- which(!is.na(day) & samples$source_hash == overrides$hash[[i]] &
-                     day == overrides$date_from[[i]])
-      if (length(hit) == 0L) next
       to <- overrides$date_to[[i]]
-      raw[hit] <- ifelse(
-        timed[hit],
-        paste(format(to, "%d %b %Y"), format(ct[hit], "%H:%M", tz = "Australia/Sydney")),
-        format(to, "%d/%m/%Y")
-      )
+      same_file <- !is.na(samples$source_hash) & samples$source_hash == overrides$hash[[i]]
+      if (is.na(overrides$date_from[[i]])) {
+        hit <- which(same_file & blank)
+        if (length(hit) == 0L) next
+        raw[hit] <- format(to, "%d/%m/%Y")
+        blank[hit] <- FALSE
+      } else {
+        hit <- which(!is.na(day) & same_file & day == overrides$date_from[[i]])
+        if (length(hit) == 0L) next
+        raw[hit] <- ifelse(
+          timed[hit],
+          paste(format(to, "%d %b %Y"), format(ct[hit], "%H:%M", tz = "Australia/Sydney")),
+          format(to, "%d/%m/%Y")
+        )
+      }
       applied[nrow(applied) + 1L, ] <- list(overrides$hash[[i]], overrides$date_from[[i]],
                                             to, length(hit))
     }
