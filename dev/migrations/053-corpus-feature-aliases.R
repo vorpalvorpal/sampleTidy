@@ -9,7 +9,7 @@
 # (dev/MIGRATIONS.md) - do not apply before he has seen
 # 053-corpus-feature-aliases-INPUT.csv. F: Robin's ruling of 2026-10-20 (a raw
 # point whose same-day values equal a named point's live values takes that
-# point); its 28 rows await his check of 053-corpus-feature-aliases-INPUT-F.csv.
+# point); its 27 rows await his check of 053-corpus-feature-aliases-INPUT-F.csv.
 #
 # ---- WHAT ----------------------------------------------------------------------
 # A. 162 CONFIDENT proposals (149 descriptive, 13 transcription_error), read
@@ -54,7 +54,7 @@
 #    K.MW01/02/04 in Nov 2020 - May 2021; the features start 2021-09-08). The
 #    resolver reads feature.date_end only (.rc_narrow_live_feature), never
 #    date_start, so they resolve and ARE included; asserted at 9.
-# F. 28 SAME-DAY VALUE-MATCH arms (26 descriptive, 2 transcription_error) on
+# F. 27 SAME-DAY VALUE-MATCH arms (25 descriptive, 2 transcription_error) on
 #    23 spellings, read from `053-corpus-feature-aliases-INPUT-F.csv` (same
 #    columns as E). Robin, 2026-10-20: where a raw point's values equal the
 #    values live already holds for a named point on the same Sydney day,
@@ -68,9 +68,9 @@
 #    arm per row, date_start = date_end = day, auto, confirmed_by NULL,
 #    comments "053 F: same-day value match <wo> <day>: <n_equal>/<n_overlap>
 #    equal to live". No F (key, day) repeats an E (key, day); F arms sit on
-#    other days of E keys, to the same feature. 'S22' 2020-03-06 -> B.S06
-#    contradicts its label (B.S22 has no live sample before 2020-03-23; the
-#    report has no S06 row and live ES2007947 holds B.S06 and no S22).
+#    other days of E keys, to the same feature. The value match
+#    'S22' 2020-03-06 -> B.S06 (33/121 equal, ES2007947) is NOT included: it
+#    contradicts its label, so it is parked for Robin (coordinator 2026-10-20).
 #    4 arms (MP # 1..4 -> K.MW01..04, 2020-08-11) predate their feature's
 #    date_start 2021-09-08 - kept, as for E; asserted at 4.
 #
@@ -91,7 +91,7 @@
 #   * marker 1052 present;
 #   * the A input is 162 rows, kinds descriptive/transcription_error, keys unique
 #     and equal to .rc_feature_key of every spelling, ISO dates, start <= end;
-#     the E input is 84 rows and the F input 28, no empty cell, one row per
+#     the E input is 84 rows and the F input 27, no empty cell, one row per
 #     (key, day) within each and across the two;
 #   * every target names exactly one feature, not ended (feature date_end)
 #     before the alias window opens; exactly 9 E and 4 F arms before feature date_start; B.S03/B.MW08 live over all of C's window,
@@ -111,13 +111,13 @@
 #     ES2332504, and no B.MW01..04 sample exists on Sydney 2023-09-20;
 #   * no planned uuid exists yet.
 #
-# Writes, in one transaction (actor "053-corpus-feature-aliases"): 282
-# feature_alias inserts by db_append (162 A + 2 B + 2 C + 4 D + 84 E + 28 F; one change_log
+# Writes, in one transaction (actor "053-corpus-feature-aliases"): 281
+# feature_alias inserts by db_append (162 A + 2 B + 2 C + 4 D + 84 E + 27 F; one change_log
 # insert row each), 1 db_update (B's date_end; one change_log row), the marker.
 # Every other table, and every untouched feature_alias row and column, is
 # checksummed before and after. Backups: verified whole-file snapshot,
 # `053-...-BACKUP-feature_alias.csv` (the updated row, before) and
-# `053-...-INSERTED-feature_alias.csv` (the 282 rows, after).
+# `053-...-INSERTED-feature_alias.csv` (the 281 rows, after).
 #
 # Idempotent: marker present -> re-verify, no-op.
 #
@@ -134,7 +134,7 @@
 .mig053_input_default <- c(A = file.path("dev", "migrations", "053-corpus-feature-aliases-INPUT.csv"),
                            E = file.path("dev", "migrations", "053-corpus-feature-aliases-INPUT-E.csv"),
                            F = file.path("dev", "migrations", "053-corpus-feature-aliases-INPUT-F.csv"))
-.mig053_expected_n <- c(A = 162L, B = 2L, C = 2L, D = 4L, E = 84L, F = 28L)
+.mig053_expected_n <- c(A = 162L, B = 2L, C = 2L, D = 4L, E = 84L, F = 27L)
 # E arms dated before their target feature's date_start (K.MW01/02/04 start
 # 2021-09-08). The resolver does not read feature.date_start, so they resolve.
 .mig053_expected_pre_start <- 9L
@@ -257,7 +257,7 @@
   x
 }
 
-# The 282 rows to insert. A pure function of the input files and feature names,
+# The 281 rows to insert. A pure function of the input files and feature names,
 # so verify can rebuild it after the migration.
 .mig053_plan <- function(con, input) {
   x <- .mig053_read_input(input[["A"]])
@@ -299,7 +299,7 @@
   plan$uuid <- mapply(.mig053_uuid, plan$alias_key, plan$target, plan$date_start, plan$date_end, USE.NAMES = FALSE)
   if (anyDuplicated(plan$uuid)) .mig053_fail("the plan holds a duplicate uuid.")
   got <- vapply(names(.mig053_expected_n), function(s) sum(plan$section == s), integer(1))
-  if (!identical(got, .mig053_expected_n)) .mig053_fail("plan section counts differ from the expected 162/2/2/4/84/28.")
+  if (!identical(got, .mig053_expected_n)) .mig053_fail("plan section counts differ from the expected 162/2/2/4/84/27.")
   rownames(plan) <- NULL
   plan
 }
