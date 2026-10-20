@@ -677,6 +677,15 @@ if (nrow(mismatched) && identical(TUNABLES$unit_mismatch, "exclude")) {
 
 # --------------------------------------------------- CONVERSION + NON-DETECT
 
+# A result with no value was not measured: a field sheet's "_" or "-" is
+# stored as a NULL value. It must not count as a sample collected and
+# analysed (point 26 SWL showed n = 1 with blank statistics, 2026-10-20).
+no_value <- is.na(rows$value)
+if (any(no_value)) {
+  say(sprintf("  %d results with no value (not measured) dropped before counting", sum(no_value)))
+  rows <- rows[!no_value, , drop = FALSE]
+}
+
 rows$reported <- rows$value * rows$cc
 
 # Carried as a COLUMN so it survives split()/aggregation - the per-cell marking
