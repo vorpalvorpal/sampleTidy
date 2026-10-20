@@ -1,4 +1,5 @@
-# Apply migration 058 to the live DB: dry run, migrate, re-run (no-op), with
+# Apply migration 058 to the live DB (B.LO2 -> B.L02 split around 2024-06-13,
+# that day -> B.E01): dry run, migrate, re-run (no-op), with
 # the 'b.lo2' alias rows before and after. Apply AFTER 057. Run from the repo root:
 #   Rscript dev/migrations/apply-058-bound-b-lo2-alias.R
 # Set SAMPLETIDY_MIG058_DB / SAMPLETIDY_MIG058_SNAPSHOT_DIR /
