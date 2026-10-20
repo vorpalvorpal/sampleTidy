@@ -458,7 +458,14 @@ test_that("R-10.6: NAMESPACE exports equal the CONTRACT-pinned public API exactl
     # PLAN-19 R-19.17, added 2026-10-19 and added to CONTRACT.md's public-API
     # list in the same change: operator-run backfill of ALS QC reports from
     # retained assets (migration 052 calls it).
-    "lab_qc_backfill"
+    "lab_qc_backfill",
+    # PLAN-20 phase 1 (dev/plans/PLAN-20-phase1-spec.md), added 2026-10-20 and
+    # added to CONTRACT.md's public-API list in the same change: session hooks
+    # for inbox_run() (register_hook/clear_hooks/hooks), the completed-work
+    # reader (completed_work) and the external filing records
+    # (register_filing/filed_assets).
+    "register_hook", "clear_hooks", "hooks",
+    "completed_work", "register_filing", "filed_assets"
   )
   actual <- getNamespaceExports("sampleTidy")
   expect_setequal(actual, pinned)
