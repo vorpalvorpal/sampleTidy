@@ -88,6 +88,13 @@ Rscript dev/corpus-import/post-import-review.R "$DB" "$WORK/post-review"
 Rscript dev/corpus-import/post-import-review.R "$DB" "$WORK/post-review" --apply
 Rscript dev/corpus-import/post-import-review.R "$DB" "$WORK/post-review-rerun"
 
+# 4b. attach the two scanned field-sheet PDFs ingest does not claim (PLAN-20 R20-4):
+#     dry run, apply, re-run = nothing to do
+if [ "$MODE" = live ]; then ARCH="$(sed -n 's/^SAMPLETIDY_ARCHIVE_DIR=//p' "$HOME/.Renviron" | tail -1)"; else ARCH="$WORK/archive"; fi
+Rscript dev/corpus-import/attach-field-sheets.R "$DB" "$ARCH" "$SRC"
+Rscript dev/corpus-import/attach-field-sheets.R "$DB" "$ARCH" "$SRC" --apply
+Rscript dev/corpus-import/attach-field-sheets.R "$DB" "$ARCH" "$SRC"
+
 # 5. checks against the pre-import backup; the duplicate check gates step 6
 Rscript dev/corpus-import/summary.R "$DB" "$BEFORE" "$WORK" > "$WORK/summary.txt" 2>&1 || true
 sed -n '1,45p' "$WORK/summary.txt"
