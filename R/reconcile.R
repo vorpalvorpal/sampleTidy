@@ -51,6 +51,25 @@
   k
 }
 
+#' Strip an ESdat "CODE - " prefix from a method name (2026-10-22).
+#' "ED093T - ED093T: Total Major Cations" -> "ED093T: Total Major Cations";
+#' text with no colon, or no " - " before the first colon, is unchanged.
+#' Whitespace after the colon is collapsed to one space.
+#' @keywords internal
+#' @noRd
+.rc_strip_method_code_prefix <- function(x) {
+  out <- x
+  has <- !is.na(x) & grepl(":", x, fixed = TRUE)
+  if (any(has)) {
+    v <- x[has]
+    head <- sub(":.*$", "", v)
+    tail <- sub("^[^:]*:", "", v)
+    head <- ifelse(grepl(" - ", head, fixed = TRUE), sub("^.* - ", "", head), head)
+    out[has] <- paste0(head, ":", ifelse(nzchar(trimws(tail)), paste0(" ", gsub("\\s+", " ", trimws(tail))), ""))
+  }
+  out
+}
+
 #' Fold a *feature* (sampling-point) name to its registry alias key (PLAN-15 A).
 #'
 #' Unlike `.rc_method_key`, this PRESERVES internal punctuation - it reproduces exactly
@@ -1576,6 +1595,23 @@
   if (is.na(org)) return(lm[0, , drop = FALSE])
   nk <- .rc_method_key(lm$name)
   cand <- lm[!is.na(nk) & !is.na(key) & nk == key & !is.na(lm$organisation) & lm$organisation == org, , drop = FALSE]
+  # 2026-10-22: strip an ESdat "CODE - " prefix first (held payloads carry it).
+  method_raw <- .rc_strip_method_code_prefix(method_raw)
+  code <- if (!is.na(method_raw) && grepl(":", method_raw, fixed = TRUE)) {
+    .rc_method_key(sub(":.*$", "", method_raw))
+  } else NA_character_
+  if (!is.na(code)) {
+    # 2026-10-22: a method with a code must match on it, even for a single
+    # candidate; no match at all is a miss (never "keep all, lowest uuid").
+    mkey <- .rc_method_key(method_raw)
+    mk <- .rc_method_key(cand$method)
+    narrowed <- cand[!is.na(mk) & !is.na(mkey) & mk == mkey, , drop = FALSE]
+    if (nrow(narrowed) == 0) {
+      ck <- .rc_method_key(sub(":.*$", "", cand$method))
+      narrowed <- cand[!is.na(ck) & ck == code, , drop = FALSE]
+    }
+    return(narrowed)
+  }
   if (nrow(cand) > 1) {
     mkey <- .rc_method_key(method_raw)
     if (!is.na(mkey)) {

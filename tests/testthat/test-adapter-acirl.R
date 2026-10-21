@@ -331,7 +331,11 @@ test_that("R-6.4: the column-SHIFTED incombustible value is read from the right 
   out <- acirl_adapter()$parse(real_path, sampleTidy:::file_meta(real_path))
   inc <- out$results[out$results$analyte_raw == "INCOMBUSTIBLE MATTER", ]
   expect_equal(nrow(inc), 6)
-  expect_setequal(inc$value_num, c(1.8, 0.2, 0.3, 0.2, 0.4, 3.1))
+  # 1.8 / 0.2 / 3.1 are read from the shifted cell. The other three sit where
+  # combustible is `<0.1`, so migration 013's rule replaces the printed 0.3 /
+  # 0.2 / 0.4 with `< INSOLUBLE SOLIDS` (0.33 / 0.16 / 0.41) -
+  # test-dust-incombustible-upper-bound.R.
+  expect_setequal(inc$value_num, c(1.8, 0.2, 0.33, 0.16, 0.41, 3.1))
 })
 
 test_that("R-6.4: a `<0.1` dust value sets below_detection", {
