@@ -1839,6 +1839,12 @@
   inc_dt <- as.numeric(sample_datetime)
   cand_dt <- as.numeric(cand$datetime)
   ev_dt <- .rc_candidate_datetime(cand_dt, cand$project_name, work_orders)
+  # 2026-10-22: a sample this commit pass just created (`fresh`) carries the
+  # clock its source gave, never the legacy 11:00 placeholder, so C1 must not
+  # blank it - else a second same-day row at a different time reuses it
+  # instead of being provably new. Pre-existing samples keep the C1 rule.
+  just_made <- cand$uuid %in% names(fresh)
+  ev_dt[just_made] <- cand_dt[just_made]
   create_new <- nrow(cand) == 0 || (!is.na(inc_dt) && all(!is.na(ev_dt)) &&
                                       !any(ev_dt == inc_dt))
   if (create_new) {

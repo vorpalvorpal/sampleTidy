@@ -1,0 +1,2 @@
+"op","uuid","gid","item","set","lon","lat","geom_wkt","comments","reason","row_sha1"
+"update","0c857ee6-f1c1-40dc-85cf-80c60bd3b4af","g1-bl05","1","lon;geom_wkt;comments","150.431200","-33.732518","POINT (150.431200 -33.732518)","2026-10-22 069 (Robin 2026-10-22): B.L05 'Discharge Point - Lawson STP': lon/lat set to 150.431200, -33.732518 (Robin, approximate), replacing 150.431198, -33.732518 recorded at registration (PLAN-15 D.1); geom_wkt set (was NULL)","B.L05 approximate location (Robin 2026-10-22)","743518859de0da3c9969b7084c6b552d2ae515df"

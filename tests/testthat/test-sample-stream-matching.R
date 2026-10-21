@@ -1218,3 +1218,49 @@ test_that("[C1.13] idempotent: re-running the C1.11 event adds no rows and no sa
   expect_equal(DBI::dbGetQuery(con, "SELECT count(*) n FROM analysis")$n, n_a)
   expect_equal(n_s, 1)
 })
+
+# ================================================================================
+# C1 must not mistake a sample created EARLIER IN THE SAME COMMIT PASS for a
+# legacy placeholder. A genuine 11:00 Sydney sample that this very event just
+# created is real evidence of its own clock time; only samples already in the
+# DB before the pass (legacy imports) can carry the 11:00 placeholder clock.
+# Bug: scratchpad/2026-10-21-review/dtloss/ (ES2110225: three same-day samples
+# at one feature, 09:00 / 11:00 / 13:00, aborted with "2 existing samples
+# cannot be told apart"). The pre-existing-legacy side of the rule stays
+# pinned by [C1.2], [C1.3], [C1.7], [C1.8], [C1.10] and [C1.11] above.
+# ================================================================================
+
+c1_three_rows <- function(order = c("09:00", "11:00", "13:00")) {
+  ids <- c("09:00" = "ES2527711001", "11:00" = "ES2527711002", "13:00" = "ES2527711003")
+  rows <- lapply(order, function(hm) {
+    r <- ss_als("pH", 7.2, when = paste("04 Sep 2025", hm), ref = paste0("als-", hm))
+    r$lab_sample_id <- ids[[hm]]
+    r
+  })
+  dplyr::bind_rows(rows)
+}
+
+c1_expect_three_samples <- function(con, r) {
+  ss_expect_ok(r)
+  s <- ss_samples_at(con, "f-0003")
+  expect_equal(nrow(s), 3)
+  got <- sort(format(s$datetime, "%H:%M", tz = "Australia/Sydney"))
+  expect_identical(got, c("09:00", "11:00", "13:00"))
+  expect_true(all(s$project == "ES2527711"))
+  expect_equal(nrow(r$resolved$clean), 3)
+  expect_equal(DBI::dbGetQuery(con, "SELECT count(*) n FROM review_queue")$n, 0)
+}
+
+test_that("[C1.14] one event, three same-day samples at 09:00/11:00/13:00 commit as three samples, no abort, no review", {
+  db <- ss_db(); con <- db$con
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+  r <- ss_als_event(con, c1_three_rows())
+  c1_expect_three_samples(con, r)
+})
+
+test_that("[C1.15] the same three samples in reverse row order also commit as three (order independence)", {
+  db <- ss_db(); con <- db$con
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+  r <- ss_als_event(con, c1_three_rows(c("13:00", "11:00", "09:00")))
+  c1_expect_three_samples(con, r)
+})
