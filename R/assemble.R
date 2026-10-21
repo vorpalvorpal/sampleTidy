@@ -256,6 +256,15 @@
     if (is.na(results$sample_datetime_raw[[i]])) {
       nn <- m_datetime[!is.na(m_datetime)]
       if (length(nn) > 0) {
+        # 2026-10-22: a date-only rendering (XTAB/ENMRG "11/02/2025") of the
+        # same sample must not shadow a timed one (ESdat "11 Feb 2025 15:00")
+        # just because its file sorted first. When the candidates agree on the
+        # date, take the first that carries a clock time; when they disagree,
+        # first-wins stands and the mismatch is already flagged above.
+        if (length(non_na_dates) <= 1) {
+          timed <- nn[.rc_is_true_vec(has_clock_time(nn))]
+          if (length(timed) > 0) nn <- timed
+        }
         results$sample_datetime_raw[[i]] <- nn[[1]]
       }
     }
