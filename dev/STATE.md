@@ -82,7 +82,7 @@ Suite: **1,484 tests, 0 failing, 11 skipped**. Gated corpus tests are skipped un
      - C7: blank-date overrides;
      - C8: reused ACIRL report numbers keyed by year, as `<no> (<yyyy>)`.
    - Migrations 053-059, 061 and 062 are rehearsed and NOT applied. 060 is PLAN-20's. See `dev/MIGRATIONS.md`.
-   - 2026-10-21: 054 now records Robin's D11 ruling (ES2006927 stays on 27 Feb 2020; the rev-1 files are ignored for good; the ruling is appended to the project comment). 062 re-files the amended January 2026 report under ES2600194 and runs after 061. 063 (folding the empty duplicate Mar-2024 dust project) is a draft awaiting Robin, rehearsed but not wired in. Full chain re-rehearsed twice: identical, dupcheck 0.
+   - 2026-10-21: 054 now records Robin's D11 ruling (ES2006927 stays on 27 Feb 2020; the rev-1 files are ignored for good; the ruling is appended to the project comment). 062 re-files the amended January 2026 report under ES2600194 and runs after 061. 063 (folding the empty duplicate Mar-2024 dust project) was approved by Robin on 2026-10-21 and now runs after 064 (see below). Full chain re-rehearsed twice: identical, dupcheck 0.
    - Run with `dev/corpus-import/apply-corpus-import.sh live <work_dir>` from the repo root on main. It runs, in order:
      - the migrations;
      - the import;
@@ -93,6 +93,7 @@ Suite: **1,484 tests, 0 failing, 11 skipped**. Gated corpus tests are skipped un
    - Both final rehearsals were identical: +1,885 samples, +7,596 analyses, +643 assets, +770 review items, 0 likely duplicates.
    - Decisions and open asks are in `scratchpad/DECISIONS-FOR-ROBIN.md` (2026-10-20 phase 2). Data is in `scratchpad/2026-10-20-corpus/`.
    - **After the import, as a separate step: migration 064 (rehearsed twice, NOT applied).** It restores 72 asset rows that F.18 deleted (NULL filename/hash) and registers 6 more quarantined files, moving 78 files from `assets/_dedupe_quarantine/20261020/processed/` back to `processed/<uuid>/<filename>`. 43 quarantined files are deliberately not restored, as the import re-archives them or they duplicate an asset (`064-...-SKIPPED.csv`). Run `Rscript dev/migrations/064-restore-quarantined-assets-CHECK.R` (read-only; it must print PASS), then `Rscript dev/migrations/apply-064-restore-quarantined-assets.R`. See `dev/MIGRATIONS.md` (1064).
+   - **Then, last: migration 063 (approved 2026-10-21; rehearsed twice after 062 and 064, NOT applied; requires marker 1064).** It folds the empty duplicate Mar-2024 dust project c7b61e56 into ff6f23db (moves its xls and PDF rows), merges the two same-bytes PDF rows that leaves in ff6f23db by 057's rules (survivor 91a9c2de, the earliest archive copy; 5aa0c6df deleted), keeps both xls rows (same cells, different bytes) with comments, and deletes c7b61e56. No file is moved or deleted: processed/5aa0c6df-.../ stays as a byte duplicate. Run `Rscript dev/migrations/apply-063-merge-dup-dust-project-mar-2024.R`. See `dev/MIGRATIONS.md` (1063).
 4. **Release the A77 dust blocks** for 2400-7453-02 (Jan-2025) and 2400-7538-02
    (Jan-2026, medium confidence) when the corpus run withholds them.
 5. **External:** the list in `DECISIONS-FOR-ROBIN.md`, covering ACIRL (analyser LOD,
