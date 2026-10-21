@@ -58,6 +58,10 @@ Each change is TDD: a separate test-writer and implementer.
 8. **`inst/extdata/sample-date-overrides.csv` leaves the package.** It holds one
    deployment's file hashes. The package ships an empty file with the same columns, and a
    deployment points `sampletidy.date_overrides_path` at its own.
+9. **The EPA return leaves the package** (Robin, 2026-10-22). `dev/epa-monitoring-report.R`
+   and its `v_*_epa` views belong to the deployment layer, which also holds what the licence
+   specifies per point: which fraction (total or dissolved) each pollutant is reported as.
+   The core keeps both fractions and only tags each lab method with its `fraction`.
 
 ## 2. Order
 
