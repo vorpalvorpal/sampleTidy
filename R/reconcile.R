@@ -730,17 +730,56 @@
 #' (an ordinary ambiguity -> review, exactly as today) or MORE THAN ONE (two
 #' features claiming one name by their own names is a registry defect, not
 #' something to resolve arbitrarily).
+#'
+#' R1b (Robin, 2026-10-21; amends R1): a NON-self arm whose EXPLICIT date
+#' window (`date_start` and/or `date_end` set) covers `sample_date` beats the
+#' self arm - it is a deliberate curation for that visit or period, stronger
+#' evidence than the blanket "a feature is reachable by its own name". The row
+#' resolves through that dated arm and `shadowed` is NULL (no note: the self
+#' arm did not win). An UNDATED non-self arm still loses to self, with the
+#' note, exactly as R1/R2. A NA `sample_date` is no basis to say any window
+#' covers the row (E.6), so R1b never fires then and R2 applies as before.
+#' When the dated covering arms reach TWO OR MORE distinct features, nothing
+#' is auto-resolved - not through a dated arm (which curation would be
+#' arbitrary) and not through self (it lost to the dated curation) - so NULL
+#' is returned and the row falls back to the ordinary ambiguous/pending path.
+#' @param sample_date the row's `Date` (NA = R1b off).
 #' @return NULL when self-precedence does not apply, else
-#'   `list(uuid_alias, uuid_feature, shadowed)`.
+#'   `list(uuid_alias, uuid_feature, shadowed)` (`shadowed` NULL when a dated
+#'   arm won under R1b).
 #' @keywords internal
 #' @noRd
-.rc_self_precedence <- function(cand, registry) {
+.rc_self_precedence <- function(cand, registry, sample_date = as.Date(NA)) {
   if (length(unique(cand$uuid_feature)) < 2) return(NULL)
   fa <- registry$feature_alias
   if (is.null(fa) || nrow(fa) == 0 || !("kind" %in% names(fa))) return(NULL)
   kind <- fa$kind[match(cand$uuid_alias, fa$uuid)]
   is_self <- !is.na(kind) & kind == "self"
   if (sum(is_self) != 1L) return(NULL)
+  # 2026-10-21 R1b: a dated non-self arm covering the row date beats self.
+  # Coverage is re-checked here (not just trusted from the live filter in
+  # `.rc_feature_candidates()`) so a caller passing an unfiltered `cand`
+  # cannot let an out-of-window arm win.
+  if (length(sample_date) == 1 && !is.na(sample_date)) {
+    arms <- fa[match(cand$uuid_alias, fa$uuid), , drop = FALSE]
+    ds <- .rc_alias_bound(arms, "date_start", nrow(cand))
+    de <- .rc_alias_bound(arms, "date_end", nrow(cand))
+    dated <- !is_self & (!is.na(ds) | !is.na(de)) &
+      .rc_alias_live(arms, sample_date)
+    if (any(dated)) {
+      dated_feat <- unique(cand$uuid_feature[dated])
+      # Two or more dated covering arms to DIFFERENT features: a genuine
+      # curation conflict -> ambiguous/pending, never an arbitrary pick.
+      if (length(dated_feat) != 1L) return(NULL)
+      # Several dated arms onto the one feature: radix-first alias uuid, so
+      # the arm written does not depend on DuckDB's physical row order.
+      j <- which(dated)
+      j <- j[order(cand$uuid_alias[j], method = "radix")][[1]]
+      return(list(uuid_alias = cand$uuid_alias[[j]],
+                  uuid_feature = cand$uuid_feature[[j]],
+                  shadowed = NULL))
+    }
+  }
   i <- which(is_self)
   list(
     uuid_alias = cand$uuid_alias[[i]],
@@ -965,11 +1004,15 @@
     # `self` alias -> the self arm wins and the row RESOLVES, with a
     # non-blocking note. Only reachable at >1 distinct live feature, so it can
     # never turn an ordinary single-candidate hit into an annotated one.
-    sp <- .rc_self_precedence(cand, registry)
+    # R1b (2026-10-21): a dated non-self arm covering the row date wins
+    # instead, with `sp$shadowed` NULL -> no note for this row.
+    sp <- .rc_self_precedence(cand, registry, row_dates[[i]])
     if (!is.null(sp)) {
       uuid_feature[[i]] <- sp$uuid_feature
       uuid_alias[[i]] <- sp$uuid_alias
-      shadowed[[i]] <- sp$shadowed
+      # Guarded: `shadowed[[i]] <- NULL` would DELETE list element i and
+      # shift every later row's shadowed set onto the wrong row.
+      if (!is.null(sp$shadowed)) shadowed[[i]] <- sp$shadowed
       status[[i]] <- "hit"
       if (site_narrowed) resolution[[i]] <- narrowed_reason(sp$uuid_feature)
       next
