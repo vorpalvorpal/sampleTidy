@@ -1,0 +1,6 @@
+"uuid","name","row_sha1","gid","reason"
+"9ba14d28-0082-4ffe-8d72-d851d6e7412a","B.G201","956b19687db971717a9b16a6c3da0bf3b71b9dd8","ufo-gas-B.G201","gas-template slot pending alias B.G201 (032/034 ruling)"
+"1c1c9674-c3b4-4582-b8fc-8369c3b466f7","K.G365","c4869e3f21ab5d30371ce9699ac36c2c7e941d29","ufo-gas-K.G365","gas-template slot pending alias K.G365 (032/034 ruling)"
+"1b0bc00a-32f9-444f-9dc4-6728bdb32299","K.G366","5d795b9cde928f74f0b2bafb3ab40b8a611a804e","ufo-gas-K.G366","gas-template slot pending alias K.G366 (032/034 ruling)"
+"5567b5c9-3b28-4682-bb53-174527574dd8","B.E01 Effluent","17442b30c8626e11804944706cb67ff71458738b","ufo-be01","'B.E01 Effluent' -> B.E01 (053 A): pending alias emptied (its samples now on 053's alias c5df73af-090b-5e94-82ac-a03272373217)"
+"55ed24b3-468b-4976-92a9-c0a3d7c9dca6","BORE 8","3ae8633c019a2d6d8be8970378b946d1bdedcaec","ufo-bore8","'BORE 8' -> B.MW08 (053 C, window 2020-09-28..2021-02-16): pending alias emptied (its samples now on 053's alias 350f261e-db5f-596d-a904-7c3d44972352)"
