@@ -38,8 +38,21 @@ As of 2026-10-21, after the corpus import, 064 and 063:
   the Dec 2024 Blaxland gas workbook (a copy of November) awaits ACIRL, MW09 SWL May 2023
   has no field sheet, and 2 unknown_feature items
 
-Suite: **1,484 tests, 0 failing, 11 skipped**. Gated corpus tests are skipped unless
+Suite: **9,832 expectations, 0 failing, 12 skipped** (2026-10-22). Gated corpus tests are skipped unless
 `SAMPLETIDY_*_CORPUS` is set.
+
+## Done 2026-10-22
+
+- Migrations 069 (B.L05 coordinates, ES2512129 times, method repairs), 070 (lab_method.fraction;
+  views prefer dissolved at groundwater points, total elsewhere) and 071 (60 results R-8.6 had
+  dropped) applied to live.
+- Code: ESdat "~<N"/NR placeholders; gas template slots skipped; dust `<total` at import; the
+  timed rendering wins in assembly; lab methods resolve by method code ("CODE - CODE:" prefix
+  stripped, no fallback onto another code); R-8.6 collapses only same-code rows (total and
+  dissolved, EA015/EA016 TDS, both naphthalene methods all kept); new lab_methods get a fraction.
+- Open: `dev/epa-monitoring-report.R` has no fraction filter, so it would mix total and dissolved
+  where both are stored; it moves to the deployment layer (PLAN-20 item 9) with per-licence
+  fractions. Do not regenerate a return from it until then.
 
 ## Done 2026-10-16/17
 
