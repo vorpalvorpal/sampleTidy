@@ -1,5 +1,5 @@
 #!/bin/bash
-# Historical corpus import: migrations 053-059 and 061, the corpus run, the
+# Historical corpus import: migrations 053-059, 061 and 062, the corpus run, the
 # post-import review actions, checks, a Sharepoint snapshot and the post-import
 # processed/ dedupe. Robin's 5-step plan (2026-10-19). Run from the repo root.
 #
@@ -68,7 +68,7 @@ echo "restore if needed: cp '$BEFORE' '$DB'"
 # 2. migrations (each: dry run, migrate, re-run = already_migrated)
 MIGS="053-corpus-feature-aliases 054-hold-2400-7400-07 055-rehash-sharepoint-rewritten-assets
   056-corpus-live-corrections 057-merge-duplicate-hash-assets 058-bound-b-lo2-alias
-  059-split-reused-report-numbers 061-resolve-ask-robin-assets"
+  059-split-reused-report-numbers 061-resolve-ask-robin-assets 062-refile-amended-2400-7538-01"
 for m in $MIGS; do
   n="${m%%-*}"
   if [ "$MODE" = live ]; then

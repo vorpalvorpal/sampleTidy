@@ -1,5 +1,5 @@
 # Apply migration 054 to the live DB: dry run, migrate, re-run (no-op), with the
-# three held files' ingest_file rows before and after. Apply AFTER 053. Run from
+# three ignored files' ingest_file rows and project ES2006927 before and after. Apply AFTER 053. Run from
 # the repo root:
 #   Rscript dev/migrations/apply-054-hold-2400-7400-07.R
 # Set SAMPLETIDY_MIG054_DB / SAMPLETIDY_MIG054_SNAPSHOT_DIR /
@@ -24,6 +24,10 @@ report <- function(label) {
   print(DBI::dbGetQuery(con, "SELECT hash, filename, state, state_reason, adapter, tier FROM ingest_file
     WHERE hash IN ('07bcecfc6312255ae6f21cc6c977daaa',
     'e11b438cfd496070dc2fef28effdbbe3', 'b66193946f485819e4b0e1451f1e70ac')"), right = FALSE)
+  print(DBI::dbGetQuery(con, "SELECT name, comments FROM project
+    WHERE uuid = '2b34a4fb-1cca-4ba5-b7b4-98205bcc70e6'"), right = FALSE)
+  print(DBI::dbGetQuery(con, "SELECT datetime, comments FROM sample
+    WHERE uuid_project = '2b34a4fb-1cca-4ba5-b7b4-98205bcc70e6'"), right = FALSE)
 }
 report("before")
 for (dr in c(TRUE, FALSE, FALSE)) {
