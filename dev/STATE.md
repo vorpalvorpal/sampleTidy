@@ -91,6 +91,7 @@ Suite: **1,484 tests, 0 failing, 11 skipped**. Gated corpus tests are skipped un
      - `processed-dedupe.R --post-import`, which only quarantines and can be undone.
    - Both final rehearsals were identical: +1,885 samples, +7,596 analyses, +643 assets, +770 review items, 0 likely duplicates.
    - Decisions and open asks are in `scratchpad/DECISIONS-FOR-ROBIN.md` (2026-10-20 phase 2). Data is in `scratchpad/2026-10-20-corpus/`.
+   - **After the import, as a separate step: migration 064 (rehearsed twice, NOT applied).** It restores 72 asset rows that F.18 deleted (NULL filename/hash) and registers 6 more quarantined files, moving 78 files from `assets/_dedupe_quarantine/20261020/processed/` back to `processed/<uuid>/<filename>`. 43 quarantined files are deliberately not restored, as the import re-archives them or they duplicate an asset (`064-...-SKIPPED.csv`). Run `Rscript dev/migrations/064-restore-quarantined-assets-CHECK.R` (read-only; it must print PASS), then `Rscript dev/migrations/apply-064-restore-quarantined-assets.R`. See `dev/MIGRATIONS.md` (1064).
 4. **Release the A77 dust blocks** for 2400-7453-02 (Jan-2025) and 2400-7538-02
    (Jan-2026, medium confidence) when the corpus run withholds them.
 5. **External:** the list in `DECISIONS-FOR-ROBIN.md`, covering ACIRL (analyser LOD,
