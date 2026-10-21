@@ -170,6 +170,7 @@ test_that("(1c) when date_start removes the ONLY candidate the row goes pending 
 # ---- (2) a dated non-self arm covering the row date beats self -------------
 
 test_that("(2) name X is F1's self alias AND a non-self arm onto F2 whose explicit window covers the row date: resolves to F2 through that arm, with NO self_precedence_note - for a one-day window, a date_end-only window and a date_start-only window", {
+  skip("pending Robin: a dated covering non-self arm vs self overturns ruling R1 (2026-07-23)")
   path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   # (i) one-day arm curated for that exact visit.
