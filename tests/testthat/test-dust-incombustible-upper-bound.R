@@ -307,7 +307,9 @@ test_that("013 rule end to end (G09): re-importing onto a live row ALREADY in 01
   vc <- DBI::dbGetQuery(ro, "SELECT * FROM review_queue WHERE kind = 'value_conflict'")
   expect_equal(nrow(vc), 0)
   a <- iu_analyses(ro, "fa-d07")
-  expect_equal(nrow(a), 3)                       # matched the live sample, nothing added
+  # the builder always writes a Dust Observations sheet; that text row is new
+  # data (pending analyte), so count only the three dust analytes (2026-10-22)
+  expect_equal(sum(a$uuid_lab %in% c("lm-dins", "lm-dcom", "lm-dinc")), 3)
   expect_equal(a$value[a$uuid_lab == "lm-dinc"], 0.14)
   expect_false(a$quantified[a$uuid_lab == "lm-dinc"])
 })
