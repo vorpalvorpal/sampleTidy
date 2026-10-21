@@ -4517,32 +4517,35 @@ test_that("R-15.8: a date_start bound blocks a row dated before the start date, 
   expect_identical(cand_after$uuid_feature[[1]], "f-0002")
 })
 
-test_that("R-15.9: a bounded two-arm key resolves via self-precedence to its own feature inside the historical arm's bound (R1/R2), with exactly one self_precedence_note, paired with the trivial resolve outside the bound", {
+test_that("R-15.9: a two-arm key (self + an UNDATED historical arm) resolves via self-precedence to its own feature (R1/R2), with exactly one self_precedence_note", {
   path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   # T.S01's self-alias (fa-0001, unbounded, kind='self') shares its alias_key
   # with a NEW curated historical arm pointing at a DIFFERENT feature
   # (f-0002) - E.0's "an alias key IS another feature's real name" shape.
-  # Bounded 2015-01-01..2019-12-31 (E.5-style curated historical window).
+  #
+  # AMENDED 2026-10-21 (ruling R1b, RULINGS-2026-07-23-alias-self-precedence.md):
+  # this arm used to be bounded 2015-01-01..2019-12-31 and the row dated
+  # inside it, with a paired row dated outside it. Under R1b a non-self arm
+  # whose EXPLICIT window covers the row date now BEATS self, so that shape
+  # no longer exercises self-precedence (test-alias-date-precedence.R (2)
+  # pins the new dated-arm behaviour). What this test is for is R1/R2 itself
+  # - self wins over a live non-self arm, with one note - so the arm is now
+  # UNDATED (still losing to self under R1b) and the outside-bound pairing,
+  # which only made sense against a bounded arm, is dropped.
   DBI::dbExecute(con, "INSERT INTO feature_alias
     (uuid, uuid_feature, name, alias_key, kind, auto_assign, first_seen, last_seen, date_start, date_end) VALUES
     ('fa-e09', 'f-0002', 'T.S01', 't.s01', 'historical_code', TRUE,
      TIMESTAMP '2015-01-01 00:00:00', TIMESTAMP '2019-12-31 00:00:00',
-     DATE '2015-01-01', DATE '2019-12-31')")
+     NULL, NULL)")
 
   event <- mk_event(mk_rows(
-    # INSIDE the historical arm's bound: both fa-0001 (self -> f-0001) and
-    # fa-e09 (historical -> f-0002) are alias-live. R1/R1a: the self arm is
-    # unbounded, so it WINS over the shadowed historical arm; the row
-    # resolves (not review) and a non-blocking self_precedence_note is
-    # emitted (R2) recording that the override happened.
+    # Both fa-0001 (self -> f-0001) and fa-e09 (undated historical ->
+    # f-0002) are alias-live. R1/R1a: the self arm WINS over the shadowed
+    # historical arm; the row resolves (not review) and a non-blocking
+    # self_precedence_note is emitted (R2) recording that the override
+    # happened. The note itself proves fa-e09 was live and shadowed.
     mk_row(source_ref = "inside_bound", feature_raw = "T.S01",
-           lab_sample_id = "XX9999900001", sample_datetime_raw = "01 Jun 2017 09:00"),
-    # OUTSIDE the historical arm's bound (same test): fa-e09 has expired, so
-    # only the self arm survives - a plain, non-precedence hit. Proves the
-    # inside-bound resolve above is self-PRECEDENCE, not merely "date bounds
-    # are ignored so it always resolves to f-0001 anyway".
-    mk_row(source_ref = "outside_bound", feature_raw = "T.S01",
-           lab_sample_id = "XX9999900002", sample_datetime_raw = "01 Jun 2025 09:00")
+           lab_sample_id = "XX9999900001", sample_datetime_raw = "01 Jun 2017 09:00")
   ))
   out <- reconcile_event(event, con)
 
@@ -4570,10 +4573,6 @@ test_that("R-15.9: a bounded two-arm key resolves via self-precedence to its own
                         !is.na(out$review$subkind) &
                         out$review$subkind == "self_precedence_note", ]
   expect_equal(nrow(note), 1)
-
-  outside <- out$clean[out$clean$source_ref == "outside_bound", ]
-  expect_false(outside$feature_pending)
-  expect_identical(outside$uuid_feature, "f-0001")
 })
 
 test_that("R-15.11: a key with one alias-live arm pointing at a DEFUNCT feature goes to review, not to the defunct feature - alias-side and feature-side liveness are separate filters, both apply", {
@@ -5214,14 +5213,19 @@ test_that("R-15.46: a key holding exactly ONE live arm (auto_assign=FALSE) AND a
 test_that("R-15.45 (E.7): a key reaching a live SELF arm plus one live NON-self arm resolves via the self arm, commits a real sample/analysis row (assert row COUNTS, not merely the absence of a review item), and records exactly ONE non-blocking review row naming the shadowed feature and carrying an EXPLICIT boolean blocking flag - paired in the same test with a SECOND self-precedence case on a NEW, LOCALLY-BUILT key (t.e7dual2, all three arms auto_assign=TRUE) where the self arm faces TWO live non-self opponents at once, AND the plan-mandated negative control (a key reaching two live NON-self arms and no self arm still goes to review and does NOT commit) - (Phase-5 audit round 3 B1+B2: round-2's C4(b) planted the second self-precedence case on T.DUAL itself, whose fa-0015/fa-0016 non-self arms are auto_assign=FALSE in the shared seed [helper-db.R:329-336], so .rc_feature_candidates() [R/reconcile.R:171, which filters to auto_assign=TRUE FIRST] returned exactly ONE row for T.DUAL - an ordinary clean Layer-1 hit that `next`s before candidate collection, so the fixture could never produce the self_precedence_note the test asserted, AND it consumed R-15.45's own plan-mandated negative control by leaving no key in the test with two live non-self arms and no self arm. FIX: the second self-precedence case now lives on a NEW key built with auto_assign=TRUE on all three arms; T.DUAL is left completely untouched and used below exactly as the negative control)", {
   path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   # f-0002's OWN self-alias (fa-0002, unbounded) shares its key 't.s02' with
-  # a NEW curated historical arm pointing at a DIFFERENT feature (f-0003),
-  # bounded 2015-01-01..2019-12-31 - the "an alias key IS another feature's
-  # real name" shape (E.0/R1/R2).
+  # a NEW curated historical arm pointing at a DIFFERENT feature (f-0003) -
+  # the "an alias key IS another feature's real name" shape (E.0/R1/R2).
+  # AMENDED 2026-10-21 (ruling R1b): this arm used to be bounded
+  # 2015-01-01..2019-12-31 with the row dated inside it. Under R1b a non-self
+  # arm whose explicit window covers the row date BEATS self, which is not
+  # what this test is about (it pins the R2 note, the commit and the negative
+  # control), so the arm is now UNDATED - an undated non-self arm still loses
+  # to self.
   DBI::dbExecute(con, "INSERT INTO feature_alias
     (uuid, uuid_feature, name, alias_key, kind, auto_assign, first_seen, last_seen, date_start, date_end) VALUES
     ('fa-e7-block', 'f-0003', 'T.S02', 't.s02', 'historical_code', TRUE,
      TIMESTAMP '2015-01-01 00:00:00', TIMESTAMP '2019-12-31 00:00:00',
-     DATE '2015-01-01', DATE '2019-12-31')")
+     NULL, NULL)")
 
   # Phase-5 audit round 3 B1+B2: a NEW, LOCAL key (t.e7dual2) with all THREE
   # arms auto_assign=TRUE - one self, two non-self opponents.
@@ -5263,8 +5267,8 @@ test_that("R-15.45 (E.7): a key reaching a live SELF arm plus one live NON-self 
      WHERE fa.uuid_feature = 'f-e7dual2-self'")$n
 
   event <- mk_event(mk_rows(
-    # date INSIDE the historical arm's bound: both fa-0002 (self, unbounded)
-    # and fa-e7-block (historical, bounded) are alias-live - self must win.
+    # both fa-0002 (self) and fa-e7-block (historical, undated since R1b)
+    # are alias-live - self must win.
     mk_row(source_ref = "e7_self_wins", feature_raw = "T.S02",
            lab_sample_id = "XX9999940001", sample_datetime_raw = "01 Jun 2017 09:00"),
     # SECOND self-precedence case (same test): T.E7DUAL2 carries a self arm
@@ -5523,11 +5527,16 @@ test_that("PLAN-7b item 1: a multi-analyte panel resolving via self-precedence o
   path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   # Same self-precedence shape as R-15.45: f-0002's self-alias (fa-0002)
   # shares key 't.s02' with a curated historical arm on f-0003.
+  # AMENDED 2026-10-21 (ruling R1b): the arm used to be dated
+  # 2015-01-01..2019-12-31, covering the rows' 2017 date; under R1b such a
+  # dated covering arm now BEATS self and no note would be emitted at all.
+  # This test is about note de-duplication, so the arm is now UNDATED (an
+  # undated non-self arm still loses to self).
   DBI::dbExecute(con, "INSERT INTO feature_alias
     (uuid, uuid_feature, name, alias_key, kind, auto_assign, first_seen, last_seen, date_start, date_end) VALUES
     ('fa-e7grp-block', 'f-0003', 'T.S02', 't.s02', 'historical_code', TRUE,
      TIMESTAMP '2015-01-01 00:00:00', TIMESTAMP '2019-12-31 00:00:00',
-     DATE '2015-01-01', DATE '2019-12-31')")
+     NULL, NULL)")
 
   event <- mk_event(mk_rows(
     mk_row(source_ref = "grp_a", feature_raw = "T.S02", lab_sample_id = "XX9999951001",
