@@ -141,9 +141,10 @@
 #     (2020-03-06) carry byte-identical results and differ only in dates (rev 1
 #     moves S3 and the dam 27 -> 25 Feb); live holds all of ES2006927 on 27 Feb
 #     with the comment "COC incorrectly recorded date as 25-02-2020", and both
-#     revisions' COC number is "ALSE-Sydney 27-Feb-20". Which date is right is
-#     Robin's call; 054 keeps holding rev 1 (and its identical chemistry), so
-#     nothing duplicates.
+#     revisions' COC number is "ALSE-Sydney 27-Feb-20". RULED by Robin
+#     2026-10-21: live's 27 Feb stands; 054 ignores rev 1 (and its identical
+#     chemistry) permanently and notes the ruling on project ES2006927, so
+#     nothing duplicates. 056 writes nothing for ES2006927.
 #
 # ---- HOW (the FK steps; 029's and 031's patterns) --------------------------------
 #
