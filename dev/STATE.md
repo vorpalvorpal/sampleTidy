@@ -50,9 +50,11 @@ Suite: **9,832 expectations, 0 failing, 12 skipped** (2026-10-22). Gated corpus 
   timed rendering wins in assembly; lab methods resolve by method code ("CODE - CODE:" prefix
   stripped, no fallback onto another code); R-8.6 collapses only same-code rows (total and
   dissolved, EA015/EA016 TDS, both naphthalene methods all kept); new lab_methods get a fraction.
-- Open: `dev/epa-monitoring-report.R` has no fraction filter, so it would mix total and dissolved
-  where both are stored; it moves to the deployment layer (PLAN-20 item 9) with per-licence
-  fractions. Do not regenerate a return from it until then.
+- The EPA annual return left the package (PLAN-20 item 9): its script, template, licence
+  tables and returns now live in the deployment repo's `epa/` folder, where it reports one
+  fraction per sample, point and pollutant (a `fraction` column in the requirements table;
+  blank = dissolved at groundwater, total elsewhere). `dev/auto-import.R` reads the licence
+  tables from `SAMPLETIDY_AUTOIMPORT_LICENCE_DIR` (default `~/dev/bmcc-monitoring/epa`).
 
 ## Done 2026-10-16/17
 
@@ -146,6 +148,9 @@ Suite: **9,832 expectations, 0 failing, 12 skipped** (2026-10-22). Gated corpus 
     plus an insert.
 - **The Sharepoint tree is Files-On-Demand.** Enumerate it with `ls`/`find`, never
   `grep -r`, and open only the specific files needed.
-- **Never run `dev/epa-monitoring-report.R` casually**: it overwrites Robin's
-  workbooks.
+- **Never run the EPA return script (deployment repo, `epa/`) casually**: its default
+  output overwrites Robin's workbooks. Pass `out=` for anything but a filing run.
+- **The hourly job reads the licence tables from the deployment checkout** (working copy,
+  not a pinned commit): `SAMPLETIDY_AUTOIMPORT_LICENCE_DIR`, default
+  `~/dev/bmcc-monitoring/epa`. Keep that checkout on a branch that has them.
 - **A-numbers are decisions; agent numbers are lowercase.** A87 was never assigned.

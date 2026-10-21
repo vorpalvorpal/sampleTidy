@@ -31,11 +31,14 @@ ledger <- nz(Sys.getenv("SAMPLETIDY_AUTOIMPORT_LEDGER")) %||%
             "invoice-automation", "contractor-work.json")
 invoices <- tryCatch(sampling_rounds(ledger)[, c("site", "stream", "sampled_on", "ref")],
                      error = function(e) NULL)
+# The EPA licence tables belong to the deployment, not this repo.
+licence_dir <- path.expand(Sys.getenv("SAMPLETIDY_AUTOIMPORT_LICENCE_DIR",
+                                      "~/dev/bmcc-monitoring/epa"))
 checks <- list(
   schedule = file.path(dev_dir, "expected_schedule.csv"),
-  limits = file.path(dev_dir, "epa_licence_limits.csv"),
-  requirements = file.path(dev_dir, "epa_licence_requirements.csv"),
-  points = file.path(dev_dir, "epa_licence_points.csv"),
+  limits = file.path(licence_dir, "epa_licence_limits.csv"),
+  requirements = file.path(licence_dir, "epa_licence_requirements.csv"),
+  points = file.path(licence_dir, "epa_licence_points.csv"),
   invoices = invoices,
   # PLAN-19: field QC criteria and the QC samples each round must carry.
   qc = list(criteria = file.path(dev_dir, "qc_criteria.csv"),

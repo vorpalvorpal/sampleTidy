@@ -425,7 +425,7 @@
   pts <- .flags_table(checks$points, "points", c("site", "epa_point", "role"))
   weather <- paste(pts$site, pts$epa_point)[pts$role %in% "weather"]
   # Matched by `pollutant` (group line items are already expanded into one row
-  # per congener, as dev/epa-monitoring-report.R reads them); a (point,
+  # per congener, as the deployment's EPA return script reads them); a (point,
   # pollutant) under two conditions is one requirement.
   req <- req[req$frequency %in% c("Monthly", "Quarterly", "Yearly") &
                !paste(req$site, req$epa_point) %in% weather &
@@ -436,7 +436,7 @@
   own_round <- paste(pts$site, pts$epa_point)[pts$role %in% c("gas_grid", "dust")]
   req$water <- !paste(req$site, req$epa_point) %in% own_round
 
-  # EPA point -> features, pollutant -> analytes (as dev/epa-monitoring-report.R).
+  # EPA point -> features, pollutant -> analytes (as the EPA return script).
   fmap <- DBI::dbGetQuery(img$con, "
     SELECT f.name AS feature, f.site AS site, trim(fm.name) AS epa_point
       FROM feature_mask fm JOIN feature f ON f.uuid = fm.uuid_feature

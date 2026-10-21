@@ -62,6 +62,10 @@ Each change is TDD: a separate test-writer and implementer.
    and its `v_*_epa` views belong to the deployment layer, which also holds what the licence
    specifies per point: which fraction (total or dissolved) each pollutant is reported as.
    The core keeps both fractions and only tags each lab method with its `fraction`.
+   **Done 2026-10-22:** the script, template, licence tables and returns moved to the
+   deployment repo's `epa/` folder (per-point `fraction` column, groundwater-dissolved default);
+   `dev/auto-import.R` reads the tables from `SAMPLETIDY_AUTOIMPORT_LICENCE_DIR`. The `v_*_epa`
+   views are still created by the migration chain.
 
 ## 2. Order
 
