@@ -17,21 +17,24 @@ The companion documents, in the order you are likely to need them:
 
 ## In one sentence
 
-The package is built. The registry and the legacy data have been repaired by 29
-applied migrations, and ACIRL gas now has an adapter. **The corpus still has not been
-ingested**. The ACIRL gas import is done (2026-10-17).
+The package is built. The registry and the legacy data have been repaired by the
+applied migrations, and ACIRL gas now has an adapter. **The historical corpus was
+imported to live on 2026-10-21** (with 053-062 before it and 064, 063 after it). The
+ACIRL gas import is done (2026-10-17).
 
 ## Live database
 
 `st_config("live_db")` is a **local** path under `tools::R_user_dir()`. Sharepoint only
 receives one-way snapshots and backups.
 
-- analysis 97,698 · sample 17,883 · analyte 247 · lab_method 568 · project 571
-- feature 1,023 · feature_alias 2,284 (0 pending)
-- markers 1..7, 1001, 1003..1033 (every migration in `dev/migrations/` is applied)
-- review_queue: 5 open (gas: 2 duplicate_report_number, 1 report_no_mismatch;
-  earlier: 1 self_precedence_note, 1 work_order_reingest)
-- ingest_file: 52 rows (16 gas workbooks archived 2026-10-17)
+As of 2026-10-21, after the corpus import, 064 and 063:
+
+- analysis 110,776 · sample 22,013 · analyte 247 · lab_method 570 · project 760
+- feature 1,117 · feature_alias 2,884
+- asset 2,264 · ingest_file 1,547
+- highest marker 1064 (every migration in `dev/migrations/` is applied except PLAN-20's 060)
+- review_queue: 791 open (770 new from the corpus run; see `summary.txt` in
+  `scratchpad/2026-10-21-corpus-live/`)
 
 Suite: **1,484 tests, 0 failing, 11 skipped**. Gated corpus tests are skipped unless
 `SAMPLETIDY_*_CORPUS` is set.
@@ -75,7 +78,15 @@ Suite: **1,484 tests, 0 failing, 11 skipped**. Gated corpus tests are skipped un
    value equals the incoming row, then the one under the incoming work order. Today
    the lowest uuid wins, which gives false value_conflicts on legacy visits split
    across two ALS work orders. This is being built tests-first.
-3. **The corpus run (2026-10-20): Robin's rulings applied and rehearsed twice; awaiting his go.**
+3. **The corpus run: DONE on live 2026-10-21.** Robin started it; it finished at 18:30
+   local. 053-062 were applied by a first attempt (04:27 UTC), which then stopped on the
+   test-helper archive-path bug (fixed in f9815b8); the third attempt imported the corpus.
+   Measured from `monitoring_pre-corpus-import_20261021T042728Z.duckdb` the result equals
+   both rehearsals exactly (+1,885 samples, +7,596 analyses, +643 assets, +770 review
+   items); dupcheck 0; Sharepoint snapshot `monitoring_2026-10-21.duckdb`; the post-import
+   dedupe moved 937 paths to `assets/_dedupe_quarantine/20261021/` (undo CSV in the work
+   dir). 064's CHECK then passed against live and 064 and 063 were applied (07:31 UTC).
+   The history below is kept for reference.
    - Code on main:
      - C1-C5 (placeholder matching, ACIRL site veto, per-file date overrides, archive rollback, units);
      - C6: a blank ALS SAR unit becomes "1";
