@@ -131,7 +131,9 @@
       units VARCHAR,
       -- Multiplied into a matched row's reported value when non-NA; NA means
       -- no conversion. That product is what analysis.value stores.
-      conversion_constant DOUBLE
+      conversion_constant DOUBLE,
+      -- Migration 070: 'dissolved' / 'total' / NULL, derived from the method code.
+      fraction VARCHAR
     )",
   project = "
     CREATE TABLE project (

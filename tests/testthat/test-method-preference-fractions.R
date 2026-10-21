@@ -222,3 +222,59 @@ test_that("code: end to end - field pH + lab pH both committed", {
   after <- DBI::dbGetQuery(con, "SELECT count(*) AS n FROM analysis")$n
   expect_equal(after - before, 2)
 })
+
+# ---- lab_method.fraction on minting (migration 070) -------------------------
+# .ct_materialise_lab_methods() is the only minting path: a newly minted
+# lab_method gets `fraction` from its method text. code = text before the
+# first colon after .rc_strip_method_code_prefix(); ^E[DG][0-9]{3}(\([^)]*\))?F$
+# -> 'dissolved', ...T$ -> 'total', anything else (incl. NA method) -> NA.
+
+mint_fraction <- function(method_raw, drop_fraction_column = FALSE, env = parent.frame()) {
+  path <- seed_db(); con <- seed_con(path)
+  withr::defer(DBI::dbDisconnect(con, shutdown = TRUE), envir = env)
+  if (drop_fraction_column) DBI::dbExecute(con, "ALTER TABLE lab_method DROP COLUMN fraction")
+  event <- mk_event(mk_row(source_ref = "r1", lab_sample_id = "XX1234567002", feature_raw = "T.S02",
+                           analyte_raw = "Unobtainium", method_raw = method_raw,
+                           value_raw = "1.5", value_num = 1.5, below_detection = FALSE,
+                           rl = 0.1, units_raw = "mg/L"))
+  out <- reconcile_event(event, con)
+  commit_event(event, out, con)
+  DBI::dbGetQuery(con, "SELECT * FROM lab_method WHERE name = 'Unobtainium'")
+}
+
+expect_minted_fraction <- function(method_raw, expected) {
+  lm <- mint_fraction(method_raw)
+  expect_equal(nrow(lm), 1)
+  expect_true("fraction" %in% names(lm))
+  if (is.na(expected)) {
+    expect_true(is.na(lm$fraction[[1]]))
+  } else {
+    expect_identical(lm$fraction[[1]], expected)
+  }
+}
+
+test_that("fraction: 'EG020F: ...' mints as dissolved", {
+  expect_minted_fraction("EG020F: Dissolved Metals by ICP-MS", "dissolved")
+})
+
+test_that("fraction: 'EG020T - EG020T: ...' (prefixed) mints as total", {
+  expect_minted_fraction("EG020T - EG020T: Total Metals by ICP-MS", "total")
+})
+
+test_that("fraction: 'EG005(ED093)F: ...' mints as dissolved", {
+  expect_minted_fraction("EG005(ED093)F: Dissolved Metals by ICP-AES", "dissolved")
+})
+
+test_that("fraction: 'EK057G: Nitrite as N' mints with NA fraction", {
+  expect_minted_fraction("EK057G: Nitrite as N by DA", NA_character_)
+})
+
+test_that("fraction: an NA method mints with NA fraction", {
+  expect_minted_fraction(NA_character_, NA_character_)
+})
+
+test_that("fraction: minting still works against an older DB whose lab_method has no fraction column", {
+  lm <- mint_fraction("EG020F: Dissolved Metals by ICP-MS", drop_fraction_column = TRUE)
+  expect_equal(nrow(lm), 1)
+  expect_false("fraction" %in% names(lm))
+})
