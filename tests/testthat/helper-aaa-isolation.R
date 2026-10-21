@@ -8,7 +8,11 @@
 # no test can touch OneDrive. Tests that set their own option or env var are
 # unaffected (options win over env vars, and withr::local_envvar() still
 # overrides). Where the env vars are unset (CI), nothing changes.
-local({
+# Only under testthat (TESTTHAT=true): devtools::load_all() also sources
+# helpers, and the live scripts (auto-import, corpus import, migrations) load
+# the package that way, so outside a test run this must do nothing - it once
+# pointed the live corpus import's archive at a temp dir (2026-10-21).
+if (identical(Sys.getenv("TESTTHAT"), "true")) local({
   root <- file.path(tempdir(), "sampletidy-test-isolation")
   for (key in c("ARCHIVE_DIR", "SNAPSHOT_DIR", "INPUT_DIR")) {
     var <- paste0("SAMPLETIDY_", key)
