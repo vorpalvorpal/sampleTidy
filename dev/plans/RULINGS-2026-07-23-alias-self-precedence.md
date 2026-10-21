@@ -109,3 +109,31 @@ R5 is a consequence of R1/R2 rather than a separate ruling: under self-precedenc
 `b.s01` and `k.e02` resolve regardless, and the date bounds now only govern which
 shadowed arms get NOTED. Recorded because the rule-1 defect would otherwise
 misfire on the next single-sample target.
+
+## R1b — a dated covering non-self arm beats self (Robin, 2026-10-21)
+
+Amends R1. A non-self arm whose **explicit** date window (`date_start` and/or
+`date_end` set) covers the row date **beats the `self` arm**: the row resolves
+through that dated arm, and no `self_precedence_note` is emitted, because the
+self arm did not win. An **undated** non-self arm (both bounds NULL) is
+unaffected and still loses to self exactly as R1/R2 describe, with the note.
+
+Reason: a dated non-self arm is a deliberate curation for a specific visit or
+period, so it is stronger evidence than the blanket rule that a feature is
+reachable by its own name. Under R1 as written, curated one-visit aliases were
+being overridden by self: for example the 12 Nov 2021 `B.S22` -> B.TS18 arm and
+the 20 Sep 2023 `B.MW04` -> K.MW04 arm each lost to the self arm of the name
+they were curated against, so the rows they were made for landed on the wrong
+feature.
+
+What is unaffected:
+- undated non-self arms still lose to self (R1), with the R2 note;
+- R1a (a date-bounded self arm no longer claims its name) stands;
+- a dated arm whose window does NOT cover the row date is not live for that row
+  at all, so self resolves as before.
+
+Tests: `tests/testthat/test-alias-date-precedence.R` (2) pins the new behaviour
+for a one-day window, a `date_end`-only window and a `date_start`-only window.
+Three older tests in `test-reconcile.R` (R-15.9, R-15.45 (E.7), PLAN-7b item 1)
+built their self-precedence case on a DATED covering historical arm; their arms
+are now undated so they keep testing R1/R2 under the amended rule.
