@@ -299,13 +299,19 @@ test_that("R-16.10 property (6/18 - .rc_method_preference, method_duplicate): NO
   path <- seed_db()
   con <- seed_con(path)
   withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+  # 2026-10-22 (R-8.6 now collapses only SAME-CODE methods): the seeded
+  # lm-0004 is "EK040T:" (a different code from lm-0002's "EK040P:"), so it no
+  # longer competes. Retargeted to a same-code twin, "EK040P: Fluoride by alt
+  # method" (rl_low 0.5), added here; every assertion below is unchanged.
+  DBI::dbExecute(con, "INSERT INTO lab_method (uuid, uuid_analyte, name, method, organisation, rl_low, units, conversion_constant) VALUES
+    ('lm-0004s', 'a-0002', 'Fluoride', 'EK040P: Fluoride by alt method', 'ALS', 0.5, 'mg/L', NULL)")
 
   event <- mk_event(mk_rows(
     mk_row(source_ref = "r1", lab_sample_id = "XX1234567002", feature_raw = "T.S02",
            method_raw = "EK040P: Fluoride by PC Titrator",
            value_raw = "2.3", value_num = 2.3, below_detection = FALSE, rl = 0.1),
     mk_row(source_ref = "r2", lab_sample_id = "XX1234567002", feature_raw = "T.S02",
-           method_raw = "EK040T: Fluoride by alt method",
+           method_raw = "EK040P: Fluoride by alt method",
            value_raw = "2.5", value_num = 2.5, below_detection = FALSE, rl = 0.5)
   ))
   out <- reconcile_event(event, con)
@@ -853,6 +859,12 @@ test_that("R-16.17 (method_duplicate): kept_uuid_lab is a real column on the SKI
   path <- seed_db()
   con <- seed_con(path)
   withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+  # 2026-10-22 (R-8.6 now collapses only SAME-CODE methods): the seeded
+  # lm-0004 is "EK040T:" (a different code from lm-0002's "EK040P:"), so it no
+  # longer competes. Retargeted to a same-code twin, "EK040P: Fluoride by alt
+  # method" (rl_low 0.5), added here; every assertion below is unchanged.
+  DBI::dbExecute(con, "INSERT INTO lab_method (uuid, uuid_analyte, name, method, organisation, rl_low, units, conversion_constant) VALUES
+    ('lm-0004s', 'a-0002', 'Fluoride', 'EK040P: Fluoride by alt method', 'ALS', 0.5, 'mg/L', NULL)")
 
   # Reuses the proven R-8.6 method-preference fixture verbatim: r1 (lm-0002,
   # rl_low 0.1) wins, r2 (lm-0004, rl_low 0.5) loses -> method_duplicate.
@@ -861,7 +873,7 @@ test_that("R-16.17 (method_duplicate): kept_uuid_lab is a real column on the SKI
            method_raw = "EK040P: Fluoride by PC Titrator",
            value_raw = "2.3", value_num = 2.3, below_detection = FALSE, rl = 0.1),
     mk_row(source_ref = "r2", lab_sample_id = "XX1234567002", feature_raw = "T.S02",
-           method_raw = "EK040T: Fluoride by alt method",
+           method_raw = "EK040P: Fluoride by alt method",
            value_raw = "2.5", value_num = 2.5, below_detection = FALSE, rl = 0.5)
   ))
   out <- reconcile_event(event, con)

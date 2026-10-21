@@ -1356,13 +1356,19 @@ test_that("R-8.6: the duplicate-method pair keeps the lower-RL row", {
   path <- seed_db()
   con <- seed_con(path)
   withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+  # 2026-10-22 (R-8.6 now collapses only SAME-CODE methods): the seeded
+  # lm-0004 is "EK040T:" (a different code from lm-0002's "EK040P:"), so it no
+  # longer competes. Retargeted to a same-code twin, "EK040P: Fluoride by alt
+  # method" (rl_low 0.5), added here; every assertion below is unchanged.
+  DBI::dbExecute(con, "INSERT INTO lab_method (uuid, uuid_analyte, name, method, organisation, rl_low, units, conversion_constant) VALUES
+    ('lm-0004s', 'a-0002', 'Fluoride', 'EK040P: Fluoride by alt method', 'ALS', 0.5, 'mg/L', NULL)")
 
   # Both rows at T.S02 = a fresh sample, so the method-preference winner lands
   # in `clean` (FIXTURES.md: XX1234567002 = T.S02), isolating R-8.6 from R-8.7.
   event <- mk_event(mk_rows(
     mk_row(source_ref = "r1", lab_sample_id = "XX1234567002", feature_raw = "T.S02", method_raw = "EK040P: Fluoride by PC Titrator",
            value_raw = "2.3", value_num = 2.3, below_detection = FALSE, rl = 0.1),
-    mk_row(source_ref = "r2", lab_sample_id = "XX1234567002", feature_raw = "T.S02", method_raw = "EK040T: Fluoride by alt method",
+    mk_row(source_ref = "r2", lab_sample_id = "XX1234567002", feature_raw = "T.S02", method_raw = "EK040P: Fluoride by alt method",
            value_raw = "2.5", value_num = 2.5, below_detection = FALSE, rl = 0.5)
   ))
   out <- reconcile_event(event, con)
@@ -2902,6 +2908,12 @@ test_that("R-12.13: distinct-key rows in the same batch are unaffected - both co
 
 test_that("R-12.13: interacts correctly with R-8.6 - cross-method dedup runs FIRST, then the within-batch guard catches the remaining same-method dupe", {
   path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
+  # 2026-10-22 (R-8.6 now collapses only SAME-CODE methods): the seeded
+  # lm-0004 is "EK040T:" (a different code from lm-0002's "EK040P:"), so it no
+  # longer competes. Retargeted to a same-code twin, "EK040P: Fluoride by alt
+  # method" (rl_low 0.5), added here; every assertion below is unchanged.
+  DBI::dbExecute(con, "INSERT INTO lab_method (uuid, uuid_analyte, name, method, organisation, rl_low, units, conversion_constant) VALUES
+    ('lm-0004s', 'a-0002', 'Fluoride', 'EK040P: Fluoride by alt method', 'ALS', 0.5, 'mg/L', NULL)")
   # r1/r3: same key AND same method (lm-0002) - the R-12.13 case.
   # r2: same key but a DIFFERENT method (lm-0004, higher rl_low) - loses to r1
   # under R-8.6's method preference BEFORE R-12.13 ever sees it.
@@ -2910,7 +2922,7 @@ test_that("R-12.13: interacts correctly with R-8.6 - cross-method dedup runs FIR
            method_raw = "EK040P: Fluoride by PC Titrator",
            value_raw = "2.3", value_num = 2.3, below_detection = FALSE, rl = 0.1),
     mk_row(source_ref = "r2", lab_sample_id = "XX1234567002", feature_raw = "T.S02",
-           method_raw = "EK040T: Fluoride by alt method",
+           method_raw = "EK040P: Fluoride by alt method",
            value_raw = "2.5", value_num = 2.5, below_detection = FALSE, rl = 0.5),
     mk_row(source_ref = "r3", lab_sample_id = "XX1234567002", feature_raw = "T.S02",
            method_raw = "EK040P: Fluoride by PC Titrator",
