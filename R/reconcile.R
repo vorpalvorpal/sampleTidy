@@ -373,7 +373,7 @@
 #' those LIVE at `sample_date` (PLAN-15 E.2, alias-side bounds); only
 #' `auto_assign` aliases enter the set; a dangling alias (uuid_feature NA) is
 #' dropped (A44 registry-row guard); finally the surviving features are
-#' narrowed by the FEATURE's own `date_end`.
+#' narrowed by the FEATURE's own `date_start`/`date_end` (both inclusive).
 #'
 #' The two date filters are SEPARATE and BOTH apply (E.2). The feature-side one
 #' is UNCONDITIONAL here - deliberately not `.rc_narrow_live()`, which fires
@@ -412,8 +412,8 @@
 }
 
 #' Narrow a candidate tibble to features live at `sample_date`, UNCONDITIONALLY
-#' (PLAN-15 B.5/E.2): every candidate whose FEATURE has expired is dropped, even
-#' when that empties the set. A NA `sample_date` narrows nothing (E.6/R-15.21).
+#' (PLAN-15 B.5/E.2): every candidate whose FEATURE has expired, or has not yet
+#' started, is dropped, even when that empties the set. A NA `sample_date` narrows nothing (E.6/R-15.21).
 #' @keywords internal
 #' @noRd
 .rc_narrow_live_feature <- function(cand, sample_date, registry) {
@@ -421,14 +421,21 @@
   d <- .rc_as_date_bound(sample_date, what = "sample_date")
   if (is.na(d)) return(cand)
   feat <- registry$feature
-  de <- .rc_as_date_bound(feat$date_end[match(cand$uuid_feature, feat$uuid)],
-                          what = "feature$date_end")
-  if (is.null(de)) return(cand)          # no date_end column at all = unbounded
-  cand[is.na(de) | de >= d, , drop = FALSE]
+  idx <- match(cand$uuid_feature, feat$uuid)
+  de <- .rc_as_date_bound(feat$date_end[idx], what = "feature$date_end")
+  # 2026-10-21: the feature's `date_start` narrows too (INCLUSIVE), so a feature
+  # that does not exist yet on the row date cannot win (B.TS40 starts
+  # 2024-04-08 but won May 2023 rows). An absent column = unbounded, as for
+  # `date_end`.
+  ds <- .rc_as_date_bound(feat[["date_start"]][idx], what = "feature$date_start")
+  live <- rep(TRUE, nrow(cand))
+  if (!is.null(de)) live <- live & (is.na(de) | de >= d)
+  if (!is.null(ds)) live <- live & (is.na(ds) | ds <= d)
+  cand[live, , drop = FALSE]
 }
 
-#' Narrow a candidate tibble to features live at `sample_date` (date_end NA, or
-#' date_end >= sample_date), but only when that leaves >=1 candidate and there is
+#' Narrow a candidate tibble to features live at `sample_date` (date_end NA or
+#' >= sample_date, and date_start NA or <= sample_date), but only when that leaves >=1 candidate and there is
 #' a genuine ambiguity to break. Shared by the auto-hit and suggestion paths.
 #' @keywords internal
 #' @noRd
@@ -448,9 +455,16 @@
     # aborts on ANY POSIXct input, which would break that contract.
     de <- .rc_as_date_bound(feat$date_end[match(cand$uuid_feature, feat$uuid)],
                             what = "feature$date_end")
-    if (!is.null(de)) {
+    # 2026-10-21: `date_start` narrows too (inclusive), as in
+    # `.rc_narrow_live_feature()`; an absent column = unbounded.
+    ds <- .rc_as_date_bound(
+      feat[["date_start"]][match(cand$uuid_feature, feat$uuid)],
+      what = "feature$date_start")
+    if (!is.null(de) || !is.null(ds)) {
       d <- as.Date(sample_date, tz = "Australia/Sydney")
-      live <- is.na(de) | de >= d
+      live <- rep(TRUE, nrow(cand))
+      if (!is.null(de)) live <- live & (is.na(de) | de >= d)
+      if (!is.null(ds)) live <- live & (is.na(ds) | ds <= d)
       narrowed <- cand[live, , drop = FALSE]
       if (nrow(narrowed) >= 1) cand <- narrowed
     }
@@ -687,6 +701,14 @@
     # just above - a no-op on the current Date-typed columns, but the guard
     # against a future POSIXct bound turning this into a silent NA.
     if (!is.na(de) && as.Date(de, tz = "Australia/Sydney") <
+          as.Date(sample_date, tz = "Australia/Sydney")) {
+      return(NA_character_)
+    }
+    # 2026-10-21: nor onto a feature that does not exist yet (`date_start`
+    # after the row date; inclusive), as in `.rc_narrow_live_feature()`. An
+    # absent column = unbounded.
+    ds <- feat[["date_start"]][match(u, feat$uuid)]
+    if (!is.null(ds) && !is.na(ds) && as.Date(ds, tz = "Australia/Sydney") >
           as.Date(sample_date, tz = "Australia/Sydney")) {
       return(NA_character_)
     }
