@@ -29,10 +29,10 @@ receives one-way snapshots and backups.
 
 As of 2026-10-21, after the corpus import, 064 and 063:
 
-- analysis 111,582 · sample 21,983 · analyte 247 · lab_method 573 · project 760 (after 069, 2026-10-22)
+- analysis 111,642 · sample 21,983 · analyte 247 · lab_method 573 · project 760 (after 071, 2026-10-22)
 - feature 1,119 · feature_alias 2,891
 - asset 2,264 · ingest_file 1,547
-- highest marker 1070 (every migration in `dev/migrations/` is applied except PLAN-20's 060)
+- highest marker 1071 (every migration in `dev/migrations/` is applied except PLAN-20's 060)
 - review_queue: 6 open after the 2026-10-21 triage (065-067 closed 785 of 791; evidence and
   Robin's rulings in `scratchpad/2026-10-21-review/`): 2 CW-melaleuca items await a COC,
   the Dec 2024 Blaxland gas workbook (a copy of November) awaits ACIRL, MW09 SWL May 2023
