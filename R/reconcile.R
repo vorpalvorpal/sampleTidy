@@ -70,6 +70,25 @@
   out
 }
 
+#' Raw (unfolded) method CODE of a lab_method text (2026-10-22): the text
+#' before the first colon after `.rc_strip_method_code_prefix()`; colon-less
+#' text is its own code; NA stays NA.
+#' @keywords internal
+#' @noRd
+.rc_method_code_raw <- function(x) {
+  s <- .rc_strip_method_code_prefix(x)
+  ifelse(is.na(s), NA_character_, trimws(sub(":.*$", "", s)))
+}
+
+#' Folded method code used as the R-8.6 grouping key (2026-10-22). A method
+#' whose text is NA (or folds to nothing) falls back to `fallback` (its uuid).
+#' @keywords internal
+#' @noRd
+.rc_method_code <- function(x, fallback = NA_character_) {
+  k <- .rc_method_key(.rc_method_code_raw(x))
+  ifelse(is.na(k), as.character(fallback), k)
+}
+
 #' Fold a *feature* (sampling-point) name to its registry alias key (PLAN-15 A).
 #'
 #' Unlike `.rc_method_key`, this PRESERVES internal punctuation - it reproduces exactly
@@ -2376,9 +2395,15 @@
   if (n == 0) return(list(kept = rows, skipped = .rc_proto_skip()))
 
   feat_key <- ifelse(!is.na(rows$uuid_feature), rows$uuid_feature, rows$uuid_feature_alias)
-  key <- paste(feat_key, as.character(rows$sample_date), rows$uuid_analyte, sep = "||")
+  # 2026-10-22 (Robin): the method CODE joins the group key. Rows whose
+  # lab_methods have different codes (EG020F vs EG020T, EA015 vs EA016) are
+  # different measurements and never compete; same code still collapses.
+  lm_i <- match(rows$uuid_lab, registry$lab_method$uuid)
+  lm_code <- .rc_method_code(registry$lab_method$method, registry$lab_method$uuid)[lm_i]
+  lm_code[is.na(lm_i)] <- as.character(rows$uuid_lab[is.na(lm_i)])
+  key <- paste(feat_key, as.character(rows$sample_date), rows$uuid_analyte, lm_code, sep = "||")
   eligible <- !is.na(feat_key) & !is.na(rows$uuid_analyte)
-  rl_low <- registry$lab_method$rl_low[match(rows$uuid_lab, registry$lab_method$uuid)]
+  rl_low <- registry$lab_method$rl_low[lm_i]
 
   keep <- rep(TRUE, n)
   skipped_list <- list()

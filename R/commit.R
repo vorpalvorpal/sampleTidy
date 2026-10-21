@@ -1426,6 +1426,15 @@
         method = method_raw, organisation = org, rl_low = rl_low, rl_high = rl_high,
         units = units_raw, conversion_constant = NA_real_
       )
+      # 2026-10-22: fraction from the method code (EDxxxF/EGxxxF dissolved,
+      # ...T total), only when lab_method has the column (migration 070).
+      if ("fraction" %in% DBI::dbListFields(con, "lab_method")) {
+        code <- gsub("\\s+", "", .rc_method_code_raw(method_raw))
+        row$fraction <- if (is.na(code)) NA_character_
+          else if (grepl("^E[DG][0-9]{3}(\\([^)]*\\))?F$", code, ignore.case = TRUE)) "dissolved"
+          else if (grepl("^E[DG][0-9]{3}(\\([^)]*\\))?T$", code, ignore.case = TRUE)) "total"
+          else NA_character_
+      }
       db_append(con, "lab_method", row, actor = actor, reason = reason,
                 source_hash = clean$source_hash[[first_i]])
     }
