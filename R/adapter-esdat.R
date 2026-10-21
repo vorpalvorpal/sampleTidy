@@ -243,13 +243,20 @@ esdat_adapter <- function() {
   #     row to Prefix "<", Result N, exactly as a lab-written "<N" row, so it
   #     reads as below_detection / quantified FALSE downstream (as migration
   #     066 stored them). EQL, units and Comments are left untouched. Only
-  #     applied when the lab gave no Prefix of its own.
+  #     applied when the lab gave no Prefix of its own AND (2026-10-22 ruling)
+  #     the Result is a placeholder: equal to the EQL, or 1 when EQL is
+  #     missing. A real value with a contradictory comment is left as is.
   #   * "NR" (not reported, e.g. HPC 36C) carries no value at all; the row is
   #     dropped below and recorded in report$skipped, never committed as 1.
   comments_trim <- trimws(df$Comments)
   tilde_re <- "^~<\\s*([0-9]+(\\.[0-9]+)?|\\.[0-9]+)$"
+  result_num <- suppressWarnings(as.numeric(result))
+  eql_num <- suppressWarnings(as.numeric(df$EQL))
+  placeholder <- !is.na(result_num) & ifelse(
+    is.na(eql_num), result_num == 1, result_num == eql_num
+  )
   tilde_lt <- !is.na(comments_trim) & grepl(tilde_re, comments_trim) &
-    trimws(prefix) == ""
+    trimws(prefix) == "" & placeholder
   if (any(tilde_lt)) {
     prefix[tilde_lt] <- "<"
     result[tilde_lt] <- sub(tilde_re, "\\1", comments_trim[tilde_lt])
