@@ -223,7 +223,8 @@ esdat_adapter <- function() {
   )
 
   analyte_raw <- normalise_lab_text(df$OriginalChemName)
-  method_raw <- normalise_lab_text(df$Method_Name)
+  # 2026-10-22: newer exports prefix the code ("ED093T - ED093T: Name"); strip it.
+  method_raw <- .rc_strip_method_code_prefix(normalise_lab_text(df$Method_Name))
   units_raw <- normalise_lab_text(df$Result_Unit)
   # C5 (2026-10-20): ESdat carries "-" as the unit for SAR (unitless); map an
   # exact "-" to "1", mirroring A87 in .st_acirl_repair_units.
