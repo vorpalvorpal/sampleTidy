@@ -2439,13 +2439,21 @@
 #' SECOND call on `uuid_feature_gated` (the live structural hit the B.4 gate
 #' suppressed) and accepts it only when the values are equal - see
 #' `.rc_three_way()`.
+#'
+#' 2026-10-21: `sample` is the row's `sample_override` (`release_review(
+#' overrides = list(sample = ...))`). A named sample narrows the candidates to
+#' that sample's analyses, so a release onto the second of two samples at one
+#' point-day is not compared with the first's; `"new"` means the reviewer chose
+#' a fresh sample, which holds nothing yet, so there is nothing to compare.
 #' @return a one-row data frame, or `NULL` if no candidate.
 #' @keywords internal
 #' @noRd
 .rc_find_existing <- function(con, resolved_feature, uuid_feature_alias, feature_pending,
                               sample_date, sample_datetime, uuid_lab,
-                              incoming = NULL, work_orders = character(0)) {
+                              incoming = NULL, work_orders = character(0),
+                              sample = NA_character_) {
   if (is.na(uuid_lab)) return(NULL)   # first-sighting dangling method: nothing committed yet
+  if (identical(sample, "new")) return(NULL)   # a release onto a new sample: nothing there yet
 
   if (isTRUE(feature_pending)) {
     if (is.na(uuid_feature_alias)) return(NULL)   # genuine first sighting
@@ -2466,10 +2474,12 @@
        JOIN analysis a ON a.uuid_sample = s.uuid
        LEFT JOIN project p ON p.uuid = s.uuid_project
        JOIN feature_alias fa ON fa.uuid = s.uuid_feature_alias
-       WHERE ', feat_clause, ' AND ', .ct_sydney_day_sql("s.date"), ' = ? AND a.uuid_lab = ?
+       WHERE ', feat_clause, ' AND ', .ct_sydney_day_sql("s.date"), ' = ? AND a.uuid_lab = ?',
+      if (is.na(sample)) '' else ' AND s.uuid = ?', '
        ORDER BY a.uuid'
     ),
-    params = list(feat_param, as.character(sample_date), uuid_lab)
+    params = c(list(feat_param, as.character(sample_date), uuid_lab),
+               if (is.na(sample)) list() else list(sample))
   )
   if (nrow(cand) == 0) return(NULL)
 
@@ -3013,6 +3023,7 @@
   own_hashes <- unique(c(event$results$source_hash, event$files$hash))
   own_hashes <- own_hashes[!is.na(own_hashes)]
 
+  override <- if ("sample_override" %in% names(rows)) rows$sample_override else rep(NA_character_, n)
   keep <- rep(TRUE, n)
   supersedes <- rep(NA_character_, n)
   skipped_list <- list()
@@ -3029,12 +3040,14 @@
     inc_chr <- rows$value_chr[[i]]
     inc_quant <- rows$quantified[[i]]
 
+    # A release that chose the row's sample compares only against that sample.
     existing <- .rc_find_existing(
       con, rows$uuid_feature[[i]], rows$uuid_feature_alias[[i]], rows$feature_pending[[i]],
       rows$sample_date[[i]], rows$sample_datetime[[i]], rows$uuid_lab[[i]],
       incoming = list(value = inc_value, value_chr = inc_chr, quantified = inc_quant,
                       value_raw = rows$value_raw[[i]]),
-      work_orders = .rc_row_work_orders(event, rows, i)
+      work_orders = .rc_row_work_orders(event, rows, i),
+      sample = override[[i]]
     )
     # 2026-10-19 Bug C (PLAN-15 B.4): a feature-pending row whose structural
     # parse the B.4 gate suppressed ALSO looks on that feature (live at its
@@ -3052,7 +3065,8 @@
         rows$sample_date[[i]], rows$sample_datetime[[i]], rows$uuid_lab[[i]],
         incoming = list(value = inc_value, value_chr = inc_chr, quantified = inc_quant,
                         value_raw = rows$value_raw[[i]]),
-        work_orders = .rc_row_work_orders(event, rows, i)
+        work_orders = .rc_row_work_orders(event, rows, i),
+        sample = override[[i]]
       )
       if (!is.null(alt) &&
           .rc_values_equal(inc_value, inc_chr, inc_quant, alt$value[[1]], alt$value_chr[[1]],
