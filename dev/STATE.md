@@ -32,9 +32,11 @@ As of 2026-10-21, after the corpus import, 064 and 063:
 - analysis 110,776 · sample 22,013 · analyte 247 · lab_method 570 · project 760
 - feature 1,117 · feature_alias 2,884
 - asset 2,264 · ingest_file 1,547
-- highest marker 1064 (every migration in `dev/migrations/` is applied except PLAN-20's 060)
-- review_queue: 791 open (770 new from the corpus run; see `summary.txt` in
-  `scratchpad/2026-10-21-corpus-live/`)
+- highest marker 1067 (every migration in `dev/migrations/` is applied except PLAN-20's 060)
+- review_queue: 6 open after the 2026-10-21 triage (065-067 closed 785 of 791; evidence and
+  Robin's rulings in `scratchpad/2026-10-21-review/`): 2 CW-melaleuca items await a COC,
+  the Dec 2024 Blaxland gas workbook (a copy of November) awaits ACIRL, MW09 SWL May 2023
+  has no field sheet, and 2 unknown_feature items
 
 Suite: **1,484 tests, 0 failing, 11 skipped**. Gated corpus tests are skipped unless
 `SAMPLETIDY_*_CORPUS` is set.
