@@ -908,8 +908,16 @@ import_report <- function(db = st_config("live_db"), report_dir, now = Sys.time(
   m
 }
 
+.inbox_is_note <- function(rv) {
+  (!is.na(rv$subkind) & rv$subkind == "self_precedence_note") |
+    (!is.na(rv$kind) & rv$kind == "self_precedence_note")
+}
+
 .inbox_review_groups <- function(rv, now) {
-  rv <- rv[rv$kind != "self_precedence_note" | is.na(rv$kind), , drop = FALSE]
+  # Self-precedence notes are kind 'unknown_feature', subkind
+  # 'self_precedence_note' (2026-10-21, FIXES item E); the old bare-kind shape
+  # is still accepted, harmlessly.
+  rv <- rv[!.inbox_is_note(rv), , drop = FALSE]
   if (nrow(rv) == 0) return(data.frame())
   key <- paste(rv$kind, ifelse(is.na(rv$subkind), "", rv$subkind),
                ifelse(is.na(rv$work_order), "", rv$work_order), sep = "\r")
@@ -964,7 +972,7 @@ import_status <- function(db = st_config("live_db"), input_dir, report_dir,
   rv$created_at <- as.numeric(rv$created_at)
   n_open <- nrow(rv)
   groups <- .inbox_review_groups(rv, now)
-  n_notes <- sum(rv$kind == "self_precedence_note", na.rm = TRUE)
+  n_notes <- sum(.inbox_is_note(rv))
 
   scan <- .inbox_scan(input_dir, now, settle_minutes)
   waiting <- character(0)
