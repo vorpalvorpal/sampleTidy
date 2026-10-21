@@ -428,6 +428,86 @@ test_that("R-7.3: an engineered sample_datetime_raw mismatch flags exactly one r
   expect_setequal(payload$datetime_candidates, c("24 May 2025 11:45", "25 May 2025 09:00"))
 })
 
+# ---- R-7.3: a timed candidate beats a date-only one on the SAME day -------
+#
+# Bug (scratchpad/2026-10-21-review/dtloss/, ES2110225): one event holds the
+# same ALS lab sample from a date-only XTAB file ("11/02/2025") and a timed
+# ESdat Sample2e ("11 Feb 2025 15:00"). The join filled sample_datetime_raw
+# first-wins, so when the XTAB sorted first (filename order) the clock time
+# was lost - and the date-only conflict check saw no mismatch, so nothing
+# flagged it. When the candidates AGREE on the date, the timed one must win
+# regardless of file order. When they DISAGREE on the date, today's
+# behaviour stands: first wins and the row is flagged.
+
+dt_event <- function(order = c("xtab", "esdat"), xtab_when = "11/02/2025",
+                     esdat_when = "11 Feb 2025 15:00") {
+  entries <- list(
+    xtab = mk_parsed_entry(
+      results = mk_result(source_hash = "h-xtab", adapter = "als_xtab/1",
+                          lab_sample_id = "XX1234567001"),
+      samples = mk_sample(source_hash = "h-xtab", adapter = "als_xtab/1",
+                          lab_sample_id = "XX1234567001", feature_raw = "T.S01",
+                          sample_datetime_raw = xtab_when),
+      meta = list(work_order_guess = "XX1234567")
+    ),
+    esdat = mk_parsed_entry(
+      samples = mk_sample(source_hash = "h-samp", adapter = "esdat/1",
+                          lab_sample_id = "XX1234567001", feature_raw = "T.S01",
+                          sample_datetime_raw = esdat_when),
+      meta = list(work_order_guess = "XX1234567")
+    ),
+    chem = mk_parsed_entry(
+      results = mk_result(source_hash = "h-chem", adapter = "esdat/1",
+                          lab_sample_id = "XX1234567001", feature_raw = NA_character_),
+      meta = list(work_order_guess = "XX1234567")
+    )
+  )
+  parsed <- entries[c(order, "chem")]
+  names(parsed) <- vapply(parsed, function(e) {
+    h <- c(e$ir$results$source_hash, e$ir$samples$source_hash)
+    h[[1]]
+  }, character(1))
+  out <- assemble_events(parsed)
+  expect_length(out$events, 1)
+  event <- out$events[[1]]
+  expect_valid_event(event)
+  event
+}
+
+test_that("R-7.3: XTAB date-only sorted FIRST, ESdat timed second, same day -> results carry the timed value, unflagged", {
+  event <- dt_event(c("xtab", "esdat"))
+  expect_equal(nrow(event$results), 1)
+  expect_identical(event$results$sample_datetime_raw[[1]], "11 Feb 2025 15:00")
+  expect_false(isTRUE(event$results$needs_review[[1]]))
+  # the real ES2110225 Sample2e renders its clock "dd-Mon-yy HH:MM"
+  event2 <- dt_event(c("xtab", "esdat"), esdat_when = "11-Feb-25 15:00")
+  expect_identical(event2$results$sample_datetime_raw[[1]], "11-Feb-25 15:00")
+  expect_false(isTRUE(event2$results$needs_review[[1]]))
+})
+
+test_that("R-7.3: ESdat timed sorted FIRST, XTAB date-only second -> results carry the timed value (regression)", {
+  event <- dt_event(c("esdat", "xtab"))
+  expect_equal(nrow(event$results), 1)
+  expect_identical(event$results$sample_datetime_raw[[1]], "11 Feb 2025 15:00")
+  expect_false(isTRUE(event$results$needs_review[[1]]))
+})
+
+test_that("R-7.3: date-only and timed candidates on DIFFERENT days -> first wins and the row is flagged sample_datetime_mismatch (unchanged)", {
+  first_xtab <- dt_event(c("xtab", "esdat"), xtab_when = "12/02/2025")
+  r <- first_xtab$results
+  expect_identical(r$sample_datetime_raw[[1]], "12/02/2025")
+  expect_true(isTRUE(r$needs_review[[1]]))
+  p <- r$review_payload[[1]]
+  expect_identical(p$subkind, "sample_datetime_mismatch")
+  expect_setequal(p$datetime_candidates, c("12/02/2025", "11 Feb 2025 15:00"))
+
+  first_esdat <- dt_event(c("esdat", "xtab"), xtab_when = "12/02/2025")
+  r <- first_esdat$results
+  expect_identical(r$sample_datetime_raw[[1]], "11 Feb 2025 15:00")
+  expect_true(isTRUE(r$needs_review[[1]]))
+  expect_identical(r$review_payload[[1]]$subkind, "sample_datetime_mismatch")
+})
+
 # ---- R-7.4: multi-work-order ESdat partitioning -------------------------
 
 test_that("R-7.4: multi-work-order ESdat file contributes only its own work order's rows to the event", {
