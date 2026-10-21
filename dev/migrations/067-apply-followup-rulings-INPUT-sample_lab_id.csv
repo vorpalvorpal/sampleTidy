@@ -1,0 +1,4 @@
+"op","work_order","lab_id","uuid_sample","client_id","source_hash","gid","item","reason","row_sha1"
+"update","ES2320105","ES2320105-003","582698fe-bc1f-4059-a848-05fdd5bec3e2",,,"d14-ts39","14","ES2320105-003 is the B.TS39 bottle: lab id moved from B.S05 sample 7217d9e4 to B.TS39 sample 582698fe","bdd21c81ce25795ecc7fee75171b285488a8764a"
+"insert","ES2245792","ES2245792-010","3676bc68-7519-417a-b29d-0a3365b7dd5b","B.MW07","50d8629ebc247c1f70c8fddd59a2b5d6","d22-bores","22","ALS ES2245792-010 (bottle 'B.MW07', taken from the bore later identified as MW09) is this sample",
+"insert","ES2245792","ES2245792-012","1ef8ef05-c0b7-4105-9f63-ef788e3850e4","B.MW09","50d8629ebc247c1f70c8fddd59a2b5d6","d22-bores","22","ALS ES2245792-012 (bottle 'B.MW09', taken from the bore later identified as MW07) is this sample",
