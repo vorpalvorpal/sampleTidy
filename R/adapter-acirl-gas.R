@@ -126,6 +126,16 @@ acirl_gas_xlsx_adapter <- function() {
   d
 }
 
+# ACIRL template slots: rows the ACIRL gas template prints (CH4 0) at a site
+# that has no such probe. Robin, migrations 032 and 034 (dev/MIGRATIONS.md rows
+# 1032/1034): "Are they existing features in the database with known
+# locations? If not, we don't want them." Site-qualified, because the same
+# NUMBERS are real probes at the other site (K.G201; B.G365/B.G366 on the 2023
+# Blaxland grid). A numeric reading at a slot is skipped as `template_slot`; a
+# text-coded slot cell keeps its text reason (e.g. `does not exist` ->
+# point_absent).
+.st_gas_template_slots <- c("B.G201", "K.G365", "K.G366")
+
 .st_gas_text_reason <- function(v) {
   k <- tolower(stringr::str_squish(v))
   if (k == "ns") return("no_sample")
@@ -401,6 +411,10 @@ acirl_gas_xlsx_adapter <- function() {
         warnings_vec <- c(warnings_vec, sprintf("%s: unrecognised CH4 cell text %s at %s; skipped.",
                                                 fm$filename, dQuote(r$raw, FALSE), ref))
       }
+      next
+    }
+    if (r$feature %in% .st_gas_template_slots) {
+      skipped[[length(skipped) + 1L]] <- tibble::tibble(source_ref = ref, reason = "template_slot")
       next
     }
     two_dp <- abs(num - round(num, 2)) < 1e-9
