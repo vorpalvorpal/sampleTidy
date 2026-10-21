@@ -15,11 +15,14 @@
 # is never changed.
 #
 #   * Only a plain decimal numeral `^-?[0-9]+([.][0-9]+)?$` (after trimws)
-#     yields d. Scientific notation, float-noise strings, "<"/">" and
-#     anything else fall back to plain A14.
-#   * d comes from `value_raw`, NEVER from `value_num`: readxl's text of a
-#     numeric cell can be float noise ("94.73999999999999"), and that
-#     yields a large d, so the rule does not fire. Accepted.
+#     yields d. Scientific notation, "<"/">" and anything else fall back to
+#     plain A14.
+#   * d comes from `value_raw`. AMENDED 2026-10-21 (FIXES item C, value
+#     -conflict G08): readxl's text of a numeric cell can be float noise
+#     ("7.0999999999999996", "94.73999999999999"). That text is read at the
+#     number it denotes ("7.1", d = 1; "94.74", d = 2), so A92 fires for
+#     .xls workbooks too. Previously it yielded a large d and the rule did
+#     not fire; that was accepted then and is now reversed.
 #   * Less precise stored against more precise incoming is still a
 #     conflict, because rounding a 1-dp value to 2 dp leaves it unchanged.
 #   * [ASSUMED, main agent to confirm] Unit conversion and
@@ -278,21 +281,57 @@ test_that("A92: a quantified incoming value against a stored NON-DETECT is still
   expect_value_conflict(out)
 })
 
-test_that("A92: d comes from value_raw, never value_num - a float-noise raw value keeps today's behaviour", {
-  # readxl's text of a numeric cell (col_types = "text") can be float noise:
-  # measured, 94.74 reads back as "94.73999999999999". d is then 14, so the
-  # rule does not fire. Deriving d from format(value_num) instead ("94.74",
-  # d = 2) would wrongly round-match 94.736.
-  expect_value_conflict(ptm_one(94.736, "94.73999999999999", value = 94.74,
-                                lab = "lm-forp", analyte = "Field ORP", units = "mV"))
-  expect_value_conflict(ptm_one(6.59, "6.6000000000000005", value = 6.6))
-  # The spec's example: "0.0299999999999999" is d = 16.
-  expect_value_conflict(ptm_one(0.0312, "0.0299999999999999", value = 0.03,
-                                lab = "lm-forp", analyte = "Field ORP", units = "mV"))
-  # Today's A14 equality still holds for a float-noise raw value equal to the
-  # stored one.
-  expect_already_present(ptm_one(94.74, "94.73999999999999", value = 94.74,
-                                 lab = "lm-forp", analyte = "Field ORP", units = "mV"))
+# ---- float-noise value_raw (FIXES 2026-10-21 item C; value-conflict slice G08) ----
+#
+# SUPERSEDES the earlier "float noise keeps today's behaviour" pin. readxl's
+# text of a numeric cell (col_types = "text") is float text: an .xls cell
+# holding 7.1 reads back as "7.0999999999999996" (%.17g), 94.74 as
+# "94.73999999999999" (%.16g). Taking d from that text (d = 16) meant A92
+# never fired, and re-importing the Nov 2022 ACIRL .xls reports raised eight
+# false value_conflicts (stored pH 7.09 vs the report's 7.1, 6.59 vs 6.6, ...).
+# The fix: float noise is read at the number it denotes ("7.1", d = 1), so the
+# stored value is compared at that precision. A genuinely different value
+# still conflicts.
+
+test_that("A92 float noise: the eight G08 pairs (stored 2-dp pH vs a 1-dp .xls cell read as %.17g text) -> already_present", {
+  g08 <- list(c(5.64, 5.6), c(5.86, 5.9), c(6.59, 6.6), c(7.09, 7.1),
+              c(6.92, 6.9), c(6.32, 6.3), c(6.56, 6.6), c(7.36, 7.4))
+  for (p in g08) {
+    raw <- sprintf("%.17g", p[[2]])
+    expect_true(grepl("^[0-9][.][0-9]{15,}$", raw))   # it IS float text
+    expect_already_present(ptm_one(p[[1]], raw, value = p[[2]]))
+  }
+})
+
+test_that("A92 float noise: \"7.0999999999999996\" against stored 7.1 (= 7.10) -> already_present", {
+  expect_already_present(ptm_one(7.1, "7.0999999999999996", value = 7.1))
+  expect_already_present(ptm_one(7.10, "7.0999999999999996", value = 7.0999999999999996))
+})
+
+test_that("A92 float noise: a genuinely different stored value still conflicts", {
+  # 7.2 is not 7.1 at any precision.
+  expect_value_conflict(ptm_one(7.2, "7.0999999999999996", value = 7.1))
+  # 7.16 rounds to 7.2, not the cell's 7.1.
+  expect_value_conflict(ptm_one(7.16, "7.0999999999999996", value = 7.1))
+  # A less precise stored value against a more precise cell is still a
+  # conflict: cell 6.59 (float text) vs stored 6.6.
+  expect_value_conflict(ptm_one(6.6, sprintf("%.17g", 6.59), value = 6.59))
+})
+
+test_that("A92 float noise: the cell's own precision is used (94.74 read as \"94.73999999999999\" round-matches stored 94.736, not 94.7)", {
+  orp <- function(stored) {
+    ptm_one(stored, "94.73999999999999", value = 94.74,
+            lab = "lm-forp", analyte = "Field ORP", units = "mV")
+  }
+  expect_already_present(orp(94.736))
+  expect_already_present(orp(94.74))
+  expect_value_conflict(orp(94.7))
+  expect_value_conflict(orp(94.75))
+})
+
+test_that("A92: an ordinary many-digit numeral is not float noise (\"6.5912\" keeps d = 4)", {
+  expect_value_conflict(ptm_one(6.59, "6.5912", value = 6.5912))
+  expect_already_present(ptm_one(6.59124, "6.5912", value = 6.5912))
 })
 
 test_that("A92: scientific notation is not a plain decimal numeral -> today's behaviour", {

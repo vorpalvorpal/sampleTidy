@@ -2682,6 +2682,23 @@
   raw_num <- as.numeric(raw)
   if (is.na(raw_num) || raw_num == 0) return(FALSE)
   d <- if (grepl(".", raw, fixed = TRUE)) nchar(sub("^[^.]*[.]", "", raw)) else 0L
+  # 2026-10-21 (FIXES item C, value-conflict G08): readxl's text of a numeric
+  # cell is float text - an .xls cell holding 7.1 reads as "7.0999999999999996"
+  # (%.17g), 94.74 as "94.73999999999999" (%.16g) - and its digit count (d = 16)
+  # meant A92 never fired, so re-imported .xls reports raised false
+  # value_conflicts. A numeral with more than 15 significant digits cannot be a
+  # lab's printed value, so it is read at the shortest decimal that round-trips
+  # to the same double ("7.1", d = 1). Applies to every value_raw, not just
+  # .xls (main-session ruling). A numeral of 15 or fewer significant digits
+  # keeps its own count, so "6.5912" stays d = 4 and "6.50" stays d = 2.
+  if (nchar(sub("^0+", "", gsub("[^0-9]", "", raw))) > 15L) {
+    for (dd in 0:15) {
+      if (as.numeric(sprintf("%.*f", dd, raw_num)) == raw_num) {
+        d <- dd
+        break
+      }
+    }
+  }
   k <- inc_value / raw_num
   if (!is.finite(k) || k <= 0) return(FALSE)
   p <- round(log10(k))
