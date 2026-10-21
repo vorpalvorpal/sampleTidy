@@ -696,11 +696,15 @@ review_fixture <- function(now) {
     uuid = sprintf("rq-%02d", 1:11),
     created_at = as.POSIXct(c(h(200), h(150), h(2), h(3), h(30), h(1), h(400),
                               h(100), h(90), h(80), h(1)), origin = "1970-01-01", tz = "UTC"),
+    # A self-precedence note is stored as kind 'unknown_feature' with SUBKIND
+    # 'self_precedence_note' (.rc_self_precedence_notes() in R/reconcile.R; the
+    # live queue's rows have that shape), never kind = 'self_precedence_note'.
     kind = c("date_conflict", "date_conflict", "work_order_reingest", "unknown_feature",
              "unknown_feature", "unknown_feature", "unknown_feature",
-             "self_precedence_note", "self_precedence_note", "self_precedence_note",
+             "unknown_feature", "unknown_feature", "unknown_feature",
              "unknown_feature"),
-    subkind = c("a77", "a77", "blocked", NA, NA, NA, NA, NA, NA, NA, NA),
+    subkind = c("a77", "a77", "blocked", NA, NA, NA, NA,
+                "self_precedence_note", "self_precedence_note", "self_precedence_note", NA),
     work_order = c("2400-1111-01", "2400-1111-01", "ES1111111", "ES2222222", "ES2222222",
                    "ES3333333", "ES4444444", "ES5555551", "ES5555552", "ES5555553", "ES9999999"),
     status = c(rep("open", 10), "resolved"),
@@ -809,6 +813,47 @@ test_that("import_status(): writes .import-status.json with the same content as 
   expect_no_error(jsonlite::fromJSON(txt))
   for (wo in c("2400-1111-01", "ES1111111", "ES2222222")) expect_match(txt, wo, fixed = TRUE)
   expect_false(grepl("ES9999999", txt, fixed = TRUE))
+})
+
+test_that("import_status(): self-precedence notes (kind unknown_feature, subkind self_precedence_note) are counted in non_blocking_notes, not grouped", {
+  s <- inbox_setup()
+  now <- as.POSIXct("2026-10-18 14:30:00", tz = "UTC")
+  insert_review_items(s$db, review_fixture(now))
+  quiet_run(import_status(db = s$db, input_dir = s$input_dir, report_dir = s$report_dir, now = now))
+  js <- jsonlite::fromJSON(file.path(s$report_dir, ".import-status.json"))
+
+  # The three open notes are counted, and still count as open review items.
+  expect_identical(as.integer(js$non_blocking_notes), 3L)
+  expect_identical(as.integer(js$review_items_open), 10L)
+
+  # None of them is an import-status group.
+  nr <- as.data.frame(js$needs_review)
+  expect_gt(nrow(nr), 0)
+  expect_false(any(nr$subkind %in% "self_precedence_note"))
+  expect_false(any(grepl("^ES555555", nr$work_order)))
+  # The ordinary unknown_feature items (no subkind) are still grouped.
+  uf <- nr[nr$kind == "unknown_feature", , drop = FALSE]
+  expect_setequal(uf$work_order, c("ES2222222", "ES3333333", "ES4444444"))
+  expect_true(all(is.na(uf$subkind)))
+  expect_identical(as.integer(sum(uf$n)), 4L)
+})
+
+test_that(".inbox_review_groups(): drops rows whose subkind is self_precedence_note, keeps other unknown_feature rows", {
+  now <- as.POSIXct("2026-10-18 14:30:00", tz = "UTC")
+  rv <- data.frame(
+    kind = c("unknown_feature", "unknown_feature", "unknown_feature"),
+    subkind = c("self_precedence_note", NA, "self_precedence_note"),
+    work_order = c("ES5555551", "ES2222222", NA),
+    created_at = as.numeric(now) - c(3600, 7200, 10800),
+    stringsAsFactors = FALSE
+  )
+  g <- .inbox_review_groups(rv, now)
+  expect_identical(nrow(g), 1L)
+  expect_identical(g$work_order, "ES2222222")
+  expect_true(is.na(g$subkind))
+
+  # Only notes -> no groups at all.
+  expect_identical(NROW(.inbox_review_groups(rv[c(1, 3), , drop = FALSE], now)), 0L)
 })
 
 test_that("import_status(): rewriting with nothing changed gives an identical file", {
