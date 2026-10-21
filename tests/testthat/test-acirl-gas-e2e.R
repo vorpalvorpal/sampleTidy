@@ -333,3 +333,79 @@ test_that("14: G368 on a landfill sheet lands on the B.G368 building feature; G1
   expect_true(abs(a179$value - 1e-4) < 1e-12)
   expect_false(any(gas_reviews(con)$kind == "unknown_feature"))
 })
+
+# ==============================================================================
+# 16 - template slots B.G201 / K.G365 / K.G366 never reach the DB (032/034)
+# ==============================================================================
+#
+# Robin (migrations 032/034): "If not [existing located features], we don't
+# want them." Before the fix every import of such a workbook minted a pending
+# alias, a dangling sample with a CH4 0 reading, and an unknown_feature review
+# item for each slot (034 deleted the ones the 2026-10-17 import re-minted).
+
+gas_counts <- function(con) {
+  c(sample = DBI::dbGetQuery(con, "SELECT count(*) n FROM \"sample\"")$n,
+    analysis = DBI::dbGetQuery(con, "SELECT count(*) n FROM analysis")$n,
+    alias = DBI::dbGetQuery(con, "SELECT count(*) n FROM feature_alias")$n,
+    review = DBI::dbGetQuery(con, "SELECT count(*) n FROM review_queue")$n)
+}
+
+gas_slot_traces <- function(con, keys) {
+  in_list <- paste(sprintf("'%s'", keys), collapse = ", ")
+  list(
+    alias = DBI::dbGetQuery(con, sprintf(
+      "SELECT uuid, kind FROM feature_alias WHERE alias_key IN (%s)", in_list)),
+    sample = DBI::dbGetQuery(con, sprintf(
+      "SELECT s.uuid FROM \"sample\" s JOIN feature_alias fa ON fa.uuid = s.uuid_feature_alias
+        WHERE fa.alias_key IN (%s)", in_list)),
+    review = DBI::dbGetQuery(con, "SELECT kind, payload FROM review_queue")
+  )
+}
+
+test_that("16: a Blaxland workbook carrying a numeric B.G201 commits exactly what the same workbook without it does - no pending alias, sample or review item", {
+  l1_ctl <- list(list(G182 = 0, G183 = 0.03))
+  l1_slot <- list(list(G182 = 0, G183 = 0.03, G201 = 0))
+  run <- function(l1, env = parent.frame()) {
+    db <- gas_db_setup(env = env)
+    gas_adapter()
+    input <- withr::local_tempdir(.local_envir = env)
+    build_gas_blaxland_2025(input, report_no = "2400-9901-07-01", sample_date = gas_sample_date,
+                            l1 = l1, l2 = list(list(G368 = 0)), l2_rows = 8L,
+                            l3 = list(list(G382 = 0)))
+    ingest_dir(input, db = db)
+    db
+  }
+  ctl <- gas_ro(run(l1_ctl))
+  db <- run(l1_slot)
+  con <- gas_ro(db)
+
+  expect_identical(gas_counts(con), gas_counts(ctl))
+  tr <- gas_slot_traces(con, "b.g201")
+  expect_equal(nrow(tr$alias), 0)
+  expect_equal(nrow(tr$sample), 0)
+  expect_false(any(grepl("G201", tr$review$payload, fixed = TRUE)))
+  # the real points in the same file commit as usual
+  expect_equal(nrow(gas_analyses_at(con, "f-g182")), 1)
+  expect_equal(nrow(gas_analyses_at(con, "f-g183")), 1)
+  expect_equal(nrow(gas_analyses_at(con, "f-g368")), 1)
+})
+
+test_that("16: a Katoomba workbook mints no pending alias or sample for K.G365 / K.G366, while its genuinely unregistered probes still go pending", {
+  db <- gas_db_setup()          # registers Blaxland probes only: every K. label is unknown here
+  gas_adapter()
+  input <- withr::local_tempdir()
+  build_gas_katoomba(input)
+  ingest_dir(input, db = db)
+  con <- gas_ro(db)
+
+  tr <- gas_slot_traces(con, c("k.g365", "k.g366"))
+  expect_equal(nrow(tr$alias), 0)
+  expect_equal(nrow(tr$sample), 0)
+  expect_false(any(grepl("G365|G366", tr$review$payload)))
+  # reachability: K.G362, printed in the same column right above the slots,
+  # is unknown to this DB and DOES go pending - so the absence above is the skip
+  near <- gas_slot_traces(con, "k.g362")
+  expect_equal(nrow(near$alias), 1)
+  expect_identical(near$alias$kind, "pending")
+  expect_equal(nrow(near$sample), 1)
+})

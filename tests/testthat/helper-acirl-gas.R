@@ -360,7 +360,9 @@ build_gas_blaxland_2021 <- function(dir, report_no = "24009902 - 05 Amended",
 
 # ---- family: Katoomba ------------------------------------------------------------
 #
-#   #1  11 numeric + `NS ` (G263, trailing space); #2  12 numeric (incl. G365/366)
+#   #1  11 numeric + `NS ` (G263, trailing space); #2  12 numeric (incl. G365/366,
+#       which are ACIRL TEMPLATE SLOTS - no such probe at Katoomba; migrations
+#       032/034: the adapter skips them, so they yield no result)
 #   Building 1: 4 (`Air conditioner` in two DIFFERENT buildings - no suffix)
 #   Building 2: 5 (`Main Recycle area   ...(Drop Off)` whitespace run;
 #                  `Re-use Center / Power point back wall` repeats -> #2)
@@ -368,6 +370,18 @@ build_gas_blaxland_2021 <- function(dir, report_no = "24009902 - 05 Amended",
 #   Biofilter grids 12 (North Corner R1C2 = 0.01, R2C3 = 0.02;
 #                      Front of Buildings R2C1 = 0.03) + bores MP1-MP4 (MP3 = 0.01)
 gas_k_ch4_header <- "CH4 Reading               % v/v"
+gas_k_l1 <- function() list(
+  list(G186 = 0, G187 = 0.01, G188 = 0),
+  list(G211 = 0, G212 = 0, G213 = 0),
+  list(G236 = 0, G237 = 0, G238 = 0),
+  list(G261 = 0, G262 = 0, G263 = "NS ")
+)
+gas_k_l2 <- function() list(
+  list(G287 = 0, G288 = 0, G289 = 0),
+  list(G312 = 0, G313 = 0, G314 = 0),
+  list(G337 = 0, G338 = 0, G339 = 0),
+  list(G362 = 0, G365 = 0, G366 = 0)
+)
 gas_k_titles <- c("ALS Coal Division", "BMCC Katoomba Recycling Facility Gas Sampling")
 
 build_gas_katoomba <- function(dir, report_no = "2400-9903-12-01",
@@ -376,7 +390,8 @@ build_gas_katoomba <- function(dir, report_no = "2400-9903-12-01",
                                note = NULL, grid_labels = TRUE,
                                front_title = "BMCC Katoomba Recycling Facility Gas Sampling",
                                front_address = "1 Test Rd, Katoomba NSW 2780",
-                               sheet_titles = gas_k_titles) {
+                               sheet_titles = gas_k_titles,
+                               l1 = gas_k_l1(), l2 = gas_k_l2()) {
   wb <- openxlsx::createWorkbook()
   gx_front_katoomba(wb, report_no, sample_date, note = note, title = front_title,
                     address = front_address)
@@ -386,18 +401,8 @@ build_gas_katoomba <- function(dir, report_no = "2400-9903-12-01",
                       titles = c(sheet_titles, "MONTHLY GAS MONITORING"),
                       title_rows = c(1, 2, 4), ch4_header = gas_k_ch4_header)
   }
-  kl("Gas Landfil #1", list(
-    list(G186 = 0, G187 = 0.01, G188 = 0),
-    list(G211 = 0, G212 = 0, G213 = 0),
-    list(G236 = 0, G237 = 0, G238 = 0),
-    list(G261 = 0, G262 = 0, G263 = "NS ")
-  ))
-  kl("Gas Landfil #2 ", list(
-    list(G287 = 0, G288 = 0, G289 = 0),
-    list(G312 = 0, G313 = 0, G314 = 0),
-    list(G337 = 0, G338 = 0, G339 = 0),
-    list(G362 = 0, G365 = 0, G366 = 0)
-  ))
+  kl("Gas Landfil #1", l1)
+  kl("Gas Landfil #2 ", l2)
   kb <- function(name, entries) {
     gx_building_sheet(wb, name, entries, header_row = 7L, first_col = 2L, rn_row = 5L,
                       report_no = report_no, titles = c(sheet_titles, "MONTHLY GAS MONITORING"),
@@ -457,7 +462,7 @@ gas_expected_b2025_monthly <- function() {
 
 gas_expected_katoomba <- function() {
   c(paste0("K.G", c(186:188, 211:213, 236:238, 261, 262)),
-    paste0("K.G", c(287:289, 312:314, 337:339, 362, 365, 366)),
+    paste0("K.G", c(287:289, 312:314, 337:339, 362)),   # G365/G366: template slots, skipped
     "K.Office - Window near desk", "K.Office - Air conditioner",
     "K.Meal Room - Air conditioner", "K.Meal Room - Power point (Sink)",
     "K.Main Recycle area (Drop Off) - Power point near hose reel",

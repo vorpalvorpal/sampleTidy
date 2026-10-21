@@ -196,10 +196,10 @@ test_that("2: the Mar-2026 shape (#1/#2 one column right) parses identically to 
   expect_identical(b$value_num, a$value_num)
 })
 
-test_that("2: Katoomba (header row 6, one column in, `CH4 Reading     % v/v`) yields all 52 readings", {
+test_that("2: Katoomba (header row 6, one column in, `CH4 Reading     % v/v`) yields all 50 readings (52 cells less 2 template slots)", {
   out <- gas_parse(fx$kat)
   expect_setequal(out$results$feature_raw, gas_expected_katoomba())
-  expect_equal(nrow(out$results), 52)
+  expect_equal(nrow(out$results), 50)
 })
 
 test_that("2: Blaxland 2021 (header row 11) yields its 40 readings", {
@@ -625,7 +625,8 @@ test_that("8: text codes match case- and whitespace-blind (`Does not exist`, `NS
   expect_equal(as.integer(tab[["no_sample"]]), 2)
   expect_equal(as.integer(tab[["no_access"]]), 1)
   k <- gas_parse(fx$kat)                        # G263 = "NS " on the Katoomba #1 sheet
-  expect_identical(gas_reasons(k), "no_sample")
+  # (plus the two numeric template slots G365/G366 - section 16)
+  expect_identical(sort(gas_reasons(k)), c("no_sample", "template_slot", "template_slot"))
   expect_false("K.G263" %in% k$results$feature_raw)
 })
 
@@ -694,25 +695,30 @@ test_that("10: with no note, the biofilter and bores carry the front-page date",
 # gastw/census3.R): numeric CH4 readings per file, and text-coded cells per
 # file. Totals 3,293 readings; 329 text cells = NS 262, NR 31, No Access 24,
 # `does/Does not exist` 10, `Not on the map` 2.
+#
+# Re-measured 2026-10-21 for the 032/034 template slots: 9 of those readings
+# are numeric CH4 at a slot (B.G201 = 0 in 2400-7399-08-01; K.G365 = K.G366 = 0
+# in each Katoomba file). They move from n_results to n_skipped
+# (`template_slot`); every other count is unchanged.
 
 gas_corpus_census <- tibble::tribble(
   ~file,                                                                    ~n_results, ~n_skipped,
   "2400-7127-05 May 2021 Monthly Gas Monitoring Blaxland WMF.XLS",               196,  0,
-  "2400-7399-08-01 August 2024 Monthly Gas Monitoring Blaxland WMF.xls",         202,  1,
+  "2400-7399-08-01 August 2024 Monthly Gas Monitoring Blaxland WMF.xls",         201,  2,
   "2400-7453-03-01 Mar 2026 Gas Monitoring Blaxland WMF.xls",                    120, 83,
   "2400-7453-05-01 May 2025 Monthly Gas Monitoring Blaxland WMF.xls",            202,  1,
   "2400-7453-07-01 July 2025 Monthly Gas Monitoring Blaxland WMF.xls",           202,  1,
   "2400-7453-10-01 October 2025 Monthly Gas Monitoring Blaxland WMF.xls",        202,  1,
   "2400-7453-11 November 2025 Monthly Gas Monitoring Blaxland WMF.xls",          202,  1,
-  "2400-7454-06-01 June 2025 Gas Monitoring Katoomba WMF.xls",                   291,  0,
-  "2400-7454-09-01 September 2025 Gas Monitoring Katoomba WMF.xls",              291,  0,
-  "2400-7454-12-01 December 2025 Gas Monitoring Katoomba WMF.xls",               291,  0,
+  "2400-7454-06-01 June 2025 Gas Monitoring Katoomba WMF.xls",                   289,  2,
+  "2400-7454-09-01 September 2025 Gas Monitoring Katoomba WMF.xls",              289,  2,
+  "2400-7454-12-01 December 2025 Gas Monitoring Katoomba WMF.xls",               289,  2,
   "2400-7538-02-01 Monthly Gas Monitoring Blaxland WMF.xls",                     164, 26,
   "2400-7538-04-01 Monthly Gas Monitoring Blaxland WMF.xls",                      84, 119,
   "2400-7538-05 Monthly Gas Monitoring Blaxland WMF.xls",                        141, 62,
   "2400-7538-05-01 Weekly Gas Monitoring Blaxland WMF.xls",                      205, 19,
   "2400-7538-05-03 Weekly Gas Monitoring Blaxland WMF.xls",                      209, 15,
-  "2400-7593-03-01 March 2026 Gas Monitoring Katoomba WMF.xls",                  291,  0
+  "2400-7593-03-01 March 2026 Gas Monitoring Katoomba WMF.xls",                  289,  2
 )
 
 skip_if_no_gas_corpus <- function() {
@@ -768,6 +774,8 @@ test_that("15 (gated): per-file result and skip counts match the measured census
   expect_equal(as.integer(tab[["no_access"]]), 24)
   expect_equal(as.integer(tab[["point_absent"]]), 10)
   expect_equal(as.integer(tab[["not_on_map"]]), 2)
+  # B.G201's `does not exist` cells (May 2025 on) stay point_absent above.
+  expect_equal(as.integer(tab[["template_slot"]]), 9)
 })
 
 test_that("15 (gated): REPORT NO is read from the cell for every real workbook", {
@@ -779,4 +787,93 @@ test_that("15 (gated): REPORT NO is read from the cell for every real workbook",
   # the filename says 2400-7538-05, the cell says -01
   expect_identical(rn[["2400-7538-05 Monthly Gas Monitoring Blaxland WMF.xls"]], "2400-7538-05-01")
   expect_identical(rn[["2400-7453-11 November 2025 Monthly Gas Monitoring Blaxland WMF.xls"]], "2400-7453-11")
+})
+
+# ==============================================================================
+# 16 - ACIRL template slots B.G201 / K.G365 / K.G366 are never emitted
+# ==============================================================================
+#
+# Robin, migrations 032 and 034 (dev/MIGRATIONS.md rows 1032/1034): "Are they
+# existing features in the database with known locations? If not, we don't
+# want them." No probe at the REPORTING site carries those numbers - they are
+# rows the ACIRL template prints (CH4 0) at a site that has no such probe. The
+# same NUMBERS are real at the OTHER site (K.G201 at Katoomba, B.G365/B.G366 on
+# the 2023 Blaxland grid), so the skip is on the SITE-QUALIFIED name.
+# Before this fix every import re-minted 3 pending aliases and their samples
+# (2026-10-21 review, uf-other group 2: 22 samples + 22 CH4 0.0 readings).
+#
+# A NUMERIC slot reading is skipped with reason `template_slot` (one row in
+# report$skipped, so the census still accounts for every cell). A slot cell
+# that is already TEXT-coded keeps its text reason (Blaxland G201 has read
+# `does not exist` since May 2025 -> point_absent, section 8).
+
+gas_template_slots <- c("B.G201", "K.G365", "K.G366")
+
+test_that("16: a numeric B.G201 reading (Aug 2024 shape, CH4 0) yields no result and no sample", {
+  dir <- withr::local_tempdir()
+  l1 <- gas_b2025_l1(); l1[[1]]$G201 <- 0
+  out <- gas_parse(build_gas_blaxland_2025(dir, l1 = l1))
+  expect_false("B.G201" %in% out$results$feature_raw)
+  expect_false("B.G201" %in% out$samples$feature_raw)
+  # its neighbours in the same column are untouched
+  expect_setequal(out$results$feature_raw, gas_expected_b2025_monthly())
+  expect_equal(nrow(out$results), 45)
+  expect_equal(gas_value_of(out, "B.G197"), 0.01)
+  expect_equal(gas_value_of(out, "B.G198"), 0)
+})
+
+test_that("16: the skipped B.G201 is recorded as `template_slot` with its cell reference", {
+  dir <- withr::local_tempdir()
+  l1 <- gas_b2025_l1(); l1[[1]]$G201 <- 0
+  out <- gas_parse(build_gas_blaxland_2025(dir, l1 = l1))
+  sk <- out$report$skipped
+  expect_equal(sum(sk$reason == "template_slot"), 1)
+  # G201 is the 5th entry of pair 1: header row 7 + 5 = row 12, CH4 column B
+  expect_identical(sk$source_ref[sk$reason == "template_slot"], "Gas Landfil #1!B12")
+  # the other text codes keep their reasons and counts (section 8)
+  tab <- table(gas_reasons(out))
+  expect_equal(as.integer(tab[["no_sample"]]), 2)
+  expect_false("point_absent" %in% names(tab))   # G201 is a number here, not `does not exist`
+})
+
+test_that("16: Katoomba K.G365 / K.G366 (CH4 0) yield no result and no sample; K.G362 beside them is kept", {
+  out <- gas_parse(fx$kat)
+  for (s in c("K.G365", "K.G366")) {
+    expect_false(s %in% out$results$feature_raw, info = s)
+    expect_false(s %in% out$samples$feature_raw, info = s)
+  }
+  expect_true("K.G362" %in% out$results$feature_raw)
+  expect_equal(gas_value_of(out, "K.G362"), 0)
+  expect_equal(nrow(out$samples), nrow(out$results))
+  expect_equal(sum(gas_reasons(out) == "template_slot"), 2)
+})
+
+test_that("16: a NON-zero reading at a slot is still skipped (the rule is the slot, not the value)", {
+  dir <- withr::local_tempdir()
+  l2 <- gas_k_l2(); l2[[4]]$G365 <- 0.05
+  out <- gas_parse(build_gas_katoomba(dir, l2 = l2))
+  expect_false("K.G365" %in% out$results$feature_raw)
+  expect_equal(sum(gas_reasons(out) == "template_slot"), 2)
+})
+
+test_that("16: the skip is site-qualified - K.G201 at Katoomba and B.G365/B.G366 at Blaxland are real probes and are kept", {
+  dir <- withr::local_tempdir()
+  l1 <- gas_k_l1(); l1[[1]]$G201 <- 0.02
+  k <- gas_parse(build_gas_katoomba(dir, l1 = l1))
+  expect_true("K.G201" %in% k$results$feature_raw)
+  expect_equal(gas_value_of(k, "K.G201"), 0.02)
+  expect_true("K.G201" %in% k$samples$feature_raw)
+
+  b <- gas_parse(build_gas_blaxland_2025(dir, l2 = list(list(G365 = 0, G366 = 0.01)), l2_rows = 8:9))
+  expect_true(all(c("B.G365", "B.G366") %in% b$results$feature_raw))
+  expect_equal(gas_value_of(b, "B.G366"), 0.01)
+  expect_false("template_slot" %in% gas_reasons(b))
+})
+
+test_that("16: no fixture family ever emits a template slot", {
+  for (nm in names(fx)) {
+    out <- gas_parse(fx[[nm]])
+    expect_false(any(gas_template_slots %in% c(out$results$feature_raw, out$samples$feature_raw)),
+                 info = nm)
+  }
 })

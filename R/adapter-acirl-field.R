@@ -222,6 +222,37 @@ acirl_field_xlsx_adapter <- function() {
   }
   first_of_month <- function(y, m) as.Date(sprintf("%04d-%02d-01", y, m))
 
+  # Migration 013's rule, applied at import (Robin, 2026-10-16; adapter fix
+  # 2026-10-22). Where *COMBUSTIBLE MATTER is a non-detect (`<x`) the lab
+  # computed incombustible = total - combustible with the combustible taken as
+  # its limit or as zero, so the printed figure is arithmetic on a non-detect,
+  # not a measurement. The most the incombustible fraction can be is the whole
+  # of the total, so per gauge and month-block INCOMBUSTIBLE MATTER is emitted
+  # as `< INSOLUBLE SOLIDS`. Nothing else moves: the total and the combustible
+  # are emitted as reported, and a block whose combustible is quantified is
+  # untouched. If the total is missing or itself a non-detect there is no bound
+  # to state, so the incombustible stays as reported (main-session ruling).
+  dust_block_key <- function(d) {
+    paste(sub("!.*$", "", d$source_ref), d$gauge, d$block, sep = "\r")
+  }
+  dust_by_block <- list()
+  for (d in dust_rows) {
+    k <- dust_block_key(d)
+    if (is.null(dust_by_block[[k]])) dust_by_block[[k]] <- list()
+    dust_by_block[[k]][[d$analyte]] <- d$value_raw
+  }
+  for (i in seq_along(dust_rows)) {
+    d <- dust_rows[[i]]
+    if (d$analyte != "INCOMBUSTIBLE MATTER") next
+    blk <- dust_by_block[[dust_block_key(d)]]
+    com <- blk[["*COMBUSTIBLE MATTER"]]
+    tot <- blk[["INSOLUBLE SOLIDS"]]
+    if (is.null(com) || !grepl("^<", com)) next
+    if (is.null(tot) || grepl("^<", tot) || is.na(parse_value(tot)$value_num)) next
+    dust_rows[[i]]$value_raw <- paste0("<", tot)
+    dust_rows[[i]]$rl <- parse_value(tot)$value_num   # A57: `<x` -> rl_low = x
+  }
+
   dust_samples <- list()
   a77_blocks <- list()   # lab_sample_id -> payload facts of a flagged gauge-block
   for (d in dust_rows) {
@@ -303,7 +334,7 @@ acirl_field_xlsx_adapter <- function() {
       units_raw = "g/m2/month", value_raw = d$value_raw,
       value_num = pv$value_num, value_chr = NA_character_,
       below_detection = grepl("^<", d$value_raw),
-      rl = NA_real_, lab_qualifier = NA_character_,
+      rl = if (is.null(d$rl)) NA_real_ else d$rl, lab_qualifier = NA_character_,
       analysed_date = as.Date(NA_character_), comments = NA_character_, confidence = 1
     )
     if (is.null(dust_samples[[lab_id]])) {
