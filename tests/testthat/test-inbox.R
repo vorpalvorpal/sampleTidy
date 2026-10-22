@@ -791,6 +791,7 @@ test_that("import_status(): Recent imports lists the last 14 days' work orders, 
 
 test_that("import_status(): Problems shows only the most recent run's problems, omitted when none", {
   s <- inbox_setup()
+  local_db_checks_pass()
   now <- Sys.time()
   write_inbox_lock(s$db, dead_pid(), now - 5 * 60)
   run_inbox(s, now = now)

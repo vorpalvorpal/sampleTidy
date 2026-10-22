@@ -221,3 +221,22 @@ insert_review_items <- function(db, rows) {
   }
   invisible(NULL)
 }
+
+# PLAN-22 A3: import_status() runs the hourly db_checks(); seed_db() violates
+# some of their invariants and lacks some of their tables. Tests that assert
+# on import Problems (not DB invariants) mock db_checks() to an all-pass result.
+local_db_checks_pass <- function(env = parent.frame()) {
+  testthat::local_mocked_bindings(
+    db_checks = function(con, tier = "hourly", ...) {
+      core <- db_checks_core()
+      core <- core[core$tier == "hourly", , drop = FALSE]
+      out <- data.frame(name = core$name, tier = core$tier, severity = core$severity,
+                        status = "pass", n = 0L, ms = 0, stringsAsFactors = FALSE)
+      out$sample <- rep(list(data.frame(key = character())), nrow(out))
+      out$message <- NA_character_
+      out$keys <- rep(list(character()), nrow(out))
+      out
+    },
+    .package = "sampleTidy", .env = env
+  )
+}

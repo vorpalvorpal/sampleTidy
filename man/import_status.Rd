@@ -36,7 +36,10 @@ the note's path, invisibly.
 \description{
 Rewrites \verb{<report_dir>/Import status.md} and \code{.import-status.json}: open
 review items, folders waiting in the inbox, the latest run's problems and
-the last 14 days of imports. Read-only on the DB. With \code{checks}, also a
+the last 14 days of imports, and the hourly standing DB checks
+(\code{\link[=db_checks]{db_checks()}}: error-level failures and checks that could not run are
+Problems, warn-level failures a count under DB checks, the full result in
+the json; they never block anything). Read-only on the DB. With \code{checks}, also a
 Flags section from \code{\link[=import_flags]{import_flags()}}, each flag's \code{first_seen} carried over
 by key from the previous \code{.import-status.json}.
 }

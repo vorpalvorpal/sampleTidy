@@ -232,6 +232,55 @@ inbox_check <- function(input_dir, report_dir, now = Sys.time(),
   r
 }
 
+# PLAN-22 A3: the hourly standing DB checks, on a read-only connection of
+# their own. Returns NULL when there is no DB to read, the db_checks() result,
+# or the error it raised - it never raises itself (status must always write).
+.inbox_db_checks <- function(db) {
+  con <- tryCatch(.inbox_read_con(db), error = function(e) NULL)
+  if (is.null(con)) return(NULL)
+  on.exit(try(DBI::dbDisconnect(con, shutdown = TRUE), silent = TRUE), add = TRUE)
+  tryCatch(db_checks(con, tier = "hourly"), error = function(e) e)
+}
+
+# Problems lines from a db_checks() result: error-severity failures, and any
+# check that could not run. Warn-severity failures are not problems.
+.inbox_db_check_problems <- function(dbc) {
+  if (is.null(dbc)) return(character(0))
+  if (inherits(dbc, "error")) {
+    return(sprintf("DB checks could not run: %s", gsub("\\s+", " ", conditionMessage(dbc))))
+  }
+  out <- character(0)
+  for (i in seq_len(nrow(dbc))) {
+    if (dbc$status[[i]] == "error") {
+      out <- c(out, sprintf("DB check %s could not run: %s", dbc$name[[i]], dbc$message[[i]]))
+    } else if (dbc$status[[i]] == "fail" && dbc$severity[[i]] == "error") {
+      k <- as.character(dbc$sample[[i]]$key)
+      out <- c(out, sprintf("DB check %s failed: %d offending row(s)%s", dbc$name[[i]], dbc$n[[i]],
+                            if (length(k)) paste0(", e.g. ", paste(utils::head(k, 3), collapse = ", ")) else ""))
+    }
+  }
+  out
+}
+
+# The `## DB checks` section: a count of failing warn-severity checks.
+.inbox_db_check_lines <- function(dbc) {
+  if (is.null(dbc) || inherits(dbc, "error")) return(character(0))
+  w <- dbc[dbc$status == "fail" & dbc$severity == "warn", , drop = FALSE]
+  if (nrow(w) == 0) return(character(0))
+  c("## DB checks", "",
+    sprintf("- %d warn-level check(s) failing: %s. Details in .import-status.json.", nrow(w),
+            paste(sprintf("%s (%d)", w$name, w$n), collapse = ", ")),
+    "")
+}
+
+.inbox_db_check_json <- function(dbc) {
+  if (is.null(dbc) || inherits(dbc, "error")) return(list())
+  lapply(seq_len(nrow(dbc)), function(i) list(
+    name = dbc$name[[i]], tier = dbc$tier[[i]], severity = dbc$severity[[i]],
+    status = dbc$status[[i]], n = dbc$n[[i]], ms = round(dbc$ms[[i]], 1),
+    message = dbc$message[[i]], sample_keys = as.list(as.character(dbc$sample[[i]]$key))))
+}
+
 # Pre/post image of samples and per-work-order analysis counts.
 .inbox_image <- function(db) {
   con <- .inbox_read_con(db)
@@ -943,7 +992,10 @@ import_report <- function(db = st_config("live_db"), report_dir, now = Sys.time(
 #'
 #' Rewrites `<report_dir>/Import status.md` and `.import-status.json`: open
 #' review items, folders waiting in the inbox, the latest run's problems and
-#' the last 14 days of imports. Read-only on the DB. With `checks`, also a
+#' the last 14 days of imports, and the hourly standing DB checks
+#' ([db_checks()]: error-level failures and checks that could not run are
+#' Problems, warn-level failures a count under DB checks, the full result in
+#' the json; they never block anything). Read-only on the DB. With `checks`, also a
 #' Flags section from [import_flags()], each flag's `first_seen` carried over
 #' by key from the previous `.import-status.json`.
 #'
@@ -1021,6 +1073,8 @@ import_status <- function(db = st_config("live_db"), input_dir, report_dir,
   log <- .inbox_read_log(report_dir)
   problems <- character(0)
   if (length(log) > 0) problems <- .inbox_line_problems(log[[length(log)]])
+  dbc <- .inbox_db_checks(db)
+  problems <- c(problems, .inbox_db_check_problems(dbc))
 
   # Recent imports: last 14 days, newest first (log order is chronological).
   recent <- list()
@@ -1080,6 +1134,7 @@ import_status <- function(db = st_config("live_db"), input_dir, report_dir,
   out <- c(out, if (length(waiting)) waiting else "Nothing waiting.", "")
 
   if (length(problems) > 0) out <- c(out, "## Problems", "", paste0("- ", problems), "")
+  out <- c(out, .inbox_db_check_lines(dbc))
 
   out <- c(out, "## Recent imports", "")
   if (length(recent) == 0) {
@@ -1104,7 +1159,8 @@ import_status <- function(db = st_config("live_db"), input_dir, report_dir,
     non_blocking_notes = n_notes,
     waiting = waiting_json,
     problems = as.list(problems),
-    recent_imports = recent
+    recent_imports = recent,
+    db_checks = .inbox_db_check_json(dbc)
   )
   if (!is.null(fs)) js <- c(js, .flags_json(fs))
   jsonlite::write_json(js, file.path(report_dir, ".import-status.json"),
