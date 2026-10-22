@@ -211,6 +211,54 @@ db_checks_params <- function(...) {
              expected = want[bad], stringsAsFactors = FALSE)
 }
 
+# NULL-datetime sample identity duplicates, stream-aware (A91 D3). A group of
+# samples sharing (alias, date, project) with a NULL datetime is a duplicate
+# unless every sample carries exactly ONE analysis stream and no two samples
+# share one - an ALS sample beside an ACIRL field sample is two contractors'
+# readings, not a duplicate. A sample with no analyses (or an unattributable
+# NA stream) matches any stream, so its group is flagged. The stream of a
+# stored analysis is .rc_lab_stream() (R/reconcile.R), the rule
+# .rc_row_stream() and .ct_sample_match() use; it is not re-written here.
+.dbc_dup_sample_identity_null_datetime <- function(con, params) {
+  grp <- DBI::dbGetQuery(con, "
+SELECT concat_ws(' ', s.uuid_feature_alias, CAST(s.date AS VARCHAR), s.uuid_project) AS key,
+       s.uuid
+FROM \"sample\" s
+JOIN (SELECT uuid_feature_alias, date, uuid_project FROM \"sample\" WHERE datetime IS NULL
+      GROUP BY uuid_feature_alias, date, uuid_project HAVING count(*) > 1) g
+  ON g.uuid_feature_alias IS NOT DISTINCT FROM s.uuid_feature_alias
+ AND g.date IS NOT DISTINCT FROM s.date
+ AND g.uuid_project IS NOT DISTINCT FROM s.uuid_project
+WHERE s.datetime IS NULL
+ORDER BY key, s.uuid")
+  empty <- data.frame(key = character(0), n = integer(0), uuids = character(0),
+                      stringsAsFactors = FALSE)
+  if (nrow(grp) == 0L) return(empty)
+  an <- DBI::dbGetQuery(con, "
+SELECT DISTINCT a.uuid_sample, a.uuid_lab FROM analysis a
+WHERE a.uuid_sample IN (SELECT uuid FROM \"sample\" WHERE datetime IS NULL)")
+  registry <- list(
+    lab_method = DBI::dbGetQuery(con, "SELECT uuid, uuid_analyte, organisation FROM lab_method"),
+    analyte = DBI::dbGetQuery(con, "SELECT uuid, type FROM analyte")
+  )
+  an$stream <- .rc_lab_stream(an$uuid_lab, registry)
+  streams <- split(an$stream, an$uuid_sample)
+  flagged <- vapply(split(grp$uuid, grp$key), function(uuids) {
+    per <- lapply(uuids, function(u) unique(streams[[u]]))
+    one_each <- all(vapply(per, function(x) length(x) == 1L && !is.na(x), logical(1)))
+    !one_each || anyDuplicated(unlist(per)) > 0L
+  }, logical(1))
+  keys <- names(flagged)[flagged]
+  if (length(keys) == 0L) return(empty)
+  data.frame(
+    key = keys,
+    n = vapply(keys, function(k) sum(grp$key == k), integer(1), USE.NAMES = FALSE),
+    uuids = vapply(keys, function(k) paste(grp$uuid[grp$key == k], collapse = " "),
+                   character(1), USE.NAMES = FALSE),
+    stringsAsFactors = FALSE
+  )
+}
+
 # ---- the core catalogue ----------------------------------------------------------------
 
 #' The generic standing database checks
@@ -355,17 +403,17 @@ GROUP BY source_hash",
 SELECT uuid_sample || ' ' || uuid_lab AS key, count(*) AS n, string_agg(uuid, ' ') AS uuids
 FROM analysis GROUP BY uuid_sample, uuid_lab HAVING count(*) > 1",
        "At most one analysis per (sample, lab_method).", "hourly", "error"),
-    ck("dup_sample_identity_null_datetime", "
-SELECT concat_ws(' ', uuid_feature_alias, CAST(date AS VARCHAR), uuid_project) AS key,
-       count(*) AS n, string_agg(uuid, ' ') AS uuids
-FROM \"sample\" WHERE datetime IS NULL
-GROUP BY uuid_feature_alias, date, uuid_project HAVING count(*) > 1",
-       "Sample identity duplicates with a NULL datetime, which ux_sample_identity treats as distinct.",
+    ck("dup_sample_identity_null_datetime", .dbc_dup_sample_identity_null_datetime,
+       paste("Sample identity duplicates with a NULL datetime, which ux_sample_identity treats as distinct;",
+             "a group whose samples each carry exactly one analysis stream, all different, is exempt (A91 D3)."),
        "hourly", "warn"),
     ck("dup_asset_hash", "
-SELECT hash AS key, count(*) AS n, string_agg(uuid, ' ') AS uuids FROM asset
-WHERE hash IS NOT NULL GROUP BY hash HAVING count(*) > 1",
-       "One asset per content hash.", "hourly", "error"),
+SELECT hash AS key, sum(n) AS n, string_agg(uuids, ' ') AS uuids FROM (
+  SELECT hash, uuid_project, count(*) AS n, string_agg(uuid, ' ') AS uuids FROM asset
+  WHERE hash IS NOT NULL GROUP BY hash, uuid_project HAVING count(*) > 1)
+GROUP BY hash",
+       "One asset per content hash within a project (a NULL project is one group); one report filed under several projects is legitimate (migration 061).",
+       "hourly", "error"),
     ck("dup_lab_method_key", "
 SELECT concat_ws(' | ', name, method, organisation, fraction, uuid_analyte) AS key,
        count(*) AS n, string_agg(uuid, ' ') AS uuids
