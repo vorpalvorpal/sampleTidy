@@ -150,25 +150,6 @@ test_that("R-9.5: every landed adapter family commits and report numbers reconci
     c("committed", "archived", "ignored", "quarantined", "failed", "needs_review")))
 })
 
-test_that("R-9.5: dry_run = TRUE produces a report with zero core-table DB writes and no snapshot", {
-  setup <- ingest_test_setup()
-  input_dir <- build_e2e_input_dir()
-
-  before <- all_core_counts(setup$db_path)
-  report <- ingest_dir(input_dir, db = setup$db_path, dry_run = TRUE)
-  after <- all_core_counts(setup$db_path)
-
-  # R-12.15 T-1 sweep (5th instance): pin dry_run's own documented contract
-  # (ingest_dir() roxygen: "dry_run = TRUE still routes, parses, assembles
-  # and reconciles ... but skips commit_event() ... entirely") rather than
-  # just checking `report` exists.
-  expect_true(isTRUE(report$dry_run))
-  expect_true(report$n_files_routed > 0)
-  expect_equal(report$n_events_committed, 0L)
-  expect_equal(after, before)
-  expect_length(list.files(setup$snapshot_dir), 0)
-})
-
 # ---- generic dry-run purity guard: EVERY base table, not a named list -----
 #
 # `all_core_counts()` above only enumerates the core business tables by
@@ -216,13 +197,30 @@ expect_dry_run_writes_nothing_but_routing <- function(db_path, run) {
   )
 }
 
-test_that("generic guard: a dry run over the full e2e corpus grows no base table except the routing ops tables", {
+# R-9.5's dry-run test and the generic guard used to be two tests, each dry-
+# running the full e2e corpus. Merged (PLAN-22 B4): one dry run, every
+# assertion of both.
+test_that("R-9.5 + generic guard: a dry run over the full e2e corpus reports dry_run with zero events committed, writes nothing to any base table except the routing ops tables, and takes no snapshot", {
   setup <- ingest_test_setup()
   input_dir <- build_e2e_input_dir()
 
+  before <- all_core_counts(setup$db_path)
+  report <- NULL
+  # the generic guard: EVERY base table, discovered at call time
   expect_dry_run_writes_nothing_but_routing(setup$db_path, function() {
-    suppressMessages(ingest_dir(input_dir, db = setup$db_path, dry_run = TRUE))
+    report <<- ingest_dir(input_dir, db = setup$db_path, dry_run = TRUE)
   })
+  after <- all_core_counts(setup$db_path)
+
+  # R-12.15 T-1 sweep (5th instance): pin dry_run's own documented contract
+  # (ingest_dir() roxygen: "dry_run = TRUE still routes, parses, assembles
+  # and reconciles ... but skips commit_event() ... entirely") rather than
+  # just checking `report` exists.
+  expect_true(isTRUE(report$dry_run))
+  expect_true(report$n_files_routed > 0)
+  expect_equal(report$n_events_committed, 0L)
+  expect_equal(after, before)
+  expect_length(list.files(setup$snapshot_dir), 0)
 })
 
 test_that("R-3.5/T1.2: an adapter tie writes nothing (review_queue/change_log, or a stuck quarantined state) under dry_run, and a later real run still resolves it", {
@@ -370,24 +368,13 @@ test_that("R-9.5: an adapter crash on one file is recorded as failed and the run
   expect_false(is.na(corrupt_state$state_reason))
 })
 
-test_that("R-9.5: a second run over the same directory is a no-op (idempotent at the orchestration level)", {
-  setup <- ingest_test_setup()
-  input_dir <- build_e2e_input_dir()
-
-  ingest_dir(input_dir, db = setup$db_path)
-  after_first <- all_core_counts(setup$db_path)
-  n_files_first <- nrow(ingest_file_states(setup$db_path))
-  n_review_first <- count_rows(setup$db_path, "review_queue")
-
-  ingest_dir(input_dir, db = setup$db_path)
-  after_second <- all_core_counts(setup$db_path)
-  n_files_second <- nrow(ingest_file_states(setup$db_path))
-  n_review_second <- count_rows(setup$db_path, "review_queue")
-
-  expect_equal(after_second, after_first)
-  expect_equal(n_files_second, n_files_first)
-  expect_equal(n_review_second, n_review_first)
-})
+# "R-9.5: a second run over the same directory is a no-op" used to sit here.
+# Dropped (PLAN-22 B4): test-e2e-pipeline.R R-10.3 asserts a strict superset
+# from the same setup. Its first repeat compares `all_table_counts()` - every
+# table this test's `all_core_counts()` named (feature, feature_mask, analyte,
+# lab_method, project, sample, analysis, asset, review_queue, change_log),
+# plus ingest_file and ingest_sighting - which covers this test's three
+# checks: the core counts, nrow(ingest_file) and count(review_queue).
 
 test_that("R-9.5: two same-byte files in ONE run (a [N] duplicate-download pair) ingest once, without aborting (A46)", {
   setup <- ingest_test_setup()
