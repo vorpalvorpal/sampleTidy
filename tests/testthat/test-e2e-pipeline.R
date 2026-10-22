@@ -53,6 +53,13 @@ e2e_setup <- function() {
   db_path
 }
 
+# The R-10.2 tests below only READ what one ingest of the e2e corpus left
+# behind, so the corpus is ingested once for this file (the same seed, options
+# and input e2e_setup() + build_e2e_input_dir() give) and each test reads its
+# own fresh copy of the DB, archive, snapshot and input dirs (PLAN-22 B1).
+# Tests that ingest again, or ingest something else, keep their own setup.
+e2e_ingested <- local_e2e_ingest_cache()
+
 # ---- R-10.1: router cross-match matrix -------------------------------------
 
 test_that("R-10.1: router_matrix() claims every fixture at exactly one winning tier; cruft/random files claim none", {
@@ -117,9 +124,8 @@ test_that("R-10.1: router_matrix() claims every fixture at exactly one winning t
 # ---- R-10.2: full pipeline e2e (synthetic) ---------------------------------
 
 test_that("R-10.2: the pinned <0.1 mg/L fluoride row matches the pre-existing analysis (idempotency backbone)", {
-  db_path <- e2e_setup()
-  input_dir <- build_e2e_input_dir()
-  ingest_dir(input_dir, db = db_path)
+  ingested <- e2e_ingested()
+  db_path <- ingested$db_path
 
   con <- DBI::dbConnect(duckdb::duckdb(), db_path, read_only = TRUE)
   withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
@@ -132,9 +138,8 @@ test_that("R-10.2: the pinned <0.1 mg/L fluoride row matches the pre-existing an
 })
 
 test_that("R-10.2: the uS/cm to mS/cm EC row lands converted on a new analysis", {
-  db_path <- e2e_setup()
-  input_dir <- build_e2e_input_dir()
-  ingest_dir(input_dir, db = db_path)
+  ingested <- e2e_ingested()
+  db_path <- ingested$db_path
 
   con <- DBI::dbConnect(duckdb::duckdb(), db_path, read_only = TRUE)
   withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
@@ -153,9 +158,8 @@ test_that("R-10.2: the uS/cm to mS/cm EC row lands converted on a new analysis",
 test_that("R-10.2: every new analysis joins cleanly to a sample and a feature (no orphan uuids)", {
   # substitutes for v_measurement, which the throwaway test schema doesn't
   # create - see dev/plans/PLAN-CHANGE-REQUESTS.md
-  db_path <- e2e_setup()
-  input_dir <- build_e2e_input_dir()
-  ingest_dir(input_dir, db = db_path)
+  ingested <- e2e_ingested()
+  db_path <- ingested$db_path
 
   con <- DBI::dbConnect(duckdb::duckdb(), db_path, read_only = TRUE)
   withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
@@ -179,9 +183,9 @@ test_that("R-10.2: every new analysis joins cleanly to a sample and a feature (n
 })
 
 test_that("R-10.2: the provenance chain is intact - source_hash matches an archived asset byte-identical to the input file", {
-  db_path <- e2e_setup()
-  input_dir <- build_e2e_input_dir()
-  ingest_dir(input_dir, db = db_path)
+  ingested <- e2e_ingested()
+  db_path <- ingested$db_path
+  input_dir <- ingested$input_dir
 
   con <- DBI::dbConnect(duckdb::duckdb(), db_path, read_only = TRUE)
   withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
@@ -204,9 +208,8 @@ test_that("R-10.2: the provenance chain is intact - source_hash matches an archi
 })
 
 test_that("R-10.2: ACIRL field rows are date-only with the sampler recorded on sample.person", {
-  db_path <- e2e_setup()
-  input_dir <- build_e2e_input_dir()
-  ingest_dir(input_dir, db = db_path)
+  ingested <- e2e_ingested()
+  db_path <- ingested$db_path
 
   con <- DBI::dbConnect(duckdb::duckdb(), db_path, read_only = TRUE)
   withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
@@ -218,9 +221,9 @@ test_that("R-10.2: ACIRL field rows are date-only with the sampler recorded on s
 })
 
 test_that("R-10.2: QC rows are skipped with the fixture's known counts and review_queue holds the engineered unknowns", {
-  db_path <- e2e_setup()
-  input_dir <- build_e2e_input_dir()
-  report <- ingest_dir(input_dir, db = db_path)
+  ingested <- e2e_ingested()
+  db_path <- ingested$db_path
+  report <- ingested$report
 
   con <- DBI::dbConnect(duckdb::duckdb(), db_path, read_only = TRUE)
   withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
@@ -259,7 +262,9 @@ test_that("R-10.2: QC rows are skipped with the fixture's known counts and revie
 
 test_that("Phase-7b item 7: ingest_dir() reports a guard-blocked re-download as blocked, not committed - n_events_committed/rows_new/review_items_opened all reflect the block, not a phantom commit", {
   db_path <- e2e_setup()
-  input_dir <- build_e2e_input_dir()
+  # PLAN-22 B2: the minimal corpus (helper-corpus.R) still commits WO
+  # XX1234567 from its PROJ_A ESdat triple, which is all this test re-downloads.
+  input_dir <- build_minimal_input_dir()
   report1 <- ingest_dir(input_dir, db = db_path)
   expect_gt(report1$n_events_committed, 0)  # sanity: WO XX1234567 really committed
 

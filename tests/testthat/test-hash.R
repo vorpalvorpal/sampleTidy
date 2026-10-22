@@ -15,8 +15,9 @@ test_that("R-1.2: known 3-byte fixture file hashes to its precomputed digest", {
 test_that("R-1.2: two files with identical bytes but different names/mtimes hash equal", {
   dir <- withr::local_tempdir()
   path_a <- st_test_write_file(dir, "a_name.csv", raw = charToRaw("identical content"))
-  Sys.sleep(1.1) # ensure a distinguishable mtime
   path_b <- st_test_write_file(dir, "totally_different_name.csv", raw = charToRaw("identical content"))
+  # ensure a distinguishable mtime (set, rather than slept for)
+  Sys.setFileTime(path_a, Sys.time() - 3600)
   expect_false(file.mtime(path_a) == file.mtime(path_b))
   expect_identical(hash_file(path_a), hash_file(path_b))
 })
