@@ -201,10 +201,12 @@ expect_dry_run_writes_nothing_but_routing <- function(db_path, run) {
   )
 }
 
-# R-9.5's dry-run test and the generic guard used to be two tests, each dry-
-# running the full e2e corpus. Merged (PLAN-22 B4): one dry run, every
-# assertion of both.
-test_that("R-9.5 + generic guard: a dry run over the full e2e corpus reports dry_run with zero events committed, writes nothing to any base table except the routing ops tables, and takes no snapshot", {
+# R-9.5's dry-run test and the generic guard ("generic guard: a dry run over
+# the full e2e corpus grows no base table except the routing ops tables") used
+# to be two tests, each dry-running the full e2e corpus. Merged (PLAN-22 B4):
+# one dry run, every assertion of both. It keeps R-9.5's name because
+# dev/plans/COVERAGE-MAP.md quotes it (test-coverage-map-lint.R).
+test_that("R-9.5: dry_run = TRUE produces a report with zero core-table DB writes and no snapshot", {
   setup <- ingest_test_setup()
   input_dir <- build_e2e_input_dir()
 
@@ -372,13 +374,29 @@ test_that("R-9.5: an adapter crash on one file is recorded as failed and the run
   expect_false(is.na(corrupt_state$state_reason))
 })
 
-# "R-9.5: a second run over the same directory is a no-op" used to sit here.
-# Dropped (PLAN-22 B4): test-e2e-pipeline.R R-10.3 asserts a strict superset
-# from the same setup. Its first repeat compares `all_table_counts()` - every
-# table this test's `all_core_counts()` named (feature, feature_mask, analyte,
-# lab_method, project, sample, analysis, asset, review_queue, change_log),
-# plus ingest_file and ingest_sighting - which covers this test's three
-# checks: the core counts, nrow(ingest_file) and count(review_queue).
+# test-e2e-pipeline.R R-10.3 asserts a strict superset of this test (its
+# all_table_counts() covers every table here plus ingest_file and
+# ingest_sighting), so PLAN-22 B4 meant to drop it. It stays because
+# dev/plans/COVERAGE-MAP.md quotes its name, but its FIRST run now comes from
+# the B1 cache: it starts from a private copy of the post-ingest state and
+# only the second run - the one under test - happens here, on that copy.
+test_that("R-9.5: a second run over the same directory is a no-op (idempotent at the orchestration level)", {
+  setup <- e2e_ingested()
+  input_dir <- setup$input_dir
+
+  after_first <- all_core_counts(setup$db_path)
+  n_files_first <- nrow(ingest_file_states(setup$db_path))
+  n_review_first <- count_rows(setup$db_path, "review_queue")
+
+  ingest_dir(input_dir, db = setup$db_path)
+  after_second <- all_core_counts(setup$db_path)
+  n_files_second <- nrow(ingest_file_states(setup$db_path))
+  n_review_second <- count_rows(setup$db_path, "review_queue")
+
+  expect_equal(after_second, after_first)
+  expect_equal(n_files_second, n_files_first)
+  expect_equal(n_review_second, n_review_first)
+})
 
 test_that("R-9.5: two same-byte files in ONE run (a [N] duplicate-download pair) ingest once, without aborting (A46)", {
   setup <- ingest_test_setup()
