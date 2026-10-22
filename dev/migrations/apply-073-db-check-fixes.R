@@ -34,5 +34,6 @@ for (dr in c(TRUE, FALSE, FALSE)) {
   cat("dry_run =", dr, "->", r$status, "\n")
 }
 report("after")
-# NOT applied to live. Rehearsals (2 fresh plain-cp copies of live at marker 1072,
+# Applied to live 2026-10-22 02:58 UTC (backup pre-073 ...20261022T025819.956Z).
+# Rehearsals (2 fresh plain-cp copies of live at marker 1072,
 # identical results, third run already_migrated; negative checks): scratchpad m073/r1, r2.
