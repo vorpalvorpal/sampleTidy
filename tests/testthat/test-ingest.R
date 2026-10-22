@@ -93,11 +93,17 @@ seed_wo_folder <- function(dir, wo) {
 
 # ---- R-9.5: end-to-end orchestration ---------------------------------------
 
-test_that("R-9.5: subdirectory content is untouched and cruft files are ignored", {
-  setup <- ingest_test_setup()
-  input_dir <- build_e2e_input_dir()
+# The first three R-9.5/R-9.6 tests below only READ what one ingest of the e2e
+# corpus left behind, so the corpus is ingested once for this file (the same
+# seed, options and input ingest_test_setup() + build_e2e_input_dir() give)
+# and each reads its own fresh copy (PLAN-22 B1). `pre` records the seeded
+# DB's core counts just before that ingest, for the DB-delta test.
+e2e_ingested <- local_e2e_ingest_cache(pre = all_core_counts)
 
-  report <- ingest_dir(input_dir, db = setup$db_path)
+test_that("R-9.5: subdirectory content is untouched and cruft files are ignored", {
+  setup <- e2e_ingested()
+  input_dir <- setup$input_dir
+  report <- setup$report
   # R-12.15 T-1 sweep (5th instance): assert the report's own files_by_state
   # reflects a specific, fixture-derived count rather than merely existing as
   # a list. Since R-12.7 makes files_by_state a TERMINAL-state tally (not the
@@ -132,11 +138,9 @@ test_that("R-9.5: subdirectory content is untouched and cruft files are ignored"
 })
 
 test_that("R-9.5: every landed adapter family commits and report numbers reconcile with DB deltas", {
-  setup <- ingest_test_setup()
-  input_dir <- build_e2e_input_dir()
-
-  before <- all_core_counts(setup$db_path)
-  report <- ingest_dir(input_dir, db = setup$db_path)
+  setup <- e2e_ingested()
+  before <- setup$pre
+  report <- setup$report
   after <- all_core_counts(setup$db_path)
 
   expect_true(any(after != before),
@@ -404,13 +408,11 @@ test_that("R-9.5: two same-byte files in ONE run (a [N] duplicate-download pair)
 # ---- R-9.6: the remove switch (A13) ----------------------------------------
 
 test_that("R-9.6: default (remove_ingested = FALSE) leaves all sources present", {
-  setup <- ingest_test_setup()
-  input_dir <- build_e2e_input_dir()
-  files_before <- list.files(input_dir, recursive = FALSE)
+  setup <- e2e_ingested()
+  # listed in the cache just before its ingest ran over the directory
+  files_before <- setup$files_before
 
-  ingest_dir(input_dir, db = setup$db_path)
-
-  files_after <- list.files(input_dir, recursive = FALSE)
+  files_after <- list.files(setup$input_dir, recursive = FALSE)
   expect_setequal(files_after, files_before)
 })
 

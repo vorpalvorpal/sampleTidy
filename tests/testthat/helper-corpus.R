@@ -188,3 +188,75 @@ ensure_test_asset_table <- function(con) {
   )")
   invisible(con)
 }
+
+#' Ingest the e2e corpus ONCE per test file; hand each test its own copy
+#'
+#' PLAN-22 B1. A dozen tests each re-ingested the 35-file e2e corpus (~11 s
+#' apiece) only to READ the resulting DB, archive or directories. Call this at
+#' the TOP LEVEL of a test file: the cache's tempdir is then bound to the
+#' file's own frame, so testthat deletes it when the file finishes. It returns
+#' a function; each test calls that function to get a fresh, private copy of
+#' the post-ingest state, so tests stay independent and order-free, and a
+#' test that did write would only touch its own copy.
+#'
+#' The ingest itself is the one `e2e_setup()`/`ingest_test_setup()` drove: a
+#' `seed_db()` DB with the test `asset` table, `remove_ingested = FALSE`,
+#' fresh archive and snapshot dirs, `build_e2e_input_dir()` as the input.
+#'
+#' @param pre optional `function(db_path)` run on the seeded DB just BEFORE
+#'   the ingest; its value is returned as `$pre` (e.g. pre-ingest counts).
+#' @param env the frame the cache lives in (the test file's, by default).
+#' @return `function(test_env = parent.frame())` returning
+#'   `list(db_path, archive_dir, snapshot_dir, input_dir, report, pre,
+#'   files_before)`, with `sampletidy.archive_dir`/`snapshot_dir` pointed at
+#'   the copy for the calling test.
+local_e2e_ingest_cache <- function(pre = NULL, env = parent.frame()) {
+  root <- withr::local_tempdir(pattern = "e2e-ingest-cache-", .local_envir = env)
+  memo <- new.env(parent = emptyenv())
+  parts <- c("db", "archive", "snapshot", "input")
+
+  build <- function() {
+    for (p in parts) dir.create(file.path(root, p))
+    db_path <- seed_db(dir = file.path(root, "db"))
+    con <- seed_con(db_path)
+    ensure_test_asset_table(con)
+    DBI::dbDisconnect(con, shutdown = TRUE)
+    input_dir <- build_e2e_input_dir(file.path(root, "input"))
+    memo$pre <- if (is.null(pre)) NULL else pre(db_path)
+    memo$files_before <- list.files(input_dir, recursive = FALSE)
+    memo$report <- withr::with_options(list(
+      "sampletidy.archive_dir" = file.path(root, "archive"),
+      "sampletidy.snapshot_dir" = file.path(root, "snapshot"),
+      "sampletidy.remove_ingested" = FALSE
+    ), ingest_dir(input_dir, db = db_path))
+    memo$db_file <- basename(db_path)
+    memo$built <- TRUE
+  }
+
+  function(test_env = parent.frame()) {
+    if (!isTRUE(memo$built)) build()
+    dest <- withr::local_tempdir(pattern = "e2e-ingest-copy-", .local_envir = test_env)
+    for (p in parts) {
+      to <- file.path(dest, p)
+      dir.create(to)
+      from <- list.files(file.path(root, p), all.files = TRUE, full.names = TRUE, no.. = TRUE)
+      if (length(from) > 0) {
+        stopifnot(all(file.copy(from, to, recursive = TRUE, copy.date = TRUE)))
+      }
+    }
+    withr::local_options(list(
+      "sampletidy.archive_dir" = file.path(dest, "archive"),
+      "sampletidy.snapshot_dir" = file.path(dest, "snapshot"),
+      "sampletidy.remove_ingested" = FALSE
+    ), .local_envir = test_env)
+    list(
+      db_path = file.path(dest, "db", memo$db_file),
+      archive_dir = file.path(dest, "archive"),
+      snapshot_dir = file.path(dest, "snapshot"),
+      input_dir = file.path(dest, "input"),
+      report = memo$report,
+      pre = memo$pre,
+      files_before = memo$files_before
+    )
+  }
+}
