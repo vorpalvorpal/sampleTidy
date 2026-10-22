@@ -260,3 +260,37 @@ local_e2e_ingest_cache <- function(pre = NULL, env = parent.frame()) {
     )
   }
 }
+
+#' A small flat input directory for orchestration-containment tests
+#'
+#' PLAN-22 B2. The R-12.x containment tests mock reconcile/commit and only
+#' need a few real events to route, parse and assemble - not the whole
+#' 35-file e2e corpus. The default set gives two committable work orders
+#' (the PROJ_A XX1234567 ESdat triple and WK7654321's crosstab), one source
+#' the assembler supersede-drops (XX1234567_0_XTAB.csv: ESdat is the source
+#' of record), one file nobody claims (random.csv, quarantined at route
+#' time), and the two cruft files `build_e2e_input_dir()` also adds.
+#'
+#' @param files fixture paths relative to `tests/testthat/fixtures`.
+#' @param env frame to bind the tempdir's cleanup to (the calling test).
+#' @return the directory path.
+build_minimal_input_dir <- function(files = minimal_corpus_files(), env = parent.frame()) {
+  dest <- withr::local_tempdir(.local_envir = env)
+  for (f in files) {
+    src <- testthat::test_path("fixtures", f)
+    stopifnot(file.exists(src))
+    file.copy(src, file.path(dest, basename(f)))
+  }
+  writeLines("stale backup, pre-dates sampleTidy", file.path(dest, "old_export.bak"))
+  writeLines("", file.path(dest, ".DS_Store"))
+  dest
+}
+
+minimal_corpus_files <- function() {
+  c(file.path("esdat", c(
+      "PROJ_A.ESDAT_XX1234567_0.Chemistry2e.CSV",
+      "PROJ_A.ESDAT_XX1234567_0.Header.XML",
+      "PROJ_A.ESDAT_XX1234567_0.Sample2e.CSV",
+      "random.csv")),
+    file.path("crosstab", c("XX1234567_0_XTAB.csv", "WK7654321_0_XTAB.csv")))
+}

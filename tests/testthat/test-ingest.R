@@ -382,7 +382,12 @@ test_that("R-9.5: an adapter crash on one file is recorded as failed and the run
 
 test_that("R-9.5: two same-byte files in ONE run (a [N] duplicate-download pair) ingest once, without aborting (A46)", {
   setup <- ingest_test_setup()
-  input_dir <- build_e2e_input_dir()
+  # PLAN-22 B2: a minimal corpus, not the full e2e one. BADDATE stays in it
+  # because it is the Chemistry2e file the full corpus twinned (first by
+  # name); the default set adds two committable work orders around it.
+  input_dir <- build_minimal_input_dir(c(
+    "esdat/BADDATE.ESDAT_XX5555555_0.Chemistry2e.CSV", minimal_corpus_files()
+  ))
 
   # Reproduces the real-corpus case that exposed A46: a browser
   # duplicate-download twin (`foo[65].CSV`) sitting beside its original in
@@ -637,7 +642,7 @@ test_that("direct: .ig_remove_verified() keeps the source when the archive copy 
 
 test_that("R-12.1: an ingest run containing one file whose adapter match() returns NA still commits the other good files (per-file containment, not a whole-run abort)", {
   setup <- ingest_test_setup()
-  input_dir <- build_e2e_input_dir()
+  input_dir <- build_minimal_input_dir()  # PLAN-22 B2: see helper-corpus.R
 
   bad_adapter_id <- "r121_bad_na_adapter"
   register_adapter(list(
@@ -706,7 +711,7 @@ test_that("R-9.6: a subsequent run over the emptied directory is a clean no-op",
 
 test_that("R-12.2: a per-event reconcile failure is contained - the poisoned event's kept files are marked failed with events_failed counted and a cli_warn names it, while sibling events still reach committed/archived terminal states", {
   setup <- ingest_test_setup()
-  input_dir <- build_e2e_input_dir()
+  input_dir <- build_minimal_input_dir()  # PLAN-22 B2: see helper-corpus.R
 
   call_n <- 0L
   poisoned_hashes <- character(0)
@@ -758,7 +763,7 @@ test_that("R-12.2: a per-event reconcile failure is contained - the poisoned eve
 
 test_that("R-12.2: when EVERY event throws in reconcile, ingest_dir() still contains each one (failed + counted) during the loop, then aborts class sampletidy_error after the loop - not a quiet all-failed report and not a bare abort on the first failure", {
   setup <- ingest_test_setup()
-  input_dir <- build_e2e_input_dir()
+  input_dir <- build_minimal_input_dir()  # PLAN-22 B2: see helper-corpus.R
 
   call_n <- 0L
   event_kept_hashes <- character(0)
@@ -818,7 +823,7 @@ test_that("R-12.2: when EVERY event throws in reconcile, ingest_dir() still cont
 
 test_that("R-12.7: files_by_state reports the run's real terminal state (committed) for a run that commits an event, not the route-time 'claimed' state", {
   setup <- ingest_test_setup()
-  input_dir <- build_e2e_input_dir()
+  input_dir <- build_minimal_input_dir()  # PLAN-22 B2: see helper-corpus.R
 
   ok_resolved <- list(
     clean = tibble::tibble(source_ref = character(0)),
@@ -1218,7 +1223,7 @@ test_that("R-15.36: a work order's non-PDF non-tabular deliverable (an XTAB.XLS)
 
 test_that("R-12.7: files_by_state shows 'needs_review' for a needs_review-only event, not 'claimed'", {
   setup <- ingest_test_setup()
-  input_dir <- build_e2e_input_dir()
+  input_dir <- build_minimal_input_dir()  # PLAN-22 B2: see helper-corpus.R
 
   review_resolved <- list(
     clean = tibble::tibble(source_ref = character(0)),

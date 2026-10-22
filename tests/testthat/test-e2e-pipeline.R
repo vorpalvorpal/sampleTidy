@@ -262,7 +262,9 @@ test_that("R-10.2: QC rows are skipped with the fixture's known counts and revie
 
 test_that("Phase-7b item 7: ingest_dir() reports a guard-blocked re-download as blocked, not committed - n_events_committed/rows_new/review_items_opened all reflect the block, not a phantom commit", {
   db_path <- e2e_setup()
-  input_dir <- build_e2e_input_dir()
+  # PLAN-22 B2: the minimal corpus (helper-corpus.R) still commits WO
+  # XX1234567 from its PROJ_A ESdat triple, which is all this test re-downloads.
+  input_dir <- build_minimal_input_dir()
   report1 <- ingest_dir(input_dir, db = db_path)
   expect_gt(report1$n_events_committed, 0)  # sanity: WO XX1234567 really committed
 
