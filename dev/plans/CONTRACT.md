@@ -109,6 +109,14 @@ import_status(db, input_dir, report_dir, now = Sys.time(), settle_minutes = 10, 
 # PLAN-18 section 4 / 4.5 (phase 2, added 2026-10-19): the status note's Flags.
 # checks = list(schedule, limits, requirements, points, invoices); read-only.
 import_flags(db = st_config("live_db"), now = Sys.time(), checks)
+# PLAN-22 Part A (added 2026-10-22, Robin's ruling): standing DB checks. Each
+# check's SQL (or R function) returns offending rows with a `key`; zero = pass.
+# import_status() runs the hourly tier; migrations gate on new failures only.
+db_check(name, sql, description, tier = "hourly", severity = "error")
+db_checks_core()
+db_checks_params(...)
+db_checks(con, tier = "hourly", extra = NULL, params = db_checks_params(), sample_n = 5)
+mig_db_checks_gate(con, baseline, allow = character(), extra = NULL, params = db_checks_params())
 # 2026-10-20 (dev/plans/SPEC-flag-missing-result.md): check `missing_result`
 # (a unit-bearing result with no value, in a recent delivery), after
 # unit_change. `action` vocabulary: resample, reanalyse, ask_acirl, ask_lab

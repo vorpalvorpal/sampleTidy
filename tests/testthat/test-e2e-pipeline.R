@@ -431,6 +431,9 @@ test_that("R-10.6: NAMESPACE exports equal the CONTRACT-pinned public API exactl
     # public-API list in the same change: the deterministic checks behind the
     # status note's Flags section, callable on their own (read-only).
     "import_flags", "sampling_rounds",  # + PLAN-18 4.6 ledger reader (superseded the PDF parser)
+    # PLAN-22 Part A (2026-10-22), added to CONTRACT.md's public-API list in the
+    # same change: the standing DB checks and the migration gate.
+    "db_check", "db_checks", "db_checks_core", "db_checks_params", "mig_db_checks_gate",
     # Phase-7b round 3, added 2026-07-26 (Robin's ruling) and added to
     # CONTRACT.md's public-API list in the same change. EXPORTED because round 3
     # found that NOTHING in the package could close a `sample_collision` review
