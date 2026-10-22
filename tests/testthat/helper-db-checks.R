@@ -413,7 +413,7 @@ dbc_violation_cases <- list(
        }),
   list(check = "dup_asset_hash", key = dbc_hex(904), label = "two assets sharing a hash",
        seed = function(con) dbc_exec(con, "INSERT INTO asset (uuid, name, uuid_project, hash) VALUES
-                                           ('as-x1', 'a.pdf', 'p-0001', ?), ('as-x2', 'b.pdf', 'p-0003', ?)",
+                                           ('as-x1', 'a.pdf', 'p-0001', ?), ('as-x2', 'b.pdf', 'p-0001', ?)",
                                      dbc_hex(904), dbc_hex(904))),
   list(check = "dup_lab_method_key", key = "pH Value", label = "two lab_methods with one natural key",
        seed = function(con) DBI::dbExecute(con, "INSERT INTO lab_method (uuid, uuid_analyte, name, method, organisation, rl_low, units)
