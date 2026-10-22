@@ -50,7 +50,7 @@ test_that("gate: a check that passed in the baseline and now fails aborts, namin
   dbc_with(db, function(con) {
     baseline <- db_checks(con, tier = "migration")
     dbc_exec(con, "INSERT INTO asset (uuid, name, uuid_project, hash) VALUES
-                   ('as-x1', 'a.pdf', 'p-0001', ?), ('as-x2', 'b.pdf', 'p-0003', ?)", dbc_hex(904), dbc_hex(904))
+                   ('as-x1', 'a.pdf', 'p-0001', ?), ('as-x2', 'b.pdf', 'p-0001', ?)", dbc_hex(904), dbc_hex(904))
     dbc_expect_gate_abort(mig_db_checks_gate(con, baseline), "dup_asset_hash")
   })
 })

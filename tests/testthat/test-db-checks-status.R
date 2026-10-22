@@ -46,7 +46,7 @@ test_that("import_status(): error-severity failures are Problems; warn failures 
   dbc_with(db, function(con) {
     # error: dup_asset_hash
     dbc_exec(con, "INSERT INTO asset (uuid, name, uuid_project, hash) VALUES
-                   ('as-x1', 'a.pdf', 'p-0001', ?), ('as-x2', 'b.pdf', 'p-0003', ?)", dbc_hex(904), dbc_hex(904))
+                   ('as-x1', 'a.pdf', 'p-0001', ?), ('as-x2', 'b.pdf', 'p-0001', ?)", dbc_hex(904), dbc_hex(904))
     # warn x2: vocab_feature_flow, feature_coords
     DBI::dbExecute(con, "UPDATE feature SET flow = 'river' WHERE uuid = 'f-0002'")
     DBI::dbExecute(con, "UPDATE feature SET lon = 'NaN'::DOUBLE, lat = 'NaN'::DOUBLE, geom_wkt = 'POINT EMPTY'
