@@ -30,6 +30,20 @@ fx <- list(
   kat     = build_gas_katoomba(gas_dir)
 )
 
+# gas_parse() of a shared fixture, memoised per fixture for this file (PLAN-22
+# B3: ~50 tests re-parsed the same six workbooks). The fixtures above are
+# never written after they are built, so one parse per fixture is the same
+# parse every test used to repeat. The memo hands back an ordinary list of
+# tibbles, which R copies on modify, so a test that alters its `out` alters
+# only its own copy. Tests that build their OWN workbook, that compare two
+# parses (the determinism test), or that assert on the parse call itself
+# (errors) still call gas_parse() directly.
+.gas_fx_parsed <- new.env(parent = emptyenv())
+gas_parse_fx <- function(nm) {
+  if (is.null(.gas_fx_parsed[[nm]])) .gas_fx_parsed[[nm]] <- gas_parse(fx[[nm]])
+  .gas_fx_parsed[[nm]]
+}
+
 gas_reasons <- function(out) {
   sk <- out$report$skipped
   if (is.null(sk) || nrow(sk) == 0) return(character(0))
@@ -138,7 +152,7 @@ test_that("1: a non-spreadsheet extension is `no` without opening the file", {
 
 test_that("IR: output validates; analyte_raw `CH4 Reading % v/v`, units_raw `%`, org ACIRL, adapter tag", {
   for (nm in names(fx)) {
-    out <- gas_parse(fx[[nm]])
+    out <- gas_parse_fx(nm)
     expect_no_error(sampleTidy:::ir_validate(out$results, "results"))
     expect_no_error(sampleTidy:::ir_validate(out$samples, "samples"))
     r <- out$results
@@ -153,7 +167,7 @@ test_that("IR: output validates; analyte_raw `CH4 Reading % v/v`, units_raw `%`,
 
 test_that("IR: one sample per reading - every result joins to exactly one sample with the same feature", {
   for (nm in names(fx)) {
-    out <- gas_parse(fx[[nm]])
+    out <- gas_parse_fx(nm)
     r <- out$results; s <- out$samples
     expect_false(anyNA(r$lab_sample_id), info = nm)
     expect_false(anyDuplicated(s$lab_sample_id) > 0, info = nm)
@@ -165,6 +179,8 @@ test_that("IR: one sample per reading - every result joins to exactly one sample
 })
 
 test_that("IR: the parse is deterministic - a re-parse yields identical results and samples", {
+  # Two DIRECT parses, deliberately not gas_parse_fx(): a memoised result
+  # compared with itself would pass vacuously.
   a <- gas_parse(fx$kat)
   b <- gas_parse(fx$kat)
   expect_identical(a$results, b$results)
@@ -173,7 +189,7 @@ test_that("IR: the parse is deterministic - a re-parse yields identical results 
 
 test_that("IR: report$campaign is `Monthly gas monitoring` (A80 filing)", {
   for (nm in names(fx)) {
-    expect_identical(gas_parse(fx[[nm]])$report$campaign, "Monthly gas monitoring", info = nm)
+    expect_identical(gas_parse_fx(nm)$report$campaign, "Monthly gas monitoring", info = nm)
   }
 })
 
@@ -182,14 +198,14 @@ test_that("IR: report$campaign is `Monthly gas monitoring` (A80 filing)", {
 # ==============================================================================
 
 test_that("2: Blaxland 2025 (header row 7, column offset 0) yields exactly the expected 45 probes", {
-  out <- gas_parse(fx$b2025)
+  out <- gas_parse_fx("b2025")
   expect_setequal(out$results$feature_raw, gas_expected_b2025_monthly())
   expect_equal(nrow(out$results), 45)
 })
 
 test_that("2: the Mar-2026 shape (#1/#2 one column right) parses identically to the unshifted one", {
-  a <- gas_parse(fx$b2025)$results
-  b <- gas_parse(fx$b2026)$results
+  a <- gas_parse_fx("b2025")$results
+  b <- gas_parse_fx("b2026")$results
   expect_setequal(b$feature_raw, gas_expected_b2025_monthly())
   a <- a[order(a$feature_raw), ]; b <- b[order(b$feature_raw), ]
   expect_identical(b$feature_raw, a$feature_raw)
@@ -197,13 +213,13 @@ test_that("2: the Mar-2026 shape (#1/#2 one column right) parses identically to 
 })
 
 test_that("2: Katoomba (header row 6, one column in, `CH4 Reading     % v/v`) yields all 50 readings (52 cells less 2 template slots)", {
-  out <- gas_parse(fx$kat)
+  out <- gas_parse_fx("kat")
   expect_setequal(out$results$feature_raw, gas_expected_katoomba())
   expect_equal(nrow(out$results), 50)
 })
 
 test_that("2: Blaxland 2021 (header row 11) yields its 40 readings", {
-  out <- gas_parse(fx$b2021)
+  out <- gas_parse_fx("b2021")
   expected <- c(paste0("B.G", c(1:3, 26:28, 51:53, 76:78)),
                 paste0("B.G", c(101:106, 126:131, 151:156, 176:181)),
                 "B.Toilets - Right Side", "B.Toilets - Left Side",
@@ -213,7 +229,7 @@ test_that("2: Blaxland 2021 (header row 11) yields its 40 readings", {
 })
 
 test_that("2: Blaxland 2024 landfill (row 7) + `Gas Buildings ` (row 8) yield 31 readings", {
-  out <- gas_parse(fx$b2024)
+  out <- gas_parse_fx("b2024")
   expect_equal(nrow(out$results), 31)
   expect_equal(sum(grepl("^B\\.G[0-9]+$", out$results$feature_raw)), 23)
   expect_equal(sum(grepl(" - ", out$results$feature_raw)), 8)
@@ -229,7 +245,7 @@ test_that("2: a `#3` sheet of only 3 rows yields exactly B.G382-B.G384", {
 })
 
 test_that("2: a wholly blank row INSIDE the grid does not end the block (Mar-2026 #2 row 27)", {
-  r <- gas_parse(fx$b2025)$results
+  r <- gas_parse_fx("b2025")$results
   # rows 14-15 of `Gas Landfil #2`, below the blank row 13, in every pair
   for (f in paste0("B.G", c(288, 289, 313, 314, 338, 339, 374, 375))) {
     expect_true(f %in% r$feature_raw, info = f)
@@ -238,14 +254,14 @@ test_that("2: a wholly blank row INSIDE the grid does not end the block (Mar-202
 })
 
 test_that("2: each Location column pairs with ITS OWN CH4 column (values land on the right probe)", {
-  out <- gas_parse(fx$b2025)
+  out <- gas_parse_fx("b2025")
   expect_equal(gas_value_of(out, "B.G197"), 0.01)   # pair 1
   expect_equal(gas_value_of(out, "B.G223"), 0.02)   # pair 2
   expect_equal(gas_value_of(out, "B.G250"), 0.17)   # pair 3
   expect_equal(gas_value_of(out, "B.G276"), 0.04)   # pair 4
   expect_equal(gas_value_of(out, "B.G283"), 0.01)
   expect_equal(gas_value_of(out, "B.G372"), 0.01)
-  k <- gas_parse(fx$kat)
+  k <- gas_parse_fx("kat")
   expect_equal(gas_value_of(k, "K.G187"), 0.01)
 })
 
@@ -254,7 +270,7 @@ test_that("2: each Location column pairs with ITS OWN CH4 column (values land on
 # ==============================================================================
 
 test_that("3: `NS: ...` / `NR: ...` note rows yield no result, sample or skip", {
-  out <- gas_parse(fx$weekly)
+  out <- gas_parse_fx("weekly")
   expect_false(any(grepl("^(NS|NR):", out$results$value_raw)))
   expect_false(any(grepl("NS:|NR:|Unable|requested", out$results$feature_raw)))
   expect_false(any(grepl("NS:|NR:|Unable|requested", out$samples$feature_raw)))
@@ -263,7 +279,7 @@ test_that("3: `NS: ...` / `NR: ...` note rows yield no result, sample or skip", 
 })
 
 test_that("3: the 2021 `Note` row and its `G103 | Working Face` remark yield nothing", {
-  out <- gas_parse(fx$b2021)
+  out <- gas_parse_fx("b2021")
   expect_equal(sum(out$results$feature_raw == "B.G103"), 1)
   expect_identical(gas_value_of(out, "B.G103"), 0)
   expect_false(any(grepl("Working Face|^Note$", c(out$results$value_raw, out$results$feature_raw))))
@@ -271,7 +287,7 @@ test_that("3: the 2021 `Note` row and its `G103 | Working Face` remark yield not
 })
 
 test_that("3: the 2021 `Additional Gas Point Coordinates` table yields nothing", {
-  out <- gas_parse(fx$b2021)
+  out <- gas_parse_fx("b2021")
   r <- out$results
   # one reading per G179-G181 (the data rows), none from the coordinates rows
   for (f in c("B.G179", "B.G180", "B.G181")) expect_equal(sum(r$feature_raw == f), 1, info = f)
@@ -286,7 +302,7 @@ test_that("3: the 2021 `Additional Gas Point Coordinates` table yields nothing",
 # ==============================================================================
 
 test_that("4: building Location fills down over blank cells", {
-  f <- gas_parse(fx$b2024)$results$feature_raw
+  f <- gas_parse_fx("b2024")$results$feature_raw
   expect_true("B.Toilets - Right Side" %in% f)
   expect_true("B.Toilets - Left Side" %in% f)          # Location blank on this row
   expect_true("B.Weigh Bridge Building - Toilet" %in% f)
@@ -296,10 +312,10 @@ test_that("4: building Location fills down over blank cells", {
 })
 
 test_that("4: a reference repeated within ONE building gets `#2`", {
-  f <- gas_parse(fx$b2024)$results$feature_raw
+  f <- gas_parse_fx("b2024")$results$feature_raw
   expect_equal(sum(f == "B.Storage Shed re used - Right Wall"), 1)
   expect_equal(sum(f == "B.Storage Shed re used - Right Wall #2"), 1)
-  k <- gas_parse(fx$kat)
+  k <- gas_parse_fx("kat")
   expect_equal(sum(k$results$feature_raw == "K.Re-use Center - Power point back wall #2"), 1)
   expect_equal(sum(k$results$feature_raw == "K.Meeting Room - Window wall 2 #2"), 1)
 })
@@ -381,7 +397,7 @@ test_that("4: regression - fully populated repeats are still unsuffixed / `#2` /
 })
 
 test_that("4: the same reference in two DIFFERENT buildings is not suffixed", {
-  f <- gas_parse(fx$kat)$results$feature_raw
+  f <- gas_parse_fx("kat")$results$feature_raw
   expect_true("K.Office - Air conditioner" %in% f)
   expect_true("K.Meal Room - Air conditioner" %in% f)
   expect_false(any(grepl("Air conditioner #", f)))
@@ -389,13 +405,13 @@ test_that("4: the same reference in two DIFFERENT buildings is not suffixed", {
 
 test_that("4: feature_raw is unique within every file (A84 refuses repeats)", {
   for (nm in names(fx)) {
-    f <- gas_parse(fx[[nm]])$results$feature_raw
+    f <- gas_parse_fx(nm)$results$feature_raw
     expect_false(anyDuplicated(f) > 0, info = paste(nm, paste(f[duplicated(f)], collapse = ", ")))
   }
 })
 
 test_that("4: runs of whitespace inside a building Location are squished", {
-  f <- gas_parse(fx$kat)$results$feature_raw
+  f <- gas_parse_fx("kat")$results$feature_raw
   expect_true("K.Main Recycle area (Drop Off) - Power point near hose reel" %in% f)
   expect_false(any(grepl("  ", f)))
 })
@@ -405,16 +421,16 @@ test_that("4: runs of whitespace inside a building Location are squished", {
 # ==============================================================================
 
 test_that("5: probes are site-qualified from content - B.G182 at Blaxland, K.G186 at Katoomba", {
-  expect_true("B.G182" %in% gas_parse(fx$b2024)$results$feature_raw)
-  expect_true("K.G186" %in% gas_parse(fx$kat)$results$feature_raw)
+  expect_true("B.G182" %in% gas_parse_fx("b2024")$results$feature_raw)
+  expect_true("K.G186" %in% gas_parse_fx("kat")$results$feature_raw)
 })
 
 test_that("5: B and K never cross - every feature in a file carries that file's site", {
   for (nm in c("b2025", "b2026", "weekly", "b2024", "b2021")) {
-    out <- gas_parse(fx[[nm]])
+    out <- gas_parse_fx(nm)
     expect_true(all(startsWith(c(out$results$feature_raw, out$samples$feature_raw), "B.")), info = nm)
   }
-  out <- gas_parse(fx$kat)
+  out <- gas_parse_fx("kat")
   expect_true(all(startsWith(c(out$results$feature_raw, out$samples$feature_raw), "K.")))
 })
 
@@ -439,13 +455,13 @@ test_that("5: a workbook whose content names neither site is refused, never gues
 })
 
 test_that("5: probe numbers are emitted verbatim - `B.G1`, not `B.G001` (the resolver pads)", {
-  f <- gas_parse(fx$b2021)$results$feature_raw
+  f <- gas_parse_fx("b2021")$results$feature_raw
   expect_true("B.G1" %in% f)
   expect_false("B.G001" %in% f)
 })
 
 test_that("5: G368-G384 on a landfill sheet emit `B.G368`..., never a building-style name", {
-  out <- gas_parse(fx$b2025)
+  out <- gas_parse_fx("b2025")
   f <- out$results$feature_raw
   for (g in c("B.G368", "B.G370", "B.G372", "B.G374", "B.G375", "B.G382", "B.G383", "B.G384")) {
     expect_true(g %in% f, info = g)
@@ -455,13 +471,13 @@ test_that("5: G368-G384 on a landfill sheet emit `B.G368`..., never a building-s
 })
 
 test_that("5: G179-G181 emit B.G179-B.G181 (the registry aliases them to B.TG179-181, not the adapter)", {
-  f <- gas_parse(fx$b2021)$results$feature_raw
+  f <- gas_parse_fx("b2021")$results$feature_raw
   expect_true(all(c("B.G179", "B.G180", "B.G181") %in% f))
   expect_false(any(grepl("TG", f)))
 })
 
 test_that("5: Katoomba bores emit K.MP_1..K.MP_4 (the registry's MP_n alias form), not a building name", {
-  out <- gas_parse(fx$kat)
+  out <- gas_parse_fx("kat")
   f <- out$results$feature_raw
   expect_true(all(paste0("K.MP_", 1:4) %in% f))
   expect_false(any(grepl("Gas Bore", f)))
@@ -469,7 +485,7 @@ test_that("5: Katoomba bores emit K.MP_1..K.MP_4 (the registry's MP_n alias form
 })
 
 test_that("5: Blaxland weekly points 1-21 emit `B.Weekly 1` ... `B.Weekly 21`", {
-  out <- gas_parse(fx$weekly)
+  out <- gas_parse_fx("weekly")
   f <- out$results$feature_raw
   expect_true(all(paste("B.Weekly", 1:21) %in% f))
   expect_false(any(f %in% paste0("B.", 1:21)))
@@ -481,7 +497,7 @@ test_that("5: Blaxland weekly points 1-21 emit `B.Weekly 1` ... `B.Weekly 21`", 
 })
 
 test_that("5: Katoomba biofilter grids emit labelled R<r>C<c> names, row-major as laid out", {
-  out <- gas_parse(fx$kat)
+  out <- gas_parse_fx("kat")
   g <- out$results[grepl("^K\\.(Biofilter North Corner|Front of Buildings) R[12]C[123]$",
                          out$results$feature_raw), ]
   expect_equal(nrow(g), 12)
@@ -526,13 +542,13 @@ test_that("6: the filename token is kept on the report, and a mismatch with the 
 })
 
 test_that("6: a filename that AGREES with the cell records no mismatch", {
-  out <- gas_parse(fx$b2025)                  # "2400-9901-07-01 July 2025 ..." / cell 2400-9901-07-01
+  out <- gas_parse_fx("b2025")                  # "2400-9901-07-01 July 2025 ..." / cell 2400-9901-07-01
   expect_identical(out$report$filename_report_no, "2400-9901-07-01")
   expect_false(any(grepl("mismatch|disagree|differ", out$report$warnings, ignore.case = TRUE)))
 })
 
 test_that("6: `24009902 - 05 Amended` files as `24009902-05`, with `Amended` kept in comments", {
-  out <- gas_parse(fx$b2021)
+  out <- gas_parse_fx("b2021")
   expect_identical(out$report$header$report_no, "24009902-05")
   expect_true(all(out$results$work_order == "24009902-05"))
   s <- out$samples; r <- out$results
@@ -549,7 +565,7 @@ test_that("6: whitespace inside the REPORT NO cell is normalised", {
 })
 
 test_that("6: sampler comes from SAMPLED BY (first name, `& ...` stripped), like the field adapter", {
-  out <- gas_parse(fx$b2025)
+  out <- gas_parse_fx("b2025")
   expect_true(all(out$samples$sampler == "J. Tester"))
 })
 
@@ -558,18 +574,18 @@ test_that("6: sampler comes from SAMPLED BY (first name, `& ...` stripped), like
 # ==============================================================================
 
 test_that("7: binary-noise readings round to 2 dp - `0.0299999999999999` -> 0.03", {
-  out <- gas_parse(fx$b2025)
+  out <- gas_parse_fx("b2025")
   r <- out$results[out$results$feature_raw == "B.G199", ]
   expect_equal(nrow(r), 1)
   expect_identical(r$value_num, 0.03)
   expect_identical(r$value_raw, "0.03")
-  b <- gas_parse(fx$b2024)
+  b <- gas_parse_fx("b2024")
   expect_identical(gas_value_of(b, "B.Out side - Reused shed"), 0.03)
 })
 
 test_that("7: every emitted value_raw carries at most 2 decimals and parses to value_num", {
   for (nm in names(fx)) {
-    r <- gas_parse(fx[[nm]])$results
+    r <- gas_parse_fx(nm)$results
     expect_true(all(grepl("^[0-9]+(\\.[0-9]{1,2})?$", r$value_raw)),
                 info = paste(nm, paste(head(r$value_raw[!grepl("^[0-9]+(\\.[0-9]{1,2})?$", r$value_raw)]), collapse = ", ")))
     expect_identical(as.numeric(r$value_raw), r$value_num, info = nm)
@@ -595,7 +611,7 @@ test_that("7: a reading with GENUINE >2 dp precision is never silently rounded",
 # ==============================================================================
 
 test_that("8: each text code is skipped with its reason", {
-  out <- gas_parse(fx$b2025)
+  out <- gas_parse_fx("b2025")
   expect_true(all(c("source_ref", "reason") %in% names(out$report$skipped)))
   tab <- table(gas_reasons(out))
   expect_equal(as.integer(tab[["no_sample"]]), 2)      # G200, G308
@@ -608,7 +624,7 @@ test_that("8: each text code is skipped with its reason", {
 })
 
 test_that("8: a text-coded point creates no result and no sample", {
-  out <- gas_parse(fx$b2025)
+  out <- gas_parse_fx("b2025")
   coded <- paste0("B.G", c(200, 201, 224, 308, 369, 371))
   expect_false(any(coded %in% out$results$feature_raw))
   expect_false(any(coded %in% out$samples$feature_raw))
@@ -624,14 +640,14 @@ test_that("8: text codes match case- and whitespace-blind (`Does not exist`, `NS
   expect_equal(as.integer(tab[["point_absent"]]), 1)
   expect_equal(as.integer(tab[["no_sample"]]), 2)
   expect_equal(as.integer(tab[["no_access"]]), 1)
-  k <- gas_parse(fx$kat)                        # G263 = "NS " on the Katoomba #1 sheet
+  k <- gas_parse_fx("kat")                        # G263 = "NS " on the Katoomba #1 sheet
   # (plus the two numeric template slots G365/G366 - section 16)
   expect_identical(sort(gas_reasons(k)), c("no_sample", "template_slot", "template_slot"))
   expect_false("K.G263" %in% k$results$feature_raw)
 })
 
 test_that("8: the weekly sheet's NR-coded G382-G384 are skipped as not_requested", {
-  out <- gas_parse(fx$weekly)
+  out <- gas_parse_fx("weekly")
   tab <- table(gas_reasons(out))
   expect_equal(as.integer(tab[["not_requested"]]), 4)  # G369 + G382-G384
   expect_false(any(c("B.G382", "B.G383", "B.G384") %in% out$results$feature_raw))
@@ -642,7 +658,7 @@ test_that("8: the weekly sheet's NR-coded G382-G384 are skipped as not_requested
 # ==============================================================================
 
 test_that("9: a zero reading is emitted as value 0, flagged below detection", {
-  out <- gas_parse(fx$b2025)
+  out <- gas_parse_fx("b2025")
   z <- out$results[out$results$feature_raw == "B.G198", ]
   expect_equal(nrow(z), 1)
   expect_identical(z$value_raw, "0")
@@ -657,11 +673,11 @@ test_that("9: a zero reading is emitted as value 0, flagged below detection", {
 # ==============================================================================
 
 test_that("10: every sample is dated by the front-page SAMPLE DATE serial, date only", {
-  out <- gas_parse(fx$b2025)                    # SAMPLE DATE serial for 2025-07-22
+  out <- gas_parse_fx("b2025")                    # SAMPLE DATE serial for 2025-07-22
   expect_true(all(out$samples$sample_datetime_raw == "22/07/2025"))
   expect_false(any(sampleTidy:::has_clock_time(out$samples$sample_datetime_raw)))
   expect_true(all(is.na(out$samples$sample_date_start_raw)))
-  o21 <- gas_parse(fx$b2021)
+  o21 <- gas_parse_fx("b2021")
   expect_true(all(o21$samples$sample_datetime_raw == "06/05/2021"))
 })
 
@@ -677,7 +693,7 @@ test_that("10: the Katoomba `Biofilter and Bores sampled 5/1/26` note re-dates O
 })
 
 test_that("10: with no note, the biofilter and bores carry the front-page date", {
-  out <- gas_parse(fx$kat)                      # sample_date 2025-12-10, no note
+  out <- gas_parse_fx("kat")                      # sample_date 2025-12-10, no note
   expect_true(all(out$samples$sample_datetime_raw == "10/12/2025"))
 })
 
@@ -837,7 +853,7 @@ test_that("16: the skipped B.G201 is recorded as `template_slot` with its cell r
 })
 
 test_that("16: Katoomba K.G365 / K.G366 (CH4 0) yield no result and no sample; K.G362 beside them is kept", {
-  out <- gas_parse(fx$kat)
+  out <- gas_parse_fx("kat")
   for (s in c("K.G365", "K.G366")) {
     expect_false(s %in% out$results$feature_raw, info = s)
     expect_false(s %in% out$samples$feature_raw, info = s)
@@ -872,7 +888,7 @@ test_that("16: the skip is site-qualified - K.G201 at Katoomba and B.G365/B.G366
 
 test_that("16: no fixture family ever emits a template slot", {
   for (nm in names(fx)) {
-    out <- gas_parse(fx[[nm]])
+    out <- gas_parse_fx(nm)
     expect_false(any(gas_template_slots %in% c(out$results$feature_raw, out$samples$feature_raw)),
                  info = nm)
   }
