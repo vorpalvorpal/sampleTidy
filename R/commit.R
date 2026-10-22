@@ -1429,11 +1429,7 @@
       # 2026-10-22: fraction from the method code (EDxxxF/EGxxxF dissolved,
       # ...T total), only when lab_method has the column (migration 070).
       if ("fraction" %in% DBI::dbListFields(con, "lab_method")) {
-        code <- gsub("\\s+", "", .rc_method_code_raw(method_raw))
-        row$fraction <- if (is.na(code)) NA_character_
-          else if (grepl("^E[DG][0-9]{3}(\\([^)]*\\))?F$", code, ignore.case = TRUE)) "dissolved"
-          else if (grepl("^E[DG][0-9]{3}(\\([^)]*\\))?T$", code, ignore.case = TRUE)) "total"
-          else NA_character_
+        row$fraction <- .st_fraction_from_method(method_raw)
       }
       db_append(con, "lab_method", row, actor = actor, reason = reason,
                 source_hash = clean$source_hash[[first_i]])
@@ -1441,6 +1437,24 @@
     clean$uuid_lab[rows_k] <- lab_uuid
   }
   clean
+}
+
+# lab_method.fraction vocabulary (migration 070); NULL = not stated.
+.st_fraction_vocabulary <- c("dissolved", "total")
+
+#' The fraction a lab_method's method text implies (2026-10-22): an ALS
+#' EDxxxF / EGxxxF code (optionally with a parenthesised suffix) is
+#' dissolved, ...T total, anything else NA. Vectorised. Shared by commit
+#' (which mints `fraction`) and the `fraction_matches_code` DB check.
+#' @keywords internal
+#' @noRd
+.st_fraction_from_method <- function(method) {
+  code <- gsub("\\s+", "", .rc_method_code_raw(method))
+  out <- rep(NA_character_, length(code))
+  ok <- !is.na(code)
+  out[ok & grepl("^E[DG][0-9]{3}(\\([^)]*\\))?F$", code, ignore.case = TRUE)] <- "dissolved"
+  out[ok & grepl("^E[DG][0-9]{3}(\\([^)]*\\))?T$", code, ignore.case = TRUE)] <- "total"
+  out
 }
 
 #' Rewrite the `review_queue` row's typed `uuid_alias` column for every
