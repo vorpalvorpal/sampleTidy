@@ -96,9 +96,12 @@ test_that("inbox_check(): unchanged inbox and DB -> 'none', writing nothing (not
   s <- inbox_setup()
   run_inbox(s)                     # baseline: writes the state file
   expect_true(file.exists(file.path(s$report_dir, ".imports.state")))
+  # Instead of sleeping: backdate what is already there, so any rewrite would
+  # show a new mtime, and tell the check the clock has moved on, so a
+  # rewritten checked_at would show in the content too.
+  backdate_tree(s$report_dir)
   before <- tree_snapshot(s$report_dir)
-  Sys.sleep(1.1)
-  expect_identical(inbox_check(s$input_dir, s$report_dir, now = Sys.time(), db = s$db), "none")
+  expect_identical(inbox_check(s$input_dir, s$report_dir, now = Sys.time() + 2, db = s$db), "none")
   expect_identical(tree_snapshot(s$report_dir), before)
 })
 
@@ -197,14 +200,17 @@ test_that("inbox_run(): a 'none' check does nothing at all (ran = FALSE)", {
   first <- run_inbox(s)
   expect_true(first$ran)
   backups <- list.files(s$backup_dir)
+  # Instead of sleeping: backdate the notes, so any rewrite would show a new
+  # mtime, and run the second sweep with the clock moved on. (The input files
+  # and the DB cannot be backdated: their stat IS the signature under test.)
+  backdate_tree(s$report_dir)
   rep_before <- tree_snapshot(s$report_dir)
   in_before <- tree_snapshot(s$input_dir)
   db_md5 <- file_md5(s$db)
   db_mtime <- file.mtime(s$db)
-  Sys.sleep(1.1)
 
   # the run's own removals/writes must not trigger the next check
-  second <- run_inbox(s)
+  second <- run_inbox(s, now = Sys.time() + 2)
   expect_false(second$ran)
   expect_identical(second$action, "none")
   expect_identical(list.files(s$backup_dir), backups)
@@ -572,15 +578,20 @@ test_that("inbox_run(): a DB change alone refreshes the status note read-only; a
   run_inbox(s, now = now)
   nr <- md_section(read_status_note(s$report_dir), "Needs review")
   expect_true(any(grepl("ES2617126", nr, fixed = TRUE)))
+  # Instead of sleeping: backdate the dated note so a rewrite would show.
+  backdate_tree(s$report_dir)
   day_before <- tree_snapshot(s$report_dir)[paste0(sydney_date(now), "-imports.md")]
   log_n <- length(read_inbox_log(s$report_dir))
   backups <- list.files(s$backup_dir)
-  Sys.sleep(1.1)
 
   # resolve every ES2617126 item outside an import (as a migration would)
   con <- seed_con(s$db)
   DBI::dbExecute(con, "UPDATE review_queue SET status = 'resolved' WHERE work_order = 'ES2617126'")
   DBI::dbDisconnect(con, shutdown = TRUE)
+  # The DB stat is what inbox_check() reads. The sleep that used to sit above
+  # made sure the UPDATE's mtime differed from the recorded one even on a
+  # filesystem with whole-second mtimes; move it on explicitly instead.
+  Sys.setFileTime(s$db, Sys.time() + 5)
   db_md5 <- file_md5(s$db)
   expect_identical(inbox_check(s$input_dir, s$report_dir, now = now, db = s$db), "status")
 

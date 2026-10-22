@@ -93,11 +93,17 @@ seed_wo_folder <- function(dir, wo) {
 
 # ---- R-9.5: end-to-end orchestration ---------------------------------------
 
-test_that("R-9.5: subdirectory content is untouched and cruft files are ignored", {
-  setup <- ingest_test_setup()
-  input_dir <- build_e2e_input_dir()
+# The first three R-9.5/R-9.6 tests below only READ what one ingest of the e2e
+# corpus left behind, so the corpus is ingested once for this file (the same
+# seed, options and input ingest_test_setup() + build_e2e_input_dir() give)
+# and each reads its own fresh copy (PLAN-22 B1). `pre` records the seeded
+# DB's core counts just before that ingest, for the DB-delta test.
+e2e_ingested <- local_e2e_ingest_cache(pre = all_core_counts)
 
-  report <- ingest_dir(input_dir, db = setup$db_path)
+test_that("R-9.5: subdirectory content is untouched and cruft files are ignored", {
+  setup <- e2e_ingested()
+  input_dir <- setup$input_dir
+  report <- setup$report
   # R-12.15 T-1 sweep (5th instance): assert the report's own files_by_state
   # reflects a specific, fixture-derived count rather than merely existing as
   # a list. Since R-12.7 makes files_by_state a TERMINAL-state tally (not the
@@ -132,11 +138,9 @@ test_that("R-9.5: subdirectory content is untouched and cruft files are ignored"
 })
 
 test_that("R-9.5: every landed adapter family commits and report numbers reconcile with DB deltas", {
-  setup <- ingest_test_setup()
-  input_dir <- build_e2e_input_dir()
-
-  before <- all_core_counts(setup$db_path)
-  report <- ingest_dir(input_dir, db = setup$db_path)
+  setup <- e2e_ingested()
+  before <- setup$pre
+  report <- setup$report
   after <- all_core_counts(setup$db_path)
 
   expect_true(any(after != before),
@@ -148,25 +152,6 @@ test_that("R-9.5: every landed adapter family commits and report numbers reconci
   # mid-pipeline)
   expect_true(all(fixture_files$state %in%
     c("committed", "archived", "ignored", "quarantined", "failed", "needs_review")))
-})
-
-test_that("R-9.5: dry_run = TRUE produces a report with zero core-table DB writes and no snapshot", {
-  setup <- ingest_test_setup()
-  input_dir <- build_e2e_input_dir()
-
-  before <- all_core_counts(setup$db_path)
-  report <- ingest_dir(input_dir, db = setup$db_path, dry_run = TRUE)
-  after <- all_core_counts(setup$db_path)
-
-  # R-12.15 T-1 sweep (5th instance): pin dry_run's own documented contract
-  # (ingest_dir() roxygen: "dry_run = TRUE still routes, parses, assembles
-  # and reconciles ... but skips commit_event() ... entirely") rather than
-  # just checking `report` exists.
-  expect_true(isTRUE(report$dry_run))
-  expect_true(report$n_files_routed > 0)
-  expect_equal(report$n_events_committed, 0L)
-  expect_equal(after, before)
-  expect_length(list.files(setup$snapshot_dir), 0)
 })
 
 # ---- generic dry-run purity guard: EVERY base table, not a named list -----
@@ -216,13 +201,32 @@ expect_dry_run_writes_nothing_but_routing <- function(db_path, run) {
   )
 }
 
-test_that("generic guard: a dry run over the full e2e corpus grows no base table except the routing ops tables", {
+# R-9.5's dry-run test and the generic guard ("generic guard: a dry run over
+# the full e2e corpus grows no base table except the routing ops tables") used
+# to be two tests, each dry-running the full e2e corpus. Merged (PLAN-22 B4):
+# one dry run, every assertion of both. It keeps R-9.5's name because
+# dev/plans/COVERAGE-MAP.md quotes it (test-coverage-map-lint.R).
+test_that("R-9.5: dry_run = TRUE produces a report with zero core-table DB writes and no snapshot", {
   setup <- ingest_test_setup()
   input_dir <- build_e2e_input_dir()
 
+  before <- all_core_counts(setup$db_path)
+  report <- NULL
+  # the generic guard: EVERY base table, discovered at call time
   expect_dry_run_writes_nothing_but_routing(setup$db_path, function() {
-    suppressMessages(ingest_dir(input_dir, db = setup$db_path, dry_run = TRUE))
+    report <<- ingest_dir(input_dir, db = setup$db_path, dry_run = TRUE)
   })
+  after <- all_core_counts(setup$db_path)
+
+  # R-12.15 T-1 sweep (5th instance): pin dry_run's own documented contract
+  # (ingest_dir() roxygen: "dry_run = TRUE still routes, parses, assembles
+  # and reconciles ... but skips commit_event() ... entirely") rather than
+  # just checking `report` exists.
+  expect_true(isTRUE(report$dry_run))
+  expect_true(report$n_files_routed > 0)
+  expect_equal(report$n_events_committed, 0L)
+  expect_equal(after, before)
+  expect_length(list.files(setup$snapshot_dir), 0)
 })
 
 test_that("R-3.5/T1.2: an adapter tie writes nothing (review_queue/change_log, or a stuck quarantined state) under dry_run, and a later real run still resolves it", {
@@ -370,11 +374,16 @@ test_that("R-9.5: an adapter crash on one file is recorded as failed and the run
   expect_false(is.na(corrupt_state$state_reason))
 })
 
+# test-e2e-pipeline.R R-10.3 asserts a strict superset of this test (its
+# all_table_counts() covers every table here plus ingest_file and
+# ingest_sighting), so PLAN-22 B4 meant to drop it. It stays because
+# dev/plans/COVERAGE-MAP.md quotes its name, but its FIRST run now comes from
+# the B1 cache: it starts from a private copy of the post-ingest state and
+# only the second run - the one under test - happens here, on that copy.
 test_that("R-9.5: a second run over the same directory is a no-op (idempotent at the orchestration level)", {
-  setup <- ingest_test_setup()
-  input_dir <- build_e2e_input_dir()
+  setup <- e2e_ingested()
+  input_dir <- setup$input_dir
 
-  ingest_dir(input_dir, db = setup$db_path)
   after_first <- all_core_counts(setup$db_path)
   n_files_first <- nrow(ingest_file_states(setup$db_path))
   n_review_first <- count_rows(setup$db_path, "review_queue")
@@ -391,7 +400,12 @@ test_that("R-9.5: a second run over the same directory is a no-op (idempotent at
 
 test_that("R-9.5: two same-byte files in ONE run (a [N] duplicate-download pair) ingest once, without aborting (A46)", {
   setup <- ingest_test_setup()
-  input_dir <- build_e2e_input_dir()
+  # PLAN-22 B2: a minimal corpus, not the full e2e one. BADDATE stays in it
+  # because it is the Chemistry2e file the full corpus twinned (first by
+  # name); the default set adds two committable work orders around it.
+  input_dir <- build_minimal_input_dir(c(
+    "esdat/BADDATE.ESDAT_XX5555555_0.Chemistry2e.CSV", minimal_corpus_files()
+  ))
 
   # Reproduces the real-corpus case that exposed A46: a browser
   # duplicate-download twin (`foo[65].CSV`) sitting beside its original in
@@ -417,13 +431,11 @@ test_that("R-9.5: two same-byte files in ONE run (a [N] duplicate-download pair)
 # ---- R-9.6: the remove switch (A13) ----------------------------------------
 
 test_that("R-9.6: default (remove_ingested = FALSE) leaves all sources present", {
-  setup <- ingest_test_setup()
-  input_dir <- build_e2e_input_dir()
-  files_before <- list.files(input_dir, recursive = FALSE)
+  setup <- e2e_ingested()
+  # listed in the cache just before its ingest ran over the directory
+  files_before <- setup$files_before
 
-  ingest_dir(input_dir, db = setup$db_path)
-
-  files_after <- list.files(input_dir, recursive = FALSE)
+  files_after <- list.files(setup$input_dir, recursive = FALSE)
   expect_setequal(files_after, files_before)
 })
 
@@ -648,7 +660,7 @@ test_that("direct: .ig_remove_verified() keeps the source when the archive copy 
 
 test_that("R-12.1: an ingest run containing one file whose adapter match() returns NA still commits the other good files (per-file containment, not a whole-run abort)", {
   setup <- ingest_test_setup()
-  input_dir <- build_e2e_input_dir()
+  input_dir <- build_minimal_input_dir()  # PLAN-22 B2: see helper-corpus.R
 
   bad_adapter_id <- "r121_bad_na_adapter"
   register_adapter(list(
@@ -717,7 +729,7 @@ test_that("R-9.6: a subsequent run over the emptied directory is a clean no-op",
 
 test_that("R-12.2: a per-event reconcile failure is contained - the poisoned event's kept files are marked failed with events_failed counted and a cli_warn names it, while sibling events still reach committed/archived terminal states", {
   setup <- ingest_test_setup()
-  input_dir <- build_e2e_input_dir()
+  input_dir <- build_minimal_input_dir()  # PLAN-22 B2: see helper-corpus.R
 
   call_n <- 0L
   poisoned_hashes <- character(0)
@@ -769,7 +781,7 @@ test_that("R-12.2: a per-event reconcile failure is contained - the poisoned eve
 
 test_that("R-12.2: when EVERY event throws in reconcile, ingest_dir() still contains each one (failed + counted) during the loop, then aborts class sampletidy_error after the loop - not a quiet all-failed report and not a bare abort on the first failure", {
   setup <- ingest_test_setup()
-  input_dir <- build_e2e_input_dir()
+  input_dir <- build_minimal_input_dir()  # PLAN-22 B2: see helper-corpus.R
 
   call_n <- 0L
   event_kept_hashes <- character(0)
@@ -829,7 +841,7 @@ test_that("R-12.2: when EVERY event throws in reconcile, ingest_dir() still cont
 
 test_that("R-12.7: files_by_state reports the run's real terminal state (committed) for a run that commits an event, not the route-time 'claimed' state", {
   setup <- ingest_test_setup()
-  input_dir <- build_e2e_input_dir()
+  input_dir <- build_minimal_input_dir()  # PLAN-22 B2: see helper-corpus.R
 
   ok_resolved <- list(
     clean = tibble::tibble(source_ref = character(0)),
@@ -1229,7 +1241,7 @@ test_that("R-15.36: a work order's non-PDF non-tabular deliverable (an XTAB.XLS)
 
 test_that("R-12.7: files_by_state shows 'needs_review' for a needs_review-only event, not 'claimed'", {
   setup <- ingest_test_setup()
-  input_dir <- build_e2e_input_dir()
+  input_dir <- build_minimal_input_dir()  # PLAN-22 B2: see helper-corpus.R
 
   review_resolved <- list(
     clean = tibble::tibble(source_ref = character(0)),

@@ -44,6 +44,14 @@
 #' @keywords internal
 .st_parse_tree <- function(lines, file_label = "<source>") {
   text <- paste(lines, collapse = "\n")
+  # Several lints parse the same R/ and tests/ files (PLAN-22 B6), so the
+  # token frame is cached for the run, keyed by the text's hash: an edited
+  # file hashes differently and is parsed afresh. A data.frame is copied on
+  # modify, so a caller cannot alter the cached copy. Parse failures are not
+  # cached; they abort below on every call.
+  key <- rlang::hash(text)
+  hit <- .st_parse_cache[[key]]
+  if (!is.null(hit)) return(hit)
   pd <- tryCatch(
     utils::getParseData(parse(text = text, keep.source = TRUE)),
     error = function(e) NULL
@@ -58,8 +66,10 @@
       call. = FALSE
     )
   }
+  assign(key, pd, envir = .st_parse_cache)
   pd
 }
+.st_parse_cache <- new.env(parent = emptyenv())
 
 #' Every span in `inner` (vectors, one element each) that is fully CONTAINED
 #' inside the single `outer` span - the primitive both matchers below use to
