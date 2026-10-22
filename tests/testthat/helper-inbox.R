@@ -201,6 +201,16 @@ tree_snapshot <- function(dir) {
   )
 }
 
+#' Move every file under `dir` `secs` into the past, so that a later rewrite
+#' shows in `tree_snapshot()`'s mtime even on a whole-second filesystem. Used
+#' in place of `Sys.sleep()` (PLAN-22 B6). Only for directories whose mtimes
+#' the code under test does not read (the report dir, not the input dir or DB).
+backdate_tree <- function(dir, secs = 60) {
+  f <- list.files(dir, recursive = TRUE, all.files = TRUE, full.names = TRUE, no.. = TRUE)
+  if (length(f) > 0) Sys.setFileTime(f, Sys.time() - secs)
+  invisible(f)
+}
+
 quiet_run <- function(expr) suppressWarnings(suppressMessages(expr))
 
 ingest_file_rows <- function(db) {
