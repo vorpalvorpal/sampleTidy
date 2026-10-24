@@ -982,6 +982,11 @@
     return(FALSE)
   }
   all(vapply(entries, function(p) {
+    # R-22.E (Robin 2026-10-25): `_email.eml` is ignored by ignore_rule() but
+    # the inbox still has to file it, so it keeps the folder alive.
+    if (identical(basename(p), "_email.eml")) {
+      return(FALSE)
+    }
     # ignore_rule() conflates two different things, and only one of them may
     # authorise deleting the enclosing folder:
     #
@@ -1302,6 +1307,13 @@ ingest_dir <- function(path, db = st_config("live_db"), dry_run = FALSE,
       ensure_schema(con)
 
       routed <- route_files(paths, con, dry_run, reconsider)
+
+      # R-22.E (Robin 2026-10-25): identify the delivering email. A dry run
+      # writes nothing (a message_id without its email row is what the
+      # dangling db_check flags).
+      if (!dry_run) {
+        .ig_record_delivery_email(con, path, paths, routed)
+      }
 
       parsed <- .ig_parse_claimed(con, routed, dry_run)
 
