@@ -29,6 +29,10 @@
 #   * work order, in order: .st_guess_work_order_revision(filename) (what file_meta()
 #     returns; no byte read); .ig_folder_work_order(con, routed, path_first_seen); and, for a
 #     gated (non-"extra") file only, .ig_stem_work_order(con, path, hash);
+#   * iterated to a FIXPOINT (mig077_plan_con()): each further pass treats the planned retains
+#     so far as committed assets (a temp.asset overlay), so a scanned sheet whose folder-mate
+#     is a retained gas PDF resolves to that PDF's project (split deliveries, where the
+#     workbook arrived via another path, defeat the importer's single pass);
 #   * a project row must exist by that name (find-only: never minted - archive_file()'s
 #     .ct_ensure_project() then finds it); type = "QA" for an extra PDF, otherwise
 #     .ig_retained_asset_type(filename).
@@ -171,8 +175,9 @@
   paste0("no work order: no ES token, ", f, ", no archived workbook shares the stem")
 }
 
-# One plan row per unclaimed ingest_file row. Read-only; stat() only.
-mig077_plan_con <- function(con) {
+# One pass: one plan row per unclaimed ingest_file row, against whatever `asset` resolves to
+# (main.asset, or the temp.asset overlay mig077_plan_con() builds). Read-only; stat() only.
+.mig077_plan_pass <- function(con) {
   all_if <- DBI::dbGetQuery(con, "SELECT hash, filename, path_first_seen, state, state_reason FROM ingest_file")
   all_if$dir <- dirname(all_if$path_first_seen)
   x <- DBI::dbGetQuery(con, "SELECT hash, filename, path_first_seen FROM ingest_file
@@ -230,7 +235,40 @@ mig077_plan_con <- function(con) {
     }
     out[[i]] <- r
   }
-  p <- do.call(rbind, lapply(out, as.data.frame, stringsAsFactors = FALSE))
+  do.call(rbind, lapply(out, as.data.frame, stringsAsFactors = FALSE))
+}
+
+# The plan, iterated to a FIXPOINT (coordinator 2026-10-25). The importer's single pass misses
+# a scanned sheet whose folder's only resolvable file is a PDF retained in the same pass (a
+# split delivery: the workbook was ingested from another path, so the folder holds no
+# committed file). Each further pass treats every planned retain so far as committed - a
+# TEMP `asset` row (shadowing main.asset for the unqualified queries the importer's helpers
+# make) carrying the file's hash, filename, type and planned project - and adopts any row
+# that now resolves; it stops when a pass adds nothing. Earlier decisions are never revised.
+# temp.asset is dropped on exit, before anything writes.
+mig077_plan_con <- function(con) {
+  on.exit(DBI::dbExecute(con, "DROP TABLE IF EXISTS temp.asset"), add = TRUE)
+  p <- .mig077_plan_pass(con)
+  k <- 1L
+  repeat {
+    r <- p[p$outcome == "retain", , drop = FALSE]
+    DBI::dbExecute(con, "DROP TABLE IF EXISTS temp.asset")
+    DBI::dbExecute(con, "CREATE TEMP TABLE asset AS SELECT * FROM main.asset")
+    for (i in seq_len(nrow(r))) {
+      n <- DBI::dbExecute(con, "INSERT INTO temp.asset (uuid, filename, hash, type, uuid_project)
+                                SELECT ?, ?, ?, ?, uuid FROM main.project WHERE name = ?",
+                          params = list(paste0("mig077-overlay-", r$hash[[i]]), r$filename[[i]], r$hash[[i]],
+                                        r$type[[i]], r$project[[i]]))
+      if (n != 1L) .mig077_fail(sprintf("fixpoint overlay: project %s does not resolve once.", r$project[[i]]))
+    }
+    k <- k + 1L
+    q <- .mig077_plan_pass(con)
+    q <- q[match(p$hash, q$hash), , drop = FALSE]
+    new <- which(p$outcome == "leave" & q$outcome != "leave")
+    if (!length(new)) break
+    q$reason[new] <- paste0(q$reason[new], sprintf(" (fixpoint pass %d: resolved via a planned retain)", k))
+    p[new, ] <- q[new, ]
+  }
   p$gid <- sprintf("F%02d", seq_len(nrow(p)))
   p$row_sha1 <- unname(.mig077_row_sha(con, p$hash))
   p[, .mig077_cols]
