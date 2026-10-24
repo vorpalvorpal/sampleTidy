@@ -615,6 +615,59 @@
   if (has_project) candidates[[1]] else NA_character_
 }
 
+#' The work order of the project holding a same-stem report workbook, or `NA`
+#' (R-22.G1)
+#'
+#' Robin 2026-10-25: gas report PDFs have no ES token and no ALS folder-mate.
+#' An ACIRL gas PDF ("2400-7538-09-01 September Monthly Gas Monitoring
+#' Blaxland WMF.pdf") is the print of the workbook of the same name, which was
+#' archived under the right project when it was parsed. Matches the file's
+#' stem (basename without extension, case-insensitive, whitespace-trimmed)
+#' against the stems of `asset.filename` rows that have a project, ignoring
+#' the file's own bytes (`hash`).
+#'
+#' The 2400-* number is NEVER parsed from the name (the ACIRL work-order
+#' trap, R/commit.R); only the stem is compared. Returns the project `name`
+#' only when every match points at exactly one project; zero matches gives
+#' `NA`, and several distinct projects warns (naming the file) and gives `NA`
+#' so the file stays quarantined rather than filed against a guess.
+#' @keywords internal
+#' @noRd
+.ig_stem_work_order <- function(con, path, hash = NA_character_) {
+  stem <- function(x) tolower(trimws(tools::file_path_sans_ext(basename(x))))
+  want <- stem(path)
+  if (!nzchar(want)) {
+    return(NA_character_)
+  }
+  assets <- DBI::dbGetQuery(
+    con,
+    "SELECT a.filename, a.hash, p.name AS project_name, p.uuid AS uuid_project
+       FROM asset a JOIN project p ON p.uuid = a.uuid_project
+      WHERE a.uuid_project IS NOT NULL AND a.filename IS NOT NULL"
+  )
+  if (nrow(assets) == 0) {
+    return(NA_character_)
+  }
+  hit <- vapply(assets$filename, stem, character(1), USE.NAMES = FALSE) == want
+  if (!is.na(hash)) {
+    hit <- hit & (is.na(assets$hash) | assets$hash != hash)
+  }
+  projects <- unique(assets$project_name[hit])
+  if (length(projects) == 0) {
+    return(NA_character_)
+  }
+  if (length(projects) > 1) {
+    cli::cli_warn(
+      "ingest_dir(): {.path {path}} looks like a non-tabular lab deliverable
+       but its filename stem matches report files on several projects
+       ({.val {projects}}) - the work order is ambiguous, so F.17 retention is
+       skipped for it; it stays quarantined and unarchived."
+    )
+    return(NA_character_)
+  }
+  projects[[1]]
+}
+
 #' Retain a work order's non-tabular deliverables (COA/COC/QC/QCI PDFs,
 #' `XTAB.XLS`, ...) that no adapter claims (R-15.36, B-15.F17)
 #'
@@ -628,11 +681,14 @@
 #' that deletes the only copy of a certificate of analysis.
 #'
 #' For every routed row still `quarantined`/`unclaimed` (deduped by hash),
-#' guesses the file's work order from its filename ([file_meta()]'s
-#' `work_order_guess` - NEVER inferred from a bare `2400-*` filename, which
-#' cannot be parsed reliably; only `ES#######`-shaped tokens are used, per
-#' `file_meta()`). A file whose work order cannot be guessed, or whose work
-#' order has no `project` row, is left alone - retaining a file with nothing
+#' finds the file's work order in three steps, in this order: (1) its
+#' filename ([file_meta()]'s `work_order_guess` - NEVER inferred from a bare
+#' `2400-*` filename, which cannot be parsed reliably; only `ES#######`-shaped
+#' tokens are used, per `file_meta()`); (2) folder inference
+#' (`.ig_folder_work_order()`); (3) R-22.G1, a stem match against the
+#' filename of an already-archived report workbook (`.ig_stem_work_order()`),
+#' which is how an ACIRL gas PDF finds its project. A file whose work order
+#' cannot be found, or whose work order has no `project` row, is left alone - retaining a file with nothing
 #' to hang it off would satisfy "the bytes are kept" while failing "the file
 #' is discoverably attached to its work order" (B-15.F17's second,
 #' easy-to-miss obligation).
@@ -740,6 +796,17 @@
           work_order <- .ig_folder_work_order(con, routed, path)
         }
 
+        # R-22.G1 (Robin 2026-10-25: gas report PDFs have no ES token and no
+        # ALS folder-mate): third and last fallback. Only reached when steps
+        # 1 and 2 found nothing, so it can never override either. Matches the
+        # file's stem to an archived workbook's filename stem; the 2400-*
+        # number is still never parsed. `ingest_dir()` runs this after the
+        # commit stage, so a workbook archived earlier in the SAME run is
+        # already in `asset` here.
+        if (is.na(work_order)) {
+          work_order <- .ig_stem_work_order(con, path, hash)
+        }
+
         if (is.na(work_order)) {
           # Round-2 item 7: refusing to filename-parse a `2400-*` ACIRL work
           # order is CORRECT (see the ACIRL work-order trap, R/commit.R) and
@@ -750,10 +817,13 @@
           # with no report field naming them - `retained` is returned then
           # discarded by the caller. Name it loudly instead.
           #
-          # Reached when the folder gave nothing to attach to either: it
-          # resolves to zero committed work orders, or to more than one. Both
-          # are genuine ambiguity, and the file stays where a human can find
-          # it rather than being filed against a guess.
+          # Reached when nothing gave an attachment: no ES token in the name,
+          # the folder resolves to zero committed work orders or to more than
+          # one, and (R-22.G1) no archived workbook shares the file's stem (or
+          # several projects do - that case also warns, by name, from
+          # `.ig_stem_work_order()`). All are genuine ambiguity, and the file
+          # stays where a human can find it rather than being filed against a
+          # guess.
           #
           # This is now the ONLY residual for ACIRL (R-9.12): a `2400-*` report
           # in a folder that does resolve to exactly one ALS work order is
@@ -763,9 +833,9 @@
           cli::cli_warn(
             "ingest_dir(): {.path {path}} looks like a non-tabular lab
              deliverable but its work order could not be recovered from its
-             filename (no {.val ES#######}-shaped token) nor inferred from its
-             folder - F.17 retention is skipped for it; it stays quarantined
-             and unarchived."
+             filename (no {.val ES#######}-shaped token), inferred from its
+             folder, nor matched by filename stem to an archived report - F.17 retention is skipped for it; it stays
+             quarantined and unarchived."
           )
           NA_character_
         } else {
