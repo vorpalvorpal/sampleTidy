@@ -176,6 +176,25 @@
   list(
     version = 8L,
     ddl = "ALTER TABLE ingest_file ADD COLUMN IF NOT EXISTS registry_fingerprint VARCHAR"
+  ),
+  # R-22.E (Robin 2026-10-25): the delivering email's identity. `ingest_email`
+  # is one row per Message-ID; `ingest_file.message_id` is the nullable link
+  # (plain ADD COLUMN, as v7/v8: ingest_file has a PRIMARY KEY). No FK: the
+  # `ingest_file_email_dangling` db_check polices it.
+  list(
+    version = 9L,
+    ddl = "
+      CREATE TABLE IF NOT EXISTS ingest_email (
+        message_id VARCHAR PRIMARY KEY,
+        sent_at TIMESTAMP,
+        sender VARCHAR,
+        sender_name VARCHAR,
+        subject VARCHAR,
+        in_reply_to VARCHAR,
+        folder VARCHAR,
+        first_seen_at TIMESTAMP
+      );
+      ALTER TABLE ingest_file ADD COLUMN IF NOT EXISTS message_id VARCHAR;"
   )
 )
 
@@ -431,6 +450,22 @@ ingest_file_set_registry_fingerprint <- function(con, hash, fingerprint) {
     "UPDATE ingest_file SET registry_fingerprint = ?, updated_at = ? WHERE hash = ?",
     params = list(fingerprint, Sys.time(), hash)
   )
+  invisible(NULL)
+}
+
+# R-22.E (Robin 2026-10-25): stamp the delivering email on ingest_file rows.
+# Fills NULL only - a file first delivered by email A and re-sent by email B
+# stays A's. Raw SQL lives here, per the mutation-layer boundary.
+ingest_file_set_message_id <- function(con, hashes, message_id) {
+  checkmate::assert_string(message_id)
+  hashes <- unique(stats::na.omit(as.character(hashes)))
+  for (h in hashes) {
+    DBI::dbExecute(
+      con,
+      "UPDATE ingest_file SET message_id = ? WHERE hash = ? AND message_id IS NULL",
+      params = list(message_id, h)
+    )
+  }
   invisible(NULL)
 }
 
