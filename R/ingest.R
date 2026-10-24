@@ -475,6 +475,11 @@
   # A chain of custody is a QA record - who took the sample, when, and who
   # handled it - not a result.
   list(pattern = "(?i)_coc(\\[[0-9]+\\])?\\.[a-z0-9]+$", type = "QA"),
+  # R-22.G2 (Robin 2026-10-25): an ALS sample receipt notification
+  # ("ES2631587_0_SRN_260929155925.pdf") records what arrived and when - QA,
+  # like the COC. Unlike the tokens above it is followed by "_<digits>" (a
+  # timestamp) before the extension.
+  list(pattern = "(?i)_srn_[0-9]+(\\[[0-9]+\\])?\\.[a-z0-9]+$", type = "QA"),
   # XTAB.XLS genuinely IS results: an ALS crosstab rendering of the same
   # chemistry its `.csv` twin carries, which we merely cannot read yet
   # (SpreadsheetML, parked post-MVP - R/adapter-crosstab.R).
@@ -575,6 +580,14 @@
 #' Never creates a project row - candidates are filtered to work orders that
 #' already have one, so an inferred target is by construction a work order we
 #' have really seen data for (R-15.36a's ruling, applied here too).
+#'
+#' R-22.G2 (Robin 2026-10-25) extension, used only when the folder holds NO
+#' ALS work order token at all (the rule above has precedence and is
+#' unchanged, including its NA for several work orders): if the files
+#' committed from this folder (this run or earlier; matched by hash against
+#' `asset`) map to exactly ONE project of any kind - e.g. an ACIRL gas
+#' project committed from the gas workbook - that project's name is returned.
+#' Zero or several projects give `NA`.
 #' @keywords internal
 #' @noRd
 .ig_folder_work_order <- function(con, routed, path) {
@@ -594,7 +607,20 @@
   )
   candidates <- unique(guesses[!is.na(guesses)])
   if (length(candidates) == 0) {
-    return(NA_character_)
+    # R-22.G2 (Robin 2026-10-25): no ALS work order in the folder - fall back
+    # to the one project the folder's committed files map to, if exactly one.
+    hashes <- unique(routed$hash[same_folder][!is.na(routed$hash[same_folder])])
+    if (length(hashes) == 0) {
+      return(NA_character_)
+    }
+    projects <- DBI::dbGetQuery(
+      con,
+      paste0("SELECT DISTINCT p.name FROM asset a JOIN project p ON p.uuid = a.uuid_project
+               WHERE a.hash IN (", paste(rep("?", length(hashes)), collapse = ","), ")"),
+      params = as.list(hashes)
+    )$name
+    projects <- unique(projects[!is.na(projects)])
+    return(if (length(projects) == 1) projects[[1]] else NA_character_)
   }
 
   # The exactly-one test runs on the FOLDER's work orders, before any lookup.
@@ -687,8 +713,14 @@
 #' tokens are used, per `file_meta()`); (2) folder inference
 #' (`.ig_folder_work_order()`); (3) R-22.G1, a stem match against the
 #' filename of an already-archived report workbook (`.ig_stem_work_order()`),
-#' which is how an ACIRL gas PDF finds its project. A file whose work order
-#' cannot be found, or whose work order has no `project` row, is left alone - retaining a file with nothing
+#' which is how an ACIRL gas PDF finds its project. R-22.G2 (Robin
+#' 2026-10-25) adds two things: ALS sample receipt notifications
+#' (`ES#######_0_SRN_<digits>.pdf`) pass the selection gate and are typed "QA";
+#' and any other unclaimed `.pdf` (case-insensitive) - a scanned field sheet -
+#' is a candidate too, but is retained ONLY if folder inference resolves
+#' (typed "QA"); otherwise it stays quarantined silently (no stem match, no
+#' "could not be recovered" warning, per the cruft-silence rule). A file whose
+#' work order cannot be found, or whose work order has no `project` row, is left alone - retaining a file with nothing
 #' to hang it off would satisfy "the bytes are kept" while failing "the file
 #' is discoverably attached to its work order" (B-15.F17's second,
 #' easy-to-miss obligation).
@@ -753,10 +785,19 @@
   # silence. `\d{4}-\d{4}` is still a POSITIVE shape, so ordinary cruft
   # (README.md, photo.jpg, notes.docx) stays excluded and stays silent - the
   # round-3 commit-5 fix above is preserved, and pinned by its own test.
-  idx <- which(routed$state == "quarantined" &
-    !is.na(routed$reason) & routed$reason == "unclaimed" &
-    (grepl("(?i)_(coa|coc|qc|qci|xtab)\\b", routed$filename, perl = TRUE) |
-       .ig_is_acirl_shaped(routed$filename)))
+  #
+  # R-22.G2 (Robin 2026-10-25): the gate also takes the SRN shape
+  # (`_srn_<digits>`; `\\b` cannot be used, `_` is a word character), and a
+  # SECOND, weaker candidate class: any other unclaimed .pdf (scanned field
+  # sheets). Those "extra" candidates are retained only when folder inference
+  # resolves, and are otherwise silent, so the cruft-silence rule above still
+  # holds for them. Non-PDF cruft is in neither class.
+  unclaimed <- routed$state == "quarantined" &
+    !is.na(routed$reason) & routed$reason == "unclaimed"
+  gated <- grepl("(?i)_(coa|coc|qc|qci|xtab)\\b|_srn_[0-9]", routed$filename, perl = TRUE) |
+    .ig_is_acirl_shaped(routed$filename)
+  extra_pdf <- grepl("\\.pdf$", routed$filename, ignore.case = TRUE) & !gated
+  idx <- which(unclaimed & (gated | extra_pdf))
   if (length(idx) == 0) {
     return(retained)
   }
@@ -782,6 +823,7 @@
     # 0 snapshots produced, no report, remove_ingested never run). Every
     # OTHER sibling stage in this file is contained per A27/R-12.1/R-12.2;
     # this later-added F.17 sweep was not.
+    is_extra <- isTRUE(extra_pdf[[i]])
     result <- tryCatch(
       {
         fm <- file_meta(path)
@@ -803,11 +845,15 @@
         # number is still never parsed. `ingest_dir()` runs this after the
         # commit stage, so a workbook archived earlier in the SAME run is
         # already in `asset` here.
-        if (is.na(work_order)) {
+        if (is.na(work_order) && !is_extra) {
           work_order <- .ig_stem_work_order(con, path, hash)
         }
 
-        if (is.na(work_order)) {
+        if (is.na(work_order) && is_extra) {
+          # R-22.G2 (Robin 2026-10-25): a scanned field sheet whose folder
+          # does not resolve is cruft-shaped: stay quarantined, say nothing.
+          NA_character_
+        } else if (is.na(work_order)) {
           # Round-2 item 7: refusing to filename-parse a `2400-*` ACIRL work
           # order is CORRECT (see the ACIRL work-order trap, R/commit.R) and
           # must stay - staying silent about the residual exposure is not.
@@ -852,7 +898,7 @@
             # F.17) - and typed only the COA, parking the rest pending a
             # ruling. Robin ruled the remaining kinds on 2026-07-28
             # (R-15.36b), so all five now route through one pinned lookup.
-            sibling_type <- .ig_retained_asset_type(basename(path))
+            sibling_type <- if (is_extra) "QA" else .ig_retained_asset_type(basename(path))
             # commit-3 (round-3): `archive_file()` (writes the `asset` row)
             # and `ingest_file_set_state()` (the terminal transition) used to
             # run as two independent DB writes with no `db_transaction()`
