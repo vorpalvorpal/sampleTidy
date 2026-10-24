@@ -38,7 +38,10 @@
 #' Write the usual non-data email debris into a fresh temp dir; returns paths.
 make_leftovers <- function(env = parent.frame(),
                            names = c("_email.eml", "image001.png", "image002.jpg",
-                                     "Cover letter.pdf")) {
+                                     # R-22.G2 (Robin 2026-10-25): a token-less PDF in a
+                                     # folder that resolves is now retained as QA, so the
+                                     # stand-in for unretainable debris is a .docx.
+                                     "Cover letter.docx")) {
   d <- withr::local_tempdir(.local_envir = env)
   for (nm in names) {
     p <- file.path(d, nm)
@@ -294,7 +297,7 @@ test_that("inbox_run(dry_run = TRUE): nothing is filed or removed, and the note 
   # and the real run afterwards still files them
   run_inbox(s, now = now)
   expect_setequal(list.files(file.path(emails_root(s), name)),
-                  c("_email.eml", "image001.png", "image002.jpg", "Cover letter.pdf"))
+                  c("_email.eml", "image001.png", "image002.jpg", "Cover letter.docx"))
 })
 
 # ---- 5. a folder with no data files at all ---------------------------------------------
