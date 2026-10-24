@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  The auto-import trigger (dev/auto-import.sh), run by launchd rather than by Obsidian's Shell
+  commands plugin, so imports no longer stop while Obsidian is closed (they did, 22-25 Oct 2026).
+  WatchPaths fires when a new delivery folder appears in the input directory. A folder is only
+  imported once nothing in it has changed for settle_minutes (10), and a delivery often arrives
+  over several minutes, so StartInterval re-checks every 10 minutes until it settles. Each tick
+  is cheap: auto-import.sh hashes stat() metadata and exits when nothing changed, and R holds a
+  lock, so overlapping triggers (this one, Obsidian's) cannot run two imports at once.
+  A template: dev/launchd/install.sh fills in @REPO@, @INPUT@ and @HOME@ and installs it to
+  ~/Library/LaunchAgents. Do not load this file directly.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>net.robinshannon.sampletidy-autoimport</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>@REPO@/dev/auto-import.sh</string>
+  </array>
+  <key>WatchPaths</key>
+  <array>
+    <string>@INPUT@</string>
+  </array>
+  <key>StartInterval</key>
+  <integer>600</integer>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>60</integer>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <!-- launchd starts jobs in the C locale, where R cannot read the package's UTF-8
+         source (units such as °C and µg/L): "unable to translate ... to native encoding". -->
+    <key>LANG</key>
+    <string>en_AU.UTF-8</string>
+    <key>LC_ALL</key>
+    <string>en_AU.UTF-8</string>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>@HOME@/Library/Logs/sampletidy-autoimport-launchd.log</string>
+  <key>StandardErrorPath</key>
+  <string>@HOME@/Library/Logs/sampletidy-autoimport-launchd.log</string>
+</dict>
+</plist>
