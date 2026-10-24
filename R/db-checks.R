@@ -351,6 +351,12 @@ WHERE uuid_asset IS NULL OR uuid_asset NOT IN (SELECT uuid FROM asset)",
     ck("orphan_ingest_sighting", "
 SELECT DISTINCT hash AS key FROM ingest_sighting WHERE hash NOT IN (SELECT hash FROM ingest_file)",
        "ingest_sighting.hash points at an ingest_file.", "hourly", "error"),
+    # R-22.E (Robin 2026-10-25): keyed by the ingest_file row, like the
+    # ingest_file.uuid_asset arm above.
+    ck("ingest_file_email_dangling", "
+SELECT hash AS key, message_id FROM ingest_file
+WHERE message_id IS NOT NULL AND message_id NOT IN (SELECT message_id FROM ingest_email)",
+       "ingest_file.message_id names an ingest_email row.", "hourly", "error"),
     ck("orphan_qc_refs", "
 SELECT uuid AS key, 'lab_qc_outlier.uuid_report' AS col FROM lab_qc_outlier
 WHERE uuid_report NOT IN (SELECT uuid FROM lab_qc_report)

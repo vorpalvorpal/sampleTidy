@@ -23,6 +23,11 @@ ignore_rule <- function(fm) {
   if (identical(fm$filename, ".DS_Store")) {
     return("ds_store_file")
   }
+  # R-22.E (Robin 2026-10-25): the delivery email is recorded in ingest_email,
+  # not attached as an asset; the inbox files it. Never quarantined/unclaimed.
+  if (identical(fm$filename, "_email.eml")) {
+    return("delivery_email")
+  }
   if (identical(fm$size, 0) || isTRUE(fm$size == 0)) {
     return("empty_file")
   }
