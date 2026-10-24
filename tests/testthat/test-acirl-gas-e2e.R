@@ -441,3 +441,38 @@ test_that("R-22.G1: a gas PDF arriving in the SAME run as its .xlsx is attached 
   expect_identical(st$state[[1]], "archived")
   expect_identical(st$state_reason[[1]], "retained_sibling")
 })
+
+# R-22.G2 (gas-only-folder half; the ALS-folder cases are in
+# test-retain-srn-fieldsheet.R): a scanned field sheet in a folder holding no
+# ALS work order, whose gas workbook committed to exactly ONE project in this
+# run, is attached to that project and typed QA. Folder inference falls back
+# to "the one project the folder's committed files map to".
+test_that("R-22.G2: a scanned field sheet in a gas-only folder attaches to the ACIRL gas project the workbook committed to, typed QA", {
+  db <- gas_db_setup()
+  gas_adapter()
+  input <- withr::local_tempdir()
+  stem <- "2400-9901-07-01 July 2025 Monthly Gas Monitoring Blaxland WMF"
+  gas_e2e_workbook(input, report_no = "2400-9901-07-01", filename = paste0(stem, ".xlsx"))
+  sheet_path <- file.path(input, "25. Gas 19-08.pdf")
+  writeBin(charToRaw(paste("fake scanned field sheet", paste(1:30, collapse = " "))), sheet_path)
+  sheet_hash <- hash_file(sheet_path)
+
+  w <- character(0)
+  withCallingHandlers(
+    ingest_dir(input, db = db),
+    warning = function(c) { w <<- c(w, conditionMessage(c)); invokeRestart("muffleWarning") }
+  )
+  con <- gas_ro(db)
+
+  xl <- DBI::dbGetQuery(con, "SELECT uuid_project FROM asset WHERE filename = ?",
+                        params = list(paste0(stem, ".xlsx")))
+  expect_equal(nrow(xl), 1, info = "precondition: the workbook was committed and archived")
+  a <- DBI::dbGetQuery(con, "SELECT type, uuid_project FROM asset WHERE hash = ?",
+                       params = list(sheet_hash))
+  expect_equal(nrow(a), 1, info = "R-22.G2: the field sheet must get an asset row")
+  if (nrow(a) == 1 && nrow(xl) == 1) {
+    expect_identical(a$uuid_project[[1]], xl$uuid_project[[1]])
+    expect_identical(a$type[[1]], "QA")
+  }
+  expect_equal(sum(grepl("work order could not be recovered", w, fixed = TRUE)), 0)
+})

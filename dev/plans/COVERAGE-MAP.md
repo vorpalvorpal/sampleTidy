@@ -628,3 +628,14 @@ code as it was written, verified by mutation, not by assertion.
 - exact stem only → "R-22.G1: a prefix variant ('Prelim <stem>.pdf') does NOT match - exact stem only"
 - two projects is ambiguous → "R-22.G1: a stem matching assets on TWO distinct projects is ambiguous - the PDF stays quarantined and the warning names the file"
 - earlier steps win → "R-22.G1: a file that folder inference already resolves keeps its ALS work order even when an .xls with the same stem sits on a different project"
+
+### R-22.G2 SRN and scanned field-sheet retention (`tests/testthat/test-retain-srn-fieldsheet.R`, `test-acirl-gas-e2e.R`) - added 2026-10-25
+- SRN selected, ES token, typed QA → "R-22.G2: an SRN with the ES token and a trailing _<digits> is retained against that work order, typed QA"
+- SRN attaches by own token → "R-22.G2: an SRN attaches by its OWN filename token, not the folder's work order (ES2634040 style)"
+- SRN with no project row stays quarantined → "R-22.G2: an SRN whose work order has no project row stays quarantined and mints no project"
+- field sheets in one-ALS-WO folder, QA → "R-22.G2: scanned field sheets (incl. an upper-case .PDF) in a folder with ONE ALS work order attach to it, typed QA"
+- field sheet in gas-only folder → "R-22.G2: a scanned field sheet in a gas-only folder attaches to the ACIRL gas project the workbook committed to, typed QA"
+- nothing committed stays quarantined, silent → "R-22.G2: a scanned field sheet in a folder with nothing committed stays quarantined and draws NO warning"
+- non-PDF cruft unselected, silent → "R-22.G2: non-PDF cruft in a folder that DOES resolve (image001.png, README.md, photo.jpg, notes.docx) is not retained and draws no warning"
+- Prelim 2400 pinned → "R-22.G2: a 'Prelim 2400-...pdf' in a folder with one ALS work order is attached to it (existing R-9.12 behaviour, pinned)"
+- COA regression → "R-22.G2: regression - a COA with an ES token still attaches by token, typed Certificate of analysis"
