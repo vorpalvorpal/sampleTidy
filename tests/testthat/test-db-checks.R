@@ -50,7 +50,7 @@ test_that("db_check(): rejects a bad tier, a bad severity, an empty name and a n
 
 # ---- db_checks_core() / db_checks_params() ---------------------------------------------------
 
-test_that("db_checks_core(): the 42 generic checks, uniquely named, with their pinned tiers and severities", {
+test_that("db_checks_core(): the 43 generic checks, uniquely named, with their pinned tiers and severities", {
   core <- db_checks_core()
   expect_s3_class(core, "data.frame")
   expect_true(all(c("name", "sql", "description", "tier", "severity") %in% names(core)))

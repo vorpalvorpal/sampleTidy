@@ -36,7 +36,9 @@ dbc_hourly_names <- c(
   "vocab_review_status", "vocab_mask_variant", "vocab_feature_flow",
   "analysis_value_shape", "hash_format",
   "sample_date_plausible", "sample_date_datetime_agree", "date_windows_ordered",
-  "feature_coords"
+  "feature_coords",
+  # R-22.E: an ingest_file.message_id naming no ingest_email row.
+  "ingest_file_email_dangling"
 )
 dbc_migration_only_names <- c(
   "measurement_view_coverage", "measurement_view_no_fanout",
@@ -360,8 +362,12 @@ dbc_violation_cases <- list(
        seed = function(con) DBI::dbExecute(con, "DROP INDEX ux_sample_identity")),
   list(check = "schema_version_no_duplicates", key = "8", label = "a schema_version marker recorded twice",
        seed = function(con) DBI::dbExecute(con, "INSERT INTO schema_version VALUES (8, TIMESTAMP '2026-01-01 00:00:00')")),
-  list(check = "schema_version_core_current", key = "9", label = "core ladder ahead of this build",
-       seed = function(con) DBI::dbExecute(con, "INSERT INTO schema_version VALUES (9, TIMESTAMP '2026-01-01 00:00:00')")),
+  # One past the build's top core version, whatever that is: a hard-coded 9
+  # collided with the real version 9 once R-22.E (ingest_email) landed.
+  list(check = "schema_version_core_current", key = as.character(sampleTidy:::.dbc_core_version() + 1L),
+       label = "core ladder ahead of this build",
+       seed = function(con) DBI::dbExecute(con, "INSERT INTO schema_version VALUES (?, TIMESTAMP '2026-01-01 00:00:00')",
+                                           params = list(sampleTidy:::.dbc_core_version() + 1L))),
   list(check = "schema_version_core_contiguous", key = "5", label = "a core version missing from 1..N",
        seed = function(con) DBI::dbExecute(con, "DELETE FROM schema_version WHERE version = 5")),
   list(check = "orphan_alias_feature", key = "fa-orphan", label = "alias pointing at a missing feature",
@@ -377,6 +383,13 @@ dbc_violation_cases <- list(
   list(check = "orphan_ingest_sighting", key = dbc_hex(902), label = "sighting of an unknown hash",
        seed = function(con) dbc_exec(con, "INSERT INTO ingest_sighting VALUES (?, '/x', TIMESTAMP '2025-01-01 00:00:00')",
                                      dbc_hex(902))),
+  # R-22.E: keyed by the ingest_file row (its hash), as orphan_asset_refs keys
+  # ingest_file.uuid_asset.
+  list(check = "ingest_file_email_dangling", key = dbc_hex(911),
+       label = "ingest_file naming a delivery email with no ingest_email row",
+       seed = function(con) dbc_exec(con, "INSERT INTO ingest_file (hash, filename, state, state_reason, message_id)
+                                           VALUES (?, '_email.eml', 'ignored', 'delivery_email', 'gone-0001@example.org')",
+                                     dbc_hex(911))),
   list(check = "orphan_qc_refs", key = "s-gone", label = "sample_lab_id pointing at a missing sample",
        seed = function(con) DBI::dbExecute(con, "INSERT INTO sample_lab_id
                                                  VALUES ('s-gone', 'XX1234567', 'XX1234567-099', 'T.S01', NULL)")),
