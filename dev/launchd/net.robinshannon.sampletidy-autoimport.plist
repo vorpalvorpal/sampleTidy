@@ -30,6 +30,17 @@
   <true/>
   <key>ThrottleInterval</key>
   <integer>60</integer>
+  <!-- Imports are not time-critical (Robin, 2026-10-25): run as a background job so they never
+       compete with foreground work. Background lets macOS throttle CPU and disk I/O and defer
+       the job under load; Nice and LowPriorityIO cover the CPU and disk explicitly. -->
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>Nice</key>
+  <integer>15</integer>
+  <key>LowPriorityIO</key>
+  <true/>
+  <key>LowPriorityBackgroundIO</key>
+  <true/>
   <key>EnvironmentVariables</key>
   <dict>
     <key>PATH</key>
