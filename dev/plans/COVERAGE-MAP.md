@@ -620,3 +620,11 @@ code as it was written, verified by mutation, not by assertion.
 - NAMESPACE exports == CONTRACT public API → "R-10.6: NAMESPACE exports equal the CONTRACT-pinned public API exactly"
 - DESCRIPTION Imports == CONTRACT-pinned set → "R-10.6: DESCRIPTION Imports equal the CONTRACT-pinned set"
 - devtools::check() clean: **not encoded as a testthat assertion** - CI/manual gate only (rcmdcheck isn't a pinned dependency; see ambiguity note) - not tested here
+
+### R-22.G1 gas PDF retained by filename-stem match (`tests/testthat/test-retain-gas-pdf-stem.R`, `test-acirl-gas-e2e.R`) - added 2026-10-25
+- step 3 after filename token and folder inference; earlier-run .xls → "R-22.G1: a gas PDF whose stem matches an .xls archived in an EARLIER run is attached to that asset's project, typed Chemical analysis, and archived/retained_sibling"
+- same-run .xlsx → "R-22.G1: a gas PDF arriving in the SAME run as its .xlsx is attached to the project the workbook was archived under"
+- no match stays quarantined → "R-22.G1: a gas PDF whose stem matches NO asset stays quarantined with the existing 'work order could not be recovered' warning"
+- exact stem only → "R-22.G1: a prefix variant ('Prelim <stem>.pdf') does NOT match - exact stem only"
+- two projects is ambiguous → "R-22.G1: a stem matching assets on TWO distinct projects is ambiguous - the PDF stays quarantined and the warning names the file"
+- earlier steps win → "R-22.G1: a file that folder inference already resolves keeps its ALS work order even when an .xls with the same stem sits on a different project"

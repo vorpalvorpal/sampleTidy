@@ -409,3 +409,35 @@ test_that("16: a Katoomba workbook mints no pending alias or sample for K.G365 /
   expect_identical(near$alias$kind, "pending")
   expect_equal(nrow(near$sample), 1)
 })
+
+# R-22.G1 (same-run half; the seeded cases are in test-retain-gas-pdf-stem.R):
+# a gas PDF whose stem matches the workbook committed in THE SAME run is
+# retained against the project that workbook's asset was archived under.
+test_that("R-22.G1: a gas PDF arriving in the SAME run as its .xlsx is attached to the project the workbook was archived under", {
+  db <- gas_db_setup()
+  gas_adapter()
+  input <- withr::local_tempdir()
+  stem <- "2400-9901-07-01 July 2025 Monthly Gas Monitoring Blaxland WMF"
+  gas_e2e_workbook(input, report_no = "2400-9901-07-01", filename = paste0(stem, ".xlsx"))
+  pdf_path <- file.path(input, paste0(stem, ".pdf"))
+  writeBin(charToRaw(paste("fake ACIRL gas report", paste(1:30, collapse = " "))), pdf_path)
+  pdf_hash <- hash_file(pdf_path)
+
+  ingest_dir(input, db = db)
+  con <- gas_ro(db)
+
+  xl <- DBI::dbGetQuery(con, "SELECT uuid_project FROM asset WHERE filename = ?",
+                        params = list(paste0(stem, ".xlsx")))
+  expect_equal(nrow(xl), 1, info = "precondition: the workbook was committed and archived")
+  a <- DBI::dbGetQuery(con, "SELECT type, uuid_project FROM asset WHERE hash = ?",
+                       params = list(pdf_hash))
+  expect_equal(nrow(a), 1, info = "R-22.G1: the PDF must get an asset row in the same run")
+  if (nrow(a) == 1 && nrow(xl) == 1) {
+    expect_identical(a$uuid_project[[1]], xl$uuid_project[[1]])
+    expect_identical(a$type[[1]], "Chemical analysis")
+  }
+  st <- DBI::dbGetQuery(con, "SELECT state, state_reason FROM ingest_file WHERE hash = ?",
+                        params = list(pdf_hash))
+  expect_identical(st$state[[1]], "archived")
+  expect_identical(st$state_reason[[1]], "retained_sibling")
+})
