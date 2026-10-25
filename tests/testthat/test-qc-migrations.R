@@ -41,14 +41,14 @@ mig_marker <- function(db) {
   v[v >= 1000]
 }
 
-# A seeded DB at marker 1047 with the live `feature.permanent` column (the
-# test core DDL omits it; live has it and 049 sets it).
+# A seeded DB at marker 1047 (the live `feature.permanent` column 049 sets
+# is in seed_db()'s DDL).
 mig_db_1047 <- function(env = parent.frame()) {
   db <- seed_db(dir = withr::local_tempdir(.local_envir = env))
   con <- seed_con(db)
   on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
   ensure_test_asset_table(con)
-  DBI::dbExecute(con, "ALTER TABLE feature ADD COLUMN permanent BOOLEAN")
+  # feature.permanent is in seed_db()'s DDL since 2026-10-25.
   DBI::dbExecute(con, "INSERT INTO schema_version (version, applied_at)
                        VALUES (1047, TIMESTAMP '2026-10-19 00:00:00')")
   db

@@ -24,10 +24,9 @@
   env
 }
 
-#' Seed exactly the rows the six rulings name, plus the `preference` column
-#' 005 would have added.
+#' Seed exactly the rows the six rulings name. The `preference` column 005
+#' adds is in seed_db()'s DDL since 2026-10-25 (test-fixture-schema.R).
 .seed_007_fixture <- function(con) {
-  DBI::dbExecute(con, "ALTER TABLE lab_method ADD COLUMN preference INTEGER")
 
   DBI::dbExecute(con, "INSERT INTO analyte (uuid, name, units, type, CAS) VALUES
     ('a-tds',  'TDS',         'mg/L', 'physical', NULL),

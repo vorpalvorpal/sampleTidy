@@ -224,8 +224,7 @@ dbc_srn_report <- function(con, uuid, uuid_asset, work_order, temp_max, days_ago
 
   qc_create_tables(con)   # qc_feature, sample_lab_id, lab_qc_report, lab_qc_outlier
   # The live `feature` carries a soft project link (orphan_registry_refs reads
-  # it); seed_db()'s DDL omits it. Added before any FK makes `feature` a parent.
-  DBI::dbExecute(con, "ALTER TABLE feature ADD COLUMN uuid_project VARCHAR")
+  # it); seed_db()'s DDL has it since 2026-10-25 (test-fixture-schema.R).
   .dbc_add_fks(con)
 
   # hash_format: seed_db's 'legacy-hash-XX' is not xxHash128-shaped.
