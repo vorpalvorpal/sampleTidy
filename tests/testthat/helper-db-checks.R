@@ -38,7 +38,9 @@ dbc_hourly_names <- c(
   "sample_date_plausible", "sample_date_datetime_agree", "date_windows_ordered",
   "feature_coords",
   # R-22.E: an ingest_file.message_id naming no ingest_email row.
-  "ingest_file_email_dangling"
+  "ingest_file_email_dangling",
+  # R-22.S: lab_qc_report.kind is QC / QCI / SRN; an SRN received warm.
+  "vocab_lab_qc_kind", "lab_receipt_warm"
 )
 dbc_migration_only_names <- c(
   "measurement_view_coverage", "measurement_view_no_fanout",
@@ -58,7 +60,8 @@ dbc_warn_names <- c(
   "dup_sample_identity_null_datetime", "alias_key_normalised",
   "alias_window_ambiguous", "fraction_matches_code", "vocab_mask_variant",
   "vocab_feature_flow", "change_log_shape", "sample_date_datetime_agree",
-  "sample_in_feature_window", "feature_coords", "feature_geom_matches_lonlat"
+  "sample_in_feature_window", "feature_coords", "feature_geom_matches_lonlat",
+  "lab_receipt_warm"
 )
 
 dbc_result_cols <- c("name", "tier", "severity", "status", "n", "ms", "sample", "message")
@@ -197,6 +200,19 @@ dbc_set_v_measurement <- function(con, ...) {
   invisible(con)
 }
 
+#' A UTC timestamp string `days_ago` days before now (for checks keyed on now()).
+dbc_ago <- function(days_ago) format(Sys.time() - days_ago * 86400, "%Y-%m-%d %H:%M:%S", tz = "UTC")
+
+#' One R-22.S SRN lab_qc_report row: kind SRN, parsed, `temp_max` (and
+#' temp_min one degree lower) received `days_ago` days ago.
+dbc_srn_report <- function(con, uuid, uuid_asset, work_order, temp_max, days_ago) {
+  dbc_exec(con, "INSERT INTO lab_qc_report (uuid, uuid_asset, work_order, kind, status, received_at,
+                                            temp_min_c, temp_max_c, n_coolers, cooling_medium,
+                                            cooling_present, n_container_noncompliances, n_holding_breaches)
+                 VALUES (?, ?, ?, 'SRN', 'parsed', CAST(? AS TIMESTAMP), ?, ?, 1, 'Ice', TRUE, 0, 0)",
+           uuid, uuid_asset, work_order, dbc_ago(days_ago), temp_max - 1, temp_max)
+}
+
 .dbc_build <- function(path) {
   dir <- dirname(path)
   src <- seed_db(dir = dir)  # writes <dir>/seed.duckdb
@@ -250,6 +266,27 @@ dbc_set_v_measurement <- function(con, ...) {
                  VALUES ('lqr-0001', 'as-0002', 'XX1234567', 'QCI', 'parsed')")
   dbc_exec(con, "INSERT INTO lab_qc_outlier (uuid, uuid_report, work_order, uuid_sample)
                  VALUES ('lqo-0001', 'lqr-0001', 'XX1234567', 's-0001')")
+  # R-22.S: SRN rows lab_receipt_warm must NOT flag - cool and recent; warm but
+  # received long ago (outside the 90-day default lookback); exactly at the
+  # 6 degree default (the rule is "above"). Each has its asset
+  # (orphan_asset_refs) and the cool one a child row of each kind
+  # (orphan_qc_refs).
+  dbc_exec(con, "INSERT INTO asset (uuid, name, uuid_project, hash) VALUES
+                 ('as-0003', 'XX1234567_0_SRN_250526000000.pdf', 'p-0001', ?),
+                 ('as-0004', 'XX2000001_0_SRN_250101000000.pdf', 'p-0001', ?),
+                 ('as-0005', 'XX2000002_0_SRN_250201000000.pdf', 'p-0001', ?)",
+           dbc_hex(4), dbc_hex(5), dbc_hex(6))
+  dbc_srn_report(con, "lqr-0002", "as-0003", "XX1234567", temp_max = 4.5, days_ago = 5)
+  dbc_srn_report(con, "lqr-0003", "as-0004", "XX2000001", temp_max = 16.8, days_ago = 200)
+  dbc_srn_report(con, "lqr-0004", "as-0005", "XX2000002", temp_max = 6, days_ago = 5)
+  dbc_exec(con, "INSERT INTO lab_receipt_temperature (uuid, uuid_report, position, temp_c)
+                 VALUES ('lrt-0001', 'lqr-0002', 1, 4.5)")
+  dbc_exec(con, "INSERT INTO lab_receipt_comment (uuid, uuid_report, position, text)
+                 VALUES ('lrc-0001', 'lqr-0002', 1, 'Sample #3 received without a label.')")
+  dbc_exec(con, "INSERT INTO lab_receipt_holding_breach (uuid, uuid_report, lab_sample_id, client_sample_id,
+                                                         method, due_date, days_overdue)
+                 VALUES ('lrh-0001', 'lqr-0002', 'XX1234567-001', 'T.S01', 'EA005-P: pH by Auto Titrator',
+                         DATE '2025-05-25', 1)")
   dbc_exec(con, "INSERT INTO sample_lab_id (uuid_sample, work_order, lab_id, client_id, source_hash)
                  VALUES ('s-0001', 'XX1234567', 'XX1234567-001', 'T.S01', ?)", dbc_hex(1))
   dbc_exec(con, "INSERT INTO qc_feature (uuid_feature, qc_type, uuid_parent, date_start)
@@ -390,6 +427,23 @@ dbc_violation_cases <- list(
        seed = function(con) dbc_exec(con, "INSERT INTO ingest_file (hash, filename, state, state_reason, message_id)
                                            VALUES (?, '_email.eml', 'ignored', 'delivery_email', 'gone-0001@example.org')",
                                      dbc_hex(911))),
+  # R-22.S: key = work_order (an SRN is a work order's receipt).
+  list(check = "lab_receipt_warm", key = "XX7654321", label = "an SRN received at 16.8 degrees ten days ago",
+       seed = function(con) {
+         dbc_exec(con, "INSERT INTO asset (uuid, name, uuid_project, hash)
+                        VALUES ('as-warm', 'XX7654321_0_SRN_260101000000.pdf', 'p-0001', ?)", dbc_hex(912))
+         dbc_srn_report(con, "lqr-warm", "as-warm", "XX7654321", temp_max = 16.8, days_ago = 10)
+       }),
+  list(check = "vocab_lab_qc_kind", key = "lqr-kind", label = "a lab_qc_report kind outside QC/QCI/SRN",
+       seed = function(con) {
+         dbc_exec(con, "INSERT INTO asset (uuid, name, uuid_project, hash)
+                        VALUES ('as-kind', 'XX1234567_0_COA.pdf', 'p-0001', ?)", dbc_hex(913))
+         dbc_exec(con, "INSERT INTO lab_qc_report (uuid, uuid_asset, work_order, kind, status)
+                        VALUES ('lqr-kind', 'as-kind', 'XX1234567', 'COA', 'parsed')")
+       }),
+  list(check = "orphan_qc_refs", key = "lrt-x", label = "a receipt temperature pointing at a missing report",
+       seed = function(con) dbc_exec(con, "INSERT INTO lab_receipt_temperature (uuid, uuid_report, position, temp_c)
+                                           VALUES ('lrt-x', 'lqr-gone', 1, 5)")),
   list(check = "orphan_qc_refs", key = "s-gone", label = "sample_lab_id pointing at a missing sample",
        seed = function(con) DBI::dbExecute(con, "INSERT INTO sample_lab_id
                                                  VALUES ('s-gone', 'XX1234567', 'XX1234567-099', 'T.S01', NULL)")),
