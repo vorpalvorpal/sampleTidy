@@ -1157,8 +1157,9 @@ import_status <- function(db = st_config("live_db"), input_dir, report_dir,
   # R-22.H: the wrapper passes the previous failed/unfinished run (Robin 2026-10-25).
   prev_fail <- Sys.getenv("SAMPLETIDY_AUTOIMPORT_PREV_FAILURE", "")
   if (nzchar(prev_fail)) problems <- c(prev_fail, problems)
-  # PLAN-20 P20.2: hook failures of this run, after the log-derived problems.
-  problems <- c(problems, extra_problems)
+  # PLAN-20 P20.2: a hooks-file problem (session state), then hook failures of
+  # this run, after the log-derived problems.
+  problems <- c(problems, .hook_env$file_problems, extra_problems)
 
   # Recent imports: last 14 days, newest first (log order is chronological).
   recent <- list()
