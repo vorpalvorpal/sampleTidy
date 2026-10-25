@@ -213,6 +213,59 @@ test_that("inbox_run(): a folder still holding a needs_review data file moves no
                        unfinished = "random.csv", leftovers = basename(lo))
 })
 
+# R-22.N (Robin 2026-10-25): a needs_review data file is unfinished even when
+# its bytes are archived (it has an asset). The old exemption - needs_review
+# WITH an asset counted as done - hid 302 files parked after their review items
+# were settled (migration 081). What it implies for filing: a folder holding a
+# data file still waiting on review is NOT filed; it stays under Waiting with
+# the file listed as needs_review. It files on a later run once the file
+# leaves needs_review, which resolving its last review item now does (settled
+# to archived, see test-needs-review-settle.R). In production remove_ingested
+# usually takes an archived needs_review file out of the folder first, so the
+# rule bites when that file is still present (removal skipped or failed
+# verification, remove_ingested off, a dry run).
+
+test_that("R-22.N: .inbox_classify() counts a needs_review data file as unfinished whether or not it has an asset", {
+  cl <- .inbox_classify(c("a.csv", "b.csv", "c.csv", "_email.eml"),
+                        state = c("needs_review", "needs_review", "archived", "ignored"),
+                        adapter = c("esdat/1", "esdat/1", "esdat/1", NA),
+                        has_asset = c(TRUE, FALSE, TRUE, FALSE))
+  expect_identical(cl$unfinished, c(TRUE, TRUE, FALSE, FALSE))
+  expect_identical(cl$state[1:2], c("needs_review", "needs_review"))
+})
+
+test_that("R-22.N: inbox_run(): a folder holding a needs_review data file that HAS an asset moves nothing; Waiting lists it", {
+  s <- inbox_setup()
+  now <- Sys.time()
+  name <- "input2026-10-18 0915 review-archived"
+  lo <- make_leftovers(names = c("_email.eml", "image001.png"))
+  d <- make_inbox_folder(s$input_dir, name,
+                         c(inbox_proj_a_files(), inbox_fixture("esdat", "random.csv"), lo),
+                         now = now)
+  held <- file.path(d, "random.csv")
+  held_hash <- hash_file(held)
+  real_ingest_dir <- ingest_dir
+  testthat::local_mocked_bindings(ingest_dir = function(path, ..., db) {
+    out <- real_ingest_dir(path, ..., db = db)
+    con <- seed_con(db)
+    on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
+    ingest_file_set_state(con, held_hash, "needs_review", reset = TRUE)
+    # archived bytes recorded on the row (no asset-table row, so ingest's
+    # verified removal leaves the source in place - the case the rule is for)
+    DBI::dbExecute(con, "UPDATE ingest_file SET uuid_asset = 'as-held' WHERE hash = ?",
+                   params = list(held_hash))
+    out
+  })
+  before <- file_facts(d)
+
+  res <- run_inbox(s, now = now)
+
+  st <- ingest_file_rows(s$db)
+  expect_identical(st$state[match("random.csv", st$filename)], "needs_review")
+  expect_nothing_filed(s, d, name, before, res,
+                       unfinished = "random.csv", leftovers = basename(lo))
+})
+
 test_that("inbox_run(): a failed or quarantined data file (corrupt CSV, unclaimed csv) also holds the leftovers back", {
   s <- inbox_setup()
   now <- Sys.time()
