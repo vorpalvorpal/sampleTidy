@@ -16,7 +16,10 @@ in, or \code{NULL} (default) for no box - finite coordinates suffice;
 \item \code{tz}: the time zone whose calendar day \code{sample.date} names (default
 \code{"Australia/Sydney"});
 \item \code{mask_variants}: the registered mask variants (default the core
-\code{long}, \code{old}, \code{gas_report}; a deployment adds its own).
+\code{long}, \code{old}, \code{gas_report}; a deployment adds its own);
+\item \code{receipt_max_temp_c}, \code{receipt_lookback_days}: the SRN receipt
+temperature above which \code{lab_receipt_warm} warns (default 6), and how
+many days back it looks (default 90).
 }}
 }
 \value{

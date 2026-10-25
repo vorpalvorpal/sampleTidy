@@ -1,0 +1,85 @@
+                                       SAMPLE RECEIPT NOTIFICATION (SRN)
+Work Order                : ES2690001
+
+Client                    : EXAMPLE CLIENT PTY LTD                             Laboratory              : Environmental Division Example
+Contact                   : A. CONTACT                                         Contact                 : A. Labperson
+Address                   : 1 Example Street                                   Address                 : 2 Laboratory Road Example
+                              Exampletown 9999                                                           NSW Australia 9999
+E-mail                    : client@example.org                                 E-mail                  : lab@example.org
+Telephone                 : 00 0000 0000                                       Telephone               : +61-0-0000 0000
+Facsimile                 : 00 0000 0001                                       Facsimile               : +61-0-0000 0001
+
+Project                   : Example QUARTERLY                                  Page                    : 1 of 2
+Order number              : ----                                               Quote number            : EX0000QUOTE0001
+C-O-C number              : ----                                               QC Level                : NEPM 2013 B3 & ALS QC Standard
+Site                      : Example Site
+Sampler                   :
+
+Dates
+Date Samples Received              : 29-Sep-2026 10:30                         Issue Date                              : 29-Sep-2026
+Client Requested Due               : 07-Oct-2026                               Scheduled Reporting Date                : 08-Oct-2026
+Date
+
+Delivery Details
+Mode of Delivery                   : Carrier                                   Security Seal                           : Intact.
+No. of coolers/boxes               : 4                                         Temperature                             : 15.8'C 16.7'C 16.8'C - Ice
+                                                                                                                         Bricks present
+Receipt Detail                     :                                            No. of samples received / analysed     : 18 / 17
+
+
+General Comments
+l      This report contains the following information:
+        -   Sample Container(s)/Preservation Non-Compliances
+        -   Summary of Sample(s) and Requested Analysis
+l      Sample #3 received without a label.
+l      Please be aware that samples should be chilled to less than or equal to 6°C for chemical
+       analysis. Where samples are received above this temperature, it should be considered.
+
+
+
+
+                                                          right solutions. right partner.
+Issue Date          : 29-Sep-2026
+Page                : 2 of 2
+Work Order          : ES2690001 Amendment 0
+Client              : EXAMPLE CLIENT PTY LTD
+
+Sample Container(s)/Preservation Non-Compliances
+All comparisons are made against pretreatment/preservation AS, APHA, USEPA standards.
+
+l No sample container / preservation non-compliance exists.
+
+
+Summary of Sample(s) and Requested Analysis
+Some items described below may be part of a laboratory
+process necessary for the execution of client requested
+tasks. Packages may contain additional analyses, such
+as the determination of moisture content and preparation
+tasks, that are included in the package.
+
+
+                                                               WATER - EA015H                            WATER - EG020F
+If no sampling time is provided, the sampling time will
+
+default 00:00 on the date of sampling. If no sampling date
+is provided, the sampling date will be assumed by the
+laboratory and displayed in brackets without a time
+component
+
+                                                               Total Dissolved Solids - Standard Level   Dissolved Metals by ICP/MS
+Matrix: WATER
+
+Laboratory sample       Sampling date /       Sample ID
+ID                          time
+ ES2690001-001      28-Sep-2026 10:40     Q.MW01                           ü                                           ü
+ ES2690001-002      28-Sep-2026 11:05     Q.MW02                           ü                                           ü
+ ES2690001-003      28-Sep-2026 11:15     Q.S01                            ü                                           ü
+
+
+Proactive Holding Time Report
+Sample(s) have been received within the recommended holding times for the requested analysis.
+
+Requested Deliverables
+EXAMPLE CONTACT
+  - *AU Certificate of Analysis - NATA (COA)                                           Email             client@example.org
+  - A4 - AU Sample Receipt Notification - Environmental HT (SRN)                       Email             client@example.org

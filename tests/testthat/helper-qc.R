@@ -53,21 +53,66 @@
       date_extracted DATE, due_extraction DATE, source_page INTEGER)"
 )
 
+# R-22.S (Robin 2026-10-25, "include all the temp, etc data as their own
+# columns"): the ALS sample receipt notification (SRN) schema, as the operator
+# migration that follows 048 will create it. lab_qc_report gains the receipt
+# columns (NULL on QC/QCI rows except received_at, which a QCI front page also
+# prints); three child tables hang off lab_qc_report.uuid, like
+# lab_qc_outlier, with no declared FK (migration 048's reasoning).
+# received_at is a UTC instant (the lab's Australia/Sydney local time
+# converted), as every stored timestamp is.
+.qc_receipt_test_cols <- c(
+  received_at = "TIMESTAMP", client_due_date = "DATE", scheduled_report_date = "DATE",
+  delivery_mode = "VARCHAR", security_seal = "VARCHAR", n_coolers = "INTEGER",
+  temp_min_c = "DOUBLE", temp_max_c = "DOUBLE", cooling_medium = "VARCHAR",
+  cooling_present = "BOOLEAN", n_container_noncompliances = "INTEGER",
+  n_holding_breaches = "INTEGER"
+)
+
+.qc_receipt_test_ddl <- list(
+  lab_receipt_temperature = "
+    CREATE TABLE lab_receipt_temperature (
+      uuid VARCHAR PRIMARY KEY, uuid_report VARCHAR, position INTEGER, temp_c DOUBLE)",
+  lab_receipt_holding_breach = "
+    CREATE TABLE lab_receipt_holding_breach (
+      uuid VARCHAR PRIMARY KEY, uuid_report VARCHAR, lab_sample_id VARCHAR,
+      client_sample_id VARCHAR, method VARCHAR, due_date DATE, days_overdue INTEGER)",
+  lab_receipt_comment = "
+    CREATE TABLE lab_receipt_comment (
+      uuid VARCHAR PRIMARY KEY, uuid_report VARCHAR, position INTEGER, text VARCHAR)"
+)
+
+#' Add the R-22.S receipt columns and tables to a DB that has lab_qc_report.
+qc_create_receipt_tables <- function(con) {
+  have <- DBI::dbGetQuery(con, "SELECT column_name FROM information_schema.columns
+                                 WHERE table_name = 'lab_qc_report'")$column_name
+  for (k in setdiff(names(.qc_receipt_test_cols), have)) {
+    DBI::dbExecute(con, sprintf("ALTER TABLE lab_qc_report ADD COLUMN %s %s", k, .qc_receipt_test_cols[[k]]))
+  }
+  for (ddl in .qc_receipt_test_ddl) DBI::dbExecute(con, ddl)
+  invisible(con)
+}
+
 #' Add the PLAN-19 tables and `analyte.lab_contaminant` to an open connection.
-qc_create_tables <- function(con) {
+#' `receipt = TRUE` (the default) also adds the R-22.S receipt schema, so the
+#' suite runs against the post-migration shape; `receipt = FALSE` is a DB at
+#' 048 without the receipt migration.
+qc_create_tables <- function(con, receipt = TRUE) {
   for (ddl in .qc_test_ddl) DBI::dbExecute(con, ddl)
   cols <- DBI::dbGetQuery(con, "SELECT column_name FROM information_schema.columns
                                  WHERE table_name = 'analyte'")$column_name
   if (!"lab_contaminant" %in% cols) {
     DBI::dbExecute(con, "ALTER TABLE analyte ADD COLUMN lab_contaminant BOOLEAN DEFAULT FALSE")
   }
+  if (receipt) qc_create_receipt_tables(con)
   invisible(con)
 }
 
-#' fl_db() plus the PLAN-19 tables. `tables = FALSE` gives a pre-048 DB.
-qc_db <- function(env = parent.frame(), tables = TRUE) {
+#' fl_db() plus the PLAN-19 tables. `tables = FALSE` gives a pre-048 DB;
+#' `receipt = FALSE` a 048 DB without the R-22.S receipt schema.
+qc_db <- function(env = parent.frame(), tables = TRUE, receipt = TRUE) {
   db <- fl_db(env = env)
-  if (tables) fl_with(db, qc_create_tables)
+  if (tables) fl_with(db, function(con) qc_create_tables(con, receipt = receipt))
   db
 }
 
