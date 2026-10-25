@@ -14,7 +14,7 @@ test_that("R-1.5: ensure_schema() creates all five ops objects on a fresh DB", {
   tables <- DBI::dbListTables(con)
   expect_true(all(
     c("ingest_file", "ingest_sighting", "review_queue", "change_log", "schema_version",
-      "asset_filing") %in% tables      # asset_filing: ops-schema version 9 (PLAN-20 P20.5)
+      "asset_filing") %in% tables      # asset_filing: ops-schema version 10 (PLAN-20 P20.5)
   ))
 })
 

@@ -26,7 +26,7 @@ hk_cw_cols <- c("uuid", "name", "type", "site", "date_start", "date_end",
 # The status list's names, in order, when no `checks` is given (P20.2).
 hk_status_names <- c("updated", "host", "dry_run", "review_items_open",
                      "folders_waiting", "needs_review", "non_blocking_notes",
-                     "waiting", "problems", "recent_imports")
+                     "waiting", "problems", "recent_imports", "db_checks")
 
 # Insert a project with `samples` samples, optionally with one open review item
 # that names it by work order (rule (a): blocks completeness).
