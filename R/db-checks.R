@@ -88,7 +88,10 @@ db_check <- function(name, sql, description, tier = "hourly", severity = "error"
 #'   * `tz`: the time zone whose calendar day `sample.date` names (default
 #'     `"Australia/Sydney"`);
 #'   * `mask_variants`: the registered mask variants (default the core
-#'     `long`, `old`, `gas_report`; a deployment adds its own).
+#'     `long`, `old`, `gas_report`; a deployment adds its own);
+#'   * `receipt_max_temp_c`, `receipt_lookback_days`: the SRN receipt
+#'     temperature above which `lab_receipt_warm` warns (default 6), and how
+#'     many days back it looks (default 90).
 #' @return a named list.
 #' @export
 db_checks_params <- function(...) {
@@ -96,7 +99,12 @@ db_checks_params <- function(...) {
     min_date = "1980-01-01",
     bbox = NULL,
     tz = .inbox_tz,
-    mask_variants = .st_core_mask_variants
+    mask_variants = .st_core_mask_variants,
+    # R-22.S: lab_receipt_warm flags an SRN whose warmest cooler is above
+    # receipt_max_temp_c (ALS's own "chilled to <= 6 C" note), received within
+    # the last receipt_lookback_days.
+    receipt_max_temp_c = 6,
+    receipt_lookback_days = 90
   )
   over <- list(...)
   if (length(over)) {
@@ -127,6 +135,8 @@ db_checks_params <- function(...) {
     cli::cli_abort("{.arg tz} must be one time-zone name.", class = "sampletidy_error")
   }
   checkmate::assert_character(p$mask_variants, any.missing = FALSE, min.len = 1)
+  checkmate::assert_number(p$receipt_max_temp_c, finite = TRUE)
+  checkmate::assert_number(p$receipt_lookback_days, lower = 0, finite = TRUE)
   p
 }
 
@@ -259,6 +269,46 @@ WHERE a.uuid_sample IN (SELECT uuid FROM \"sample\" WHERE datetime IS NULL)")
   )
 }
 
+# ---- R-22.S: QC tables and sample receipt notifications ------------------------------------
+
+.dbc_orphan_qc_refs_sql <- "
+SELECT uuid AS key, 'lab_qc_outlier.uuid_report' AS col FROM lab_qc_outlier
+WHERE uuid_report NOT IN (SELECT uuid FROM lab_qc_report)
+UNION ALL SELECT uuid, 'lab_qc_outlier.uuid_sample' FROM lab_qc_outlier
+WHERE uuid_sample IS NOT NULL AND uuid_sample NOT IN (SELECT uuid FROM \"sample\")
+UNION ALL SELECT uuid_sample, 'sample_lab_id.uuid_sample' FROM sample_lab_id
+WHERE uuid_sample NOT IN (SELECT uuid FROM \"sample\")
+UNION ALL SELECT uuid_feature, 'qc_feature.uuid_feature' FROM qc_feature
+WHERE uuid_feature NOT IN (SELECT uuid FROM feature)
+UNION ALL SELECT uuid_feature, 'qc_feature.uuid_parent' FROM qc_feature
+WHERE uuid_parent IS NOT NULL AND uuid_parent NOT IN (SELECT uuid FROM feature)"
+
+# The receipt child tables exist only after the operator migration; before it
+# the check is the 048 arms alone.
+.dbc_orphan_qc_refs <- function(con, params) {
+  sql <- .dbc_orphan_qc_refs_sql
+  if (.lab_receipt_ready(con)) {
+    for (t in names(.lab_receipt_ddl)) {
+      sql <- paste0(sql, sprintf("
+UNION ALL SELECT uuid, '%1$s.uuid_report' FROM %1$s
+WHERE uuid_report NOT IN (SELECT uuid FROM lab_qc_report)", t))
+    }
+  }
+  DBI::dbGetQuery(con, sql)
+}
+
+# key = work_order. temp_max_c is the warmest reported cooler; the rule is
+# "above" the limit, so exactly receipt_max_temp_c passes.
+.dbc_lab_receipt_warm <- function(con, params) {
+  if (!.lab_receipt_ready(con)) return(data.frame(key = character(0), stringsAsFactors = FALSE))
+  DBI::dbGetQuery(con, "
+SELECT work_order AS key, temp_max_c, received_at FROM lab_qc_report
+WHERE kind = 'SRN' AND temp_max_c IS NOT NULL AND temp_max_c > ?
+  AND received_at >= timezone('UTC', now()) - to_days(CAST(? AS INTEGER))
+ORDER BY received_at",
+                  params = list(params$receipt_max_temp_c, as.integer(ceiling(params$receipt_lookback_days))))
+}
+
 # ---- the core catalogue ----------------------------------------------------------------
 
 #' The generic standing database checks
@@ -357,18 +407,15 @@ SELECT DISTINCT hash AS key FROM ingest_sighting WHERE hash NOT IN (SELECT hash 
 SELECT hash AS key, message_id FROM ingest_file
 WHERE message_id IS NOT NULL AND message_id NOT IN (SELECT message_id FROM ingest_email)",
        "ingest_file.message_id names an ingest_email row.", "hourly", "error"),
-    ck("orphan_qc_refs", "
-SELECT uuid AS key, 'lab_qc_outlier.uuid_report' AS col FROM lab_qc_outlier
-WHERE uuid_report NOT IN (SELECT uuid FROM lab_qc_report)
-UNION ALL SELECT uuid, 'lab_qc_outlier.uuid_sample' FROM lab_qc_outlier
-WHERE uuid_sample IS NOT NULL AND uuid_sample NOT IN (SELECT uuid FROM \"sample\")
-UNION ALL SELECT uuid_sample, 'sample_lab_id.uuid_sample' FROM sample_lab_id
-WHERE uuid_sample NOT IN (SELECT uuid FROM \"sample\")
-UNION ALL SELECT uuid_feature, 'qc_feature.uuid_feature' FROM qc_feature
-WHERE uuid_feature NOT IN (SELECT uuid FROM feature)
-UNION ALL SELECT uuid_feature, 'qc_feature.uuid_parent' FROM qc_feature
-WHERE uuid_parent IS NOT NULL AND uuid_parent NOT IN (SELECT uuid FROM feature)",
+    ck("orphan_qc_refs", .dbc_orphan_qc_refs,
        "The QC tables point at their parents.", "hourly", "error"),
+    # R-22.S (Robin 2026-10-25): lab_qc_report.kind is one of the parsed
+    # report kinds, and an SRN received warm is worth a human's look.
+    ck("vocab_lab_qc_kind", "
+SELECT uuid AS key, kind FROM lab_qc_report WHERE kind IS NULL OR kind NOT IN ('QC', 'QCI', 'SRN')",
+       "lab_qc_report.kind is QC, QCI or SRN.", "hourly", "error"),
+    ck("lab_receipt_warm", .dbc_lab_receipt_warm,
+       "A recent SRN reports a receipt temperature above receipt_max_temp_c.", "hourly", "warn"),
     ck("orphan_registry_refs", "
 SELECT uuid AS key, 'lab_method.uuid_project' AS col FROM lab_method
 WHERE uuid_project IS NOT NULL AND uuid_project NOT IN (SELECT uuid FROM project)

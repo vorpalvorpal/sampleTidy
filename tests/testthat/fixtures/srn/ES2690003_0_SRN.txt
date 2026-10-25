@@ -1,0 +1,78 @@
+                                       SAMPLE RECEIPT NOTIFICATION (SRN)
+Work Order                : ES2690003
+
+Client                    : EXAMPLE CLIENT PTY LTD                             Laboratory              : Environmental Division Example
+Contact                   : A. CONTACT                                         Contact                 : A. Labperson
+Address                   : 1 Example Street                                   Address                 : 2 Laboratory Road Example
+                              Exampletown 9999                                                           NSW Australia 9999
+E-mail                    : client@example.org                                 E-mail                  : lab@example.org
+Telephone                 : 00 0000 0000                                       Telephone               : +61-0-0000 0000
+Facsimile                 : 00 0000 0001                                       Facsimile               : +61-0-0000 0001
+
+Project                   : Example QUARTERLY                                  Page                    : 1 of 2
+Order number              : ----                                               Quote number            : EX0000QUOTE0001
+C-O-C number              : ----                                               QC Level                : NEPM 2013 B3 & ALS QC Standard
+Site                      : Example Site
+Sampler                   :
+
+Dates
+Date Samples Received              : 02-Jun-2026 09:00                         Issue Date                              : 02-Jun-2026
+Client Requested Due               : 10-Jun-2026                               Scheduled Reporting Date                : 10-Jun-2026
+Date
+
+Delivery Details
+Mode of Delivery                   : Client Drop Off                           Security Seal                           : Not Available
+No. of coolers/boxes               : 1                                         Temperature                             : Not recorded
+Receipt Detail                     :                                            No. of samples received / analysed     : 2 / 2
+
+
+General Comments
+l      Please direct any queries you have regarding this work order to the above ALS laboratory contact.
+
+
+
+
+                                                          right solutions. right partner.
+Issue Date          : 02-Jun-2026
+Page                : 2 of 2
+Work Order          : ES2690003 Amendment 0
+Client              : EXAMPLE CLIENT PTY LTD
+
+Sample Container(s)/Preservation Non-Compliances
+All comparisons are made against pretreatment/preservation AS, APHA, USEPA standards.
+
+l No sample container / preservation non-compliance exists.
+
+
+Summary of Sample(s) and Requested Analysis
+Some items described below may be part of a laboratory
+process necessary for the execution of client requested
+tasks. Packages may contain additional analyses, such
+as the determination of moisture content and preparation
+tasks, that are included in the package.
+
+
+                                                               WATER - EA015H                            WATER - EG020F
+If no sampling time is provided, the sampling time will
+
+default 00:00 on the date of sampling. If no sampling date
+is provided, the sampling date will be assumed by the
+laboratory and displayed in brackets without a time
+component
+
+                                                               Total Dissolved Solids - Standard Level   Dissolved Metals by ICP/MS
+Matrix: WATER
+
+Laboratory sample       Sampling date /       Sample ID
+ID                          time
+ ES2690003-001      01-Jun-2026 08:00     Q.MW01                           ü                                           ü
+ ES2690003-002      01-Jun-2026 08:20     Q.MW02                           ü                                           ü
+
+
+Proactive Holding Time Report
+Sample(s) have been received within the recommended holding times for the requested analysis.
+
+Requested Deliverables
+EXAMPLE CONTACT
+  - *AU Certificate of Analysis - NATA (COA)                                           Email             client@example.org
+  - A4 - AU Sample Receipt Notification - Environmental HT (SRN)                       Email             client@example.org
