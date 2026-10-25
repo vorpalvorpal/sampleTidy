@@ -1075,6 +1075,9 @@ import_status <- function(db = st_config("live_db"), input_dir, report_dir,
   if (length(log) > 0) problems <- .inbox_line_problems(log[[length(log)]])
   dbc <- .inbox_db_checks(db)
   problems <- c(problems, .inbox_db_check_problems(dbc))
+  # R-22.H: the wrapper passes the previous failed/unfinished run (Robin 2026-10-25).
+  prev_fail <- Sys.getenv("SAMPLETIDY_AUTOIMPORT_PREV_FAILURE", "")
+  if (nzchar(prev_fail)) problems <- c(prev_fail, problems)
 
   # Recent imports: last 14 days, newest first (log order is chronological).
   recent <- list()
