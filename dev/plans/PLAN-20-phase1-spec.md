@@ -85,8 +85,13 @@ Each hook is called with ONE argument.
 - When **no** `after_run` hook is registered, the default renderer runs in its place: if the
   day has news it writes the daily `<YYYY-MM-DD>-imports.md` via the same logic as
   `import_report()`, exactly as today.
-- When a hook **is** registered for an event, the default renderer for that event does not
-  run (the registered hook replaces it). So registering an `after_status` hook means
+- When a hook **is** registered for an event with `replace_default = TRUE` (the default of
+  `register_hook(event, fn, replace_default = TRUE)`), the default renderer for that event does
+  not run (the registered hook replaces it). Hooks registered with `replace_default = FALSE` run
+  in addition: the default first, then the hooks in registration order; the default is
+  suppressed only if at least one hook of the event has `replace_default = TRUE`.
+  `replace_default` must be a single TRUE/FALSE (else `sampletidy_error`) and has no effect for
+  `work_complete`. So registering an `after_status` hook means
   `Import status.md` is no longer written by `inbox_run()`; `status.json` and
   `.import-status.json` always are.
 - `work_complete` has no default.
