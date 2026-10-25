@@ -4,8 +4,8 @@
 #   mig060_run(db, snapshot_dir, dry_run = FALSE, .now = NULL)
 #     -> invisible list(status = "dry_run" | "migrated" | "already_migrated", ...)
 #
-# The live DB sits at marker 1052 with ops-schema versions 1..8 (no asset_filing).
-# seed_db() runs the CURRENT ensure_schema(), which (once version 9 exists) already
+# The live DB sits at marker 1052 with ops-schema versions 1..9 (no asset_filing).
+# seed_db() runs the CURRENT ensure_schema(), which (once version 10 exists) already
 # creates asset_filing; m60_db() undoes that to simulate the live DB.
 
 m60_load <- function() {
@@ -38,14 +38,14 @@ m60_counts <- function(db) {
   }, numeric(1)), t)
 }
 
-# The live DB at marker 1052, ops versions 1..8, no asset_filing.
+# The live DB at marker 1052, ops versions 1..9, no asset_filing.
 m60_db <- function(env = parent.frame(), marker = TRUE, keep_table = FALSE) {
   db <- seed_db(dir = withr::local_tempdir(.local_envir = env))
   con <- seed_con(db)
   on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
   if (!keep_table) {
     DBI::dbExecute(con, "DROP TABLE IF EXISTS asset_filing")
-    DBI::dbExecute(con, "DELETE FROM schema_version WHERE version = 9")
+    DBI::dbExecute(con, "DELETE FROM schema_version WHERE version = 10")
   }
   if (marker) {
     DBI::dbExecute(con, "INSERT INTO schema_version (version, applied_at)
@@ -78,7 +78,7 @@ test_that("060: dry run checks the preconditions and writes nothing - no table, 
   expect_identical(file_md5(db), md5)
 })
 
-test_that("060: migrates a DB at marker 1052 - table, version 9 and marker 1060 recorded, other tables untouched", {
+test_that("060: migrates a DB at marker 1052 - table, version 10 and marker 1060 recorded, other tables untouched", {
   env <- m60_load()
   db <- m60_db()
   snap <- withr::local_tempdir()
@@ -94,8 +94,8 @@ test_that("060: migrates a DB at marker 1052 - table, version 9 and marker 1060 
                    c("NO", "NO", "NO", "YES", "YES", "NO", "YES", "YES"))
   expect_identical(m60_query(db, "SELECT count(*) AS n FROM asset_filing")$n, 0)
   mk <- m60_markers(db)
-  expect_true(all(c(9, 1052, 1060) %in% mk))
-  expect_identical(sum(mk == 9), 1L)
+  expect_true(all(c(10, 1052, 1060) %in% mk))
+  expect_identical(sum(mk == 10), 1L)
   expect_identical(sum(mk == 1060), 1L)
   expect_identical(m60_counts(db), before)
 })
@@ -169,31 +169,31 @@ test_that("060: a DB with no asset table aborts with sampletidy_error and writes
   expect_length(list.files(snap), 0)
 })
 
-test_that("060: adopts an empty asset_filing that ensure_schema() version 9 already created - marker 1060 recorded, version 9 not duplicated, table kept", {
+test_that("060: adopts an empty asset_filing that ensure_schema() version 10 already created - marker 1060 recorded, version 10 not duplicated, table kept", {
   env <- m60_load()
   db <- m60_db(keep_table = TRUE)          # seed_db() ran the current ensure_schema()
   expect_true("asset_filing" %in% m60_tables(db))
-  expect_true(9 %in% m60_markers(db))
+  expect_true(10 %in% m60_markers(db))
   snap <- withr::local_tempdir()
   r <- m60_run(env, db, snap)
   expect_identical(r$status, "migrated")
   expect_true("asset_filing" %in% m60_tables(db))
   mk <- m60_markers(db)
-  expect_identical(sum(mk == 9), 1L)
+  expect_identical(sum(mk == 10), 1L)
   expect_identical(sum(mk == 1060), 1L)
   expect_length(list.files(snap), 1)
   expect_identical(m60_query(db, "SELECT count(*) AS n FROM asset_filing")$n, 0)
 })
 
-test_that("060: adopts when the table exists but version 9 is not recorded - version 9 is inserted", {
+test_that("060: adopts when the table exists but version 10 is not recorded - version 10 is inserted", {
   env <- m60_load()
   db <- m60_db(keep_table = TRUE)
   con <- seed_con(db)
-  DBI::dbExecute(con, "DELETE FROM schema_version WHERE version = 9")
+  DBI::dbExecute(con, "DELETE FROM schema_version WHERE version = 10")
   DBI::dbDisconnect(con, shutdown = TRUE)
   r <- m60_run(env, db, withr::local_tempdir())
   expect_identical(r$status, "migrated")
-  expect_true(all(c(9, 1060) %in% m60_markers(db)))
+  expect_true(all(c(10, 1060) %in% m60_markers(db)))
 })
 
 test_that("060: refuses (sampletidy_error, nothing written, no backup) an existing asset_filing that has rows", {

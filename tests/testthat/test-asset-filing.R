@@ -1,11 +1,11 @@
 # PLAN-20 phase 1, P20.5: external filing records - the asset_filing table
-# (ensure_schema ops-schema version 9), register_filing() and filed_assets().
+# (ensure_schema ops-schema version 10), register_filing() and filed_assets().
 # Spec: dev/plans/PLAN-20-phase1-spec.md section P20.5.
 
 af_cols <- c("uuid_asset", "system", "external_id", "external_uri", "container",
              "filed_at", "title", "comments")
 
-# A seed DB (ensure_schema has run, so it has asset_filing once version 9 exists)
+# A seed DB (ensure_schema has run, so it has asset_filing once version 10 exists)
 # with two assets.
 af_db <- function(env = parent.frame()) {
   db <- seed_db(dir = withr::local_tempdir(.local_envir = env))
@@ -32,7 +32,7 @@ af_n_log <- function(db) af_q(db, "SELECT count(*) AS n FROM change_log")$n
 
 af_utc <- function(x) as.POSIXct(x, tz = "UTC")
 
-# ---- the table (ensure_schema version 9) -------------------------------------------------
+# ---- the table (ensure_schema version 10) -------------------------------------------------
 
 test_that("P20.5: ensure_schema() creates asset_filing on a BARE database (no asset table), columns in spec order", {
   db <- file.path(withr::local_tempdir(), "bare.duckdb")
@@ -51,19 +51,19 @@ test_that("P20.5: ensure_schema() creates asset_filing on a BARE database (no as
                    c("NO", "NO", "NO", "YES", "YES", "NO", "YES", "YES"))
 })
 
-test_that("P20.5: asset_filing is created empty and records ops-schema version 9", {
+test_that("P20.5: asset_filing is created empty and records ops-schema version 10", {
   db <- file.path(withr::local_tempdir(), "bare.duckdb")
   con <- DBI::dbConnect(duckdb::duckdb(), db, read_only = FALSE)
   withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   ensure_schema(con)
   expect_identical(DBI::dbGetQuery(con, "SELECT count(*) AS n FROM asset_filing")$n, 0)
-  expect_true(9 %in% DBI::dbGetQuery(con, "SELECT version FROM schema_version")$version)
+  expect_true(10 %in% DBI::dbGetQuery(con, "SELECT version FROM schema_version")$version)
 })
 
-test_that("P20.5: the migration ladder is versions 1..9, strictly ascending in list order", {
+test_that("P20.5: the migration ladder is versions 1..10, strictly ascending in list order", {
   ns <- asNamespace("sampleTidy")
   versions <- vapply(get(".st_schema_migrations", envir = ns), function(m) m$version, integer(1))
-  expect_identical(versions, 1:9)
+  expect_identical(versions, 1:10)
 })
 
 test_that("P20.5: the primary key is (uuid_asset, system)", {
@@ -96,15 +96,15 @@ test_that("P20.5: no declared foreign key - filings can be written on a bare DB 
   expect_no_error(DBI::dbExecute(con, "DELETE FROM asset WHERE uuid = 'as-1'"))
 })
 
-test_that("P20.5: ensure_schema() re-applies version 9 on a DB that lacks it, and a second call is a no-op", {
+test_that("P20.5: ensure_schema() re-applies version 10 on a DB that lacks it, and a second call is a no-op", {
   db <- af_db()
   con <- seed_con(db)
   withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   DBI::dbExecute(con, "DROP TABLE asset_filing")
-  DBI::dbExecute(con, "DELETE FROM schema_version WHERE version = 9")
+  DBI::dbExecute(con, "DELETE FROM schema_version WHERE version = 10")
   ensure_schema(con)
   expect_true("asset_filing" %in% DBI::dbListTables(con))
-  expect_true(9 %in% DBI::dbGetQuery(con, "SELECT version FROM schema_version")$version)
+  expect_true(10 %in% DBI::dbGetQuery(con, "SELECT version FROM schema_version")$version)
   v1 <- DBI::dbGetQuery(con, "SELECT version FROM schema_version ORDER BY version")$version
   expect_no_error(ensure_schema(con))
   expect_identical(DBI::dbGetQuery(con, "SELECT version FROM schema_version ORDER BY version")$version, v1)
@@ -116,7 +116,7 @@ test_that("P20.5: ensure_schema() keeps existing asset_filing rows", {
   withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   DBI::dbExecute(con, "INSERT INTO asset_filing (uuid_asset, system, external_id, filed_at)
                        VALUES ('as-1', 'TRIM', 'x', TIMESTAMP '2026-10-01 00:00:00')")
-  DBI::dbExecute(con, "DELETE FROM schema_version WHERE version = 9")
+  DBI::dbExecute(con, "DELETE FROM schema_version WHERE version = 10")
   ensure_schema(con)
   expect_identical(DBI::dbGetQuery(con, "SELECT count(*) AS n FROM asset_filing")$n, 1)
 })

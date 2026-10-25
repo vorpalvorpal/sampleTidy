@@ -168,7 +168,7 @@ excluded). Anything else aborts `sampletidy_error`.
 
 ### Table
 
-`asset_filing`, created by `ensure_schema()` as ops-schema **version 9** (so every fresh DB
+`asset_filing`, created by `ensure_schema()` as ops-schema **version 10** (renumbered from 9 on the 2026-10-25 rebase: v9 is R-22.E `ingest_email`) (so every fresh DB
 has it) and on the live DB by operator migration `dev/migrations/060-asset-filing.R`:
 
 ```sql
@@ -222,11 +222,11 @@ marker **1060**, requires marker **1052**. `env$mig060_run(db, snapshot_dir, dry
 `"already_migrated"`.
 
 - Preconditions (abort `sampletidy_error`, nothing written): marker 1052 present; an `asset`
-  table exists; if `asset_filing` already exists (`ensure_schema()` v9 got there first) it
+  table exists; if `asset_filing` already exists (`ensure_schema()` v10 got there first) it
   must have exactly the columns above and 0 rows.
 - Dry run: checks preconditions, writes nothing, no backup.
 - Migrate: verified whole-file backup to `snapshot_dir`; then in one transaction create the
-  table (`IF NOT EXISTS`), insert `schema_version` 9 if absent and 1060; verify; every other
+  table (`IF NOT EXISTS`), insert `schema_version` 10 if absent and 1060; verify; every other
   table's row count unchanged.
 - Re-run with marker present: re-verify, `"already_migrated"`, nothing written.
 - `dev/migrations/apply-060-asset-filing.R` mirrors `apply-048-qc-schema.R`

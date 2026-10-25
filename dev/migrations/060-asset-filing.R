@@ -8,9 +8,9 @@
 #   * asset_filing  one row per (asset, external system) the asset was filed into:
 #                   uuid_asset, system, external_id, external_uri, container,
 #                   filed_at, title, comments; PK (uuid_asset, system).
-#   * schema_version 9 (ops-schema ladder, R/db-schema.R) if absent, and 1060.
+#   * schema_version 10 (ops-schema ladder, R/db-schema.R) if absent, and 1060.
 #
-# This is the same table ensure_schema() creates as ops-schema version 9 on any
+# This is the same table ensure_schema() creates as ops-schema version 10 on any
 # fresh DB, as v8 was also created on live by migration 023. There is no declared
 # FOREIGN KEY on uuid_asset: a declared FK onto asset would make DuckDB refuse
 # later DELETEs of asset rows; register_filing() checks the asset exists.
@@ -18,10 +18,10 @@
 # ---- PRECONDITIONS (any failure aborts; nothing is written) ---------------------
 #   * marker 1052 present;
 #   * an `asset` table exists;
-#   * if asset_filing already exists (ensure_schema() v9 got there first) it has
+#   * if asset_filing already exists (ensure_schema() v10 got there first) it has
 #     exactly the spec's columns, in order, and 0 rows (it is then adopted).
 #
-# Writes, in one transaction: CREATE TABLE IF NOT EXISTS, schema_version 9 (if
+# Writes, in one transaction: CREATE TABLE IF NOT EXISTS, schema_version 10 (if
 # absent) and the marker. Every other table's row count is checksummed before and
 # after. Backup: a verified whole-file snapshot in `snapshot_dir`.
 #
@@ -34,7 +34,7 @@
 #                  snapshot_dir = st_config("snapshot_dir"), dry_run = TRUE)
 
 .mig060_marker_version <- 1060L
-.mig060_ladder_version <- 9L
+.mig060_ladder_version <- 10L
 .mig060_requires <- 1052L
 .mig060_name <- "060-asset-filing"
 
@@ -108,7 +108,7 @@
   if (.mig060_scalar(con, "SELECT COUNT(*) FROM schema_version WHERE version = ?", .mig060_marker_version) != 1L)
     return("marker 1060 missing")
   if (.mig060_scalar(con, "SELECT COUNT(*) FROM schema_version WHERE version = ?", .mig060_ladder_version) < 1L)
-    return("ops-schema version 9 missing")
+    return("ops-schema version 10 missing")
   got <- .mig060_columns(con, "asset_filing")
   if (!identical(got, .mig060_cols))
     return(sprintf("asset_filing columns are %s", paste(got, collapse = ",")))
