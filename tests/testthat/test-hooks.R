@@ -609,6 +609,110 @@ test_that("P20.2: work_complete has no default and does not replace either rende
   expect_true(file.exists(status_note_path(s$report_dir)))
 })
 
+# ---- additive hooks: register_hook(replace_default = FALSE) --------------------------
+
+test_that("additive hooks: a replace_default = FALSE after_run hook runs and the daily report is still written", {
+  hk_clean()
+  s <- inbox_setup()
+  now <- sydney_midday()
+  rec <- hk_rec()
+  register_hook("after_run", hk_hook(rec, "after_run"), replace_default = FALSE)
+  hk_news_run(s, now)
+  expect_identical(hk_events(rec), "after_run")
+  expect_true(file.exists(inbox_report_path(s$report_dir, now)))
+  expect_true(file.exists(status_note_path(s$report_dir)))
+})
+
+test_that("additive hooks: a replace_default = FALSE after_status hook runs and Import status.md is still written", {
+  hk_clean()
+  s <- inbox_setup()
+  now <- sydney_midday()
+  rec <- hk_rec()
+  register_hook("after_status", hk_hook(rec, "after_status"), replace_default = FALSE)
+  hk_news_run(s, now)
+  expect_identical(hk_events(rec), "after_status")
+  expect_true(file.exists(status_note_path(s$report_dir)))
+})
+
+test_that("additive hooks: any replace_default = TRUE hook suppresses the default, whatever the order", {
+  hk_clean()
+  s <- inbox_setup()
+  now <- sydney_midday()
+  register_hook("after_run", function(x) NULL, replace_default = FALSE)
+  register_hook("after_run", function(x) NULL, replace_default = TRUE)
+  register_hook("after_run", function(x) NULL, replace_default = FALSE)
+  hk_news_run(s, now)
+  expect_false(file.exists(inbox_report_path(s$report_dir, now)))
+  expect_true(file.exists(status_note_path(s$report_dir)))
+})
+
+test_that("additive hooks: replace_default defaults to TRUE", {
+  hk_clean()
+  s <- inbox_setup()
+  now <- sydney_midday()
+  register_hook("after_run", function(x) NULL)
+  register_hook("after_run", function(x) NULL, replace_default = FALSE)
+  hk_news_run(s, now)
+  expect_false(file.exists(inbox_report_path(s$report_dir, now)))
+})
+
+test_that("additive hooks: the default runs first, then additive hooks in registration order", {
+  hk_clean()
+  s <- inbox_setup()
+  now <- sydney_midday()
+  day <- inbox_report_path(s$report_dir, now)
+  seen <- character(0)
+  a <- function(x) seen <<- c(seen, paste0("a:", file.exists(day)))
+  b <- function(x) seen <<- c(seen, "b")
+  register_hook("after_run", a, replace_default = FALSE)
+  register_hook("after_run", b, replace_default = FALSE)
+  register_hook("after_run", a, replace_default = FALSE)
+  hk_news_run(s, now)
+  expect_identical(seen, c("a:TRUE", "b", "a:TRUE"))
+})
+
+test_that("additive hooks: a failing additive hook is a problem and the default still ran", {
+  hk_clean()
+  s <- inbox_setup()
+  now <- sydney_midday()
+  register_hook("after_run", function(x) stop("additive boom"), replace_default = FALSE)
+  hk_news_run(s, now)
+  expect_true(file.exists(inbox_report_path(s$report_dir, now)))
+  expect_true(any(grepl("hook after_run\\[1\\] failed: additive boom", hk_problems(s$report_dir))))
+})
+
+test_that("additive hooks: replace_default has no effect for work_complete", {
+  hk_clean()
+  s <- inbox_setup()
+  now <- sydney_midday()
+  rec <- hk_rec()
+  register_hook("work_complete", hk_hook(rec, "work_complete"), replace_default = FALSE)
+  hk_news_run(s, now)
+  expect_true(file.exists(inbox_report_path(s$report_dir, now)))
+  expect_true(file.exists(status_note_path(s$report_dir)))
+  expect_length(hooks("work_complete"), 1)
+})
+
+test_that("additive hooks: replace_default must be a single TRUE or FALSE", {
+  hk_clean()
+  f <- function(x) NULL
+  for (bad in list(NA, NULL, "TRUE", 1, c(TRUE, FALSE), logical(0), NA_integer_)) {
+    expect_error(register_hook("after_run", f, replace_default = bad), class = "sampletidy_error")
+    expect_error(register_hook("work_complete", f, replace_default = bad), class = "sampletidy_error")
+  }
+  expect_length(hooks("after_run"), 0)   # nothing registered by a refused call
+  expect_length(hooks("work_complete"), 0)
+})
+
+test_that("additive hooks: hooks() still lists the functions and clear_hooks() clears additive ones", {
+  hk_clean()
+  f <- function(x) NULL
+  register_hook("after_run", f, replace_default = FALSE)
+  expect_identical(hooks("after_run"), list(f))
+  clear_hooks("after_run")
+  expect_length(hooks("after_run"), 0)
+})
+
 test_that("P20.2: a dry run with an after_status hook writes no Import status.md; without one it writes it as before", {
   hk_clean()
   s <- inbox_setup()
