@@ -433,6 +433,42 @@
   dplyr::bind_rows(rows)
 }
 
+#' R-22.N (Robin 2026-10-25): which guard rows already have an OPEN
+#' work_order_reingest row. Dedupe key = (kind, work_order, source_hash,
+#' open): a RETRY of the same blocked file adds nothing, but a LATER blocked
+#' delivery of the work order (a different file hash) gets its own row, so
+#' every blocked file is named by a typed column. Shared by `commit_event()`
+#' and `.ct_reingest_guard_preview()`; keep them in sync.
+#' @keywords internal
+#' @noRd
+.ct_guard_rows_already_open <- function(con, guard_rows) {
+  vapply(seq_len(nrow(guard_rows)), function(i) {
+    wo_g <- guard_rows$work_order[[i]]
+    if (is.na(wo_g)) {
+      return(FALSE)
+    }
+    sh <- guard_rows$source_hash[[i]]
+    existing <- if (is.na(sh)) {
+      DBI::dbGetQuery(
+        con,
+        "SELECT count(*) AS n FROM review_queue
+          WHERE kind = 'work_order_reingest' AND work_order = ? AND source_hash IS NULL
+            AND status = 'open'",
+        params = list(wo_g)
+      )
+    } else {
+      DBI::dbGetQuery(
+        con,
+        "SELECT count(*) AS n FROM review_queue
+          WHERE kind = 'work_order_reingest' AND work_order = ? AND source_hash = ?
+            AND status = 'open'",
+        params = list(wo_g, sh)
+      )
+    }
+    existing$n[[1]] > 0
+  }, logical(1))
+}
+
 #' T1.2 item 7: read-only preview of what `commit_event()`'s blocked branch
 #' would ACTUALLY write, for `.ig_reconcile_and_commit()`'s (R/ingest.R)
 #' `dry_run` path.
@@ -461,19 +497,7 @@
     return(list(blocked = FALSE))
   }
 
-  already_open <- vapply(seq_len(nrow(guard_rows)), function(i) {
-    wo_g <- guard_rows$work_order[[i]]
-    if (is.na(wo_g)) {
-      return(FALSE)
-    }
-    existing <- DBI::dbGetQuery(
-      con,
-      "SELECT count(*) AS n FROM review_queue
-        WHERE kind = 'work_order_reingest' AND work_order = ? AND status = 'open'",
-      params = list(wo_g)
-    )
-    existing$n[[1]] > 0
-  }, logical(1))
+  already_open <- .ct_guard_rows_already_open(con, guard_rows)
   new_guard_rows <- guard_rows[!already_open, , drop = FALSE]
 
   n_review <- if (!is.null(resolved$review) && nrow(resolved$review) > 0) {
@@ -2539,7 +2563,8 @@
 #' are left alone - they are already `ignored`.
 #' @keywords internal
 #' @noRd
-.ct_set_file_states <- function(con, files, n_clean, n_review, reason) {
+.ct_set_file_states <- function(con, files, n_clean, n_review, reason,
+                                work_order = NA_character_) {
   kept <- files[.ct_kept_rows(files), , drop = FALSE]
   if (nrow(kept) == 0) {
     return(invisible(NULL))
@@ -2552,6 +2577,12 @@
     row <- DBI::dbGetQuery(con, "SELECT state FROM ingest_file WHERE hash = ?", params = list(h))
     if (nrow(row) == 0 || !(row$state[[1]] %in% non_terminal)) {
       next
+    }
+    # R-22.N (Robin 2026-10-25): record the event's work order on the file, so
+    # settling (.st_settle_resolved_files()) and the db_check can tell which
+    # review items cover it. Nothing wrote ingest_file.work_order before.
+    if (!is.na(work_order)) {
+      ingest_file_set_work_order(con, h, work_order)
     }
     if (needs_review_only) {
       # Phase-7b item 3: a SECOND commit_event() call on an already-blocked
@@ -2647,19 +2678,7 @@ commit_event <- function(event, resolved, con) {
       # order whose guard verdict already has an OPEN row is not re-blocked
       # again here - only a genuinely new blocking WO (or the first call)
       # writes one.
-      already_open <- vapply(seq_len(nrow(guard_rows)), function(i) {
-        wo_g <- guard_rows$work_order[[i]]
-        if (is.na(wo_g)) {
-          return(FALSE)
-        }
-        existing <- DBI::dbGetQuery(
-          con,
-          "SELECT count(*) AS n FROM review_queue
-            WHERE kind = 'work_order_reingest' AND work_order = ? AND status = 'open'",
-          params = list(wo_g)
-        )
-        existing$n[[1]] > 0
-      }, logical(1))
+      already_open <- .ct_guard_rows_already_open(con, guard_rows)
       new_guard_rows <- guard_rows[!already_open, , drop = FALSE]
 
       # commit-1 (round-3): the round-2 item-3 find-or-create above dedupes
@@ -2694,7 +2713,8 @@ commit_event <- function(event, resolved, con) {
       # written this call - `n_review` here only decides the needs_review
       # branch (`.ct_set_file_states()`'s `needs_review_only`), not the
       # opened-count in the return value below.
-      .ct_set_file_states(con, event$files, 0L, max(nrow(written_review), 1L), reason)
+      .ct_set_file_states(con, event$files, 0L, max(nrow(written_review), 1L), reason,
+                          work_order = event$work_order)
       # Phase-7b item 2: the guard verdict MUST be distinguishable from a real
       # commit in the return value - .ig_reconcile_and_commit() (R/ingest.R)
       # derives its tally from resolved$clean, which is what reconcile WOULD
@@ -2754,7 +2774,8 @@ commit_event <- function(event, resolved, con) {
       review <- .ct_rewrite_review_payloads(con, review, clean)
     }
 
-    .ct_set_file_states(con, event$files, nrow(clean), nrow(review), reason)
+    .ct_set_file_states(con, event$files, nrow(clean), nrow(review), reason,
+                        work_order = event$work_order)
 
     list(blocked = FALSE, n_clean = nrow(clean), n_review = nrow(review))
   })

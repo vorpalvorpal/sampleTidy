@@ -432,8 +432,11 @@ inbox_check <- function(input_dir, report_dir, now = Sys.time(),
   claimed <- !is.na(adapter) & nzchar(adapter)
   data <- ext %in% .inbox_data_exts | claimed
   has_asset <- !is.na(has_asset) & has_asset
-  done <- !is.na(state) &
-    (state %in% .inbox_done_states | (state == "needs_review" & has_asset))
+  # R-22.N (Robin 2026-10-25): needs_review is never done, asset or not. The
+  # old exemption (needs_review WITH an asset counted as done) hid 302 files
+  # parked after their review items were settled; resolving the last covering
+  # review item now moves the file on to archived (.st_settle_resolved_files).
+  done <- !is.na(state) & state %in% .inbox_done_states
   data.frame(file = files, data = data, unfinished = data & !done,
              state = ifelse(is.na(state), "not yet imported", state),
              stringsAsFactors = FALSE)

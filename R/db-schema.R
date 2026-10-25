@@ -426,6 +426,18 @@ ingest_file_set_state <- function(con, hash, state, reason = NA_character_, rese
   invisible(NULL)
 }
 
+# R-22.N: record the work order a file was committed under (ops-table write,
+# kept here with the other raw ingest_file SQL; see .ct_set_file_states()).
+ingest_file_set_work_order <- function(con, hash, work_order) {
+  checkmate::assert_string(hash)
+  checkmate::assert_string(work_order)
+  DBI::dbExecute(
+    con, "UPDATE ingest_file SET work_order = ?, updated_at = ? WHERE hash = ?",
+    params = list(work_order, Sys.time(), hash)
+  )
+  invisible(NULL)
+}
+
 # Record the routing outcome (adapter id + winning tier) on an ingest_file row.
 # An ops-table write, kept here so all raw ingest_file SQL lives in one place
 # (db-schema.R) rather than leaking into the router/pipeline modules.
@@ -1075,10 +1087,50 @@ review_queue_close <- function(con, uuid_target, resolution, resolved_by, kind) 
         actor = resolved_by, reason = reason
       )
     }
+    .st_settle_resolved_files(con, matching, reason)   # R-22.N
     length(matching)
   })
 
   invisible(as.integer(n_closed))
+}
+
+# R-22.N (Robin 2026-10-25): settle the needs_review files whose review items
+# have just been closed. commit_event() parks a delivery's kept files on
+# needs_review while review items stand; nothing moved them on once the items
+# were resolved (302 files, migration 081). Runs on the caller's `con`, inside
+# the caller's transaction, so a failed transition rolls the resolution back.
+# `uuids` = the review items just closed (already status 'resolved' on `con`).
+# A needs_review file is COVERED by an item when item.source_hash is the file's
+# hash, or item.work_order equals the file's non-NULL work_order (NULL never
+# matches NULL). Candidates are the needs_review files covered by a closed
+# item; each moves needs_review -> committed -> archived unless an OPEN item
+# still covers it. Legal transitions only (ingest_file_set_state()).
+.st_settle_resolved_files <- function(con, uuids, reason = "review settled") {
+  uuids <- uuids[!is.na(uuids)]
+  if (length(uuids) == 0L) {
+    return(invisible(0L))
+  }
+  ph <- paste(rep("?", length(uuids)), collapse = ", ")
+  cover <- function(item) {
+    paste0("(", item, ".source_hash = f.hash OR (", item, ".work_order IS NOT NULL AND ",
+           item, ".work_order = f.work_order))")
+  }
+  hashes <- DBI::dbGetQuery(
+    con,
+    paste0("SELECT f.hash FROM ingest_file f
+             WHERE f.state = 'needs_review'
+               AND EXISTS (SELECT 1 FROM review_queue c WHERE c.uuid IN (", ph, ") AND ",
+           cover("c"), ")
+               AND NOT EXISTS (SELECT 1 FROM review_queue o WHERE o.status = 'open' AND ",
+           cover("o"), ")"),
+    params = as.list(uuids)
+  )$hash
+  state_reason <- paste0("review settled: ", reason)
+  for (h in hashes) {
+    ingest_file_set_state(con, h, "committed", reason = state_reason)
+    ingest_file_set_state(con, h, "archived", reason = state_reason)
+  }
+  invisible(length(hashes))
 }
 
 #' Resolve (close) a single `review_queue` row by its own uuid - the operator
@@ -1147,6 +1199,7 @@ resolve_review <- function(uuid, resolution, resolved_by, db = st_config("live_d
           actor = resolved_by,
           reason = sprintf("resolve_review(): uuid=%s", uuid)
         )
+        .st_settle_resolved_files(con, uuid, sprintf("resolve_review(): uuid=%s", uuid))   # R-22.N
         TRUE
       })
     },
