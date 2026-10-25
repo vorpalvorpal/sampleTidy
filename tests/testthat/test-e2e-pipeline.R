@@ -473,7 +473,12 @@ test_that("R-10.6: NAMESPACE exports equal the CONTRACT-pinned public API exactl
     # reader (completed_work) and the external filing records
     # (register_filing/filed_assets).
     "register_hook", "clear_hooks", "hooks",
-    "completed_work", "register_filing", "filed_assets"
+    "completed_work", "register_filing", "filed_assets",
+    # Site hooks file (2026-10-25; spec in test-hooks-file.R): dev/auto-import.R
+    # sources the file SAMPLETIDY_HOOKS_FILE names so a deployment can register
+    # hooks on the live import. To be added to CONTRACT.md's public-API list
+    # in the same change.
+    "load_hooks_file"
   )
   actual <- getNamespaceExports("sampleTidy")
   expect_setequal(actual, pinned)

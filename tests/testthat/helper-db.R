@@ -32,29 +32,45 @@
 .st_test_core_ddl <- list(
   feature = "
     CREATE TABLE feature (
+      -- Column set, order and types mirror the live `feature` table (19 cols;
+      -- pinned by test-fixture-schema.R, 2026-10-25). NOT NULL is declared on
+      -- lon/lat only: live also has name/site NOT NULL, which the fixture does
+      -- not enforce.
       uuid VARCHAR PRIMARY KEY,
       name VARCHAR,
       site VARCHAR,
+      -- Live vocabulary (db_checks vocab_feature_flow): groundwater, still,
+      -- seep, flowing. Live matrix values: freshwater, stormwater, leachate,
+      -- air. The seeded rows below predate this and use 'surface'/'water'/
+      -- 'groundwater'; tests that need live-like values set them explicitly.
       flow VARCHAR,
       matrix VARCHAR,
-      geom_wkt VARCHAR,
-      -- `virtual` IS part of the live shape (19 cols, 894 rows all FALSE;
-      -- A67) - the earlier 'TEST-ONLY drift' claim was measured against the
-      -- dashboard's DERIVED copy, not the authoritative DB. Marks a
-      -- non-physical feature (e.g. WEM.data SILO-grid weather stations),
-      -- which still carry real (grid-centre) lon/lat - not a placeholder
-      -- mechanism.
-      virtual BOOLEAN,
+      depth DOUBLE,
+      installed_by VARCHAR,
+      permanent BOOLEAN,
+      -- TRUE marks a reference (background) site; used by derived products.
+      reference BOOLEAN,
       -- date_start/date_end DO exist live (CONTRACT.md, corrected block) and
       -- were missing from the test DDL (plan-11 cold review C11). With
       -- site-narrowing deferred (D9), date_end is the ONLY narrowing rule
       -- left in R-11.4 - without this column that criterion is unreachable.
       date_start DATE,
       date_end DATE,
+      cypher VARCHAR,
+      elevation DOUBLE,
+      uuid_project VARCHAR,
       -- lon/lat ARE DOUBLE NOT NULL live (R-11.17); the earlier omission is
       -- what let a broken add_feature() (missing lon/lat args) stay green.
       lon DOUBLE NOT NULL,
-      lat DOUBLE NOT NULL
+      lat DOUBLE NOT NULL,
+      geom_wkt VARCHAR,
+      comments VARCHAR,
+      -- `virtual` IS part of the live shape (A67; live default FALSE) - the
+      -- earlier 'TEST-ONLY drift' claim was measured against the dashboard's
+      -- DERIVED copy, not the authoritative DB. Marks a non-physical feature
+      -- (e.g. WEM.data SILO-grid weather stations), which still carry real
+      -- (grid-centre) lon/lat - not a placeholder mechanism.
+      virtual BOOLEAN DEFAULT FALSE
     )",
   feature_alias = "
     CREATE TABLE feature_alias (
@@ -104,7 +120,13 @@
       units VARCHAR,
       conversion_constant DOUBLE,
       type VARCHAR,
-      CAS VARCHAR
+      valence DOUBLE,
+      atomic_mass DOUBLE,
+      reported_as VARCHAR,
+      CAS VARCHAR,
+      comments VARCHAR
+      -- lab_contaminant (live, migration 048) is deliberately absent: the
+      -- seed is a pre-048 DB; qc_create_tables() (helper-qc.R) adds it.
     )",
   lab_method = "
     CREATE TABLE lab_method (
@@ -132,6 +154,8 @@
       -- Multiplied into a matched row's reported value when non-NA; NA means
       -- no conversion. That product is what analysis.value stores.
       conversion_constant DOUBLE,
+      -- Migration 005: preference rank among duplicate methods.
+      preference INTEGER,
       -- Migration 070: 'dissolved' / 'total' / NULL, derived from the method code.
       fraction VARCHAR
     )",
@@ -149,7 +173,8 @@
       regulated_by VARCHAR,
       cypher VARCHAR,
       site VARCHAR,
-      value VARCHAR
+      value DOUBLE,
+      comments VARCHAR
     )",
   sample = "
     CREATE TABLE \"sample\" (
