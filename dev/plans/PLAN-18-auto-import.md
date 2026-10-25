@@ -78,7 +78,7 @@ since the last check, or the last check left a folder still arriving (unsettled)
   asset row is removed even if its state is `needs_review`, because it is already
   archived). Then **filing** runs over every settled candidate folder (not only those
   imported this run, so pre-existing folders clear too): if no DATA file in the folder
-  is unfinished (needs_review without an asset, failed, quarantined), every remaining
+  is unfinished (needs_review, with or without an asset, failed, quarantined), every remaining
   file is MOVED to `<archive_dir>/_emails/<folder basename>/` (`" (2)"`, `" (3)"` on a
   name collision; never overwrite, never delete) and the empty folder removed. DATA =
   csv, tsv, txt, json, xml, xls, xlsx, xlsm, xlsb, zip, or anything an adapter claims;
@@ -88,6 +88,9 @@ since the last check, or the last check left a folder still arriving (unsettled)
   the log (`files_filed`) and in a **Filed** section of the dated note, which is written
   on a filing-only day too. Accepted risk (2026-10-19): an ALS COA arriving in an email
   *before* its data is filed under `_emails`, not attached to its work order.
+  A `needs_review` data file holds its folder back even when archived (R-22.N, Robin
+  2026-10-25); resolving the file's last open review item settles it to `archived`, so
+  the folder files on a later run.
 - **Lock.** Only one `inbox_run()` at a time: a lock file in the DB's directory with the
   PID and start time; a lock older than 2 hours or whose PID is dead is stale and taken
   over (and that is reported). A second concurrent run exits immediately, writing nothing.

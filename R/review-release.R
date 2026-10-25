@@ -163,6 +163,7 @@ release_review <- function(uuid, overrides = list(), resolved_by,
           ),
           actor = resolved_by, reason = reason
         )
+        .st_settle_resolved_files(con, uuid, reason)   # R-22.N
         TRUE
       })
     },
