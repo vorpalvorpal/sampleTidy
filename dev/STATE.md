@@ -109,7 +109,7 @@ Suite: **9,832 expectations, 0 failing, 12 skipped** (2026-10-22). Gated corpus 
      - C6: a blank ALS SAR unit becomes "1";
      - C7: blank-date overrides;
      - C8: reused ACIRL report numbers keyed by year, as `<no> (<yyyy>)`.
-   - Migrations 053-059, 061 and 062 are rehearsed and NOT applied. 060 is PLAN-20's. See `dev/MIGRATIONS.md`.
+   - Migrations 053-059, 061 and 062 are rehearsed and NOT applied. 060 is retired (PLAN-20's asset_filing ships via ensure_schema v10). See `dev/MIGRATIONS.md`.
    - 2026-10-21: 054 now records Robin's D11 ruling (ES2006927 stays on 27 Feb 2020; the rev-1 files are ignored for good; the ruling is appended to the project comment). 062 re-files the amended January 2026 report under ES2600194 and runs after 061. 063 (folding the empty duplicate Mar-2024 dust project) was approved by Robin on 2026-10-21 and now runs after 064 (see below). Full chain re-rehearsed twice: identical, dupcheck 0.
    - Run with `dev/corpus-import/apply-corpus-import.sh live <work_dir>` from the repo root on main. It runs, in order:
      - the migrations;

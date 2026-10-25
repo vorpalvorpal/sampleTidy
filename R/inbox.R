@@ -20,6 +20,7 @@
 
 .inbox_state_path <- function(report_dir) file.path(report_dir, ".imports.state")
 .inbox_log_path <- function(report_dir) file.path(report_dir, ".imports.log")
+.inbox_events_path <- function(report_dir) file.path(report_dir, "events.jsonl")
 
 .inbox_file_url <- function(path) {
   p <- utils::URLencode(path)
@@ -561,7 +562,8 @@ inbox_check <- function(input_dir, report_dir, now = Sys.time(),
 # ---- the run log ------------------------------------------------------------------------
 
 .inbox_read_log <- function(report_dir) {
-  p <- .inbox_log_path(report_dir)
+  p <- .inbox_events_path(report_dir)
+  if (!file.exists(p)) p <- .inbox_log_path(report_dir)
   if (!file.exists(p)) return(list())
   l <- readLines(p, warn = FALSE, encoding = "UTF-8")
   l <- l[nzchar(trimws(l))]
@@ -660,8 +662,7 @@ inbox_run <- function(input_dir = st_config("input_dir"),
   }
   dir.create(report_dir, recursive = TRUE, showWarnings = FALSE)
   if (action == "status") {
-    import_status(db, input_dir, report_dir, now = now, settle_minutes = settle_minutes,
-                  checks = checks)
+    .inbox_refresh_status(db, input_dir, report_dir, now, settle_minutes, NULL, checks)
     .inbox_write_state(report_dir, input_dir, db, now, pending = FALSE)
     return(invisible(res))
   }
@@ -687,6 +688,11 @@ inbox_run <- function(input_dir = st_config("input_dir"),
   todo <- settled[found$work[names(settled)]]
   aborted <- FALSE
   reps <- list()
+  hook_problems <- character(0)
+  cw_before <- NULL
+  cw_failed <- FALSE
+  n_ingested <- 0L
+  want_cw <- !dry_run && length(.hook_env$work_complete) > 0
 
   if (length(todo) > 0) {
     tmp_db <- NULL
@@ -709,6 +715,15 @@ inbox_run <- function(input_dir = st_config("input_dir"),
     if (!aborted) {
       for (nm in names(todo)) {
         cd <- todo[[nm]]
+        if (want_cw && n_ingested == 0L) {
+          cw_before <- tryCatch(completed_work(db), error = function(e) {
+            cw_failed <<- TRUE
+            hook_problems <<- c(hook_problems, sprintf(
+              "hook work_complete[snapshot] failed: %s", conditionMessage(e)))
+            NULL
+          })
+        }
+        n_ingested <- n_ingested + 1L
         res$folders_processed <- c(res$folders_processed, nm)
         pre <- if (dry_run) NULL else .inbox_image(db)
         rep <- tryCatch(ingest_dir(cd$path, db = work_db, dry_run = dry_run),
@@ -802,18 +817,39 @@ inbox_run <- function(input_dir = st_config("input_dir"),
       else "Nothing new to import.",
       would_file
     )
-    import_status(db, input_dir, report_dir, now = now,
-                  settle_minutes = settle_minutes, dry_run = banner, checks = checks)
+    .inbox_refresh_status(db, input_dir, report_dir, now, settle_minutes, banner, checks)
     return(invisible(res))
   }
 
-  cat(.inbox_log_json(res), "\n", file = .inbox_log_path(report_dir),
-      sep = "", append = TRUE)
-  if (.inbox_day_has_news(report_dir, now)) {
-    import_report(db, report_dir, now = now)
+  line <- paste0(.inbox_log_json(res), "\n")
+  # events.jsonl is the log; .imports.log is kept for one release. Seed events.jsonl
+  # from the legacy log the first time, then append the same line to both.
+  if (!file.exists(.inbox_events_path(report_dir)) && file.exists(.inbox_log_path(report_dir))) {
+    file.copy(.inbox_log_path(report_dir), .inbox_events_path(report_dir))
   }
-  import_status(db, input_dir, report_dir, now = now, settle_minutes = settle_minutes,
-                checks = checks)
+  cat(line, file = .inbox_events_path(report_dir), sep = "", append = TRUE)
+  cat(line, file = .inbox_log_path(report_dir), sep = "", append = TRUE)
+
+  hook_problems <- c(hook_problems, .hooks_run(
+    "after_run", res,
+    default = function(x) {
+      if (.inbox_day_has_news(report_dir, now)) import_report(db, report_dir, now = now)
+    }))
+  if (want_cw && n_ingested > 0L && !aborted && !cw_failed) {
+    done <- tryCatch(completed_work(db), error = function(e) {
+      hook_problems <<- c(hook_problems, sprintf(
+        "hook work_complete[snapshot] failed: %s", conditionMessage(e)))
+      NULL
+    })
+    if (!is.null(done) && !is.null(cw_before)) {
+      fresh <- done[!done$uuid %in% cw_before$uuid, , drop = FALSE]
+      if (nrow(fresh) > 0) {
+        hook_problems <- c(hook_problems, .hooks_run("work_complete", fresh))
+      }
+    }
+  }
+  .inbox_refresh_status(db, input_dir, report_dir, now, settle_minutes, NULL, checks,
+                        extra_problems = hook_problems)
   if (!aborted) {
     .inbox_write_state(report_dir, input_dir, db, now,
                        pending = length(res$folders_arriving) > 0)
@@ -993,14 +1029,15 @@ import_report <- function(db = st_config("live_db"), report_dir, now = Sys.time(
 
 #' Write the standing import status note
 #'
-#' Rewrites `<report_dir>/Import status.md` and `.import-status.json`: open
+#' Rewrites `<report_dir>/Import status.md`, `.import-status.json` and
+#' `status.json` (the two json files are identical): open
 #' review items, folders waiting in the inbox, the latest run's problems and
 #' the last 14 days of imports, and the hourly standing DB checks
 #' ([db_checks()]: error-level failures and checks that could not run are
 #' Problems, warn-level failures a count under DB checks, the full result in
 #' the json; they never block anything). Read-only on the DB. With `checks`, also a
 #' Flags section from [import_flags()], each flag's `first_seen` carried over
-#' by key from the previous `.import-status.json`.
+#' by key from the previous `status.json` (else `.import-status.json`).
 #'
 #' @param db the live database.
 #' @param input_dir the inbox directory.
@@ -1020,7 +1057,46 @@ import_status <- function(db = st_config("live_db"), input_dir, report_dir,
   checkmate::assert_string(report_dir)
   checkmate::assert_list(checks, null.ok = TRUE)
   dir.create(report_dir, recursive = TRUE, showWarnings = FALSE)
-  # Read before .import-status.json is overwritten (first_seen carry-over).
+  st <- .inbox_status_build(db, input_dir, report_dir, now, settle_minutes, dry_run, checks)
+  path <- file.path(report_dir, "Import status.md")
+  writeLines(st$lines, path, useBytes = TRUE)
+  .inbox_write_status_json(st$status, report_dir)
+  invisible(path)
+}
+
+# The status json: status.json and the legacy .import-status.json, identical.
+.inbox_write_status_json <- function(js, report_dir) {
+  for (f in c(".import-status.json", "status.json")) {
+    jsonlite::write_json(js, file.path(report_dir, f),
+                         auto_unbox = TRUE, pretty = TRUE, na = "null", digits = NA)
+  }
+  invisible(NULL)
+}
+
+# inbox_run()'s status refresh: build, write the json files, then the
+# after_status hooks (the default renderer writes Import status.md when none is
+# registered). A failing after_status hook is added to the problems and the
+# json files are rewritten with it.
+.inbox_refresh_status <- function(db, input_dir, report_dir, now, settle_minutes,
+                                  dry_run, checks, extra_problems = character(0)) {
+  st <- .inbox_status_build(db, input_dir, report_dir, now, settle_minutes, dry_run, checks,
+                            extra_problems = extra_problems)
+  .inbox_write_status_json(st$status, report_dir)
+  failed <- .hooks_run("after_status", st$status, default = function(x) {
+    writeLines(st$lines, file.path(report_dir, "Import status.md"), useBytes = TRUE)
+  })
+  if (length(failed) > 0) {
+    st$status$problems <- c(st$status$problems, as.list(failed))
+    .inbox_write_status_json(st$status, report_dir)
+  }
+  invisible(st$status)
+}
+
+# Builds the status: list(status = <the list serialised to status.json>,
+# lines = <the Import status.md lines>). Writes nothing.
+.inbox_status_build <- function(db, input_dir, report_dir, now, settle_minutes, dry_run,
+                                checks, extra_problems = character(0)) {
+  # Read before the json files are overwritten (first_seen carry-over).
   fs <- if (is.null(checks)) NULL else .flags_for_status(db, now, checks, report_dir)
 
   rv <- .inbox_open_reviews(db)
@@ -1081,6 +1157,9 @@ import_status <- function(db = st_config("live_db"), input_dir, report_dir,
   # R-22.H: the wrapper passes the previous failed/unfinished run (Robin 2026-10-25).
   prev_fail <- Sys.getenv("SAMPLETIDY_AUTOIMPORT_PREV_FAILURE", "")
   if (nzchar(prev_fail)) problems <- c(prev_fail, problems)
+  # PLAN-20 P20.2: a hooks-file problem (session state), then hook failures of
+  # this run, after the log-derived problems.
+  problems <- c(problems, .hook_env$file_problems, extra_problems)
 
   # Recent imports: last 14 days, newest first (log order is chronological).
   recent <- list()
@@ -1152,9 +1231,6 @@ import_status <- function(db = st_config("live_db"), input_dir, report_dir,
   }
   out <- c(out, "*Written by sampleTidy; log: .imports.log*")
 
-  path <- file.path(report_dir, "Import status.md")
-  writeLines(out, path, useBytes = TRUE)
-
   js <- list(
     updated = .inbox_syd(now, "%Y-%m-%d %H:%M"),
     host = unname(Sys.info()[["nodename"]]),
@@ -1169,7 +1245,5 @@ import_status <- function(db = st_config("live_db"), input_dir, report_dir,
     db_checks = .inbox_db_check_json(dbc)
   )
   if (!is.null(fs)) js <- c(js, .flags_json(fs))
-  jsonlite::write_json(js, file.path(report_dir, ".import-status.json"),
-                       auto_unbox = TRUE, pretty = TRUE, na = "null", digits = NA)
-  invisible(path)
+  list(status = js, lines = out)
 }

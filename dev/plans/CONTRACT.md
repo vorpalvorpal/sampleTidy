@@ -106,6 +106,17 @@ inbox_check(input_dir, report_dir, now = Sys.time(), db = st_config("live_db"))
 inbox_run(input_dir = st_config("input_dir"), db = st_config("live_db"), backup_dir, report_dir, now = Sys.time(), settle_minutes = 10, keep_backups = 10, dry_run = FALSE, checks = NULL)
 import_report(db, report_dir, now = Sys.time())
 import_status(db, input_dir, report_dir, now = Sys.time(), settle_minutes = 10, checks = NULL)
+# PLAN-20 phase 1, added 2026-10-20 (spec dev/plans/PLAN-20-phase1-spec.md): hooks fired by
+# inbox_run() (events after_run, after_status, work_complete; session state), the
+# completed-project query, and external filing records (asset_filing, ops-schema v10
+# via ensure_schema(); no operator migration). inbox_run() also writes status.json and events.jsonl.
+register_hook(event, fn)
+clear_hooks(event = NULL)
+load_hooks_file(path = Sys.getenv("SAMPLETIDY_HOOKS_FILE"))
+hooks(event = NULL)
+completed_work(db = st_config("live_db"), since = NULL)
+register_filing(db = st_config("live_db"), uuid_asset, system, external_id, external_uri = NA_character_, container = NA_character_, filed_at = NULL, title = NA_character_, comments = NA_character_)
+filed_assets(db = st_config("live_db"), system = NULL)
 # PLAN-18 section 4 / 4.5 (phase 2, added 2026-10-19): the status note's Flags.
 # checks = list(schedule, limits, requirements, points, invoices); read-only.
 import_flags(db = st_config("live_db"), now = Sys.time(), checks)
