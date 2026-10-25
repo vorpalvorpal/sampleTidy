@@ -13,7 +13,8 @@ test_that("R-1.5: ensure_schema() creates all five ops objects on a fresh DB", {
 
   tables <- DBI::dbListTables(con)
   expect_true(all(
-    c("ingest_file", "ingest_sighting", "review_queue", "change_log", "schema_version") %in% tables
+    c("ingest_file", "ingest_sighting", "review_queue", "change_log", "schema_version",
+      "asset_filing") %in% tables      # asset_filing: ops-schema version 10 (PLAN-20 P20.5)
   ))
 })
 
@@ -44,7 +45,8 @@ test_that("R-1.5: calling ensure_schema() twice is a no-op (row counts and versi
   con <- DBI::dbConnect(duckdb::duckdb(), db, read_only = FALSE)
   withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
-  ops_tables <- c("ingest_file", "ingest_sighting", "review_queue", "change_log", "schema_version")
+  ops_tables <- c("ingest_file", "ingest_sighting", "review_queue", "change_log", "schema_version",
+                  "asset_filing")
   row_counts <- function() {
     vapply(ops_tables, function(t) {
       DBI::dbGetQuery(con, sprintf("SELECT COUNT(*) AS n FROM %s", t))$n

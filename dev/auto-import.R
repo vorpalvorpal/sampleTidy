@@ -6,6 +6,10 @@ here <- gsub("~+~", " ", sub("^--file=", "", args[grepl("^--file=", args)]), fix
 repo <- if (length(here)) dirname(dirname(normalizePath(here[1]))) else getwd()
 suppressMessages(devtools::load_all(repo, quiet = TRUE))
 
+# A deployment attaches its hooks by naming a file in SAMPLETIDY_HOOKS_FILE; it
+# never errors, a bad file shows up in the status Problems.
+load_hooks_file()
+
 nz <- function(x) if (nzchar(x)) x else NULL
 db <- nz(Sys.getenv("SAMPLETIDY_AUTOIMPORT_DB")) %||% st_config("live_db")
 

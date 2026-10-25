@@ -195,6 +195,28 @@
         first_seen_at TIMESTAMP
       );
       ALTER TABLE ingest_file ADD COLUMN IF NOT EXISTS message_id VARCHAR;"
+  ),
+  # PLAN-20 phase 1 (P20.5): external filing records - which asset was filed
+  # into which external system (TRIM, SharePoint, ...) under what id. The core
+  # never interprets `system`. No declared FOREIGN KEY: ensure_schema() runs on
+  # a bare DB with no `asset` table, and a declared FK would block later asset
+  # deletes; register_filing() checks the asset exists. No operator migration
+  # (R-22.E precedent, as v9): the live DB gets it from the next ingest_dir(),
+  # or from register_filing(), both of which run ensure_schema().
+  list(
+    version = 10L,
+    ddl = "
+      CREATE TABLE IF NOT EXISTS asset_filing (
+        uuid_asset   VARCHAR NOT NULL,
+        system       VARCHAR NOT NULL,
+        external_id  VARCHAR NOT NULL,
+        external_uri VARCHAR,
+        container    VARCHAR,
+        filed_at     TIMESTAMP NOT NULL,
+        title        VARCHAR,
+        comments     VARCHAR,
+        PRIMARY KEY (uuid_asset, system)
+      )"
   )
 )
 
