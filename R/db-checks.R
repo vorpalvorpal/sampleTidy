@@ -407,6 +407,18 @@ SELECT DISTINCT hash AS key FROM ingest_sighting WHERE hash NOT IN (SELECT hash 
 SELECT hash AS key, message_id FROM ingest_file
 WHERE message_id IS NOT NULL AND message_id NOT IN (SELECT message_id FROM ingest_email)",
        "ingest_file.message_id names an ingest_email row.", "hourly", "error"),
+    # R-22.N (Robin 2026-10-25): a needs_review file with no open review item
+    # covering it was never settled. Covered = an open item whose source_hash
+    # is the file's hash or whose work_order is the file's; a legacy row with
+    # work_order NULL reads the work order from "commit_event: <WO>".
+    ck("ingest_file_needs_review_resolved", "
+SELECT f.hash AS key FROM (
+  SELECT hash, COALESCE(work_order, NULLIF(NULLIF(regexp_extract(state_reason, '^commit_event: (.+)$', 1), ''), 'NA')) AS wo
+  FROM ingest_file WHERE state = 'needs_review') f
+WHERE NOT EXISTS (
+  SELECT 1 FROM review_queue r WHERE r.status = 'open'
+    AND (r.source_hash = f.hash OR (r.work_order IS NOT NULL AND r.work_order = f.wo)))",
+       "A needs_review file is covered by an open review item.", "hourly", "warn"),
     ck("orphan_qc_refs", .dbc_orphan_qc_refs,
        "The QC tables point at their parents.", "hourly", "error"),
     # R-22.S (Robin 2026-10-25): lab_qc_report.kind is one of the parsed

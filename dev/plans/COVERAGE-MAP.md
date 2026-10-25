@@ -719,3 +719,24 @@ code as it was written, verified by mutation, not by assertion.
 - threshold and lookback → "R-22.S: lab_receipt_warm honours receipt_max_temp_c and receipt_lookback_days"
 - kind and NULL temperature ignored → "R-22.S: lab_receipt_warm ignores QCI rows and SRNs with no temperature"
 - db_checks failing cases: table-driven, the lab_receipt_warm, vocab_lab_qc_kind and orphan_qc_refs (receipt temperature) entries in `dbc_violation_cases` (helper-db-checks.R), run by test-db-checks.R's per-case loop
+
+### R-22.N needs_review files settled when their review items are (`tests/testthat/test-needs-review-settle.R`, `test-inbox-leftovers.R`, `helper-db-checks.R`) - added 2026-10-25
+- work_order recorded: clean commit → "R-22.N: a clean commit records the event's work order on every file it archives"
+- work_order recorded: review-only commit → "R-22.N: a review-only commit records the event's work order on every file it parks on needs_review"
+- work_order recorded: guard block → "R-22.N: a guard-blocked commit records the event's work order on the file it parks"
+- resolve_review() settles the delivery, only its needs_review files → "R-22.N: resolve_review() of a delivery's last open item archives every needs_review file of the delivery, and only those"
+- coverage by source_hash alone → "R-22.N: an item covering a file by source_hash alone (work_order NULL on both) settles that file"
+- partial resolution stays parked → "R-22.N: a partially resolved delivery stays needs_review until its last covering item is resolved"
+- own-file item holds → "R-22.N: an open item raised on the file itself holds it even when the work-order item is resolved"
+- same transaction, via ingest_file_set_state() → "R-22.N: settling runs in resolve_review()'s transaction, through ingest_file_set_state() - a failed transition leaves the item open and the file parked"
+- review_queue_close() settles → "R-22.N: review_queue_close() settles the needs_review files of the items it closes"
+- release_review() settles → "R-22.N: release_review() that releases a delivery's withheld rows ends with its file archived; the other delivery stays needs_review"
+- guard: later delivery gets its own row; retry adds none; preview mirrors → "R-22.N: a later delivery blocked under an already-open work_order_reingest item gets its own guard row; a retry adds none"
+- guard: resolving both items settles both → "R-22.N: resolving the guard items settles both blocked deliveries - one alone leaves both parked"
+- guard: review_queue_close() on the project → "R-22.N: review_queue_close() on the work order's project closes both guard items and settles both blocked deliveries"
+- check tier/severity → "R-22.N: ingest_file_needs_review_resolved is an hourly warn check"
+- check passes covered files (source_hash, work_order, legacy state_reason) → "R-22.N: ingest_file_needs_review_resolved passes a needs_review file covered by an open item - by source_hash, by work_order, or by the legacy state_reason work order"
+- check legacy fallback flags → "R-22.N: ingest_file_needs_review_resolved flags a legacy needs_review file whose state_reason work order has only resolved items"
+- check failing case: table-driven, the ingest_file_needs_review_resolved entry in `dbc_violation_cases` (helper-db-checks.R), run by test-db-checks.R's per-case loop
+- inbox: needs_review unfinished regardless of asset → "R-22.N: .inbox_classify() counts a needs_review data file as unfinished whether or not it has an asset"
+- inbox: folder with an archived needs_review file is not filed → "R-22.N: inbox_run(): a folder holding a needs_review data file that HAS an asset moves nothing; Waiting lists it"
