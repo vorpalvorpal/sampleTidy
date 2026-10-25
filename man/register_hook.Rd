@@ -4,7 +4,7 @@
 \alias{register_hook}
 \title{Register a hook that \code{inbox_run()} fires}
 \usage{
-register_hook(event, fn)
+register_hook(event, fn, replace_default = TRUE)
 }
 \arguments{
 \item{event}{one of \code{"after_run"} (argument: the list \code{inbox_run()}
@@ -13,6 +13,11 @@ returns), \code{"after_status"} (the status list written to \code{status.json}) 
 became complete during the run).}
 
 \item{fn}{a function of one argument.}
+
+\item{replace_default}{a single \code{TRUE} or \code{FALSE} (default \code{TRUE}). The
+event's default renderer is suppressed if at least one hook registered for
+the event has \code{replace_default = TRUE}. Has no effect for \code{"work_complete"},
+which has no default.}
 }
 \value{
 \code{fn}, invisibly.
@@ -21,6 +26,8 @@ became complete during the run).}
 Hooks are session state (not persisted). Hooks of one event run in
 registration order; the same function may be registered twice and then runs
 twice. Registering a hook for \code{"after_status"} or \code{"after_run"} replaces that
-event's default markdown renderer. An error inside a hook never fails
+event's default markdown renderer, unless every hook registered for the event
+has \code{replace_default = FALSE}: then the default runs first and the hooks run
+after it, in registration order. An error inside a hook never fails
 \code{\link[=inbox_run]{inbox_run()}}; it is recorded as a problem in the status.
 }
