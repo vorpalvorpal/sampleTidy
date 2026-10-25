@@ -41,6 +41,13 @@ environment), not persisted.
   function may be registered twice and then runs twice. Returns `fn` invisibly.
 - `clear_hooks(event = NULL)`: `NULL` clears every event; a valid event name clears that event
   only; an invalid name aborts `sampletidy_error`. Returns `NULL` invisibly.
+- `load_hooks_file(path = Sys.getenv("SAMPLETIDY_HOOKS_FILE"))` (added 2026-10-25): sources a
+  site hooks file into a new environment (parent `globalenv()`) so it can call `register_hook()`;
+  `""` is a no-op. Never errors: a missing or failing file is recorded as session state
+  (`hooks file <path> not found` / `hooks file <path> failed: <msg>`), shown in every later status's
+  Problems after the log-derived problems and before the run's own hook failures, replaced by each
+  call and cleared by `clear_hooks()`. `dev/auto-import.R` calls it before `inbox_run()`.
+  Returns the problem (or `character(0)`) invisibly.
 - `hooks(event = NULL)`: with `NULL`, a named list with exactly the three names
   `after_run`, `after_status`, `work_complete` (in that order), each a (possibly empty) unnamed
   list of the registered functions. With an event name, that event's list. Invalid name ->
@@ -225,6 +232,6 @@ Not built. `asset_filing` is ops-schema v10 in `ensure_schema()` only (see P20.5
 
 ## Public API
 
-New exports: `register_hook`, `clear_hooks`, `hooks`, `completed_work`, `register_filing`,
+New exports: `register_hook`, `clear_hooks`, `load_hooks_file`, `hooks`, `completed_work`, `register_filing`,
 `filed_assets`. The R-10.6 export pin in `tests/testthat/test-e2e-pipeline.R` and the
 CONTRACT public-API list gain them.

@@ -112,6 +112,7 @@ import_status(db, input_dir, report_dir, now = Sys.time(), settle_minutes = 10, 
 # via ensure_schema(); no operator migration). inbox_run() also writes status.json and events.jsonl.
 register_hook(event, fn)
 clear_hooks(event = NULL)
+load_hooks_file(path = Sys.getenv("SAMPLETIDY_HOOKS_FILE"))
 hooks(event = NULL)
 completed_work(db = st_config("live_db"), since = NULL)
 register_filing(db = st_config("live_db"), uuid_asset, system, external_id, external_uri = NA_character_, container = NA_character_, filed_at = NULL, title = NA_character_, comments = NA_character_)

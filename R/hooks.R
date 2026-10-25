@@ -7,6 +7,8 @@
 .hook_env <- new.env(parent = emptyenv())
 for (.ev in .hook_events) .hook_env[[.ev]] <- list()
 rm(.ev)
+# Problems from load_hooks_file(), surfaced in every status afterwards (session state).
+.hook_env$file_problems <- character(0)
 
 .hook_check_event <- function(event) {
   if (!is.character(event) || length(event) != 1 || is.na(event) ||
@@ -51,11 +53,47 @@ register_hook <- function(event, fn) {
 clear_hooks <- function(event = NULL) {
   if (is.null(event)) {
     for (ev in .hook_events) .hook_env[[ev]] <- list()
+    .hook_env$file_problems <- character(0)
   } else {
     .hook_check_event(event)
     .hook_env[[event]] <- list()
   }
   invisible(NULL)
+}
+
+#' Load a site hooks file
+#'
+#' Sources `path` into a new environment whose parent is [globalenv()], so the
+#' file can call [register_hook()] unqualified and a registered closure keeps
+#' the helpers the file defines. Call it after the package is loaded and before
+#' [inbox_run()]; `dev/auto-import.R` does, so a deployment sets the
+#' `SAMPLETIDY_HOOKS_FILE` environment variable to attach its hooks.
+#'
+#' It never errors. A missing file or a file that fails to source is recorded
+#' as session state and appears in the Problems of every status [inbox_run()]
+#' writes afterwards (after the log-derived problems, before the run's own hook
+#' failures); it is not a run error. Each call replaces the recorded problems,
+#' and `clear_hooks()` with no argument clears them.
+#'
+#' @param path the hooks file; `""` (the default when the variable is unset) is
+#'   a no-op.
+#' @return The problem as a string, or `character(0)`; invisibly.
+#' @export
+load_hooks_file <- function(path = Sys.getenv("SAMPLETIDY_HOOKS_FILE")) {
+  problem <- character(0)
+  if (length(path) == 1 && !is.na(path) && nzchar(path)) {
+    if (!file.exists(path)) {
+      problem <- sprintf("hooks file %s not found", path)
+    } else {
+      msg <- tryCatch({
+        sys.source(path, envir = new.env(parent = globalenv()), keep.source = FALSE)
+        NULL
+      }, error = function(e) conditionMessage(e))
+      if (!is.null(msg)) problem <- sprintf("hooks file %s failed: %s", path, msg)
+    }
+  }
+  .hook_env$file_problems <- problem
+  invisible(problem)
 }
 
 #' List registered hooks

@@ -747,3 +747,7 @@ code as it was written, verified by mutation, not by assertion.
 - register_filing() self-ensures on a DB below v10 → "P20.5 register_filing(): on a DB below ops-schema version 10 it runs ensure_schema() itself, creates asset_filing and inserts"
 - unknown asset refused before the schema is touched → "P20.5 register_filing(): an unknown asset on a DB below version 10 is refused before the schema is touched"
 - damaged ladder (v10 recorded, table missing) refused → "P20.5 register_filing(): version 10 recorded but asset_filing missing (a damaged ladder) is refused with sampletidy_error naming ensure_schema; nothing is written"
+
+## PLAN-20 phase 1 - site hooks file (load_hooks_file, 2026-10-25)
+- spec and behaviour → `tests/testthat/test-hooks-file.R` (no-op on unset/empty, own environment, never errors, problem in status.json / .import-status.json / Import status.md before the run's hook failures, replaced per call, cleared by clear_hooks(), dev/auto-import.R call order and end-to-end run)
+- exported → `tests/testthat/test-e2e-pipeline.R` "R-10.6: NAMESPACE exports equal the CONTRACT-pinned public API exactly"
