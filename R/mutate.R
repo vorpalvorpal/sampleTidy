@@ -42,7 +42,9 @@
   "project", "sample", "analysis", "asset", "review_queue", "review_queue_candidate",
   "feature_alias",
   # PLAN-19 (migration 048): QC features, stored lab sample numbers, ALS lab QC.
-  "qc_feature", "sample_lab_id", "lab_qc_report", "lab_qc_outlier"
+  "qc_feature", "sample_lab_id", "lab_qc_report", "lab_qc_outlier",
+  # R-22.S: the sample receipt notification's child tables.
+  "lab_receipt_temperature", "lab_receipt_holding_breach", "lab_receipt_comment"
 )
 
 #' @keywords internal

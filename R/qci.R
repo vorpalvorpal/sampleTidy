@@ -17,7 +17,9 @@
 # The full holding-time and frequency listings that follow those tables are
 # not parsed (phase 3, R-19.36).
 
-.qci_parser_version <- "1"
+# "2" (R-22.S): a QCI report now also stores received_at, so reports stored at
+# "1" are stale and the backfill re-parses them.
+.qci_parser_version <- "2"
 
 .qci_summary_keys <- c("mb", "dup", "lcs", "ms", "surrogate", "holding_time", "frequency")
 
@@ -549,6 +551,8 @@
 
 # The asset's report kind from its filename token: `_QCI` -> QCI, `_QC` -> QC.
 .lab_qc_kind <- function(filename) {
+  # R-22.S: a sample receipt notification (`ES#######_0_SRN_<digits>.pdf`).
+  if (grepl("(?i)_SRN_[0-9]+(\\[[0-9]+\\])?\\.[a-z0-9]+$", filename, perl = TRUE)) return("SRN")
   if (grepl("(?i)_QCI(\\[[0-9]+\\])?\\.[a-z0-9]+$", filename, perl = TRUE)) return("QCI")
   if (grepl("(?i)_QC(\\[[0-9]+\\])?\\.[a-z0-9]+$", filename, perl = TRUE)) return("QC")
   NA_character_
@@ -627,7 +631,7 @@
 #' @return the report status (invisibly), or NULL when nothing was done.
 #' @keywords internal
 #' @noRd
-lab_qc_ingest <- function(con, uuid_asset, path, actor = "ingest") {
+lab_qc_ingest <- function(con, uuid_asset, path, actor = "ingest", force = FALSE) {
   if (!DBI::dbExistsTable(con, "lab_qc_report") || !DBI::dbExistsTable(con, "lab_qc_outlier")) {
     return(invisible(NULL))
   }
@@ -637,9 +641,14 @@ lab_qc_ingest <- function(con, uuid_asset, path, actor = "ingest") {
   filename <- if (nrow(a) && !is.na(a$filename[[1]])) a$filename[[1]] else basename(path)
   kind <- .lab_qc_kind(filename)
   if (is.na(kind)) return(invisible(NULL))
+  # R-22.S: receipt columns/tables exist only after the operator migration. An
+  # SRN has nowhere to go before it (skipped silently); a QCI is stored as
+  # before, without received_at.
+  receipt <- .lab_receipt_ready(con)
+  if (kind == "SRN" && !receipt) return(invisible(NULL))
   prev <- DBI::dbGetQuery(con, "SELECT uuid, parser_version FROM lab_qc_report WHERE uuid_asset = ?",
                           params = list(uuid_asset))
-  if (nrow(prev) && identical(prev$parser_version[[1]], .qci_parser_version)) {
+  if (!force && nrow(prev) && identical(prev$parser_version[[1]], .qci_parser_version)) {
     return(invisible(NULL))
   }
   m <- regmatches(filename, regexpr("E[A-Z][0-9]{7}", filename))
@@ -650,9 +659,33 @@ lab_qc_ingest <- function(con, uuid_asset, path, actor = "ingest") {
               n_analysed = NA_integer_, summary = NA_character_, status = "unreadable",
               message = NA_character_)
   out <- .qci_empty_outliers()
+  srn <- NULL
+  received_at <- as.POSIXct(NA_real_, origin = "1970-01-01", tz = "UTC")
   lines <- .lab_qc_read(path)
   if (inherits(lines, "condition")) {
     rep$message <- paste("PDF unreadable:", conditionMessage(lines))
+  } else if (kind == "SRN") {
+    # R-22.S: the sample receipt notification.
+    res <- tryCatch(.srn_parse(lines), error = function(e) e)
+    if (inherits(res, "error")) {
+      rep$message <- paste("SRN parse failed:", conditionMessage(res))
+    } else if (is.null(res)) {
+      rep$message <- "not a sample receipt notification (no SRN title found)"
+    } else {
+      srn <- res
+      h <- res$header
+      msgs <- res$warnings
+      rep$status <- if (length(msgs)) "partial" else "parsed"
+      if (!is.na(h$work_order) && !is.na(file_wo) && h$work_order != file_wo) {
+        msgs <- c(msgs, sprintf("header Work Order %s differs from the filename's %s; the header wins",
+                                h$work_order, file_wo))
+      }
+      if (!is.na(h$work_order)) rep$work_order <- h$work_order
+      rep$issue_date <- h$issue_date
+      rep$n_received <- h$n_received
+      rep$n_analysed <- h$n_analysed
+      rep$message <- if (length(msgs)) paste(msgs, collapse = "; ") else NA_character_
+    }
   } else if (kind == "QC") {
     rep$status <- "partial"
     rep$message <- "QC.pdf not parsed yet (PLAN-19 phase 3)"
@@ -677,6 +710,7 @@ lab_qc_ingest <- function(con, uuid_asset, path, actor = "ingest") {
                                                    null = "null"))
       rep$message <- if (length(msgs)) paste(msgs, collapse = "; ") else NA_character_
       out <- res$outliers
+      received_at <- .qci_received_at(lines)
     }
   }
   out <- .lab_qc_link(con, out, rep$work_order)
@@ -687,6 +721,42 @@ lab_qc_ingest <- function(con, uuid_asset, path, actor = "ingest") {
                        summary = rep$summary, status = rep$status, message = rep$message,
                        parser_version = .qci_parser_version, parsed_at = Sys.time(),
                        stringsAsFactors = FALSE)
+  if (receipt && kind == "QCI") report$received_at <- received_at
+  kids <- list()
+  if (receipt && kind == "SRN") {
+    h <- if (is.null(srn)) list() else srn$header
+    pick <- function(k, na) if (is.null(h[[k]])) na else h[[k]]
+    report$received_at <- if (is.null(srn)) received_at else h$received_at
+    report$client_due_date <- pick("client_due_date", as.Date(NA))
+    report$scheduled_report_date <- pick("scheduled_report_date", as.Date(NA))
+    report$delivery_mode <- pick("delivery_mode", NA_character_)
+    report$security_seal <- pick("security_seal", NA_character_)
+    report$n_coolers <- as.integer(pick("n_coolers", NA_integer_))
+    report$temp_min_c <- as.numeric(pick("temp_min_c", NA_real_))
+    report$temp_max_c <- as.numeric(pick("temp_max_c", NA_real_))
+    report$cooling_medium <- pick("cooling_medium", NA_character_)
+    report$cooling_present <- as.logical(pick("cooling_present", NA))
+    report$n_container_noncompliances <- as.integer(pick("n_container_noncompliances", NA_integer_))
+    report$n_holding_breaches <- as.integer(pick("n_holding_breaches", NA_integer_))
+    if (!is.null(srn)) {
+      mk <- function(n) uuid::UUIDgenerate(n = n)
+      if (length(srn$temps)) {
+        kids$lab_receipt_temperature <- data.frame(
+          uuid = mk(length(srn$temps)), uuid_report = report$uuid,
+          position = seq_along(srn$temps), temp_c = srn$temps, stringsAsFactors = FALSE)
+      }
+      if (length(srn$comments)) {
+        kids$lab_receipt_comment <- data.frame(
+          uuid = mk(length(srn$comments)), uuid_report = report$uuid,
+          position = seq_along(srn$comments), text = srn$comments, stringsAsFactors = FALSE)
+      }
+      if (nrow(srn$breaches)) {
+        kids$lab_receipt_holding_breach <- cbind(
+          data.frame(uuid = mk(nrow(srn$breaches)), uuid_report = report$uuid, stringsAsFactors = FALSE),
+          srn$breaches)
+      }
+    }
+  }
   if (nrow(out)) {
     out <- cbind(data.frame(uuid = uuid::UUIDgenerate(n = nrow(out)), uuid_report = report$uuid,
                             work_order = rep$work_order, stringsAsFactors = FALSE), out)
@@ -701,12 +771,21 @@ lab_qc_ingest <- function(con, uuid_asset, path, actor = "ingest") {
         ids <- DBI::dbGetQuery(con, "SELECT uuid FROM lab_qc_outlier WHERE uuid_report = ?",
                                params = list(u))$uuid
         for (x in ids) db_delete(con, "lab_qc_outlier", uuid = x, actor = actor, reason = reason)
+        if (receipt) {
+          for (t in names(.lab_receipt_ddl)) {
+            for (x in DBI::dbGetQuery(con, sprintf("SELECT uuid FROM %s WHERE uuid_report = ?", t),
+                                      params = list(u))$uuid) {
+              db_delete(con, t, uuid = x, actor = actor, reason = reason)
+            }
+          }
+        }
         db_delete(con, "lab_qc_report", uuid = u, actor = actor, reason = reason)
       }
     }
     db_append(con, "lab_qc_report", report, actor = actor, reason = reason, source_hash = hash)
     if (nrow(out)) db_append(con, "lab_qc_outlier", out, actor = actor, reason = reason,
                              source_hash = hash)
+    for (t in names(kids)) db_append(con, t, kids[[t]], actor = actor, reason = reason, source_hash = hash)
   })
   invisible(report$status)
 }
@@ -743,9 +822,11 @@ lab_qc_backfill <- function(db = st_config("live_db"), actor = "lab_qc_backfill"
 # transaction). The archived copy is `<archive_dir>/<asset uuid>/<filename>`.
 .lab_qc_backfill_con <- function(con, actor, archive_dir = st_config("archive_dir")) {
   a <- DBI::dbGetQuery(con, "
-    SELECT a.uuid, a.filename, r.parser_version
+    SELECT a.uuid, a.filename, a.type, r.parser_version
       FROM asset a LEFT JOIN lab_qc_report r ON r.uuid_asset = a.uuid
-     WHERE a.type = 'QC' ORDER BY a.filename, a.uuid")
+     WHERE a.type IN ('QC', 'QA') ORDER BY a.filename, a.uuid")
+  # R-22.S: QC-typed assets, plus the QA-typed sample receipt notifications.
+  a <- a[a$type == "QC" | (!is.na(a$filename) & vapply(a$filename, function(f) identical(.lab_qc_kind(f), "SRN"), logical(1))), , drop = FALSE]
   res <- character(nrow(a))
   for (i in seq_len(nrow(a))) {
     if (identical(a$parser_version[[i]], .qci_parser_version)) {
@@ -761,4 +842,33 @@ lab_qc_backfill <- function(db = st_config("live_db"), actor = "lab_qc_backfill"
     res[[i]] <- if (is.null(st)) "skipped" else st
   }
   data.frame(uuid_asset = a$uuid, filename = a$filename, result = res, stringsAsFactors = FALSE)
+}
+
+#' Re-parse one ALS QC / QCI / SRN asset whatever its stored parser version
+#'
+#' R-22.S (Robin 2026-10-25): the same parse and replace as [lab_qc_ingest()]
+#' but forced, for a report stored before a column existed (e.g. a QCI's
+#' `received_at`). The report and its child rows are replaced in one
+#' transaction; the report gets a new uuid and is never duplicated.
+#'
+#' @param con an open read-write connection.
+#' @param uuid_asset the `asset` row.
+#' @param path the PDF; `NULL` reads `<archive_dir>/<asset uuid>/<filename>`.
+#' @param actor change_log actor.
+#' @return the report status (invisibly), or NULL when nothing was done (not a
+#'   lab report, or a DB without the receipt schema for an SRN).
+#' @keywords internal
+#' @noRd
+lab_qc_reparse <- function(con, uuid_asset, path = NULL, actor = "lab_qc_reparse") {
+  checkmate::assert_string(uuid_asset)
+  checkmate::assert_string(actor)
+  if (is.null(path)) {
+    f <- DBI::dbGetQuery(con, "SELECT filename FROM asset WHERE uuid = ?", params = list(uuid_asset))$filename
+    if (!length(f) || is.na(f[[1]])) {
+      cli::cli_abort("lab_qc_reparse(): no asset {.val {uuid_asset}} with a filename.", class = "sampletidy_error")
+    }
+    path <- file.path(st_config("archive_dir"), uuid_asset, f[[1]])
+  }
+  checkmate::assert_string(path)
+  lab_qc_ingest(con, uuid_asset, path, actor = actor, force = TRUE)
 }

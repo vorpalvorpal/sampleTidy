@@ -923,7 +923,12 @@
               # as an `unreadable` report rather than raising, and is a
               # no-op before migration 048; the tryCatch is a backstop so
               # that nothing in it can ever block retention.
-              if (identical(sibling_type, "QC")) {
+              #
+              # R-22.S (Robin 2026-10-25): an SRN (type "QA", `_SRN_` token) is
+              # parsed here too, in the same transaction and under the same
+              # backstop; a DB without the receipt schema skips it silently.
+              if (identical(sibling_type, "QC") ||
+                  (identical(sibling_type, "QA") && identical(.lab_qc_kind(basename(path)), "SRN"))) {
                 tryCatch(lab_qc_ingest(con, uuid_asset, path, actor = "ingest"),
                          error = function(e) cli::cli_warn(
                            "ingest_dir(): lab QC parse of {.path {path}} failed: {conditionMessage(e)}"))
