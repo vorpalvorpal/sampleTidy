@@ -740,3 +740,10 @@ code as it was written, verified by mutation, not by assertion.
 - check failing case: table-driven, the ingest_file_needs_review_resolved entry in `dbc_violation_cases` (helper-db-checks.R), run by test-db-checks.R's per-case loop
 - inbox: needs_review unfinished regardless of asset → "R-22.N: .inbox_classify() counts a needs_review data file as unfinished whether or not it has an asset"
 - inbox: folder with an archived needs_review file is not filed → "R-22.N: inbox_run(): a folder holding a needs_review data file that HAS an asset moves nothing; Waiting lists it"
+
+## PLAN-20 phase 1 - P20.5 schema (asset_filing, ops-schema v10; migration 060 retired)
+- created empty by ensure_schema() at v10 → `tests/testthat/test-asset-filing.R` "P20.5: asset_filing is created empty and records ops-schema version 10"
+- ladder is 1..10 → "P20.5: the migration ladder is versions 1..10, strictly ascending in list order"
+- register_filing() self-ensures on a DB below v10 → "P20.5 register_filing(): on a DB below ops-schema version 10 it runs ensure_schema() itself, creates asset_filing and inserts"
+- unknown asset refused before the schema is touched → "P20.5 register_filing(): an unknown asset on a DB below version 10 is refused before the schema is touched"
+- damaged ladder (v10 recorded, table missing) refused → "P20.5 register_filing(): version 10 recorded but asset_filing missing (a damaged ladder) is refused with sampletidy_error naming ensure_schema; nothing is written"

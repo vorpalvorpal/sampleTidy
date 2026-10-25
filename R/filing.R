@@ -34,7 +34,8 @@
 #' Inserts, or updates, the `asset_filing` row for `(uuid_asset, system)`.
 #' The core never interprets `system`. Writes go through the mutation layer
 #' (`change_log` rows with `actor = "register_filing"`). Re-registering the
-#' same filing writes nothing.
+#' same filing writes nothing. On a DB below ops-schema version 10 it runs
+#' [ensure_schema()] first, which creates the `asset_filing` table.
 #'
 #' @param db a path to the DuckDB file (opened read-write) or an open
 #'   read-write `DBIConnection`.
@@ -61,13 +62,16 @@ register_filing <- function(db = st_config("live_db"), uuid_asset, system, exter
   }
 
   work <- function(con) {
-    if (!"asset_filing" %in% DBI::dbListTables(con)) {
-      .af_abort("The {.field asset_filing} table does not exist; apply operator migration 060 (dev/migrations/060-asset-filing.R).")
-    }
     n_asset <- DBI::dbGetQuery(con, "SELECT count(*) AS n FROM asset WHERE uuid = ?",
                                params = list(uuid_asset))$n
     if (n_asset == 0) {
       .af_abort("No asset with uuid {.val {uuid_asset}}.")
+    }
+    # asset_filing is ops-schema v10: bring an older DB up to date, as
+    # ingest_dir() does on every import (R-22.E precedent: no operator migration).
+    if (!"asset_filing" %in% DBI::dbListTables(con)) ensure_schema(con)
+    if (!"asset_filing" %in% DBI::dbListTables(con)) {
+      .af_abort("The {.field asset_filing} table does not exist although ensure_schema() records ops-schema version 10; the schema_version ladder is damaged.")
     }
     cur <- DBI::dbGetQuery(
       con, "SELECT * FROM asset_filing WHERE uuid_asset = ? AND system = ?",

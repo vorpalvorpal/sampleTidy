@@ -169,7 +169,9 @@ excluded). Anything else aborts `sampletidy_error`.
 ### Table
 
 `asset_filing`, created by `ensure_schema()` as ops-schema **version 10** (renumbered from 9 on the 2026-10-25 rebase: v9 is R-22.E `ingest_email`) (so every fresh DB
-has it) and on the live DB by operator migration `dev/migrations/060-asset-filing.R`:
+has it). There is no operator migration (R-22.E precedent: v9 `ingest_email` has none);
+the live DB gets the table from the next `ingest_dir()`, or from `register_filing()`,
+both of which run `ensure_schema()` (migration 060 was reserved for it and is retired):
 
 ```sql
 CREATE TABLE IF NOT EXISTS asset_filing (
@@ -198,7 +200,10 @@ Exported. `db` is a path (opened read-write via `with_db_write()`) or an open re
   `external_uri`, `container`, `title`, `comments`: a string or NA. `filed_at`: `NULL` or a
   length-1 POSIXct.
 - Unknown `uuid_asset` (no `asset` row) -> `sampletidy_error`, nothing written.
-- Missing `asset_filing` table -> `sampletidy_error` naming migration 060, nothing written.
+- Missing `asset_filing` table -> `register_filing()` runs `ensure_schema()` on the
+  connection (after the asset check, so an unknown asset still writes nothing), then
+  proceeds. If the table is still missing (ops-schema 10 recorded but the table dropped:
+  a damaged ladder) -> `sampletidy_error` naming `ensure_schema`, nothing written.
 - No row for `(uuid_asset, system)` -> insert; `filed_at` = the given value or `Sys.time()`.
   Returns `"inserted"` invisibly.
 - Row exists -> update only the fields whose supplied value differs (`filed_at = NULL`
@@ -214,23 +219,9 @@ Exported, read-only; `db` a path or an open connection. Returns a tibble with ex
 `system = NULL` returns every row; a character vector keeps rows whose `system` is in it. If
 the table does not exist, returns a 0-row tibble with those columns.
 
-## P20.M Migration 060 (`dev/migrations/060-asset-filing.R`)
+## P20.M Migration 060 — retired (2026-10-25)
 
-Operator migration in the pattern of `048-qc-schema.R`: functions prefixed `mig060_`,
-marker **1060**, requires marker **1052**. `env$mig060_run(db, snapshot_dir, dry_run = FALSE,
-.now = NULL)` returns a list with `status` in `"dry_run"`, `"migrated"`,
-`"already_migrated"`.
-
-- Preconditions (abort `sampletidy_error`, nothing written): marker 1052 present; an `asset`
-  table exists; if `asset_filing` already exists (`ensure_schema()` v10 got there first) it
-  must have exactly the columns above and 0 rows.
-- Dry run: checks preconditions, writes nothing, no backup.
-- Migrate: verified whole-file backup to `snapshot_dir`; then in one transaction create the
-  table (`IF NOT EXISTS`), insert `schema_version` 10 if absent and 1060; verify; every other
-  table's row count unchanged.
-- Re-run with marker present: re-verify, `"already_migrated"`, nothing written.
-- `dev/migrations/apply-060-asset-filing.R` mirrors `apply-048-qc-schema.R`
-  (`SAMPLETIDY_MIG060_DB`, `SAMPLETIDY_MIG060_SNAPSHOT_DIR`).
+Not built. `asset_filing` is ops-schema v10 in `ensure_schema()` only (see P20.5).
 
 ## Public API
 

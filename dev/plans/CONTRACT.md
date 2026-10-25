@@ -108,8 +108,8 @@ import_report(db, report_dir, now = Sys.time())
 import_status(db, input_dir, report_dir, now = Sys.time(), settle_minutes = 10, checks = NULL)
 # PLAN-20 phase 1, added 2026-10-20 (spec dev/plans/PLAN-20-phase1-spec.md): hooks fired by
 # inbox_run() (events after_run, after_status, work_complete; session state), the
-# completed-project query, and external filing records (asset_filing, ops-schema v10 /
-# operator migration 060). inbox_run() also writes status.json and events.jsonl.
+# completed-project query, and external filing records (asset_filing, ops-schema v10
+# via ensure_schema(); no operator migration). inbox_run() also writes status.json and events.jsonl.
 register_hook(event, fn)
 clear_hooks(event = NULL)
 hooks(event = NULL)

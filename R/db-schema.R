@@ -200,10 +200,9 @@
   # into which external system (TRIM, SharePoint, ...) under what id. The core
   # never interprets `system`. No declared FOREIGN KEY: ensure_schema() runs on
   # a bare DB with no `asset` table, and a declared FK would block later asset
-  # deletes; register_filing() checks the asset exists. Also created on the
-  # live DB by operator migration 060 (dev/migrations/060-asset-filing.R), as
-  # v8 was by 023, so this entry is a no-op there (CREATE TABLE IF NOT EXISTS).
-  # Rebased onto main: v9 is now R-22.E's ingest_email, so this is v10.
+  # deletes; register_filing() checks the asset exists. No operator migration
+  # (R-22.E precedent, as v9): the live DB gets it from the next ingest_dir(),
+  # or from register_filing(), both of which run ensure_schema().
   list(
     version = 10L,
     ddl = "

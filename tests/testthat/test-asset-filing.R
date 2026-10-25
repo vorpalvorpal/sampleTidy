@@ -322,14 +322,37 @@ test_that("P20.5 register_filing(): an unknown asset is refused with class sampl
   expect_identical(af_n_log(db), n0)
 })
 
-test_that("P20.5 register_filing(): a missing asset_filing table is refused with class sampletidy_error naming migration 060; nothing is written", {
+test_that("P20.5 register_filing(): on a DB below ops-schema version 10 it runs ensure_schema() itself, creates asset_filing and inserts", {
+  db <- af_db()
+  con <- seed_con(db)
+  DBI::dbExecute(con, "DROP TABLE asset_filing")
+  DBI::dbExecute(con, "DELETE FROM schema_version WHERE version = 10")
+  DBI::dbDisconnect(con, shutdown = TRUE)
+  expect_identical(register_filing(db, "as-1", "TRIM", "x"), "inserted")
+  expect_true("asset_filing" %in% af_q(db, "SELECT table_name FROM information_schema.tables")$table_name)
+  expect_true(10 %in% af_q(db, "SELECT version FROM schema_version")$version)
+  expect_identical(nrow(af_rows(db)), 1L)
+})
+
+test_that("P20.5 register_filing(): an unknown asset on a DB below version 10 is refused before the schema is touched", {
+  db <- af_db()
+  con <- seed_con(db)
+  DBI::dbExecute(con, "DROP TABLE asset_filing")
+  DBI::dbExecute(con, "DELETE FROM schema_version WHERE version = 10")
+  DBI::dbDisconnect(con, shutdown = TRUE)
+  expect_error(register_filing(db, "no-such-asset", "TRIM", "x"), class = "sampletidy_error")
+  expect_false("asset_filing" %in% af_q(db, "SELECT table_name FROM information_schema.tables")$table_name)
+  expect_false(10 %in% af_q(db, "SELECT version FROM schema_version")$version)
+})
+
+test_that("P20.5 register_filing(): version 10 recorded but asset_filing missing (a damaged ladder) is refused with sampletidy_error naming ensure_schema; nothing is written", {
   db <- af_db()
   con <- seed_con(db)
   DBI::dbExecute(con, "DROP TABLE asset_filing")
   DBI::dbDisconnect(con, shutdown = TRUE)
   n0 <- af_n_log(db)
   expect_error(register_filing(db, "as-1", "TRIM", "x"), class = "sampletidy_error")
-  expect_error(register_filing(db, "as-1", "TRIM", "x"), "060")
+  expect_error(register_filing(db, "as-1", "TRIM", "x"), "ensure_schema")
   expect_false("asset_filing" %in% af_q(db, "SELECT table_name FROM information_schema.tables")$table_name)
   expect_identical(af_n_log(db), n0)
 })

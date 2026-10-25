@@ -34,5 +34,6 @@ a length-1 \code{POSIXct}.}
 Inserts, or updates, the \code{asset_filing} row for \verb{(uuid_asset, system)}.
 The core never interprets \code{system}. Writes go through the mutation layer
 (\code{change_log} rows with \code{actor = "register_filing"}). Re-registering the
-same filing writes nothing.
+same filing writes nothing. On a DB below ops-schema version 10 it runs
+\code{\link[=ensure_schema]{ensure_schema()}} first, which creates the \code{asset_filing} table.
 }
