@@ -1,0 +1,100 @@
+                                       SAMPLE RECEIPT NOTIFICATION (SRN)
+Work Order                : ES2690002
+
+Client                    : EXAMPLE CLIENT PTY LTD                             Laboratory              : Environmental Division Example
+Contact                   : A. CONTACT                                         Contact                 : A. Labperson
+Address                   : 1 Example Street                                   Address                 : 2 Laboratory Road Example
+                              Exampletown 9999                                                           NSW Australia 9999
+E-mail                    : client@example.org                                 E-mail                  : lab@example.org
+Telephone                 : 00 0000 0000                                       Telephone               : +61-0-0000 0000
+Facsimile                 : 00 0000 0001                                       Facsimile               : +61-0-0000 0001
+
+Project                   : Example QUARTERLY                                  Page                    : 1 of 3
+Order number              : ----                                               Quote number            : EX0000QUOTE0001
+C-O-C number              : ----                                               QC Level                : NEPM 2013 B3 & ALS QC Standard
+Site                      : Example Site
+Sampler                   :
+
+Dates
+Date Samples Received              : 15-Jan-2026 14:05                         Issue Date                              : 16-Jan-2026
+Client Requested Due               : 23-Jan-2026                               Scheduled Reporting Date                : 23-Jan-2026
+Date
+
+Delivery Details
+Mode of Delivery                   : Client Drop Off                           Security Seal                           : Intact.
+No. of coolers/boxes               : 2                                         Temperature                             : 7.9'C, 8.4'C - Ice present
+Receipt Detail                     :                                            No. of samples received / analysed     : 3 / 3
+
+
+General Comments
+l      Sample Q.S03 was not received.
+
+
+
+
+                                                          right solutions. right partner.
+Issue Date          : 16-Jan-2026
+Page                : 2 of 3
+Work Order          : ES2690002 Amendment 0
+Client              : EXAMPLE CLIENT PTY LTD
+
+Sample Container(s)/Preservation Non-Compliances
+All comparisons are made against pretreatment/preservation AS, APHA, USEPA standards.
+
+l No sample container / preservation non-compliance exists.
+
+
+Summary of Sample(s) and Requested Analysis
+Some items described below may be part of a laboratory
+process necessary for the execution of client requested
+tasks. Packages may contain additional analyses, such
+as the determination of moisture content and preparation
+tasks, that are included in the package.
+
+
+                                                               WATER - EA015H                            WATER - EG020F
+If no sampling time is provided, the sampling time will
+
+default 00:00 on the date of sampling. If no sampling date
+is provided, the sampling date will be assumed by the
+laboratory and displayed in brackets without a time
+component
+
+                                                               Total Dissolved Solids - Standard Level   Dissolved Metals by ICP/MS
+Matrix: WATER
+
+Laboratory sample       Sampling date /       Sample ID
+ID                          time
+ ES2690002-001      14-Jan-2026 09:30     Q.MW01                           ü                                           ü
+ ES2690002-002      14-Jan-2026 09:50     Q.MW02                           ü                                           ü
+ ES2690002-003      14-Jan-2026 10:10     Q.S02                            ü                                           ü
+
+
+Proactive Holding Time Report
+The following table summarises breaches of recommended holding times that have occurred prior to samples/instructions being
+received at the laboratory.
+Matrix: WATER                                                                          Evaluation: û = Holding time breach ; ü = Within holding time.
+  Method                                                  Due for         Due for              Samples Received           Instructions Received
+
+                                    Container            extraction      analysis              Date       Evaluation          Date       Evaluation
+  Client Sample ID(s)
+ EA005-P: pH by Auto Titrator
+Q.MW01                  Clear Plastic Bottle - Natural      ----         14-Jan-2026       15-Jan-2026                        ----          ----
+                                                                                                              û
+
+
+
+
+                                                          right solutions. right partner.
+Issue Date          : 16-Jan-2026
+Page                : 3 of 3
+Work Order          : ES2690002 Amendment 0
+Client              : EXAMPLE CLIENT PTY LTD
+
+ EP080: TRH/BTEXN
+Q.S02                   Amber VOC Vial - Sulfuric Acid      12-Jan-2026  21-Feb-2026       15-Jan-2026                        ----          ----
+                                                                                                              û
+Requested Deliverables
+EXAMPLE CONTACT
+  - *AU Certificate of Analysis - NATA (COA)                                           Email             client@example.org
+  - A4 - AU Sample Receipt Notification - Environmental HT (SRN)                       Email             client@example.org
