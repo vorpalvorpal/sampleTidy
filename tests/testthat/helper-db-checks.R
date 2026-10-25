@@ -40,7 +40,9 @@ dbc_hourly_names <- c(
   # R-22.E: an ingest_file.message_id naming no ingest_email row.
   "ingest_file_email_dangling",
   # R-22.S: lab_qc_report.kind is QC / QCI / SRN; an SRN received warm.
-  "vocab_lab_qc_kind", "lab_receipt_warm"
+  "vocab_lab_qc_kind", "lab_receipt_warm",
+  # R-22.N: a needs_review file that no open review item covers.
+  "ingest_file_needs_review_resolved"
 )
 dbc_migration_only_names <- c(
   "measurement_view_coverage", "measurement_view_no_fanout",
@@ -61,7 +63,7 @@ dbc_warn_names <- c(
   "alias_window_ambiguous", "fraction_matches_code", "vocab_mask_variant",
   "vocab_feature_flow", "change_log_shape", "sample_date_datetime_agree",
   "sample_in_feature_window", "feature_coords", "feature_geom_matches_lonlat",
-  "lab_receipt_warm"
+  "lab_receipt_warm", "ingest_file_needs_review_resolved"
 )
 
 dbc_result_cols <- c("name", "tier", "severity", "status", "n", "ms", "sample", "message")
@@ -255,6 +257,13 @@ dbc_srn_report <- function(con, uuid, uuid_asset, work_order, temp_max, days_ago
                  VALUES ('rq-0003', TIMESTAMP '2025-04-01 00:00:00', 'unknown_feature', 'resolved', 'accepted', 'test',
                          TIMESTAMP '2025-04-02 00:00:00', 'fa-0004')")
 
+  # R-22.N ingest_file_needs_review_resolved: a legacy needs_review file
+  # (work_order NULL) covered by open rq-0001 through the work order its
+  # state_reason names - the fallback the check must honour, not flag.
+  dbc_exec(con, "INSERT INTO ingest_file (hash, filename, state, state_reason, work_order)
+                 VALUES (?, 'XX1234567_REDL.csv', 'needs_review', 'commit_event: XX1234567', NULL)",
+           dbc_hex(7))
+
   # One row in each linked table, every link resolving.
   dbc_exec(con, "INSERT INTO asset (uuid, name, uuid_project, hash) VALUES
                  ('as-0001', 'XX1234567.csv', 'p-0001', ?), ('as-0002', 'XX1234567_QCI.pdf', 'p-0001', ?)",
@@ -427,6 +436,13 @@ dbc_violation_cases <- list(
        seed = function(con) dbc_exec(con, "INSERT INTO ingest_file (hash, filename, state, state_reason, message_id)
                                            VALUES (?, '_email.eml', 'ignored', 'delivery_email', 'gone-0001@example.org')",
                                      dbc_hex(911))),
+  # R-22.N: key = the parked file's hash. Its work order has no review item at all.
+  list(check = "ingest_file_needs_review_resolved", key = dbc_hex(921),
+       label = "a needs_review file that no open review item covers",
+       seed = function(con) dbc_exec(con, "INSERT INTO ingest_file (hash, filename, state, state_reason, work_order)
+                                           VALUES (?, 'XX7000001_0.Chemistry2e.CSV', 'needs_review',
+                                                   'commit_event: XX7000001', 'XX7000001')",
+                                     dbc_hex(921))),
   # R-22.S: key = work_order (an SRN is a work order's receipt).
   list(check = "lab_receipt_warm", key = "XX7654321", label = "an SRN received at 16.8 degrees ten days ago",
        seed = function(con) {
