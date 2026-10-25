@@ -257,8 +257,10 @@ Obsidian was closed. The Mac trigger is now a launchd agent
 `dev/launchd/install.sh`; `install.sh uninstall` removes it). `WatchPaths` on the input
 directory fires when a delivery folder appears, and `StartInterval` 600 re-checks until the
 folder settles. The plist sets a UTF-8 locale, since launchd starts jobs in the C locale and
-R then cannot parse the package's `°C`/`µg/L` source. The Obsidian entry is left in place:
-the R lock and the metadata gate make a second trigger a no-op.
+R then cannot parse the package's `°C`/`µg/L` source. The Obsidian entry was at first left in place:
+the R lock and the metadata gate make a second trigger a no-op. *Removed 2026-10-25 (Robin):* the
+Obsidian entry's events are disabled, so launchd is the only trigger (launchd never overlaps
+two instances of one job).
 
 **Licence and schedule changes: notes + monthly headless Claude Code, not a flow.**
 - Folder notes (`51.12 License variation - 10039`, the Katoomba licence folder,
