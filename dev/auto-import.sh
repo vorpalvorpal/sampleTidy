@@ -1,6 +1,6 @@
 #!/bin/bash
 # Hourly auto-import trigger (macOS). PLAN-18 sections 0, 3, 5.
-# Run by launchd on the Mac (dev/launchd/) and by Obsidian's Shell commands plugin. Does nothing unless this machine holds the
+# Run by launchd on the Mac (dev/launchd/); Obsidian's Shell commands trigger was retired 2026-10-25. Does nothing unless this machine holds the
 # live DB and something under input_dir (or the DB file) changed since the last good run.
 # Metadata only: stat, never file contents (Files-On-Demand).
 # Test overrides: SAMPLETIDY_AUTOIMPORT_{DB,INPUT,REPORT,RSCRIPT,LOG,CODE}.
