@@ -35,3 +35,4 @@ for (dr in c(TRUE, FALSE, FALSE)) {
   cat("dry_run =", dr, "->", r$status, "\n")
 }
 report("after")
+# Applied to live 2026-10-25 00:16 UTC (backup pre-080 ...20261025T001627.909Z).
