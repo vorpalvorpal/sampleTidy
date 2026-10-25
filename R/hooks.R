@@ -9,6 +9,8 @@ for (.ev in .hook_events) .hook_env[[.ev]] <- list()
 rm(.ev)
 # Problems from load_hooks_file(), surfaced in every status afterwards (session state).
 .hook_env$file_problems <- character(0)
+# Parallel to the function lists: one replace_default flag per registered hook.
+.hook_env$replace <- stats::setNames(rep(list(logical(0)), length(.hook_events)), .hook_events)
 
 .hook_check_event <- function(event) {
   if (!is.character(event) || length(event) != 1 || is.na(event) ||
@@ -26,7 +28,9 @@ rm(.ev)
 #' Hooks are session state (not persisted). Hooks of one event run in
 #' registration order; the same function may be registered twice and then runs
 #' twice. Registering a hook for `"after_status"` or `"after_run"` replaces that
-#' event's default markdown renderer. An error inside a hook never fails
+#' event's default markdown renderer, unless every hook registered for the event
+#' has `replace_default = FALSE`: then the default runs first and the hooks run
+#' after it, in registration order. An error inside a hook never fails
 #' [inbox_run()]; it is recorded as a problem in the status.
 #'
 #' @param event one of `"after_run"` (argument: the list `inbox_run()`
@@ -34,14 +38,24 @@ rm(.ev)
 #'   `"work_complete"` (a [completed_work()] tibble of the projects that
 #'   became complete during the run).
 #' @param fn a function of one argument.
+#' @param replace_default a single `TRUE` or `FALSE` (default `TRUE`). The
+#'   event's default renderer is suppressed if at least one hook registered for
+#'   the event has `replace_default = TRUE`. Has no effect for `"work_complete"`,
+#'   which has no default.
 #' @return `fn`, invisibly.
 #' @export
-register_hook <- function(event, fn) {
+register_hook <- function(event, fn, replace_default = TRUE) {
   .hook_check_event(event)
   if (!is.function(fn)) {
     cli::cli_abort("{.arg fn} must be a function.", class = "sampletidy_error")
   }
+  if (!is.logical(replace_default) || length(replace_default) != 1 ||
+      is.na(replace_default)) {
+    cli::cli_abort("{.arg replace_default} must be a single {.val TRUE} or {.val FALSE}.",
+                   class = "sampletidy_error")
+  }
   .hook_env[[event]] <- c(.hook_env[[event]], list(fn))
+  .hook_env$replace[[event]] <- c(.hook_env$replace[[event]], replace_default)
   invisible(fn)
 }
 
@@ -53,10 +67,12 @@ register_hook <- function(event, fn) {
 clear_hooks <- function(event = NULL) {
   if (is.null(event)) {
     for (ev in .hook_events) .hook_env[[ev]] <- list()
+    for (ev in .hook_events) .hook_env$replace[[ev]] <- logical(0)
     .hook_env$file_problems <- character(0)
   } else {
     .hook_check_event(event)
     .hook_env[[event]] <- list()
+    .hook_env$replace[[event]] <- logical(0)
   }
   invisible(NULL)
 }
@@ -112,14 +128,15 @@ hooks <- function(event = NULL) {
 }
 
 # Run every hook of `event` with `arg`, each inside tryCatch. With no hook
-# registered, `default` (if any) runs in its place with id "default". Returns
+# registered, or none has replace_default = TRUE, `default` (if any) runs first
+# with id "default"; then the hooks, in registration order. Returns
 # the problem strings, `hook <event>[<id>] failed: <msg>`.
 .hooks_run <- function(event, arg, default = NULL) {
   fns <- .hook_env[[event]]
   ids <- seq_along(fns)
-  if (length(fns) == 0 && !is.null(default)) {
-    fns <- list(default)
-    ids <- "default"
+  if (!is.null(default) && !any(.hook_env$replace[[event]])) {
+    fns <- c(list(default), fns)
+    ids <- c("default", ids)
   }
   problems <- character(0)
   for (i in seq_along(fns)) {
