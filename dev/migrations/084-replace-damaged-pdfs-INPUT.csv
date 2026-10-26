@@ -1,0 +1,5 @@
+"gid","op","tbl","id","label","from_value","to_value","new_size","prefix_bytes","row_sha1"
+"G1","replace_file","asset","f8f0096e-3ba7-47ef-974b-e73489b69959","Monthly 5-05.pdf","829e8c3aadab2d5c1d33ad93907560dd","b986a29f30596958c6a434b7c7034815","8181426","8144374","6e3db30fdd592964b28484e75bc6d62d47b23f4e"
+"G2","replace_file","asset","baadda76-20ef-422c-8a27-fd3751541712","ES2512915_0_COA.pdf","d606accdbde4d300b6da917bcb31d36c","90326863f18e7383d89e12b9f0d44d53","831853","503718","4632713a6ecb489e5b25830b0b5e02002db04dc5"
+"G3","replace_file","asset","ed2c1409-db04-4414-a348-93f5867fd1d1","ES2602084_0_QC.pdf","26add24a9834c50ad565bd128f3a28d9","65dc5ef611d3f3b9724772acc6162447","736305","98977","9be4a1b0b4c514179c81dc84cb73167f4b2847dc"
+"G3","reparse","lab_qc_report","70c012a5-d22c-44ed-b2e2-517fba61f05e","ES2602084 QC report","unreadable","partial",,,"4d264998f5c4f3e2d4cedee8b6e90412bd04a79f"
