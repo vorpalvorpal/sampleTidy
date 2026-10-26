@@ -41,6 +41,37 @@ As of 2026-10-21, after the corpus import, 064 and 063:
 Suite: **9,832 expectations, 0 failing, 12 skipped** (2026-10-22). Gated corpus tests are skipped unless
 `SAMPLETIDY_*_CORPUS` is set.
 
+## Done 2026-10-26 (branch `archive-settle`, not yet on main)
+
+- **Archive settling.** A file store can rewrite an archived file after the
+  fact: SharePoint rewrites a metadata block inside old-format Office files
+  (.xls/.doc/.ppt), same size, new bytes (migrations 055 and 087 repaired the
+  existing cases by hand). Now:
+  - `asset.hash` is the stored copy's **settled** hash; `ingest_file(hash,
+    uuid_asset)` is the as-received lookup (no schema bump). `archive_file()`
+    writes `uuid_asset` on both its new-asset and reuse paths (and fills a
+    missing `ingest_file.size`), and dedups through it.
+  - Every consumer that starts from a received hash resolves its asset through
+    `uuid_asset` first, then `asset.hash` (`.ar_asset_for_hash()`): source
+    removal and `removable_pending`, the folder -> project fallback, the stem
+    own-bytes exclusion, `.ct_wo_prior_asset_hashes()`, `completed_work()`.
+  - `archive_settle()` (exported) re-hashes copies of configured extensions
+    archived within `window_hours` and accepts a same-size rewrite (subject to
+    an optional `accept()` predicate) via `db_update()`, with a change_log row
+    keeping the old hash (reason "storage rewrite"). `ingest_dir()` calls it
+    at the start of each write phase; a settle counts as `did_something`.
+  - The inbox source of a configured extension is kept for `hold_secs` after
+    archiving, then removed when the copy matches the source hash or the
+    current `asset.hash`. Other extensions are removed at once, as before.
+  - **Off by default:** `st_config("archive_settle", list())` turns it on with
+    `ext = c("xls","doc","ppt")`, `hold_secs = 900`, `window_hours = 72`.
+- **Still to do:** the backfill migration that sets `ingest_file.uuid_asset`
+  for existing rows (from the 055/087 BACKUP old -> new hashes plus every row
+  where `ingest_file.hash = asset.hash`; one `ingest_file` row per old hash;
+  061's multi-project hashes go to the SKIPPED CSV - spec in the header of
+  `tests/testthat/test-archive-settle.R`), then enabling the setting in the
+  run configuration.
+
 ## Done 2026-10-22
 
 - Migrations 069 (B.L05 coordinates, ES2512129 times, method repairs), 070 (lab_method.fraction;

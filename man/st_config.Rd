@@ -30,4 +30,9 @@ string would silently shrink the allowlist to one entry. For the known
 list-valued keys, \code{st_config()} aborts if it would otherwise fall through
 to the env var; set such a key in code via \code{st_config(key, value)}
 instead (see PLAN-12 R-12.11).
+
+\code{archive_settle} is one such list-valued key: \code{NULL} (the default) turns
+archive settling off, and a list such as \code{list()} or
+\code{list(ext = "xls", hold_secs = 600)} turns it on. See \code{\link[=archive_settle]{archive_settle()}}
+for its fields.
 }

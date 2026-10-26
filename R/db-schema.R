@@ -448,6 +448,29 @@ ingest_file_set_state <- function(con, hash, state, reason = NA_character_, rese
   invisible(NULL)
 }
 
+# Archive settling: link an as-received `ingest_file` row to the `asset` row
+# that stores its bytes. `asset.hash` is the STORED file's (settled) hash and
+# can drift from the as-received hash when the file store rewrites the copy,
+# so this link - not a hash join - is how a received file finds its asset.
+# Never re-points an already-linked row. Also records the as-received size
+# when the row has none (archive_settle() compares it with the stored copy's
+# size). A no-op when there is no `ingest_file` row (or table) for `hash`.
+ingest_file_set_uuid_asset <- function(con, hash, uuid_asset, size = NA_real_) {
+  checkmate::assert_string(hash)
+  checkmate::assert_string(uuid_asset)
+  if (!DBI::dbExistsTable(con, "ingest_file")) {
+    return(invisible(NULL))
+  }
+  DBI::dbExecute(
+    con,
+    "UPDATE ingest_file
+        SET uuid_asset = ?, size = COALESCE(size, ?), updated_at = ?
+      WHERE hash = ? AND (uuid_asset IS NULL OR uuid_asset = ?)",
+    params = list(uuid_asset, as.numeric(size), Sys.time(), hash, uuid_asset)
+  )
+  invisible(NULL)
+}
+
 # R-22.N: record the work order a file was committed under (ops-table write,
 # kept here with the other raw ingest_file SQL; see .ct_set_file_states()).
 ingest_file_set_work_order <- function(con, hash, work_order) {

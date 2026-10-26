@@ -117,6 +117,11 @@ hooks(event = NULL)
 completed_work(db = st_config("live_db"), since = NULL)
 register_filing(db = st_config("live_db"), uuid_asset, system, external_id, external_uri = NA_character_, container = NA_character_, filed_at = NULL, title = NA_character_, comments = NA_character_)
 filed_assets(db = st_config("live_db"), system = NULL)
+# Archive settling (added 2026-10-26, Robin's ruling): off unless st_config("archive_settle")
+# is set. Re-records asset.hash for configured file types that the store rewrote
+# (same size) within window_hours; ingest_file(hash, uuid_asset) keeps the as-received
+# hash for dedup. ingest_dir() runs it at the start of each write phase.
+archive_settle(db = st_config("live_db"), now = Sys.time())
 # PLAN-18 section 4 / 4.5 (phase 2, added 2026-10-19): the status note's Flags.
 # checks = list(schedule, limits, requirements, points, invoices); read-only.
 import_flags(db = st_config("live_db"), now = Sys.time(), checks)
