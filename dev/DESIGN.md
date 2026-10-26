@@ -387,6 +387,17 @@ say" without value-versioning. Rows are tiny; never pruned. Snapshots carry it
 automatically. There is no other audit machinery — the archived original file
 plus the change log is the provenance story.
 
+**Archived copies can be rewritten by the file store.** SharePoint rewrites a
+metadata block inside old-format Office files some time after upload: same
+size and content, different bytes. So `asset.hash` is the stored copy's
+*settled* hash, while `ingest_file(hash, uuid_asset)` is the as-received
+identity that de-duplication and every received-file lookup use (through
+`uuid_asset` first, `asset.hash` as the legacy fallback). `archive_settle()`
+accepts a same-size rewrite of a configured extension within a window after
+archiving, logging the old hash in `change_log`; anything else that changes a
+stored copy is warned about and never accepted. It is opt-in
+(`st_config("archive_settle")`).
+
 ---
 
 ## 10. Ingestion state machine
