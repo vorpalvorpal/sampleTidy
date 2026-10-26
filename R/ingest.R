@@ -613,11 +613,21 @@
     if (length(hashes) == 0) {
       return(NA_character_)
     }
+    # Each file finds its asset through `ingest_file.uuid_asset` first, then
+    # `asset.hash` (`.ar_asset_for_hash()`): a settled copy's `asset.hash` is
+    # no longer the as-received hash.
+    uuid_projects <- unique(unlist(lapply(hashes, function(h) {
+      as.character(.ar_asset_for_hash(con, h)$uuid_project)
+    })))
+    uuid_projects <- uuid_projects[!is.na(uuid_projects)]
+    if (length(uuid_projects) == 0) {
+      return(NA_character_)
+    }
     projects <- DBI::dbGetQuery(
       con,
-      paste0("SELECT DISTINCT p.name FROM asset a JOIN project p ON p.uuid = a.uuid_project
-               WHERE a.hash IN (", paste(rep("?", length(hashes)), collapse = ","), ")"),
-      params = as.list(hashes)
+      paste0("SELECT DISTINCT name FROM project WHERE uuid IN (",
+             paste(rep("?", length(uuid_projects)), collapse = ","), ")"),
+      params = as.list(uuid_projects)
     )$name
     projects <- unique(projects[!is.na(projects)])
     return(if (length(projects) == 1) projects[[1]] else NA_character_)
@@ -667,7 +677,7 @@
   }
   assets <- DBI::dbGetQuery(
     con,
-    "SELECT a.filename, a.hash, p.name AS project_name, p.uuid AS uuid_project
+    "SELECT a.uuid, a.filename, a.hash, p.name AS project_name, p.uuid AS uuid_project
        FROM asset a JOIN project p ON p.uuid = a.uuid_project
       WHERE a.uuid_project IS NOT NULL AND a.filename IS NOT NULL"
   )
@@ -676,7 +686,11 @@
   }
   hit <- vapply(assets$filename, stem, character(1), USE.NAMES = FALSE) == want
   if (!is.na(hash)) {
-    hit <- hit & (is.na(assets$hash) | assets$hash != hash)
+    # The file's own bytes are not "another report": its own asset is found
+    # through `ingest_file.uuid_asset` (a settled copy no longer carries the
+    # as-received hash), and any asset still carrying that hash is excluded too.
+    own <- .ar_asset_for_hash(con, hash)$uuid
+    hit <- hit & (is.na(assets$hash) | assets$hash != hash) & !(assets$uuid %in% own)
   }
   projects <- unique(assets$project_name[hit])
   if (length(projects) == 0) {
@@ -1102,10 +1116,16 @@
 #' connection can coexist). For each routed input path/hash the source is
 #' deleted only when ALL of the following hold:
 #'
-#' * an `asset` row exists for that hash;
+#' * an `asset` row holds that hash's bytes (found through
+#'   `ingest_file.uuid_asset` first, then `asset.hash`);
+#' * the source is past its archive-settle hold - only when
+#'   `st_config("archive_settle")` is on and the file has a configured
+#'   extension (`hold_secs` after archiving; see [archive_settle()]);
 #' * the archive copy exists on disk as a REGULAR FILE (not merely its uuid
 #'   directory);
-#' * re-hashing the archived bytes reproduces the same xxHash128; and
+#' * re-hashing the archived bytes reproduces the source's xxHash128, or the
+#'   asset's current `asset.hash` (the stored copy's settled hash after an
+#'   accepted file-store rewrite); and
 #' * the source file still exists.
 #'
 #' The content check is not redundant with the existence check: the archive
@@ -1128,6 +1148,7 @@
   on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
 
   archive_dir <- st_config("archive_dir")
+  settle_cfg <- .ar_settle_config()
   removed <- character(0)
 
   for (i in seq_len(nrow(routed))) {
@@ -1137,8 +1158,18 @@
       next
     }
 
-    asset_row <- DBI::dbGetQuery(con, "SELECT uuid, filename FROM asset WHERE hash = ?", params = list(hash))
+    # The received hash finds its asset through `ingest_file.uuid_asset` first
+    # (a settled copy's `asset.hash` is the STORED hash), then `asset.hash`.
+    asset_row <- .ar_asset_for_hash(con, hash)
     if (nrow(asset_row) == 0) {
+      next
+    }
+
+    # Archive settling: a configured extension's source is kept until
+    # `hold_secs` after archiving, so a file-store rewrite of the copy can
+    # land (and be settled by `archive_settle()`) while the source is still
+    # here. Silent - the next run past the hold removes it.
+    if (.ar_settle_held(con, asset_row$uuid[[1]], asset_row$filename[[1]], settle_cfg)) {
       next
     }
 
@@ -1162,8 +1193,15 @@
     # archived bytes and require them to equal the hash we are about to delete
     # the source for. This is the difference between "a file is there" and "the
     # data is there", and deletion is irreversible.
+    #
+    # The copy may hash to the source's hash OR to the asset's current
+    # `asset.hash` - the latter is the stored copy's settled hash after an
+    # accepted file-store rewrite (`archive_settle()`), which kept the content
+    # and size. Any other hash is an unaccepted change: a rewrite after the
+    # settle window, a size change, an unconfigured extension.
     copy_hash <- tryCatch(hash_file(copy_path), error = function(e) NA_character_)
-    if (is.na(copy_hash) || !identical(copy_hash, hash)) {
+    accepted <- unique(c(hash, asset_row$hash[[1]]))
+    if (is.na(copy_hash) || !(copy_hash %in% accepted[!is.na(accepted)])) {
       cli::cli_warn(
         "ingest_dir(): archive copy at {.path {copy_path}} does NOT match the
          source {.path {path}} (expected hash {.val {hash}}, archived copy
@@ -1311,6 +1349,15 @@ ingest_dir <- function(path, db = st_config("live_db"), dry_run = FALSE,
     function(con) {
       ensure_schema(con)
 
+      # Archive settling first, so this run's removal step sees settled
+      # hashes (`archive_settle()`, R/archive.R; a no-op while
+      # `st_config("archive_settle")` is NULL). A dry run writes nothing.
+      settled <- if (dry_run) {
+        tibble::tibble(uuid = character(0))
+      } else {
+        archive_settle(con)
+      }
+
       routed <- route_files(paths, con, dry_run, reconsider)
 
       # R-22.E (Robin 2026-10-25): identify the delivering email. A dry run
@@ -1359,14 +1406,19 @@ ingest_dir <- function(path, db = st_config("live_db"), dry_run = FALSE,
       # a routed source still on disk whose hash already has an asset row.
       # Self-limiting - once removal succeeds the file is gone and this is
       # empty again.
+      #
+      # The asset is found through `ingest_file.uuid_asset` first (a settled
+      # copy no longer carries the as-received hash). A source still inside
+      # its settle hold is not pending yet: it cannot be removed this run, and
+      # counting it would snapshot on every run of the hold.
       removable_pending <- character(0)
       if (isTRUE(as.logical(st_config("remove_ingested"))) && !dry_run) {
+        settle_cfg <- .ar_settle_config()
         for (i in seq_len(nrow(routed))) {
           h <- routed$hash[[i]]
           if (is.na(h) || !file.exists(routed$path[[i]])) next
-          if (nrow(DBI::dbGetQuery(
-            con, "SELECT 1 FROM asset WHERE hash = ? LIMIT 1", params = list(h)
-          )) > 0) {
+          a <- .ar_asset_for_hash(con, h)
+          if (nrow(a) > 0 && !.ar_settle_held(con, a$uuid[[1]], a$filename[[1]], settle_cfg)) {
             removable_pending <- c(removable_pending, h)
           }
         }
@@ -1374,7 +1426,8 @@ ingest_dir <- function(path, db = st_config("live_db"), dry_run = FALSE,
 
       list(routed = routed, events = events, outcome = outcome,
            file_states = file_states, retained = retained,
-           removable_pending = unique(removable_pending))
+           removable_pending = unique(removable_pending),
+           settled = settled$uuid)
     },
     db = db
   )
@@ -1390,9 +1443,12 @@ ingest_dir <- function(path, db = st_config("live_db"), dry_run = FALSE,
   # requires a snapshot. The folder consequently never emptied and R-9.9 never
   # fired. The strict commit -> archive -> snapshot -> remove ORDER of R-9.6 is
   # untouched; this only widens what counts as "something happened".
+  #
+  # A settle (`archive_settle()`) changes `asset.hash`, so it counts too.
   did_something <- isTRUE(pipeline$outcome$committed_any) ||
     length(pipeline$retained) > 0 ||
-    length(pipeline$removable_pending) > 0
+    length(pipeline$removable_pending) > 0 ||
+    length(pipeline$settled) > 0
   snapshot_path <- NA_character_
   if (did_something && !dry_run) {
     snapshot_path <- snapshot_db(db = db, dest_dir = st_config("snapshot_dir"))

@@ -197,11 +197,19 @@
   if (!DBI::dbExistsTable(con, "asset")) {
     return(character(0))
   }
+  # An asset's `ingest_file` row is found through `uuid_asset` first, then by
+  # hash for an unlinked row: once `archive_settle()` has settled a stored
+  # copy, `asset.hash` is the stored hash and no longer the as-received one,
+  # so a hash join would lose the row (and its `retained_sibling` reason).
+  # The hash reported is the as-received one where known, and an asset is
+  # this event's own when EITHER hash is among `own_hashes`.
   r <- DBI::dbGetQuery(
     con,
-    "SELECT a.hash FROM asset a
+    "SELECT a.uuid, a.hash AS stored_hash, i.hash AS received_hash
+       FROM asset a
        JOIN project p ON p.uuid = a.uuid_project
-       LEFT JOIN ingest_file i ON i.hash = a.hash
+       LEFT JOIN ingest_file i
+         ON i.uuid_asset = a.uuid OR (i.uuid_asset IS NULL AND i.hash = a.hash)
       WHERE p.name = ? AND p.type = 'Work order'
         AND coalesce(i.state_reason, '') <> 'retained_sibling'",
     params = list(work_order)
@@ -209,8 +217,12 @@
   if (nrow(r) == 0) {
     return(character(0))
   }
-  h <- as.character(r$hash)
-  unique(h[!is.na(h) & !(h %in% own_hashes)])
+  stored <- as.character(r$stored_hash)
+  received <- as.character(r$received_hash)
+  own_uuid <- unique(r$uuid[(!is.na(stored) & stored %in% own_hashes) |
+                              (!is.na(received) & received %in% own_hashes)])
+  h <- ifelse(is.na(received), stored, received)
+  unique(h[!is.na(h) & !(r$uuid %in% own_uuid)])
 }
 
 #' The revision RECORDED for THIS work order's own files (never
