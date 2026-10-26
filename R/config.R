@@ -104,6 +104,13 @@
   remove_ingested = function() {
     TRUE
   },
+  # Archive settling (`archive_settle()`, R/archive.R): NULL = off. A list
+  # turns it on - fields `ext`, `hold_secs`, `window_hours`, `accept`, each
+  # defaulted and validated by `.ar_settle_config()`. List-valued, so it
+  # cannot come from an env var (see `.st_config_list_keys`).
+  archive_settle = function() {
+    NULL
+  },
   # Deliberately reads SAMPLETIDY_CORPUS (not the SAMPLETIDY_CORPUS_DIR
   # pattern used for the option/env-var lookup below) - see PLAN-01 R-1.1.
   corpus_dir = function() {
@@ -121,7 +128,7 @@
 #'
 #' @keywords internal
 #' @noRd
-.st_config_list_keys <- c("field_analytes", "acirl_transcription_labels")
+.st_config_list_keys <- c("field_analytes", "acirl_transcription_labels", "archive_settle")
 
 #' Get or set a sampleTidy configuration value
 #'
@@ -139,6 +146,11 @@
 #' list-valued keys, `st_config()` aborts if it would otherwise fall through
 #' to the env var; set such a key in code via `st_config(key, value)`
 #' instead (see PLAN-12 R-12.11).
+#'
+#' `archive_settle` is one such list-valued key: `NULL` (the default) turns
+#' archive settling off, and a list such as `list()` or
+#' `list(ext = "xls", hold_secs = 600)` turns it on. See [archive_settle()]
+#' for its fields.
 #'
 #' @param key configuration key, e.g. `"live_db"`, `"input_dir"`.
 #' @param value if supplied, the value to set for `key`.
