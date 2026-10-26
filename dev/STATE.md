@@ -41,7 +41,7 @@ As of 2026-10-21, after the corpus import, 064 and 063:
 Suite: **9,832 expectations, 0 failing, 12 skipped** (2026-10-22). Gated corpus tests are skipped unless
 `SAMPLETIDY_*_CORPUS` is set.
 
-## Done 2026-10-26 (branch `archive-settle`, not yet on main)
+## Done 2026-10-26 (archive settling, on main)
 
 - **Archive settling.** A file store can rewrite an archived file after the
   fact: SharePoint rewrites a metadata block inside old-format Office files
@@ -65,12 +65,11 @@ Suite: **9,832 expectations, 0 failing, 12 skipped** (2026-10-22). Gated corpus 
     current `asset.hash`. Other extensions are removed at once, as before.
   - **Off by default:** `st_config("archive_settle", list())` turns it on with
     `ext = c("xls","doc","ppt")`, `hold_secs = 900`, `window_hours = 72`.
-- **Still to do:** the backfill migration that sets `ingest_file.uuid_asset`
-  for existing rows (from the 055/087 BACKUP old -> new hashes plus every row
-  where `ingest_file.hash = asset.hash`; one `ingest_file` row per old hash;
-  061's multi-project hashes go to the SKIPPED CSV - spec in the header of
-  `tests/testthat/test-archive-settle.R`), then enabling the setting in the
-  run configuration.
+- **Backfill done:** migration 088 (applied 2026-10-26) linked 1,491
+  `ingest_file` rows to their assets (1,435 by `asset.hash`, 17/39 via the
+  055/087 old hashes); one ambiguous hash (446f219d..., two assets) is skipped
+  pending a ruling. See `dev/MIGRATIONS.md` (1088).
+- **Still to do:** enable `archive_settle` in the run configuration.
 
 ## Done 2026-10-22
 
