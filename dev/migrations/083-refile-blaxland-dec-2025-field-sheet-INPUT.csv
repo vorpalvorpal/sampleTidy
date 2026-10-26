@@ -1,0 +1,5 @@
+"gid","op","tbl","id","label","from_value","to_value","anchor","row_sha1"
+"G1","move","asset","2c5acb02-423f-408c-9500-57fb5570148b","Quarterly 2-12.pdf","2a398160-1ca5-48ab-b8a8-c515f3749ccf","fa806613-2d8d-4cc6-82c6-e1111dd9712a","d50c0e4c-4220-4d87-8784-1163c95b3885","79c1bd33a256af4665a0d20993ac2b2a14e3a088"
+"G1","anchor","asset","d50c0e4c-4220-4d87-8784-1163c95b3885",,,,,"a41c36841586b74b52c8787d1ab358249822d232"
+"G1","anchor","project","2a398160-1ca5-48ab-b8a8-c515f3749ccf",,,,,"b898abbb3176daff42a91840a9a37bbe21d5bc8b"
+"G1","anchor","project","fa806613-2d8d-4cc6-82c6-e1111dd9712a",,,,,"53db806d85f5c0176cdd3e523fdb6b7a8a24b042"
