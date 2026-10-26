@@ -478,7 +478,12 @@ test_that("R-10.6: NAMESPACE exports equal the CONTRACT-pinned public API exactl
     # sources the file SAMPLETIDY_HOOKS_FILE names so a deployment can register
     # hooks on the live import. To be added to CONTRACT.md's public-API list
     # in the same change.
-    "load_hooks_file"
+    "load_hooks_file",
+    # Archive settling (2026-10-26, Robin's ruling; spec in
+    # test-archive-settle.R), added to CONTRACT.md's public-API list in the
+    # same change: re-records the hash of archived files that the file store
+    # rewrites after archiving. Operator-callable; ingest_dir() also runs it.
+    "archive_settle"
   )
   actual <- getNamespaceExports("sampleTidy")
   expect_setequal(actual, pinned)
