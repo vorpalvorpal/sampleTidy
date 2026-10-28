@@ -1,0 +1,4 @@
+"hash","mp","label","field","printed","corrected","reason"
+"855d1b1fc19640f7c07901390cbbc427","4","*","sample_datetime_raw","0/01/1900","07 May 2020","date cell prints 0/01/1900 (an empty spreadsheet date); every other cell and the cover say 7/05/2020"
+"2e41d571bb7430159e6cf6a64ff29bb1","*","Electrical Conductivity","units_raw","uM/cm","mS/cm","unit misprinted; values 3.5 and 0.96 are mS/cm (MP1 reads 3,000-4,000 uS/cm every other round)"
+"2e41d571bb7430159e6cf6a64ff29bb1","*","Water Height","units_raw","M","m","unit printed upper-case M; metres as in every other report"
