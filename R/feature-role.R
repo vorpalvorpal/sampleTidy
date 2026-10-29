@@ -14,7 +14,7 @@
 
 .st_water_types  <- c("groundwater", "surface", "leachate")
 .st_point_roles  <- c("leachate", "containment", "receptor", "reference")
-.st_source_cells <- c("A", "B", "A+B", "single cell", "street sweepings", "other")
+.st_source_cells <- c("A", "B", "A+B", "single cell", "transfer station", "street sweepings", "other")
 .st_treatments   <- c("raw", "treated", "partly treated")
 
 .feature_role_ddl <- list(
