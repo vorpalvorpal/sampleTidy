@@ -1,0 +1,7 @@
+"hash","feature_raw","label","field","printed","corrected","reason"
+"d82d74cb190ab11ec94664956ef42f4e","LEACHATE","Phenols (Total)","units_raw","","mg/L","units cell left blank; the same row prints mg/L for the bores in this report, and ACIRL reports total phenols in mg/L (LOR 0.05 mg/L)"
+"dd9bd7dc6a8447fb40bfc158128b2cda","LEACHATE","Phenols (Total)","units_raw","","mg/L","units cell left blank; the same row prints mg/L for the bores in this report, and ACIRL reports total phenols in mg/L (LOR 0.05 mg/L)"
+"88e611c3179d49f9fc79ed32085ee39f","LEACHATE","Phenols (Total)","units_raw","","mg/L","units cell left blank; the same row prints mg/L for the bores in this report, and ACIRL reports total phenols in mg/L (LOR 0.05 mg/L)"
+"81d502a888d33b3a7446a4ec7b997005","LEACHATE","Phenols (Total)","units_raw","","mg/L","units cell left blank; the same row prints mg/L for the bores in this report, and ACIRL reports total phenols in mg/L (LOR 0.05 mg/L)"
+"08ad2cd110aa2210c493ec6bd5459323","LEACHATE","Phenols (Total)","units_raw","","mg/L","units cell left blank; the same row prints mg/L for the bores in this report, and ACIRL reports total phenols in mg/L (LOR 0.05 mg/L)"
+"4b85d36d48e7d39f0dcf995be5462bfa","S1A","Temperature","value_raw","166.9","_","printed 166.9 degC is impossible for a creek (the other six points read 15.2-20.4); not imported rather than guessed (probably 16.9)"
