@@ -2,7 +2,8 @@
 # the mutation-layer allowlist and the two standing db_checks.
 
 pr_con <- function(env = parent.frame()) {
-  con <- seed_con(seed_db())
+  # The temp dir must live as long as the calling test, not pr_con()'s frame.
+  con <- seed_con(seed_db(withr::local_tempdir(.local_envir = env)))
   withr::defer(DBI::dbDisconnect(con, shutdown = TRUE), envir = env)
   con
 }

@@ -309,6 +309,30 @@ ORDER BY received_at",
                   params = list(params$receipt_max_temp_c, as.integer(ceiling(params$receipt_lookback_days))))
 }
 
+# Monitoring-point roles (migration 093). Empty before the tables exist.
+.dbc_orphan_feature_role_refs <- function(con, params) {
+  if (!.feature_role_ready(con)) return(data.frame(key = character(0), stringsAsFactors = FALSE))
+  DBI::dbGetQuery(con, "
+SELECT uuid_feature AS key, 'feature_role' AS tbl FROM feature_role
+WHERE uuid_feature NOT IN (SELECT uuid FROM feature)
+UNION ALL SELECT uuid_feature, 'feature_dubious' FROM feature_dubious
+WHERE uuid_feature NOT IN (SELECT uuid FROM feature)")
+}
+
+.dbc_vocab_feature_role <- function(con, params) {
+  if (!.feature_role_ready(con)) return(data.frame(key = character(0), stringsAsFactors = FALSE))
+  DBI::dbGetQuery(con, sprintf("
+SELECT uuid_feature AS key, 'feature_role' AS tbl FROM feature_role
+WHERE water_type IS NULL OR water_type NOT IN (%s)
+   OR role IS NULL OR role NOT IN (%s)
+   OR (source_cell IS NOT NULL AND source_cell NOT IN (%s))
+   OR (treatment IS NOT NULL AND treatment NOT IN (%s))
+UNION ALL SELECT uuid_feature, 'feature_dubious' FROM feature_dubious
+WHERE reason IS NULL OR trim(reason) = ''",
+    .dbc_sql_list(.st_water_types), .dbc_sql_list(.st_point_roles),
+    .dbc_sql_list(.st_source_cells), .dbc_sql_list(.st_treatments)))
+}
+
 # ---- the core catalogue ----------------------------------------------------------------
 
 #' The generic standing database checks
@@ -426,8 +450,12 @@ WHERE NOT EXISTS (
     ck("vocab_lab_qc_kind", "
 SELECT uuid AS key, kind FROM lab_qc_report WHERE kind IS NULL OR kind NOT IN ('QC', 'QCI', 'SRN')",
        "lab_qc_report.kind is QC, QCI or SRN.", "hourly", "error"),
+    ck("vocab_feature_role", .dbc_vocab_feature_role,
+       "feature_role vocabularies hold, and feature_dubious has a reason.", "hourly", "error"),
     ck("lab_receipt_warm", .dbc_lab_receipt_warm,
        "A recent SRN reports a receipt temperature above receipt_max_temp_c.", "hourly", "warn"),
+    ck("orphan_feature_role_refs", .dbc_orphan_feature_role_refs,
+       "feature_role and feature_dubious rows point at a feature.", "hourly", "error"),
     ck("orphan_registry_refs", "
 SELECT uuid AS key, 'lab_method.uuid_project' AS col FROM lab_method
 WHERE uuid_project IS NOT NULL AND uuid_project NOT IN (SELECT uuid FROM project)
