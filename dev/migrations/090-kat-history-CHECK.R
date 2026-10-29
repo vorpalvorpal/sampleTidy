@@ -51,7 +51,9 @@ if (!is.null(inp)) {
 
     # ingest_file / asset / filing state of the 17 PDFs
     st <- env$mig090_file_states(con, inp)
-    n_done <- sum(!is.na(st$hash) & st$state == "archived" & st$adapter == tag)
+    # 092 re-routes 16 of these PDFs to its own adapter (gas pages); after marker 1092
+    # acirl_pdf_092 is their expected adapter.
+    n_done <- sum(!is.na(st$hash) & st$state == "archived" & st$adapter %in% c(tag, if (1092L %in% have) "acirl_pdf_092"))
     if (n_done < nrow(inp$files)) todo("%d of %d PDFs archived by %s", n_done, nrow(inp$files), tag)
     odd <- st[!is.na(st$hash) & !(st$state %in% c("archived", "seen")), , drop = FALSE]
     if (nrow(odd)) add("unexpected ingest_file state(s): %s", paste(unique(odd$state), collapse = ", "))
