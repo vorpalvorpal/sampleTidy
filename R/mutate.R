@@ -45,6 +45,8 @@
   "qc_feature", "sample_lab_id", "lab_qc_report", "lab_qc_outlier",
   # R-22.S: the sample receipt notification's child tables.
   "lab_receipt_temperature", "lab_receipt_holding_breach", "lab_receipt_comment",
+  # Monitoring-point roles and doubted features (migration 093).
+  "feature_role", "feature_dubious",
   # PLAN-20 phase 1 (ops-schema v10): external filing records.
   "asset_filing"
 )
