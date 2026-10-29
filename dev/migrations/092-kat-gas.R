@@ -2,7 +2,12 @@
 # printed in the same ACIRL PDF reports that 089 and 090 imported the water
 # results from (Nov 2012 - May 2020), which no package adapter reads. Marker 1092.
 # Requires 1090.
-# Authority: Robin, 2026-10-29 ("Import the gas data too", after 090).
+# Authority: Robin, 2026-10-29 ("Import the gas data too", after 090), and Robin's
+# answers of the same day: create K.G15/K.G19/K.G20/K.G25; map the 2012/2014
+# biofilter layouts to K.G367-K.G378 approximately; withhold the June 2017
+# whole-number readings; the 4 x 3 tables are the two 2 x 3 grids; the report's
+# water-sampling day dates the gas readings; the 2012-15 "surface methane at MP"
+# readings are the gas bores'.
 #
 # ---- WHAT THE REPORTS PRINT -----------------------------------------------------
 # Every reading is methane only, "CH4 Reading % v/v", taken in the field by ACIRL
@@ -32,10 +37,13 @@
 #   * G1..G24 -> "K.G1".."K.G24" -> the old Katoomba surface grid K.G01..K.G24
 #     (date_end 2022-01-01, the day before the successor grid K.G026+ starts).
 #     K.G1..K.G9 resolve through 041's transcription_error aliases (window ends
-#     2022-01-01), K.G10..K.G24 through their self aliases. The registry holds no
-#     K.G15, K.G19, K.G20 or K.G25: those readings are transcribed but NOT
-#     imported (feature blank in INPUT-points; no feature is invented). G25 prints
-#     "NP" ("No point on map") in most reports.
+#     2022-01-01), K.G10..K.G24 through their self aliases. The registry held no
+#     K.G15, K.G19, K.G20 or K.G25; Phase A creates them (Robin 2026-10-29) the way
+#     028 created the gas-building points K.G379-K.G473: unlocated, at the live
+#     K.centroid's coordinates with a comment saying so, site K, matrix air,
+#     permanent, with the self alias add_feature() makes; date_end 2022-01-01 and
+#     no date_start, as their siblings K.G01-K.G24. G25 prints "NP" ("No point on
+#     map") in most reports.
 #   * Building rows -> "K.<Location> - <Reference>" (a repeated reference within a
 #     report gets " #2", as the workbook adapter numbers it) -> K.G379..K.G473,
 #     the 95 points 028 registered from the same ACIRL template with exactly these
@@ -46,9 +54,16 @@
 #     R<r>C<c>" -> K.G367..K.G378 (014's aliases; the workbook adapter's grid
 #     naming: first grid North Corner, second Front of Buildings, columns left to
 #     right). The Nov 2014 and May 2015 4 x 3 tables (North Corner over Building)
-#     are read as the same two grids, rows 1-2 and 3-4. The Nov 2012 3 x 3 grid
-#     and the Sep 2014 named corners fit no registered point: transcribed, not
-#     imported.
+#     are read as the same two grids, rows 1-2 and 3-4 (Robin confirmed). The Nov
+#     2012 3 x 3 grid and the Sep 2014 named corners come from a differently laid-out
+#     biofilter grid; Robin (2026-10-29): map them "as best you can", the exact
+#     match is not important. Mapping: 3 x 3 rows 1-2 -> North Corner rows 1-2
+#     (K.G367-K.G372), row 3 -> Front of Buildings row 1 (K.G373-K.G375), columns
+#     left to right; corners Left/Right Back -> North Corner R1C1/R1C3, Left/Right
+#     Front -> Front of Buildings R2C1/R2C3 (back = away from the buildings). Each
+#     printed cell gets an INPUT-alias arm bounded to its report's day, and each of
+#     the 11 points a dated note in feature.comments ("092 (2026-10-29): ...")
+#     saying the readings were mapped approximately, with the mapping.
 #   * Gas Bore MP<n> and the 2012-15 "surface methane" at MP<n> -> "K.MP_<n>" ->
 #     K.MW0<n> through the existing historical_code aliases K.MP_1..K.MP_4, which
 #     the live ACIRL gas workbooks already use for the same bores (CH4 at
@@ -83,13 +98,21 @@
 # refuse if a planned point already holds a CH4 reading on a planned day
 # (092-kat-gas-DISCREPANCIES.csv compares any such overlap). INPUT-corrections holds
 # the printed cells changed before parsing, each with its reason; a value may
-# only be withheld ("_"), never replaced.
+# only be withheld ("_"), never replaced. Nine are: the four Nov 2012 MP limits
+# (a fill-down pattern); the three whole-number readings of the June 2017 report
+# (G17 2.0000, Meal Room power point 1.0000, Gas Bore MP1 1.0000), which Robin
+# judged cannot be right (2026-10-29); and two Nov 2012 biofilter cells (R1C1
+# 0.000008, R3C1 0.000009 % v/v) more than ten times below every stored CH4
+# reading, which the pipeline's units guard holds for review (a held row is never
+# committed), so they are withheld rather than forced past it.
 #
 # ---- PHASES --------------------------------------------------------------------
-# A (one transaction): the INPUT-alias arms (bounded to the history window, so
-#   they never overlap another feature's arm) and date_start moved back on any
-#   mapped feature that starts after its first imported day (none at the time of
-#   writing).
+# A (one transaction): the four new features and their self aliases (uuids
+#   derived from the marker, so a re-run finds them); the INPUT-alias arms (bounded
+#   to the history window or the report day, so they never overlap another
+#   feature's arm); date_start moved back on any mapped feature that starts after
+#   its first imported day (none at the time of writing); the biofilter notes
+#   appended to feature.comments (a note already present is left alone).
 # B0 (one transaction): reset the 24 PDFs' ingest_file rows archived -> seen.
 # B: ingest_dir() of a staging inbox holding exactly the frozen PDFs, adapter
 #   registered, remove_ingested FALSE. Verified after: every PDF archived by
@@ -100,7 +123,7 @@
 #   marker 1092.
 #
 # Idempotent: marker present -> re-verify, no-op. A run stopped after A, B0 or B
-# can be re-run: A skips arms already present, B0 resets only rows still archived
+# can be re-run: A skips features, arms and notes already present, B0 resets only rows still archived
 # by 089's or 090's adapter, B is a no-op for archived files.
 #
 #   devtools::load_all(".")
@@ -128,12 +151,30 @@
 # keyed on that adapter's id); the operator adapter states it so these zeros are
 # stored as the existing 17,400 are (quantified FALSE, rl_low 1e-4).
 .mig092_zero_rl <- 0.01
+# Old surface-grid points the reports print that the registry never held (Robin
+# 2026-10-29: create them, unlocated, as 028 created the gas-building points). They
+# end with their siblings K.G01-K.G24 (date_end 2022-01-01) and, like them, have no
+# date_start.
+.mig092_new_features <- c("K.G15", "K.G19", "K.G20", "K.G25")
+.mig092_new_feature_end <- "2022-01-01"
+.mig092_new_feature_comment <- paste0(
+  "UNLOCATED - placed at the K site centroid as a placeholder; old Katoomba landfill surface-grid point %s ",
+  "(the K.G01-K.G24 grid), printed in the ACIRL whole-site report gas pages 2015-2020 but never registered; ",
+  "created by 092 (2026-10-29) as 028 created the unlocated gas-building points; true position to be confirmed")
+# The note appended to each biofilter point that takes a reading from the 2012/2014
+# layouts (Robin 2026-10-29: map them to K.G367-K.G378 as best as can be done).
+.mig092_bio_note <- paste0(
+  "092 (2026-10-29): CH4 readings from a differently laid-out biofilter grid in the ACIRL MP bore reports ",
+  "were mapped to this point approximately: %s. Mapping used: Nov 2012 3 x 3 grid rows 1-2 -> North Corner ",
+  "rows 1-2 (K.G367-K.G372), row 3 -> Front of Buildings row 1 (K.G373-K.G375), columns left to right; Sep 2014 ",
+  "corners Left/Right Back -> North Corner R1C1/R1C3 (K.G367/K.G369), Left/Right Front -> Front of Buildings ",
+  "R2C1/R2C3 (K.G376/K.G378).")
 
 .mig092_files_cols <- c("hash", "staged_name", "source_dir", "report_no", "sample_day", "prior_adapter", "pages",
                         "n_values", "note")
 .mig092_values_cols <- c("hash", "source_ref", "section", "location", "reference", "value_raw")
 .mig092_points_cols <- c("feature_raw", "feature", "evidence")
-.mig092_alias_cols <- c("name", "feature", "date_start", "date_end")
+.mig092_alias_cols <- c("name", "feature", "date_start", "date_end", "comments")
 .mig092_corr_cols <- c("hash", "source_ref", "field", "printed", "corrected", "reason")
 .mig092_sections <- c("grid", "building", "biofilter", "biofilter_other", "bore")
 
@@ -212,7 +253,8 @@ mig092_read_inputs <- function(input_dir = "dev/migrations") {
   if (length(unmapped)) .mig092_fail(sprintf("printed name(s) not in INPUT-points: %s", paste(unmapped, collapse = "; ")))
   if (any(grepl("^(K|B)\\.J", points$feature))) .mig092_fail("INPUT-points names an excluded point.")
   if (any(nzchar(points$feature) & !grepl("^K\\.", points$feature))) .mig092_fail("INPUT-points maps outside Katoomba.")
-  if (anyNA(alias) || anyDuplicated(paste(.rc_feature_key(alias$name), alias$date_start)))
+  if (anyNA(alias) || anyDuplicated(paste(.rc_feature_key(alias$name), alias$date_start)) ||
+      !all(startsWith(alias$comments, "092")))
     .mig092_fail("INPUT-alias misses or repeats a value.")
   if (!identical(alias$feature, points$feature[match(alias$name, points$feature_raw)]))
     .mig092_fail("INPUT-alias maps a name to a feature other than INPUT-points does.")
@@ -384,19 +426,57 @@ mig092_file_states <- function(con, inp) {
         paste0("8", substr(d, 18, 20)), substr(d, 21, 32), sep = "-")
 }
 
+# The four features 092 creates (plan): deterministic uuids, the K.centroid's
+# coordinates (read at run time, as 028), the self alias add_feature() would make.
+.mig092_plan_new_features <- function(con, needed) {
+  nf <- data.frame(name = intersect(.mig092_new_features, needed), stringsAsFactors = FALSE)
+  if (!nrow(nf)) return(cbind(nf, uuid = character(0), self_uuid = character(0), lon = numeric(0), lat = numeric(0),
+                              geom_wkt = character(0), comments = character(0), present = logical(0)))
+  k <- DBI::dbGetQuery(con, "SELECT lon, lat FROM feature WHERE name = 'K.centroid' AND site = 'K'")
+  if (nrow(k) != 1L || anyNA(k)) .mig092_fail("K.centroid is not exactly one located feature.")
+  nf$uuid <- vapply(nf$name, function(n) .mig092_uuid("feature", n), "", USE.NAMES = FALSE)
+  nf$self_uuid <- vapply(nf$name, function(n) .mig092_uuid("self", n), "", USE.NAMES = FALSE)
+  nf$lon <- k$lon[[1]]; nf$lat <- k$lat[[1]]
+  nf$geom_wkt <- sprintf("POINT (%s %s)", format(nf$lon, digits = 15), format(nf$lat, digits = 15))
+  nf$comments <- sprintf(.mig092_new_feature_comment, sub("^K\\.", "", nf$name))
+  have <- DBI::dbGetQuery(con, sprintf("SELECT uuid, name FROM feature WHERE name IN %s", .mig092_inlist(nf$name)))
+  if (any(!have$uuid %in% nf$uuid)) .mig092_fail(sprintf("feature(s) %s exist but were not created by 092.",
+                                                         paste(have$name[!have$uuid %in% nf$uuid], collapse = ", ")))
+  nf$present <- nf$uuid %in% have$uuid
+  nf
+}
+
+.mig092_feature_rows <- function(nf) {
+  tibble::tibble(uuid = nf$uuid, name = nf$name, site = "K", matrix = "air", permanent = TRUE, reference = FALSE,
+                 date_end = as.Date(rep(.mig092_new_feature_end, nrow(nf))), lon = nf$lon, lat = nf$lat,
+                 geom_wkt = nf$geom_wkt, comments = nf$comments, virtual = FALSE)
+}
+
+.mig092_self_alias_rows <- function(nf, now) {
+  tibble::tibble(uuid = nf$self_uuid, uuid_feature = nf$uuid, name = nf$name, alias_key = .rc_feature_key(nf$name),
+                 kind = "self", n_seen = 0L, auto_assign = TRUE,
+                 first_seen = rep(as.POSIXct(now), nrow(nf)), last_seen = rep(as.POSIXct(now), nrow(nf)),
+                 confirmed_by = NA_character_, comments = "Self alias created by add_feature() (PLAN-15 F.9/S-15.8).")
+}
+
+.mig092_append <- function(old, note) if (is.na(old) || !nzchar(trimws(old))) note else paste0(old, "\n", note)
+
 mig092_plan_registry <- function(con, inp, parsed) {
   v <- mig092_planned_point_days(inp, parsed)
   feats <- unique(v$feature)
+  nf <- .mig092_plan_new_features(con, feats)
   feat <- DBI::dbGetQuery(con, sprintf("SELECT uuid, name, date_start, date_end, comments FROM feature WHERE name IN %s",
                                        .mig092_inlist(feats)))
+  feat$date_start <- as.Date(feat$date_start); feat$date_end <- as.Date(feat$date_end)
+  todo <- nf[!nf$present, , drop = FALSE]
+  if (nrow(todo)) feat <- rbind(feat, data.frame(uuid = todo$uuid, name = todo$name, date_start = as.Date(NA),
+                                                 date_end = as.Date(.mig092_new_feature_end), comments = todo$comments))
   if (nrow(feat) != length(feats) || anyDuplicated(feat$name)) .mig092_fail("a mapped feature does not exist exactly once.")
   a <- inp$alias
   a$uuid_feature <- feat$uuid[match(a$feature, feat$name)]
   if (anyNA(a$uuid_feature)) .mig092_fail("INPUT-alias names a feature with no imported reading.")
   a$alias_key <- .rc_feature_key(a$name)
   a$uuid <- mapply(.mig092_uuid, a$alias_key, a$feature, a$date_start, a$date_end, USE.NAMES = FALSE)
-  a$comments <- sprintf("092: printed spelling in the ACIRL whole-site report gas pages %s..%s (%s = %s)",
-                        a$date_start, a$date_end, a$name, a$feature)
   first <- tapply(v$day, v$feature, min)
   fd <- data.frame(feature = names(first), stringsAsFactors = FALSE)
   fd$uuid <- feat$uuid[match(fd$feature, feat$name)]
@@ -406,7 +486,22 @@ mig092_plan_registry <- function(con, inp, parsed) {
   fd <- fd[!is.na(fd$old_start) & fd$old_start > fd$first, , drop = FALSE]
   fd$new_comments <- paste0(ifelse(is.na(fd$old_comments), "", paste0(fd$old_comments, "; ")), sprintf(
     "092: date_start moved back from %s to %s for the ACIRL report gas history.", fd$old_start, fd$first))
-  list(alias = a, feature = fd, values = v[, c("feature_raw", "feature", "day")],
+  # the biofilter notes: one per point that takes a 2012/2014 layout reading
+  bo <- unique(inp$values$feature_raw[inp$values$section == "biofilter_other"])
+  ba <- a[a$name %in% bo, , drop = FALSE]
+  if (!all(bo %in% ba$name)) .mig092_fail("a 2012/2014 biofilter cell has no INPUT-alias arm.")
+  bn <- data.frame(feature = sort(unique(ba$feature)), stringsAsFactors = FALSE)
+  bn$uuid <- feat$uuid[match(bn$feature, feat$name)]
+  bn$note <- vapply(bn$feature, function(f) {
+    x <- ba[ba$feature == f, , drop = FALSE]
+    x <- x[order(x$date_start), , drop = FALSE]
+    sprintf(.mig092_bio_note, paste(sprintf("'%s' on %s", sub("^K\\.Biofilter ", "", x$name), x$date_start),
+                                    collapse = " and "))
+  }, "", USE.NAMES = FALSE)
+  bn$old_comments <- feat$comments[match(bn$feature, feat$name)]
+  bn$present <- !is.na(bn$old_comments) & vapply(seq_len(nrow(bn)), function(i)
+    grepl(bn$note[[i]], bn$old_comments[[i]], fixed = TRUE), logical(1))
+  list(alias = a, feature = fd, new_features = nf, notes = bn, values = v[, c("feature_raw", "feature", "day")],
        date_end = feat[, c("name", "date_end")])
 }
 
@@ -430,6 +525,9 @@ mig092_resolution <- function(con, plan) {
   new <- plan$alias[!plan$alias$uuid %in% arms$uuid, , drop = FALSE]
   if (nrow(new)) arms <- rbind(arms, data.frame(uuid = new$uuid, alias_key = new$alias_key, feature = new$feature,
                                                 date_start = as.Date(new$date_start), date_end = as.Date(new$date_end)))
+  nf <- plan$new_features[!plan$new_features$self_uuid %in% arms$uuid, , drop = FALSE]
+  if (nrow(nf)) arms <- rbind(arms, data.frame(uuid = nf$self_uuid, alias_key = .rc_feature_key(nf$name), feature = nf$name,
+                                               date_start = as.Date(NA), date_end = as.Date(NA)))
   pv$resolves_to <- vapply(seq_len(nrow(pv)), function(i) {
     hit <- arms[arms$alias_key == pv$key[[i]] & (is.na(arms$date_start) | arms$date_start <= pv$day[[i]]) &
                   (is.na(arms$date_end) | arms$date_end >= pv$day[[i]]), , drop = FALSE]
@@ -461,12 +559,21 @@ mig092_registry_problems <- function(con, plan) {
   unique(pr)
 }
 
-mig092_apply_registry <- function(con, plan, logf) {
+mig092_apply_registry <- function(con, plan, recorded_at, logf) {
   db_transaction(con, function(con) {
+    nf <- plan$new_features
+    nf <- nf[!nf$uuid %in% DBI::dbGetQuery(con, sprintf("SELECT uuid FROM feature WHERE uuid IN %s",
+                                                        .mig092_inlist(nf$uuid)))$uuid, , drop = FALSE]
+    if (nrow(nf)) {
+      db_append(con, "feature", .mig092_feature_rows(nf), actor = .mig092_actor,
+                reason = "092: old Katoomba surface-grid point printed in the ACIRL reports, unlocated as 028")
+      db_append(con, "feature_alias", .mig092_self_alias_rows(nf, recorded_at), actor = .mig092_actor,
+                reason = "092: self alias of a created feature")
+    }
     todo <- plan$alias[!plan$alias$uuid %in% DBI::dbGetQuery(con, sprintf(
       "SELECT uuid FROM feature_alias WHERE uuid IN %s", .mig092_inlist(plan$alias$uuid)))$uuid, , drop = FALSE]
     if (nrow(todo)) db_append(con, "feature_alias", .mig092_alias_rows(todo), actor = .mig092_actor,
-                              reason = "092: Katoomba report gas history - printed spelling")
+                              reason = "092: Katoomba report gas history - printed name")
     fd <- plan$feature
     for (i in seq_len(nrow(fd))) {
       cur <- as.Date(DBI::dbGetQuery(con, "SELECT date_start FROM feature WHERE uuid = ?", params = list(fd$uuid[[i]]))[[1]])
@@ -475,8 +582,18 @@ mig092_apply_registry <- function(con, plan, logf) {
                 changes = list(date_start = fd$first[[i]], comments = fd$new_comments[[i]]),
                 actor = .mig092_actor, reason = "092: Katoomba gas history - date_start covers the imported samples")
     }
-    logf("Phase A: %d alias arm(s) inserted (%d already present); %d feature date_start(s) moved.", nrow(todo),
-         nrow(plan$alias) - nrow(todo), nrow(fd))
+    bn <- plan$notes
+    n_note <- 0L
+    for (i in seq_len(nrow(bn))) {
+      cur <- DBI::dbGetQuery(con, "SELECT comments FROM feature WHERE uuid = ?", params = list(bn$uuid[[i]]))$comments
+      if (length(cur) != 1L) .mig092_fail(sprintf("feature %s is not exactly one row.", bn$feature[[i]]))
+      if (!is.na(cur) && grepl(bn$note[[i]], cur, fixed = TRUE)) next
+      db_update(con, "feature", uuid = bn$uuid[[i]], changes = list(comments = .mig092_append(cur, bn$note[[i]])),
+                actor = .mig092_actor, reason = "092: 2012/2014 biofilter readings mapped approximately to this point")
+      n_note <- n_note + 1L
+    }
+    logf("Phase A: %d feature(s) created (+ self alias); %d alias arm(s) inserted (%d already present); %d feature date_start(s) moved; %d biofilter note(s) appended (%d already present).",
+         nrow(nf), nrow(todo), nrow(plan$alias) - nrow(todo), nrow(fd), n_note, nrow(bn) - n_note)
     NULL
   })
 }
@@ -694,8 +811,8 @@ mig092_run <- function(db, snapshot_dir, archive_dir, work_dir, files_root = "de
   if (nrow(odd)) .mig092_fail(sprintf("unexpected ingest_file state(s): %s", paste(unique(paste(odd$state, odd$adapter)), collapse = ", ")))
   if (anyNA(pre$filings$uuid) || any(pre$filings$n_filed != 1))
     .mig092_fail("every PDF must already be one asset with one trim filing (089/090).")
-  logf("Plan: %d alias arm(s); %d date_start move(s); %d ingest_file reset(s); %d point-day(s).",
-       nrow(st$plan$alias), nrow(st$plan$feature),
+  logf("Plan: %d new feature(s); %d alias arm(s); %d date_start move(s); %d biofilter note(s); %d ingest_file reset(s); %d point-day(s).",
+       nrow(st$plan$new_features), nrow(st$plan$alias), nrow(st$plan$feature), nrow(st$plan$notes),
        sum(pre$states$state == "archived" & pre$states$adapter %in% .mig092_prior_adapters),
        nrow(unique(st$plan$values[, c("feature", "day")])))
   if (isTRUE(dry_run)) {
@@ -709,7 +826,7 @@ mig092_run <- function(db, snapshot_dir, archive_dir, work_dir, files_root = "de
                                                    .mig092_inlist(inp$files$hash))),
                       .mig092_csv_path(csv_dir, "BACKUP-ingest_file"))
     .mig092_write_csv(DBI::dbGetQuery(con, sprintf("SELECT * FROM feature WHERE name IN %s ORDER BY name",
-                                                   .mig092_inlist(st$plan$feature$feature))),
+                                                   .mig092_inlist(c(st$plan$feature$feature, st$plan$notes$feature)))),
                       .mig092_csv_path(csv_dir, "BACKUP-feature"))
   }, finally = DBI::dbDisconnect(con, shutdown = TRUE))
   backup_path <- mig092_backup(db, snapshot_dir, .now)
@@ -717,8 +834,11 @@ mig092_run <- function(db, snapshot_dir, archive_dir, work_dir, files_root = "de
   logf("To restore if needed: cp %s %s", shQuote(backup_path), shQuote(db))
   recorded_at <- if (is.null(.now)) Sys.time() else .now
 
-  with_db_write(function(con) mig092_apply_registry(con, st$plan, logf), db = db)
-  .mig092_write_csv(as.data.frame(.mig092_alias_rows(st$plan$alias)), .mig092_csv_path(csv_dir, "INSERTED-feature_alias"))
+  with_db_write(function(con) mig092_apply_registry(con, st$plan, recorded_at, logf), db = db)
+  .mig092_write_csv(as.data.frame(.mig092_feature_rows(st$plan$new_features)), .mig092_csv_path(csv_dir, "INSERTED-feature"))
+  .mig092_write_csv(as.data.frame(dplyr::bind_rows(.mig092_self_alias_rows(st$plan$new_features, recorded_at),
+                                                   .mig092_alias_rows(st$plan$alias))),
+                    .mig092_csv_path(csv_dir, "INSERTED-feature_alias"))
   with_db_write(function(con) mig092_apply_reset(con, inp, recorded_at, logf), db = db)
 
   inbox <- file.path(work_dir, "inbox")
