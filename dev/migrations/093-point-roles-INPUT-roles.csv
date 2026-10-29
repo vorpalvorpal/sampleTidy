@@ -44,12 +44,12 @@
 "B.TS41","leachate","containment",,,"FALSE",,"Pooled leachate from an inspection-pipe overflow; role follows intent; not an LMF end-member."
 "BH.S01","surface","reference",,,"FALSE",,
 "K.L01","leachate","leachate","A","raw","TRUE","very dilute","Pipe from the groundwater interception trench: cell A leachate heavily diluted by clean groundwater."
-"K.L02","surface","containment",,"raw","FALSE",,"Lined stormwater dam."
+"K.L02","surface","containment",,,"FALSE",,"Lined stormwater dam."
 "K.L03","leachate","leachate","B","raw","TRUE",,
 "K.L04","leachate","leachate","A","raw","TRUE",,
 "K.L05","leachate","leachate","A","raw","TRUE",,
-"K.L06","leachate","containment",,,"FALSE",,
-"K.L07","leachate","leachate","other","raw","TRUE",,"Source is the transfer station (greenwaste leachate sump), not a landfill cell."
+"K.L06","leachate","containment",,,"TRUE",,
+"K.L07","leachate","leachate","transfer station","raw","TRUE",,"Source is the transfer station (greenwaste leachate sump), not a landfill cell."
 "K.L08","leachate","leachate","A+B","raw","TRUE",,"Leachate dam pumpout to the sewer (formerly K.TS24)."
 "K.MW01","groundwater","containment",,,"FALSE",,
 "K.MW02","groundwater","receptor",,,"FALSE",,
@@ -61,6 +61,6 @@
 "K.TS25","surface","containment","B",,"FALSE",,
 "K.TS26","leachate","containment",,,"FALSE",,
 "L.L01","leachate","leachate","single cell","raw","TRUE",,
-"L.L02","leachate","leachate","single cell","treated","TRUE",,
+"L.L02","leachate","leachate","single cell","treated","FALSE","not used at Lawson: the wetland outlet is left out of LMF (owner ruling 2026-10-29)",
 "L.MW06","groundwater","reference",,,"FALSE",,
 "L.MW09","groundwater","receptor",,,"FALSE",,

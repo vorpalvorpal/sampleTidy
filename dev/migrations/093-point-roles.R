@@ -24,10 +24,14 @@
 # ---- WHAT IS WRITTEN -------------------------------------------------------------
 # INPUT CSVs, frozen from the table (its section 1, where the owner's edits are):
 #   * INPUT-roles.csv: water_type, role, source_cell, treatment per point.
-#     lmf_end_member = role 'leachate' (the table's convention: all of a site's
-#     leachate-role points are LMF end-members); K.L01 is one, noted 'very dilute'.
-#     Rulings applied: K.L07's source_cell 'other' (the transfer station);
-#     B.TS24's 'street sweepings'; B.L01 'partly treated'.
+#     LMF end-members (owner ruling 2026-10-29): at Blaxland and Katoomba every
+#     L point holding leachate, treated or not (LMF is multi-species, so losing N
+#     does not break it, and treated or untreated leachate can both breach), i.e.
+#     the leachate-role points plus the inspection pit K.L06; not K.L02 (a
+#     stormwater dam, surface water). At Lawson L.L01 only: L.L02 (the wetland
+#     outlet) is not used, noted. K.L01 is one, noted 'very dilute'. Other rulings
+#     applied: K.L07's source_cell 'transfer station'; B.TS24's 'street sweepings';
+#     B.L01 'partly treated'; K.L02 treatment not applicable.
 #   * INPUT-dubious.csv: feature + short reason.
 #   * INPUT-renames.csv: K.TS24 -> K.L08. The feature row is renamed in place (same
 #     uuid, so samples and assets follow); its old self alias row is kept, with its
@@ -101,9 +105,10 @@ mig093_read_inputs <- function(input_dir = "dev/migrations") {
   if (!all(is.na(r$source_cell) | r$source_cell %in% .st_source_cells)) .mig093_fail("INPUT-roles: source_cell outside the vocabulary.")
   if (!all(is.na(r$treatment) | r$treatment %in% .st_treatments)) .mig093_fail("INPUT-roles: treatment outside the vocabulary.")
   if (!all(r$lmf_end_member %in% c("TRUE", "FALSE"))) .mig093_fail("INPUT-roles: lmf_end_member is not TRUE/FALSE.")
-  if (!identical(r$lmf_end_member == "TRUE", r$role == "leachate"))
-    .mig093_fail("INPUT-roles: LMF end-members are not exactly the leachate-role points.")
-  if (any(!is.na(r$end_member_note) & r$lmf_end_member != "TRUE")) .mig093_fail("INPUT-roles: an end_member_note on a non-end-member.")
+  if (any(r$lmf_end_member == "TRUE" & r$water_type != "leachate"))
+    .mig093_fail("INPUT-roles: an LMF end-member does not hold leachate.")
+  if (any(r$role == "leachate" & r$lmf_end_member != "TRUE" & is.na(r$end_member_note)))
+    .mig093_fail("INPUT-roles: a leachate-role point left out of the LMF end-members without a note.")
   d <- inp$dubious
   if (!all(.mig093_code_ok(d$feature)) || anyDuplicated(d$feature) || anyNA(d$reason) || any(!nzchar(trimws(d$reason))))
     .mig093_fail("INPUT-dubious: a feature is malformed or repeated, or a reason is blank.")
