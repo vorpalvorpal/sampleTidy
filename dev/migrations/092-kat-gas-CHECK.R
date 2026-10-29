@@ -3,10 +3,14 @@
 #   pre  (default) - the database is READY for 092: 1090 present, 1092 absent, the
 #        24 PDFs archived by 089's/090's adapter with one asset and one trim filing
 #        each, no stored CH4 reading at a planned point-day, the registry resolves
-#        every printed name to its mapped feature. Prints "PASS (pre)".
+#        every printed name to its mapped feature (counting the planned arms and
+#        self aliases), K.G15/K.G19/K.G20/K.G25 and the biofilter notes absent.
+#        Prints "PASS (pre)".
 #   post - 092 is applied correctly: marker present, every PDF archived by
 #        acirl_pdf_092, exactly one ACIRL CH4 sample and analysis per planned
-#        point-day, matching the INPUT, the alias arms present. Prints "PASS (post)".
+#        point-day, matching the INPUT, the alias arms present, the four created
+#        features (unlocated at the K.centroid, date_end 2022-01-01) and their self
+#        aliases present, every biofilter note present. Prints "PASS (post)".
 # Exits non-zero with the reasons on FAIL. Opens the database read-only.
 #   Rscript dev/migrations/092-kat-gas-CHECK.R                       # live, pre
 #   SAMPLETIDY_MIG092_CHECK=post Rscript dev/migrations/092-kat-gas-CHECK.R
@@ -65,6 +69,25 @@ if (!is.null(inp)) {
       got <- DBI::dbGetQuery(con, sprintf("SELECT uuid FROM feature_alias WHERE uuid IN %s", env$.mig092_inlist(plan$alias$uuid)))$uuid
       if (mode == "pre" && length(got)) add("%d alias arm(s) already present", length(got))
       if (mode == "post" && length(got) < nrow(plan$alias)) add("%d of %d alias arms absent", nrow(plan$alias) - length(got), nrow(plan$alias))
+      nf <- plan$new_features
+      if (!setequal(nf$name, env$.mig092_new_features)) add("the planned new features are not %s",
+                                                           paste(env$.mig092_new_features, collapse = ", "))
+      self <- DBI::dbGetQuery(con, sprintf("SELECT uuid FROM feature_alias WHERE uuid IN %s", env$.mig092_inlist(nf$self_uuid)))$uuid
+      if (mode == "pre" && (any(nf$present) || length(self))) add("%d 092 feature(s) already present", sum(nf$present))
+      if (mode == "post") {
+        if (!all(nf$present) || length(self) != nrow(nf)) add("%d of %d 092 features (or their self aliases) absent",
+                                                             sum(!nf$present), nrow(nf))
+        f <- DBI::dbGetQuery(con, sprintf("SELECT name, site, matrix, date_start, date_end, lon, lat, geom_wkt, comments
+          FROM feature WHERE uuid IN %s", env$.mig092_inlist(nf$uuid)))
+        f <- f[match(nf$name, f$name), , drop = FALSE]
+        if (any(f$site != "K" | f$matrix != "air" | !is.na(f$date_start) | format(as.Date(f$date_end)) != env$.mig092_new_feature_end |
+                abs(f$lon - nf$lon) > 1e-9 | abs(f$lat - nf$lat) > 1e-9 | f$geom_wkt != nf$geom_wkt |
+                !startsWith(f$comments, "UNLOCATED - placed at the K site centroid"), na.rm = TRUE) || anyNA(f$name))
+          add("a 092 feature is not as planned (site K, air, unlocated at the K.centroid, date_end %s)", env$.mig092_new_feature_end)
+      }
+      bn <- plan$notes
+      if (mode == "pre" && any(bn$present)) add("%d biofilter note(s) already present", sum(bn$present))
+      if (mode == "post" && !all(bn$present)) add("%d of %d biofilter notes absent", sum(!bn$present), nrow(bn))
       pr <- env$mig092_registry_problems(con, plan)
       if (length(pr)) add("registry: %s", paste(pr, collapse = "; "))
 
