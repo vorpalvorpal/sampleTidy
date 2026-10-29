@@ -16,7 +16,7 @@ pr_cols <- function(con, tbl) {
 test_that("point roles: the vocabularies have the exact contents and order", {
   expect_identical(.st_water_types, c("groundwater", "surface", "leachate"))
   expect_identical(.st_point_roles, c("leachate", "containment", "receptor", "reference"))
-  expect_identical(.st_source_cells, c("A", "B", "A+B", "single cell", "street sweepings", "other"))
+  expect_identical(.st_source_cells, c("A", "B", "A+B", "single cell", "transfer station", "street sweepings", "other"))
   expect_identical(.st_treatments, c("raw", "treated", "partly treated"))
 })
 
