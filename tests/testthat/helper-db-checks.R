@@ -42,7 +42,10 @@ dbc_hourly_names <- c(
   # R-22.S: lab_qc_report.kind is QC / QCI / SRN; an SRN received warm.
   "vocab_lab_qc_kind", "lab_receipt_warm",
   # R-22.N: a needs_review file that no open review item covers.
-  "ingest_file_needs_review_resolved"
+  "ingest_file_needs_review_resolved",
+  # Monitoring-point roles: feature_role / feature_dubious keyed to a feature,
+  # and their vocabularies.
+  "orphan_feature_role_refs", "vocab_feature_role"
 )
 dbc_migration_only_names <- c(
   "measurement_view_coverage", "measurement_view_no_fanout",
@@ -223,6 +226,7 @@ dbc_srn_report <- function(con, uuid, uuid_asset, work_order, temp_max, days_ago
   on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
 
   qc_create_tables(con)   # qc_feature, sample_lab_id, lab_qc_report, lab_qc_outlier
+  .feature_role_create_schema(con)   # feature_role, feature_dubious
   # The live `feature` carries a soft project link (orphan_registry_refs reads
   # it); seed_db()'s DDL has it since 2026-10-25 (test-fixture-schema.R).
   .dbc_add_fks(con)
@@ -299,6 +303,12 @@ dbc_srn_report <- function(con, uuid, uuid_asset, work_order, temp_max, days_ago
                  VALUES ('s-0001', 'XX1234567', 'XX1234567-001', 'T.S01', ?)", dbc_hex(1))
   dbc_exec(con, "INSERT INTO qc_feature (uuid_feature, qc_type, uuid_parent, date_start)
                  VALUES ('f-0013', 'field_blank', 'f-0001', DATE '2025-01-01')")
+  # Point roles: one valid row in each table, so orphan_feature_role_refs and
+  # vocab_feature_role read rows they must NOT flag.
+  dbc_exec(con, "INSERT INTO feature_role (uuid_feature, water_type, role, source_cell, treatment)
+                 VALUES ('f-0003', 'leachate', 'leachate', 'A+B', 'partly treated')")
+  dbc_exec(con, "INSERT INTO feature_dubious (uuid_feature, reason, date_flagged)
+                 VALUES ('f-0001', 'screen above water table', DATE '2025-01-01')")
   dbc_exec(con, "INSERT INTO change_log (uuid, \"at\", actor, action, tbl, uuid_row, reason, source_hash)
                  VALUES ('cl-0001', TIMESTAMP '2025-05-26 00:00:00', 'test', 'insert', 'analysis', 'an-0001', 'seed', ?)",
            dbc_hex(1))
@@ -462,6 +472,27 @@ dbc_violation_cases <- list(
   list(check = "orphan_qc_refs", key = "s-gone", label = "sample_lab_id pointing at a missing sample",
        seed = function(con) DBI::dbExecute(con, "INSERT INTO sample_lab_id
                                                  VALUES ('s-gone', 'XX1234567', 'XX1234567-099', 'T.S01', NULL)")),
+  list(check = "orphan_feature_role_refs", key = "f-gone", label = "a feature_role row naming a missing feature",
+       seed = function(con) dbc_exec(con, "INSERT INTO feature_role (uuid_feature, water_type, role)
+                                           VALUES ('f-gone', 'surface', 'reference')")),
+  list(check = "orphan_feature_role_refs", key = "f-gone2", label = "a feature_dubious row naming a missing feature",
+       seed = function(con) dbc_exec(con, "INSERT INTO feature_dubious (uuid_feature, reason, date_flagged)
+                                           VALUES ('f-gone2', 'dry', DATE '2025-01-01')")),
+  list(check = "vocab_feature_role", key = "f-0002", label = "a feature_role water_type outside the vocabulary",
+       seed = function(con) dbc_exec(con, "INSERT INTO feature_role (uuid_feature, water_type, role)
+                                           VALUES ('f-0002', 'rainwater', 'reference')")),
+  list(check = "vocab_feature_role", key = "f-0002", label = "a feature_role role outside the vocabulary",
+       seed = function(con) dbc_exec(con, "INSERT INTO feature_role (uuid_feature, water_type, role)
+                                           VALUES ('f-0002', 'surface', 'upstream')")),
+  list(check = "vocab_feature_role", key = "f-0002", label = "a feature_role source_cell outside the vocabulary",
+       seed = function(con) dbc_exec(con, "INSERT INTO feature_role (uuid_feature, water_type, role, source_cell)
+                                           VALUES ('f-0002', 'leachate', 'leachate', 'C')")),
+  list(check = "vocab_feature_role", key = "f-0002", label = "a feature_role treatment outside the vocabulary",
+       seed = function(con) dbc_exec(con, "INSERT INTO feature_role (uuid_feature, water_type, role, treatment)
+                                           VALUES ('f-0002', 'leachate', 'leachate', 'boiled')")),
+  list(check = "vocab_feature_role", key = "f-0002", label = "a feature_dubious row with a blank reason",
+       seed = function(con) dbc_exec(con, "INSERT INTO feature_dubious (uuid_feature, reason, date_flagged)
+                                           VALUES ('f-0002', '   ', DATE '2025-01-01')")),
   list(check = "orphan_registry_refs", key = "lm-x", label = "lab_method pointing at a missing project",
        seed = function(con) DBI::dbExecute(con, "INSERT INTO lab_method (uuid, uuid_analyte, name, method, organisation, uuid_project)
                                                  VALUES ('lm-x', 'a-0003', 'EC (site)', 'EA999: EC', 'ALS', 'p-gone')")),
