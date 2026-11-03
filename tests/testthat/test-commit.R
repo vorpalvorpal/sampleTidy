@@ -2835,17 +2835,17 @@ test_that("A80: a cited ALS order we have never seen is created as a child of th
   expect_identical(wo$uuid_root[[1]], report$uuid[[1]])
 })
 
-test_that("A80: a report number colliding with an existing project MERGES into it and never touches its parent", {
+test_that("A80: a report number colliding with a project of ANOTHER type gets its own ACIRL report and never touches the other project", {
   s <- a80_setup()
   con <- s$con
   # The measured shape of the six real collisions: a `Monthly gas monitoring`
   # project already carrying samples, already a child of a campaign.
+  # Ruling 2026-11-03 (replacing 2026-08-02 "collisions merge"): a report
+  # project is matched by name AND type, so the water report does NOT merge
+  # into the gas project; it gets an `ACIRL report` of its own.
   gas_campaign <- a80_seed_project(con, "Monthly gas monitoring", type = NA_character_)
   gas <- a80_seed_project(con, "2400-9222-01", type = "Monthly gas monitoring",
                           parent = gas_campaign, root = gas_campaign)
-  # A child of its own, of a kind that is NOT a lab work order. The duplicate
-  # check restricts `kids` to `type = 'Work order'` precisely so a merged
-  # project's unrelated children cannot be misread as ALS orders already filed.
   a80_seed_project(con, "Gauge block A", type = "Dust monitoring",
                    parent = gas, root = gas_campaign)
   als_campaign <- a80_seed_project(con, "EPL quarterly", type = NA_character_)
@@ -2855,12 +2855,18 @@ test_that("A80: a report number colliding with an existing project MERGES into i
   commit_event(ev$event, mk_resolved(clean = a80_clean(ev$hash, "2400-9222-01")), con)
 
   rows <- a80_project(con, "2400-9222-01")
-  expect_equal(nrow(rows), 1)                       # merged, not duplicated
-  expect_identical(rows$uuid[[1]], gas)
-  expect_identical(rows$type[[1]], "Monthly gas monitoring")
-  expect_identical(rows$uuid_parent[[1]], gas_campaign)   # NOT re-pointed
-  # A pre-existing gas project is not a new sampling event under a reused
-  # number, so the merge must not raise the duplicate flag (contract A80).
+  expect_equal(nrow(rows), 2)                       # one per type
+  g <- rows[rows$type == "Monthly gas monitoring", ]
+  expect_identical(g$uuid, gas)
+  expect_identical(g$uuid_parent, gas_campaign)     # gas project untouched
+  expect_equal(nrow(DBI::dbGetQuery(con, "SELECT 1 FROM project WHERE uuid_parent = ? AND name = 'ES2452025'",
+                                    params = list(gas))), 0)
+  acirl <- rows[rows$type == "ACIRL report", ]
+  expect_equal(nrow(acirl), 1)
+  # same parent rules as any new report: the cited order's campaign
+  expect_identical(acirl$uuid_parent, als_campaign)
+  expect_identical(a80_project(con, "ES2452025")$uuid_parent[[1]], acirl$uuid)
+  # Sharing a name with another type is not, by itself, a reason for review.
   expect_equal(
     DBI::dbGetQuery(con, "SELECT count(*) n FROM review_queue WHERE kind = 'duplicate_report_number'")$n,
     0
