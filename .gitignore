@@ -26,3 +26,13 @@ dev/migrations/049-*-BACKUP-*.csv
 
 # Lab documents backed up during the 2026-07-23 asset swap: real data, never commit
 dev/asset-swap-backup-2026-07-23/
+
+# Migration run-time outputs (row dumps from the live DB): kept on disk, never committed
+dev/migrations/*-BACKUP*.csv
+dev/migrations/*-INSERTED*.csv
+dev/migrations/*-SKIPPED*.csv
+
+# EPA licences and EPA monitoring-data workbooks: real documents, never committed
+dev/*.pdf
+dev/epa_monitoring_data_K_*.xlsx
+dev/~$*
