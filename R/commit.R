@@ -788,15 +788,15 @@
   .ct_raw_years(front)
 }
 
-#' Which report project a (report number, year set) files under (C8/D14)
+#' Which report project a (report number, year set, type) files under (C8/D14)
 #'
 #' Read-only. Candidates are the rows named `report_no` or
-#' `"<report_no> (<yyyy>)"` whose type is `ACIRL report` or `Monthly gas
-#' monitoring`. A candidate MATCHES when its name carries a year in `years`, or
+#' `"<report_no> (<yyyy>)"` whose type is `type` (2026-11-03: a report is
+#' matched by name AND type; the default `NULL` means both report types). A candidate MATCHES when its name carries a year in `years`, or
 #' when it is bare-named and either holds no samples (its own plus its child
 #' projects') or holds samples in a year in `years`. More than one match is
-#' resolved deterministically, the bare name first and then by name, and
-#' reported as `ambiguous`. With an empty `years` (no parseable date) the bare
+#' resolved deterministically, the bare name first and then by name and uuid
+#' (never by row order), and reported as `ambiguous`. With an empty `years` (no parseable date) the bare
 #' row matches, as before D14.
 #'
 #' @return a list: `create` (logical), `name` (the matched row's name, or the
@@ -804,15 +804,17 @@
 #'   row, or `NULL`), `ambiguous` (logical) and `matches` (matched names).
 #' @keywords internal
 #' @noRd
-.ct_report_project_key <- function(con, report_no, years) {
+.ct_report_project_key <- function(con, report_no, years, type = NULL) {
   years <- sort(unique(suppressWarnings(as.integer(years))))
   years <- years[!is.na(years)]
   rows <- DBI::dbGetQuery(
     con,
     sprintf(
       "SELECT uuid, uuid_parent, uuid_root, name, type FROM project
-        WHERE (name = ? OR starts_with(name, ?)) AND type IN (%s)",
-      paste(sprintf("'%s'", .ct_report_project_types), collapse = ", ")
+        WHERE (name = ? OR starts_with(name, ?)) AND type IN (%s)
+        ORDER BY name, uuid",
+      paste(sprintf("'%s'", if (is.null(type)) .ct_report_project_types else type),
+            collapse = ", ")
     ),
     params = list(report_no, paste0(report_no, " ("))
   )
@@ -847,7 +849,7 @@
 
   hit <- rows[match, , drop = FALSE]
   if (nrow(hit) > 0) {
-    hit <- hit[order(hit$name != report_no, hit$name, method = "radix"), , drop = FALSE]
+    hit <- hit[order(hit$name != report_no, hit$name, hit$uuid, method = "radix"), , drop = FALSE]
     return(list(
       create = FALSE, name = hit$name[[1]], uuid = hit$uuid[[1]],
       row = hit[1, , drop = FALSE], ambiguous = nrow(hit) > 1, matches = hit$name
@@ -881,7 +883,8 @@
     return(event)
   }
   event$report$project_name <-
-    .ct_report_project_key(con, report_no, .ct_event_report_years(event))$name
+    .ct_report_project_key(con, report_no, .ct_event_report_years(event),
+                           .ct_event_report_type(event))$name
   event
 }
 
@@ -894,6 +897,13 @@
     any(startsWith(as.character(event$results$adapter), "acirl_gas_xlsx/"), na.rm = TRUE)
 }
 
+#' The report project type an event's report number files under (2026-11-03)
+#' @keywords internal
+#' @noRd
+.ct_event_report_type <- function(event) {
+  if (.ct_event_is_gas(event)) "Monthly gas monitoring" else "ACIRL report"
+}
+
 #' Find-or-create the ACIRL report project, filling an EMPTY parent only (A80)
 #'
 #' Returns `list(uuid, grandparent, root, name, ambiguous, matches)`.
@@ -902,11 +912,15 @@
 #' `years`) - C8/D14: a report number reused in a new year gets its own
 #' `"<report_no> (<yyyy>)"` row rather than merging into the earlier year's.
 #'
-#' **Collisions merge** (Robin, 2026-08-02): six of the corpus's 132 report
-#' numbers already exist as `Monthly gas monitoring` projects carrying 169-178
-#' samples each. The incoming water data attaches to that existing row rather
-#' than minting a parallel one - find-by-name, no namespacing, no flag (within
-#' the year: a gas row holding another year's samples is not a match).
+#' **Matched by name AND type** (Robin, 2026-11-03, superseding the 2026-08-02
+#' "collisions merge" ruling): water/ACIRL events match only `ACIRL report`
+#' rows and gas events only `Monthly gas monitoring` rows. With no row of the
+#' right type one is created, even if a same-named row of the other type
+#' exists, and no review is raised for the shared name. Gas rows are no longer
+#' finished legacy data (the gas adapter went live 2026-10-17), and merging
+#' put water under gas, picked a winner at random when both types existed, and
+#' would have put gas samples under an ACIRL report. Same-type merging is
+#' unchanged.
 #'
 #' **Never overwrite a parent that is already set.** That is what makes the
 #' merge safe (those six already sit under their own campaign), and it is also
@@ -976,7 +990,7 @@
     }
   }
 
-  key <- .ct_report_project_key(con, report_no, years)
+  key <- .ct_report_project_key(con, report_no, years, type)
   found <- list(name = key$name, ambiguous = key$ambiguous, matches = key$matches)
   if (!key$create) {
     existing <- key$row
@@ -1061,7 +1075,8 @@
                               campaign = "Monthly gas monitoring",
                               type = "Monthly gas monitoring", years = years)
   } else {
-    .ct_ensure_report_project(con, report_no, cited, reason, years = years)
+    .ct_ensure_report_project(con, report_no, cited, reason,
+                              type = "ACIRL report", years = years)
   }
   review <- list()
   if (isTRUE(rp$ambiguous)) {
