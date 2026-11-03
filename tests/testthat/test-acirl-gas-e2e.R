@@ -263,6 +263,9 @@ test_that("12: a new report files as a `Monthly gas monitoring` project under th
   }
 })
 
+# Ruling 2026-11-03: matching is by name AND type. The legacy project below is a
+# `Monthly gas monitoring` one, the SAME type as the incoming gas workbook, so
+# merging is unchanged (cross-type behaviour: test-report-match-by-type.R).
 test_that("12: an existing report project is MERGED into, not duplicated; same date raises no duplicate_report_number", {
   db <- gas_db_setup()
   gas_add_legacy(db, "2400-9901-07-01", gas_sydney_midnight_utc, list(`f-g182` = 0))
