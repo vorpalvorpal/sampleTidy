@@ -922,9 +922,8 @@
 #' would have put gas samples under an ACIRL report. Same-type merging is
 #' unchanged.
 #'
-#' **Never overwrite a parent that is already set.** That is what makes the
-#' merge safe (those six already sit under their own campaign), and it is also
-#' what makes this function ORDER-INDEPENDENT: `.ct_archive_project()` may mint
+#' **Never overwrite a parent that is already set.** That is what makes this
+#' function ORDER-INDEPENDENT: `.ct_archive_project()` may mint
 #' this same row from `commit_event()`'s blocked branch before any citation is
 #' known, and the later real commit must be able to fill the parent in without
 #' the two calls fighting over it.
