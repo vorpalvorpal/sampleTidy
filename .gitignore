@@ -23,3 +23,6 @@ qc-codes*.csv
 **/qc-codes*.csv
 dev/migrations/049-*-BACKUP-*.csv
 !tests/testthat/fixtures/qc/qc-codes-FAKE.csv
+
+# Lab documents backed up during the 2026-07-23 asset swap: real data, never commit
+dev/asset-swap-backup-2026-07-23/
