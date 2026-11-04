@@ -27,7 +27,7 @@ basename -> that folder's \code{ingest_report}, or a
 \verb{list(failed = TRUE, error = <message>)} for one that threw).
 }
 \description{
-PowerAutomate saves the attachments of a single lab email into their own
+A mail flow (e.g. Power Automate) saves the attachments of a single lab email into their own
 folder under the inbox root, so a folder is the durable record of "these
 files arrived together". \code{\link[=ingest_dir]{ingest_dir()}} is deliberately non-recursive (A8,
 R-9.5) and stays that way; this walks the root's immediate subdirectories

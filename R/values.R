@@ -148,7 +148,7 @@ parse_value <- function(value_raw) {
   # grass") is not a measurement at all, so neither TRUE nor FALSE is true of
   # it. TRUE would be the worse error: 23 of the 315 such rows in the live
   # registry record that NO SAMPLE WAS TAKEN, and marking those quantified
-  # asserts an observation that never happened. Ruled by Robin 2026-07-23.
+  # asserts an observation that never happened. Ruled 2026-07-23.
   # The invariant this establishes: quantified IS NULL <=> value_chr IS NOT NULL.
   quantified[is_plain_numeric] <- TRUE
   # parse_error rows also stay NA: an unparseable/ambiguous input is not a

@@ -18,8 +18,8 @@ invisibly, a tibble with one row per asset settled by this call:
 setting is off.
 }
 \description{
-Some file stores rewrite a file after it has been archived - SharePoint,
-for one, rewrites an embedded metadata block inside old-format Office
+Some file stores rewrite a file after it has been archived - a cloud store
+(SharePoint, for one) rewrites an embedded metadata block inside old-format Office
 files some time after upload. The content and size are unchanged, but the
 bytes differ, so \code{asset.hash} stops matching the stored copy. This pass
 brings \code{asset.hash} back in line with the stored file, under tight

@@ -1,4 +1,4 @@
-# R-22.S (Robin 2026-10-25, "include all the temp, etc data as their own
+# R-22.S (2026-10-25, "include all the temp, etc data as their own
 # columns"): the ALS sample receipt notification (SRN) parser and the receipt
 # schema. An SRN is parsed from `pdftotext -layout` text (the same lines
 # .lab_qc_read() gives the QCI parser) into one lab_qc_report row of kind 'SRN'

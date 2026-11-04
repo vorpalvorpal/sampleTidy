@@ -420,7 +420,7 @@
     if (length(mline) == 3) {
       method <- mline[[2]]
       # A block continued on a new page repeats its method line with the
-      # table title glued on (ES2451393): page furniture, not the name.
+      # table title glued on (ES9100045): page furniture, not the name.
       method_name <- sub("\\s+-\\s+Analysis Holding Time Compliance$", "", mline[[3]])
       in_list <- FALSE
       next
@@ -460,7 +460,7 @@
   }
   out <- if (length(rows)) do.call(rbind, rows) else .qci_empty_outliers()
   # One row per (method block, client ID). Two blocks may share a method code
-  # (EP080/071 TPH and TRH, ES2608954); they are distinct analyses.
+  # (EP080/071 TPH and TRH, ES9100052); they are distinct analyses.
   out <- out[!duplicated(paste(out$method, out$method_name, out$client_id, sep = "\r")), , drop = FALSE]
   list(rows = out, warnings = warn)
 }
@@ -846,7 +846,7 @@ lab_qc_backfill <- function(db = st_config("live_db"), actor = "lab_qc_backfill"
 
 #' Re-parse one ALS QC / QCI / SRN asset whatever its stored parser version
 #'
-#' R-22.S (Robin 2026-10-25): the same parse and replace as [lab_qc_ingest()]
+#' R-22.S (2026-10-25): the same parse and replace as [lab_qc_ingest()]
 #' but forced, for a report stored before a column existed (e.g. a QCI's
 #' `received_at`). The report and its child rows are replaced in one
 #' transaction; the report gets a new uuid and is never duplicated.

@@ -60,7 +60,7 @@ acirl_field_xlsx_adapter <- function() {
 
   # Second arm (R-6.1, added 2026-08-01 with A73). A `Units` marker only ever
   # occurs on a WATER sheet, so the 6 real dust-only workbooks
-  # ("2400-9286-10-02 Dust Northvale WMF.xls" and siblings) all measured
+  # ("2400-9001-10-02 Dust Site N.xls" and siblings) all measured
   # match() == "no" - the adapter never claimed them, and reversing A10 alone
   # would have recovered no dust from them at all.
   for (s in sheet_names[grepl("dust results", sheet_names, ignore.case = TRUE)]) {
@@ -222,7 +222,7 @@ acirl_field_xlsx_adapter <- function() {
   }
   first_of_month <- function(y, m) as.Date(sprintf("%04d-%02d-01", y, m))
 
-  # Migration 013's rule, applied at import (Robin, 2026-10-16; adapter fix
+  # Migration 013's rule, applied at import (2026-10-16; adapter fix
   # 2026-10-22). Where *COMBUSTIBLE MATTER is a non-detect (`<x`) the lab
   # computed incombustible = total - combustible with the combustible taken as
   # its limit or as zero, so the printed figure is arithmetic on a non-detect,
@@ -285,7 +285,7 @@ acirl_field_xlsx_adapter <- function() {
         "%s: gauge %s block %d - Results Month (%s) and Observations EXPOSURE DATE (%s) disagree; routed to review (A77).",
         fm$filename, d$gauge, d$block, d$month_serial, fmt_date(exp_dt)))
     }
-    # Robin's ruling: EXPOSURE (gauge put out) is `date_start`, COLLECTION
+    # The ruling: EXPOSURE (gauge put out) is `date_start`, COLLECTION
     # (gauge brought in) is `date`. Exposure falls back to the 1st of `Month`
     # for a workbook with no Observations row; collection falls back to
     # exposure + days, then to the 1st of the month after the start.
@@ -449,7 +449,7 @@ acirl_field_xlsx_adapter <- function() {
   } else {
     do.call(ir_results, as.list(dplyr::bind_rows(results_rows)))
   }
-  # A77 -> review (Robin, 2026-10-16: withhold + review). EVERY row of a flagged
+  # A77 -> review (2026-10-16: withhold + review). EVERY row of a flagged
   # gauge-block - the three analytes AND its ANALYSIS OBSERVATIONS row - gets
   # `needs_review`; rows of one block share an identical payload so reconcile
   # folds them into ONE `date_conflict`/`a77` item. Nothing of the block commits
@@ -520,7 +520,7 @@ acirl_field_xlsx_adapter <- function() {
       # R-6.5b: how many sheets this file treated as WATER sheets. Needed
       # because an empty `als_work_orders` is ambiguous on its own: it means
       # "dust-only workbook" for 5 real files and "water workbook that cites no
-      # ALS report at all" for 1 (`example-workbook.xls`,
+      # ALS report at all" for 1 (`2400-9002-01 May 2025 Site P.xls`,
       # whose ALS row literally reads `ES` with no number). Both import under
       # A79, but they are not the same thing to A80 - the first correctly has
       # no ALS child project, the second has water data whose lab report we
@@ -698,10 +698,10 @@ acirl_field_xlsx_adapter <- function() {
 
   # --- ALS cross-reference (R-6.5): exposed, never acted on here -------------
   # EVERY matching label row is scanned, not just the first. A sheet may carry
-  # more than one `ALS ... Report No` row - measured: `2400-7223-12-01 2022
-  # December Quarterly Millbrook WMF.xls` has `ALS Laketno Report No` (holding
+  # more than one `ALS ... Report No` row - measured: `2400-9003-12-01 2022
+  # December Quarterly Site M.xls` has `ALS Laketno Report No` (holding
   # the ACIRL report number, no ES at all) immediately ABOVE `ALS Sydney Report
-  # No.` (holding ES2280003). Breaking on the first match read the Laketon row,
+  # No.` (holding ES9100003). Breaking on the first match read the Laketon row,
   # found no `ES#######`, and reported the file as citing NOTHING - which under
   # the A74 gate is the difference between importing 57 rows and quarantining
   # them. Scanning every match costs nothing: a row with no ES pattern
@@ -775,7 +775,7 @@ acirl_field_xlsx_adapter <- function() {
   # choice - it is a fact about the sheet layout, and a site name is never an
   # analyte under any ruling.
   meta_norm <- c("OTHER SAMPLE ID", "OTHER SITE NAME", "OTHER SITE ID")
-  # RULING 2026-08-08 (Robin): the two STALE-TEMPLATE Fe labels. Pinned beside
+  # RULING 2026-08-08: the two STALE-TEMPLATE Fe labels. Pinned beside
   # `meta_norm` and matched the same way, for the same reason - this is a fact
   # about the sheet, not a policy choice. See the block below for the
   # measurement.
@@ -783,7 +783,7 @@ acirl_field_xlsx_adapter <- function() {
     "FERROUS IRON BY DISCRETE ANALYSER",
     "DISSOLVED FERRIC IRON BY ICPMS AND DA"
   )
-  # RULING 2026-08-08 (Robin): the Aroclor SURROGATE-RECOVERY rows. Unlike
+  # RULING 2026-08-08: the Aroclor SURROGATE-RECOVERY rows. Unlike
   # `meta_norm` and `stale_norm` above, this one is keyed on (label, UNITS) -
   # see the block below for why a label-only rule would destroy real data.
   aroclor_re <- "\\bAROCLOR"
@@ -820,7 +820,7 @@ acirl_field_xlsx_adapter <- function() {
         # Split it into at most one `Stage` and one `Appearance` value.
         # First non-NA wins per (column, analyte): a sheet carrying both
         # "Flow Observation / Appearance" and "Observations / Comments" would
-        # otherwise emit the same field reading twice (Robin, 2026-08-01).
+        # otherwise emit the same field reading twice (2026-08-01).
         sp <- .st_acirl_split_observation(txt)
         cur <- obs_by_col[[key]]
         if (is.null(cur)) {
@@ -880,14 +880,14 @@ acirl_field_xlsx_adapter <- function() {
       next
     }
 
-    # STALE-TEMPLATE rows are not readings (RULING 2026-08-08, Robin). Two Fe
-    # labels in the Pinecrest Landfill workbooks are an uncleared spreadsheet row
+    # STALE-TEMPLATE rows are not readings (RULING 2026-08-08). Two Fe
+    # labels in site P's workbooks are an uncleared spreadsheet row
     # frozen at the May-2024 numbers, and they were never re-measured:
     #
     #     Ferrous Iron by Discrete Analyser        20 rows, 4 files
     #     Dissolved Ferric Iron by ICPMS and DA    20 rows, 4 files
     #
-    # Measured over the unprocessed corpus (`scratchpad/m6a_corpus_candidates.rds`):
+    # Measured over the unprocessed corpus (measured on the corpus):
     #
     #   * The stale block sits ONE ROW ABOVE the real row it shadows - the
     #     Ferrous pair is r30/r31 and the Ferric pair r32/r33 on every sheet
@@ -912,7 +912,7 @@ acirl_field_xlsx_adapter <- function() {
     # `miss`, which KEEPS the row with `analyte_pending = TRUE` and mints a
     # dangling `lab_method` at commit. Measured over all 7 labels excluded from
     # 006: 7 rows in, 7 kept, 6 review items - a mapping omission stops a label
-    # RESOLVING, never IMPORTING (`scratchpad/m6a_excluded_fate.R`).
+    # RESOLVING, never IMPORTING. (Measured on the corpus.)
     #
     # Match is exact on the normalised label, exactly as `meta_norm` above, so
     # the real `Ferrous Iron` / `Ferric Iron` / `Iron` labels are untouched -
@@ -931,23 +931,23 @@ acirl_field_xlsx_adapter <- function() {
     units_cell <- cell(r, units_col)
     units_repaired <- .st_acirl_repair_units(analyte_raw_val, units_cell)
 
-    # AROCLOR SURROGATE-RECOVERY rows (RULING 2026-08-08, Robin). The Pinecrest
-    # Landfill workbooks carry a `PAH Surrogates` heading with three rows under
+    # AROCLOR SURROGATE-RECOVERY rows (RULING 2026-08-08). Site P's
+    # workbooks carry a `PAH Surrogates` heading with three rows under
     # it labelled `Aroclor 1242`, `Aroclor 1248` and `Aroclor 1254` whose units
     # are `%` and whose values run 58.5-93.8. Those are SURROGATE RECOVERY
     # PERCENTAGES filed under the names of the PCB CONCENTRATION analytes.
     # Importing them commits a recovery percentage as a PCB concentration.
     #
     # Measured over the unprocessed corpus (34,137 candidate rows,
-    # `scratchpad/m6a_corpus_candidates.rds`): 22 Aroclor rows in total, and
+    # measured on the corpus): 22 Aroclor rows in total, and
     # they split cleanly on UNITS, not on label:
     #
     #     units `%`     15 rows  Aroclor 1242/1248/1254, values 58.5 - 93.8
-    #                            (2400-9430-01 May 2024 Pinecrest x2 copies,
-    #                             2400-9430-02 Nov 2024 Pinecrest)
+    #                            (2400-9004-01 May 2024 Site P x2 copies,
+    #                             2400-9004-02 Nov 2024 Site P)
     #     units `ug/L`   7 rows  Aroclor 1016/1221/1232/1242/1248/1254/1260,
     #                            every one `<0.10` - REAL PCB results
-    #                            (2400-9346-02 November 2023 Pinecrest)
+    #                            (2400-9005-02 November 2023 Site P)
     #
     # WHY THIS RULE IS UNITS-AWARE AND `meta_norm`/`stale_norm` ARE NOT. Three
     # labels - `Aroclor 1242`, `1248`, `1254` - appear on BOTH sides of that
@@ -970,7 +970,7 @@ acirl_field_xlsx_adapter <- function() {
     # Toluene-D8 (123), Phenol-d6 (94), 2-Chlorophenol-D4 (94),
     # 2-Fluorobiphenyl (94), 2.4.6-Tribromophenol (94), 4-Terphenyl-d14 (94),
     # Anthracene-d10 (94), DEF (91), Dibromo-DDE (82), Decachlorobiphenyl (27).
-    # Robin ruled on AROCLOR. Those 1,133 rows are reported, not swept up -
+    # The AROCLOR ruling. Those 1,133 rows are reported, not swept up -
     # widening the ruling to them is a separate decision, and four of them
     # (the D4/D8/DDE labels) also appear with `ug/L`, so widening would have to
     # be units-aware in exactly this way too.
@@ -1306,7 +1306,7 @@ acirl_field_xlsx_adapter <- function() {
     grepl("comment|observation", label, ignore.case = TRUE)
 }
 
-# A76 (Robin, 2026-08-01): an ACIRL observation cell encodes two independent
+# A76 (2026-08-01): an ACIRL observation cell encodes two independent
 # qualitative readings in one free-text string - the watercourse STAGE ("Low
 # flow", "Pooled", "No discharge") and the water's APPEARANCE ("Clear",
 # "Cloudy"). Historically both were written whole into a single `Appearance`
@@ -1314,7 +1314,7 @@ acirl_field_xlsx_adapter <- function() {
 # are split.
 #
 # The vocabulary below is measured, not invented: 194 distinct observation
-# values across the real corpus (`scratchpad/a76_obs_values.rds`) plus the
+# values across the real corpus (measured on the corpus) plus the
 # existing `Stage`/`Appearance` values already in the database. Misspellings
 # are handled by explicit alternation, never by fuzzy matching.
 #
@@ -1405,7 +1405,7 @@ acirl_field_xlsx_adapter <- function() {
     # ACIRL writes a DIMENSIONLESS analyte's units cell as `-` or `_`, and
     # `unify_value()` rejects BOTH as invalid units ("Invalid unit: \"-\""), so
     # every such row quarantines as `unknown_unit` instead of importing.
-    # Measured on the 2026-08-01 corpus (`scratchpad/m6a_corpus_candidates.rds`,
+    # Measured on the 2026-08-01 corpus (
     # 38,450 candidate rows): `_` on 156 rows, `-` on 6, and BOTH are carried by
     # exactly one analyte - `Sodium Adsorption Ratio`, which is the one analyte
     # in the corpus that genuinely has no units. The mapping therefore cannot

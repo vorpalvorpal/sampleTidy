@@ -13,7 +13,7 @@ Turn the heterogeneous stream of environmental-monitoring results a programme
 receives into clean, reconciled rows in a DuckDB-backed database, with every
 value linked back to its archived original file.
 
-**Two audiences.** (1) The EXORG waste-monitoring workflow; (2) users of the
+**Two audiences.** (1) The original deployment's monitoring workflow; (2) users of the
 `tidyWaste` ecosystem, of which this package is a central part. The rule that
 enforces the split: **no site-specific strings in package code.** Site names,
 org registries, folder paths, field-analyte lists and adapter thresholds live
@@ -133,7 +133,7 @@ sampling times for lab samples come from ESdat `Sampled_Date_Time`.
 ```
 
 Everything left of the IR is format-specific and small; everything right of it
-is generic and shared. The MVP replaces the transport stage with "Robin points
+is generic and shared. The MVP replaces the transport stage with "the operator points
 `ingest_dir()` at the folder".
 
 ---
@@ -193,7 +193,7 @@ Email-transport fields (`message_id`, `received_at`) attach at the event
 level when the sidecar exists (§12); they are not IR columns the MVP requires.
 
 Raw fields are preserved verbatim in all cases; parsing raw → canonical is the
-reconciler's job, and the canonical timezone is **Australia/Sydney**. Crosstab
+reconciler's job, and the canonical timezone is the configured `st_config("timezone")` (default UTC). Crosstab
 date columns are hard-asserted d/m/y.
 
 ---

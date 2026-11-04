@@ -3,7 +3,7 @@
 \name{resolve_review}
 \alias{resolve_review}
 \title{Resolve (close) a single \code{review_queue} row by its own uuid - the operator
-API for ANY review kind (Robin's ruling 2, Phase 7b round 3)}
+API for ANY review kind (ruling 2, Phase 7b round 3)}
 \usage{
 resolve_review(uuid, resolution, resolved_by, db = st_config("live_db"))
 }

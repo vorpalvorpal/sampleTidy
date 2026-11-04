@@ -23,9 +23,8 @@ The architecture, data model and ingestion-pipeline design live in the pinned
   analyte, unrecognised units, PDF free-text) become proposals in a review
   queue, resolved headlessly for high-confidence items or interactively via a
   skill. Ambiguity fails loud into quarantine — never a silent drop.
-- **Local transport.** Outlook rules + Power Automate land attachments in a
-  SharePoint folder synced to the Mac; the pipeline just watches a local
-  directory. No API credentials in the pipeline.
+- **Local transport.** A mail rule saves attachments into a folder synced to
+  the machine; the pipeline just watches a local directory. No API credentials in the pipeline.
 - **DuckDB storage.** A single short-lived read-write connection is the write
   lock; analysis and reporting read a read-only snapshot copy.
 

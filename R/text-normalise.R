@@ -45,8 +45,8 @@
   "\ufffdS/cm"   = "\u00b5S/cm",
   "\ufffdg/L"    = "\u00b5g/L",
   "\ufffdC"      = "\u00b0C",
-  # U+00C2 U+00B0 / U+00C2 U+00B5 - the "UTF-8 read as latin-1" pair (Robin's
-  # ruling, 2026-08-08). A degree sign encoded correctly in UTF-8 is the two
+  # U+00C2 U+00B0 / U+00C2 U+00B5 - the "UTF-8 read as latin-1" pair (ruling,
+  # 2026-08-08). A degree sign encoded correctly in UTF-8 is the two
   # bytes C2 B0; decode those bytes as latin-1 and each becomes its own
   # character - A-circumflex (U+00C2) followed by the degree sign (U+00B0) -
   # which renders as the familiar "A-hat degree". Same story for the micro
@@ -57,7 +57,7 @@
   # all (7 literal ASCII characters); this one is a real 2-character string
   # that has already been (mis)decoded. Both spellings must be listed.
   #
-  # Measured in the ACIRL corpus (scratchpad/m6a_corpus_candidates.rds,
+  # Measured in the ACIRL corpus (measured on the corpus,
   # 2026-08-08): 150 rows carry the analyte label
   # `Electrical Conductivity @ 25<C2><B0>C` (97 of them in `unprocessed`),
   # across 10 distinct 2400-* workbooks; the two-character sequence really is

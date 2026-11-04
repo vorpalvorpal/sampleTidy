@@ -15,7 +15,7 @@
 # no key to hang a pending alias on; a resolved row that fails units/value or
 # datetime) are HELD.
 #
-# See dev/plans/PLAN-08-reconcile.md and PLAN-11-feature-alias.md.
+# See PLAN-08 (reconcile) and PLAN-11 (feature alias).
 
 # ---- registry loading (read-only snapshot of the small core tables) ------
 
@@ -39,8 +39,8 @@
 
 #' Fold a text key for exact (non-fuzzy) matching (B-11.3).
 #'
-#' Strips ALL non-alphanumerics (so `N.S01`, `B S01`, `BS01`, `n.s01` and
-#' `B..S01` all share one key) and case-folds. A NA input, or one that folds to
+#' Strips ALL non-alphanumerics (so `N.S01`, `N S01`, `NS01`, `n.s01` and
+#' `N..S01` all share one key) and case-folds. A NA input, or one that folds to
 #' the empty string (blank/punctuation-only), returns NA (A44 guard) so it
 #' never collapses into a phantom length-1 candidate.
 #' @keywords internal
@@ -95,7 +95,7 @@
 #' the key that migration-001's `.mig001_normalize` (`tolower(trimws(x))`) writes
 #' into `feature_alias.alias_key`. A feature name encodes `(site, point)` with a
 #' separator (`N.S01`, `M.E02`); stripping the separator fuses genuinely distinct
-#' cross-site codes (`BS1`->NH.S01 vs `N.S1`->N.S01), so reconcile must look
+#' cross-site codes (`NS1`->NH.S01 vs `N.S1`->N.S01), so reconcile must look
 #' features up with the SAME punctuation-preserving normaliser the migration used.
 #' A NA input, one that folds to the empty string, or one carrying NO
 #' alphanumeric character at all returns NA (A44 guard). This is deliberately
@@ -137,7 +137,7 @@
 # silent-corruption bug already fixed once at the `.rq_row()` driver boundary
 # (a local timestamp before the zone's UTC offset has passed truncates to
 # the PREVIOUS day in UTC) - so a POSIXct bound is REJECTED here rather than coerced, the
-# same ruling (Robin, 2026-07-25) `.rq_row()` follows. Coercing would make
+# same ruling (2026-07-25) `.rq_row()` follows. Coercing would make
 # this function silently PICK a day instead of storing the wrong one.
 
 #' Coerce a stored bound column to class `Date` without ever going through
@@ -251,7 +251,7 @@
 #' rather than at the call sites. A ref containing a literal comma is
 #' therefore still ambiguous in the column but exact in the diagnostics.
 #'
-#' Q2 (Robin, 2026-07-25): `source_ref` and `n_rows` are ALSO written into
+#' Q2 (2026-07-25): `source_ref` and `n_rows` are ALSO written into
 #' `diagnostics`, under the same two key names retired migration 006 used to
 #' write, so a row this package writes is not poorer than a migrated row was.
 #' Two deliberate differences from the migration: `n_rows` stays the integer
@@ -311,7 +311,7 @@
   # because the child rows would have been inserted orphaned. `.ct_commit_review()`
   # now rewrites `uuid_review` to the parent row's ACTUAL inserted uuid (the
   # same pattern `.ct_rewrite_review_payloads()` uses for `uuid_alias`), so
-  # the deferral has expired and Robin's 2026-07-26 ruling moves the producer:
+  # the deferral has expired and the 2026-07-26 ruling moves the producer:
   # `.rc_feature_review()` and `.rc_self_precedence_notes()` pass real
   # `candidates=`/`expired=` and set NO `diagnostics$candidates` key. Exactly
   # ONE carrier per row - `review_queue_candidates()` (`R/mutate.R`) aborts on
@@ -427,7 +427,7 @@
   empty <- tibble::tibble(uuid_alias = character(0), uuid_feature = character(0))
   # PLAN-15 A: features fold with the punctuation-PRESERVING key (`.rc_feature_key`),
   # matching the migration-written `alias_key`. `.rc_method_key` (strip) would leave ~62%
-  # of dotted keys unreachable AND fuse cross-site codes (BS1 vs N.S1).
+  # of dotted keys unreachable AND fuse cross-site codes (NS1 vs N.S1).
   key <- .rc_feature_key(feature_raw)
   if (is.na(key)) return(empty)
 
@@ -624,8 +624,8 @@
 #' leading zeros within each maximal digit run (`S01` -> `S1`, `MW02A` ->
 #' `MW2A`).
 #'
-#' NOT zero-padding: digit width is not uniform across the registry - `B.G###`
-#' is 3-wide, `L.G##` 2-wide, and `K.G` carries BOTH (`M.G01`..`M.G025` 2-wide,
+#' NOT zero-padding: digit width is not uniform across the registry - `N.G###`
+#' is 3-wide, `P.G##` 2-wide, and `M.G` carries BOTH (`M.G01`..`M.G025` 2-wide,
 #' `M.G026`+ 3-wide) - so no fixed pad width reaches every point. The
 #' lookbehind keeps the rule to the START of a run: `MW102` must stay `MW102`,
 #' not become `MW12`.
@@ -687,9 +687,9 @@
 #'
 #' The site is the LONGEST recognised prefix. The character right after it
 #' decides the boundary: `.`/` ` is a real boundary; anything else is a DIRECT
-#' (empty) boundary, which is suggestion-only and NEVER auto-resolves - `bs1`
-#' is a curated alias of NH.S01 while no `bs01` alias exists, so a
-#' longest-match parse of `BS01` would auto-resolve into the OPPOSITE
+#' (empty) boundary, which is suggestion-only and NEVER auto-resolves - `ns1`
+#' is a curated alias of NH.S01 while no `ns01` alias exists, so a
+#' longest-match parse of `NS01` would auto-resolve into the OPPOSITE
 #' catchment. A residual point still containing a separator is unparseable
 #' (`point = NA`): we split at the FIRST boundary only and never re-split.
 #' @return NULL when no site is recognised, else
@@ -769,7 +769,7 @@
 #' features claiming one name by their own names is a registry defect, not
 #' something to resolve arbitrarily).
 #'
-#' R1b (Robin, 2026-10-21; amends R1): a NON-self arm whose EXPLICIT date
+#' R1b (2026-10-21; amends R1): a NON-self arm whose EXPLICIT date
 #' window (`date_start` and/or `date_end` set) covers `sample_date` beats the
 #' self arm - it is a deliberate curation for that visit or period, stronger
 #' evidence than the blanket "a feature is reachable by its own name". The row
@@ -848,8 +848,8 @@
 #' (2026-10-20): ACIRL report site veto; amends PLAN-15 C.3 for ACIRL events).
 #'
 #' An arm is VETOED when its feature sits at a site other than `report_site`
-#' and it is not human-confirmed. Robin's rulings (2026-10-20):
-#' - `self` arms ARE vetoed: `N.MW02` inside a Millbrook report is a site-prefix
+#' and it is not human-confirmed. the rulings (2026-10-20):
+#' - `self` arms ARE vetoed: `N.MW02` inside a site-M report is a site-prefix
 #'   typo, and the self arm is exactly the arm that misfiles it;
 #' - an arm with `confirmed_by` non-NULL still wins - a human said this name
 #'   means that feature, cross-site or not;
@@ -1234,7 +1234,7 @@
   idx <- which(!vapply(shadowed, is.null, logical(1)))
   if (length(idx) == 0) return(.rc_proto_review())
 
-  # PLAN-7b item 1 (Robin's ruling, from E.7's own justification): group by
+  # PLAN-7b item 1 (ruling, from E.7's own justification): group by
   # `(alias_key, resolved feature)`, exactly as `.rc_feature_review()` already
   # does. This file's rows are ANALYSIS-grain (one per analyte per sample), so
   # emitting one note PER ROW fans a single ambiguous sampling point with a
@@ -1305,8 +1305,8 @@
 #' samples ALREADY committed under those work orders say which site the report
 #' is about. That is the one piece of site evidence an orphan (ACIRL) event has
 #' - Layer 3 (`.rc_wo_site()`) is skipped for it - and it is what catches the
-#' corpus misfiles (`S3` -> M.S03 and `Bore 8` -> M.MW08 inside Northvale
-#' reports; `N.MW02` -> the Northvale bore inside a Millbrook report).
+#' corpus misfiles (`S3` -> M.S03 and `Bore 8` -> M.MW08 inside site-N
+#' reports; `N.MW02` -> site N's bore inside a site-M report).
 #'
 #' The site is the single distinct `feature.site` across every committed
 #' sample whose project (type `Work order`) is a cited WO, counting only
@@ -1425,7 +1425,7 @@
 #'   carries it, and a reader branches on one field at any rank here,
 #'   including ranks added later.
 #'
-#'   PLAN-7b round 3 (2026-07-26), Robin's reversal: `blocking` is
+#'   PLAN-7b round 3 (2026-07-26), the reversal: `blocking` is
 #'   DELIBERATELY NOT universal across every OTHER `kind` this file queues
 #'   (`unknown_analyte`, `unknown_unit`, `parse_error`, `value_conflict`,
 #'   `batch_duplicate`, plus STAGE-0's fold-in). A first attempt at Phase-7b
@@ -1446,7 +1446,7 @@
 #'
 #' Candidates and expired arms are TYPED CHILD ROWS (`.rc_review_row(candidates=,
 #' expired=)` -> `review_queue_candidate`), not a `diagnostics$candidates` JSON
-#' key. Robin's ruling, 2026-07-26, closing R-16.23's remaining half: PLAN-16's
+#' key. the ruling, 2026-07-26, closing R-16.23's remaining half: PLAN-16's
 #' RULING-F deferred this only because `.ct_commit_review()` could not then
 #' rewrite a child row's `uuid_review` to the parent's actual inserted uuid; it
 #' now does (`R/commit.R`), so the deferral has expired. `review_queue_candidates()`
@@ -1854,7 +1854,7 @@
 #'   once upstream at the head of `.rc_resolve_features` and carried on the row
 #'   - NOT the punctuation-stripping `.rc_method_key`. This matters: migration
 #'   001 wrote alias keys with punctuation intact (`n.s01`, `m.e02`), so the
-#'   stripped form (`bs01`, `ke02`) matches ZERO dotted aliases. Looking these
+#'   stripped form (`ns01`, `me02`) matches ZERO dotted aliases. Looking these
 #'   up with the wrong normaliser is precisely the defect PLAN-15 exists to fix.
 #' - analyte-pending with `uuid_lab == NA`: the `lab_method` row with
 #'   `uuid_analyte IS NULL` and matching `(organisation, .rc_method_key(name),
@@ -1895,7 +1895,7 @@
   rows
 }
 
-# ---- RULING-8 (Robin, 2026-08-08): the units plausibility gate -------------
+# ---- RULING-8 (2026-08-08): the units plausibility gate -------------
 #
 # WHY THIS EXISTS AT ALL. `unify_value()` (R/units.R) converts from the
 # INCOMING ROW's `units_raw` to the ANALYTE's registered units. It is a pure
@@ -1903,8 +1903,7 @@
 # aborts on a unit it does not recognise. What it structurally CANNOT tell you
 # is whether the units string on the row is the units the NUMBER is actually
 # in. Two measured populations in the ACIRL transcription corpus turn on
-# exactly that gap (re-measured 2026-08-08 over the 34,137 `unprocessed` rows,
-# `scratchpad/m6b_ruling8_0*.R`):
+# exactly that gap (re-measured 2026-08-08 over the 34,137 `unprocessed` rows):
 #
 #  (a) 81 rows whose `units_raw` disagrees IN SCALE with the units every other
 #      row for that same analyte carries - 35 `Biochemical Oxygen Demand` +
@@ -2187,7 +2186,7 @@
     #
     # udunits disagrees, and that is the whole danger: it reads a bare number
     # as a DIMENSIONLESS SCALE FACTOR, so `1.89` is a perfectly valid unit
-    # meaning "times 1.89". Measured on the corpus (scratchpad/m6c_units_vocab.R):
+    # meaning "times 1.89". Measured on the corpus:
     # 17 `Sodium Adsorption Ratio` rows carry `units_raw = 1.89` while their
     # values are 1.84 / 2.18 / 2.03 - the same magnitude as the thing in the
     # units cell. Against today's registry (`SAR` units `mg/L`) those rows
@@ -2395,7 +2394,7 @@
   if (n == 0) return(list(kept = rows, skipped = .rc_proto_skip()))
 
   feat_key <- ifelse(!is.na(rows$uuid_feature), rows$uuid_feature, rows$uuid_feature_alias)
-  # 2026-10-22 (Robin): the method CODE joins the group key. Rows whose
+  # 2026-10-22: the method CODE joins the group key. Rows whose
   # lab_methods have different codes (EG020F vs EG020T, EA015 vs EA016) are
   # different measurements and never compete; same code still collapses.
   lm_i <- match(rows$uuid_lab, registry$lab_method$uuid)
@@ -2442,7 +2441,7 @@
 # ---- R-11.18/A62 & R-12.13: shared sampling-event identity -----------------
 
 #' TRUE only when two sampling-event instants PROVE the events are distinct:
-#' both known and unequal. Robin's ruling (2026-07): same point, same date,
+#' both known and unequal. the ruling (2026-07): same point, same date,
 #' DIFFERENT datetime is rare but real - two genuine sampling events, neither
 #' a duplicate of the other; same point, same datetime is the same event.
 #' A missing datetime on either side (a date-only source row) proves nothing
@@ -2513,8 +2512,8 @@
 #' a time-unknown one by `.rc_provably_distinct_datetime()`.
 #'
 #' Scoped to the row's own work orders on purpose: the same placeholder in a
-#' DIFFERENT work order is a different sampling round (live ES2080001 /
-#' ES2080002 - two real rounds on one day), so it stays provably distinct.
+#' DIFFERENT work order is a different sampling round (live ES9100059 /
+#' ES9100066 - two real rounds on one day), so it stays provably distinct.
 #' Exact-instant narrowing still uses the STORED instant, not this one.
 #' `work_orders = character(0)` returns the stored instants unchanged.
 #' @keywords internal
@@ -2549,7 +2548,7 @@
 #' them apart either, so the model cannot represent "same feature and date, two
 #' matrices". Left alone because multi-section crosstabs are legacy and current
 #' exports are single-matrix, but if it recurs do NOT silently pick one matrix
-#' over the other; see the known-limitation note in `dev/HANDOVER.md` and
+#' over the other; see the the handover's known-limitation note and
 #' revisit matrix-in-the-key when the datetime convention is next reworked.
 #'
 #' PLAN-7b round-2 D6: the query below carries an explicit `ORDER BY a.uuid`
@@ -3307,7 +3306,7 @@
 #' event from it (`.rc_provably_distinct_datetime()` - same instant, or
 #' either side's time unknown); a row whose datetime is provably distinct
 #' from every representative seen so far starts its OWN cluster and commits
-#' alongside the rest (Robin's ruling: same date, different datetime, is two
+#' alongside the rest (ruling: same date, different datetime, is two
 #' real events, not a duplicate). This mirrors `.rc_find_existing()`'s
 #' incoming-vs-committed test so the in-batch and cross-batch guards agree.
 #'

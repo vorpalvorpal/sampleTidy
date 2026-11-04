@@ -2,7 +2,7 @@
 # sheet_names, peek, work_order_guess, revision_guess.
 
 # Regex for a lab work-order token: exactly two uppercase letters followed
-# by exactly seven digits (e.g. "ES2650019").
+# by exactly seven digits (e.g. "ES9100024").
 .st_work_order_re <- "[A-Z]{2}\\d{7}"
 
 # Regex for a revision marker immediately following the work-order token:

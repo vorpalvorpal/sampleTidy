@@ -458,7 +458,7 @@ inbox_batches <- function(pattern = NULL, settle_minutes = 0, leftovers = NULL) 
   claimed <- !is.na(adapter) & nzchar(adapter)
   data <- ext %in% .inbox_data_exts | claimed
   has_asset <- !is.na(has_asset) & has_asset
-  # R-22.N (Robin 2026-10-25): needs_review is never done, asset or not. The
+  # R-22.N (2026-10-25): needs_review is never done, asset or not. The
   # old exemption (needs_review WITH an asset counted as done) hid 302 files
   # parked after their review items were settled; resolving the last covering
   # review item now moves the file on to archived (.st_settle_resolved_files).
@@ -1196,7 +1196,7 @@ import_status <- function(db = st_config("live_db"), input_dir, report_dir,
   if (length(log) > 0) problems <- .inbox_line_problems(log[[length(log)]])
   dbc <- .inbox_db_checks(db)
   problems <- c(problems, .inbox_db_check_problems(dbc))
-  # R-22.H: the wrapper passes the previous failed/unfinished run (Robin 2026-10-25).
+  # R-22.H: the wrapper passes the previous failed/unfinished run (2026-10-25).
   prev_fail <- Sys.getenv("SAMPLETIDY_AUTOIMPORT_PREV_FAILURE", "")
   if (nzchar(prev_fail)) problems <- c(prev_fail, problems)
   # PLAN-20 P20.2: a hooks-file problem (session state), then hook failures of

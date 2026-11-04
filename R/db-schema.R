@@ -93,7 +93,7 @@
   # review_queue_candidate child table. No FK on uuid_existing/uuid_alias:
   # they are polymorphic (the referent table depends on `kind`), so a FK
   # cannot express them - the migration itself cannot verify resolution
-  # either, which is why R-16.12/R-16.13 (dev/migrations/006) own that check.
+  # either, which is why R-16.12/R-16.13 (migration 006) own that check.
   # `kind` is a plain VARCHAR (no CHECK: DuckDB CHECK survives this schema's
   # rebuild patterns poorly; the enum is pinned by criterion instead). `rank`
   # is NOT NULL: candidate order is meaningful (PLAN-15's audit finding).
@@ -152,9 +152,9 @@
         UNIQUE (uuid_review, rank)
       );"
   ),
-  # PLAN-11 R-11.10 / Robin's ruling 2 (2026-07-26, Phase 7b round-2 item B):
+  # PLAN-11 R-11.10 / ruling 2 (2026-07-26, Phase 7b round-2 item B):
   # the alias merge's `value_conflict` review item must name BOTH analysis
-  # uuids - the code only ever emitted `uuid_existing`. Robin ruled the plan
+  # uuids - the code only ever emitted `uuid_existing`. it was ruled the plan
   # wins and the second uuid is a TYPED column (consistent with PLAN-16
   # moving uuids out of the payload), not a payload key. A NEW ladder entry,
   # not an amendment of version 6: v6's own comment permits in-place
@@ -177,7 +177,7 @@
     version = 8L,
     ddl = "ALTER TABLE ingest_file ADD COLUMN IF NOT EXISTS registry_fingerprint VARCHAR"
   ),
-  # R-22.E (Robin 2026-10-25): the delivering email's identity. `ingest_email`
+  # R-22.E (2026-10-25): the delivering email's identity. `ingest_email`
   # is one row per Message-ID; `ingest_file.message_id` is the nullable link
   # (plain ADD COLUMN, as v7/v8: ingest_file has a PRIMARY KEY). No FK: the
   # `ingest_file_email_dangling` db_check polices it.
@@ -197,7 +197,7 @@
       ALTER TABLE ingest_file ADD COLUMN IF NOT EXISTS message_id VARCHAR;"
   ),
   # PLAN-20 phase 1 (P20.5): external filing records - which asset was filed
-  # into which external system (TRIM, SharePoint, ...) under what id. The core
+  # into which external system (a records system, a document library, ...) under what id. The core
   # never interprets `system`. No declared FOREIGN KEY: ensure_schema() runs on
   # a bare DB with no `asset` table, and a declared FK would block later asset
   # deletes; register_filing() checks the asset exists. No operator migration
@@ -510,7 +510,7 @@ ingest_file_set_registry_fingerprint <- function(con, hash, fingerprint) {
   invisible(NULL)
 }
 
-# R-22.E (Robin 2026-10-25): stamp the delivering email on ingest_file rows.
+# R-22.E (2026-10-25): stamp the delivering email on ingest_file rows.
 # Fills NULL only - a file first delivered by email A and re-sent by email B
 # stays A's. Raw SQL lives here, per the mutation-layer boundary.
 ingest_file_set_message_id <- function(con, hashes, message_id) {
@@ -564,14 +564,14 @@ ingest_file_set_message_id <- function(con, hashes, message_id) {
 # registered keys. A caller that has already wrapped its own value in `I()`
 # is honoured as-is (not double-wrapped).
 #
-# Seeded with the two keys Robin named directly: `candidates` (R-16.4's
+# Seeded with the two keys named directly: `candidates` (R-16.4's
 # multi-candidate review producers) and `source_ref` (`.rc_review_row()`,
 # R/reconcile.R - one element per folded source row, frequently exactly one).
 #
 # Round-2 remediation (worker W-G, 2026-07-25): two more keys registered by
 # policy ("semantically-PLURAL diagnostics keys always serialise as JSON
 # ARRAYS, at length 0 and 1 too"), reported when first found (round-2 audit)
-# and now added on Robin's instruction -
+# and now added on instruction -
 #   - `adapters` (R/router.R, `adapter_tie` producer) - in practice always
 #     length>=2 (only reached when >1 adapter ties at the winning tier).
 #   - `units` (R/feature-alias.R, `units_drift` producer) - only reached when
@@ -673,7 +673,7 @@ ingest_file_set_message_id <- function(con, hashes, message_id) {
 #   for the kind -> referent table map), or NA.
 # @param uuid_alias review_queue.uuid_alias, or NA.
 # @param uuid_incoming review_queue.uuid_incoming (ladder version 7, PLAN-11
-#   R-11.10 / Robin's ruling 2, 2026-07-26): the SECOND analysis uuid a
+#   R-11.10 / ruling 2, 2026-07-26): the SECOND analysis uuid a
 #   `value_conflict` merge names, alongside `uuid_existing`. Follows
 #   `uuid_existing`'s own pattern exactly (typed column, NA default,
 #   `.rq_assert_char_scalar()` guard). For `subkind = "measurement"`
@@ -734,8 +734,8 @@ ingest_file_set_message_id <- function(con, hashes, message_id) {
     # driver boundary IN UTC, so a local timestamp early in the day (before
     # the zone's UTC offset has passed) stores the PREVIOUS day
     # (`as.POSIXct("2022-03-04 09:00:00", tz = "<an ahead-of-UTC zone>")` ->
-    # stored `2022-03-03`). RULING (Robin,
-    # 2026-07-25), followed exactly: do NOT "fix" this by calling as.Date()
+    # stored `2022-03-03`). RULING
+    # (2026-07-25), followed exactly: do NOT "fix" this by calling as.Date()
     # on the incoming value here, because as.Date.POSIXct() is ITSELF
     # timezone-dependent - that is the very bug, one layer up. Coercing
     # would make this function silently PICK a day instead of storing the
@@ -886,7 +886,7 @@ review_queue_add <- function(con, kind, work_order = NA_character_,
   # "column does not exist" error merely by NOT asking for the new
   # behaviour.
   #
-  # RESIDUAL RISK, RECORDED DELIBERATELY (Robin's ruling 3, Phase 7b round 3,
+  # RESIDUAL RISK, RECORDED DELIBERATELY (ruling 3, Phase 7b round 3,
   # 2026-07-26): S8 found that this omit-when-NA carve-out no longer protects
   # what it claims to - `.rq_row()` (above) emits `subkind`, `uuid_existing`,
   # `uuid_alias` (ladder v6) and `uuid_incoming` (v7) into the `review`
@@ -894,7 +894,7 @@ review_queue_add <- function(con, kind, work_order = NA_character_,
   # the live table, so a caller on a database behind v6/v7 fails on THOSE
   # columns regardless of what it did or did not ask for - the one column
   # this carve-out actually guards (`uuid_target`, v5) is no longer the
-  # binding constraint. Robin's ruling: the live DB has already been
+  # binding constraint. the ruling: the live DB has already been
   # migrated by hand (ladder v5/v6/v7, zero row delta, backup retained), so
   # this asymmetry is left AS-IS rather than fixed - do NOT extend the
   # omit-when-NA treatment to `subkind`/`uuid_existing`/`uuid_alias`/
@@ -1127,7 +1127,7 @@ review_queue_close <- function(con, uuid_target, resolution, resolved_by, kind) 
         # sibling `db_update()` in the SAME transaction
         # (`.fa_confirm_one_alias()`, R/feature-alias.R, which uses
         # actor = confirmed_by) - one human confirmation wrote `actor =
-        # "robin"` on feature_alias and `actor = "pipeline"` on review_queue.
+        # <the confirming person>` on feature_alias and `actor = "pipeline"` on review_queue.
         # `resolved_by` IS the actor who performed this close; record them,
         # not a generic pipeline placeholder.
         actor = resolved_by, reason = reason
@@ -1140,7 +1140,7 @@ review_queue_close <- function(con, uuid_target, resolution, resolved_by, kind) 
   invisible(as.integer(n_closed))
 }
 
-# R-22.N (Robin 2026-10-25): settle the needs_review files whose review items
+# R-22.N (2026-10-25): settle the needs_review files whose review items
 # have just been closed. commit_event() parks a delivery's kept files on
 # needs_review while review items stand; nothing moved them on once the items
 # were resolved (302 files, migration 081). Runs on the caller's `con`, inside
@@ -1180,7 +1180,7 @@ review_queue_close <- function(con, uuid_target, resolution, resolved_by, kind) 
 }
 
 #' Resolve (close) a single `review_queue` row by its own uuid - the operator
-#' API for ANY review kind (Robin's ruling 2, Phase 7b round 3)
+#' API for ANY review kind (ruling 2, Phase 7b round 3)
 #'
 #' Before this function existed, NOTHING could close a `sample_collision`
 #' review row (Tier-3 finding A4): `review_queue_close()` (D4, above) is

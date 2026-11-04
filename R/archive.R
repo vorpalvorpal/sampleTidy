@@ -183,8 +183,8 @@ archive_file <- function(con, path, hash, event, type = "Chemical analysis") {
 
 # ---- archive settling ------------------------------------------------------
 #
-# Some file stores change a file after it has been archived. SharePoint, for
-# one, rewrites an embedded metadata block inside old-format Office files
+# Some file stores change a file after it has been archived. A cloud store
+# (SharePoint, for one) rewrites an embedded metadata block inside old-format Office files
 # (.xls/.doc/.ppt) some seconds or hours after upload: same size, same
 # content, different bytes - so `asset.hash` stops matching the stored copy.
 # The design:
@@ -357,8 +357,8 @@ archive_file <- function(con, path, hash, event, type = "Chemical analysis") {
 
 #' Accept file-store rewrites of recently archived files into `asset.hash`
 #'
-#' Some file stores rewrite a file after it has been archived - SharePoint,
-#' for one, rewrites an embedded metadata block inside old-format Office
+#' Some file stores rewrite a file after it has been archived - a cloud store
+#' (SharePoint, for one) rewrites an embedded metadata block inside old-format Office
 #' files some time after upload. The content and size are unchanged, but the
 #' bytes differ, so `asset.hash` stops matching the stored copy. This pass
 #' brings `asset.hash` back in line with the stored file, under tight

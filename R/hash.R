@@ -6,7 +6,7 @@
 #' regardless of filename or mtime. Used as the identity key for
 #' `ingest_file` and for asset provenance.
 #'
-#' **Algorithm changed 2026-07-23 (Robin): SHA-256 -> xxHash128**, i.e.
+#' **Algorithm changed 2026-07-23: SHA-256 -> xxHash128**, i.e.
 #' `rlang::hash_file()`, a 32-character lower-case hex digest. The reason is
 #' interoperability with the data already in the registry: the pre-package
 #' system (`~/Desktop/WEM.data`, `R/new/import/import_dust.R` and
@@ -23,7 +23,7 @@
 #' for tamper-evidence.
 #'
 #' A non-empty file that hashes as empty input was read as 0 bytes (for example
-#' a cloud-only OneDrive file that was not downloaded), so this aborts rather
+#' a cloud-only (Files-On-Demand) file that was not downloaded), so this aborts rather
 #' than return the empty-input hash.
 #'
 #' @param path path to an existing, readable file.

@@ -1,6 +1,6 @@
 # Plan 07 - R/assemble.R: R-7.1 grouping, R-7.2 source preference, R-7.3
 # sample-metadata join, R-7.4 multi-work-order partitioning, R-7.5 event
-# object shape. See dev/plans/PLAN-07-assembly.md and CONTRACT A22/A23.
+# object shape. See PLAN-07 (assembly) and CONTRACT A22/A23.
 
 # --- pinned tables / small helpers -----------------------------------------
 

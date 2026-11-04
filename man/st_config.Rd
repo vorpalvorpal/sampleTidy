@@ -41,9 +41,17 @@ it must be one string in \code{\link[=OlsonNames]{OlsonNames()}}. \code{checks},
 \code{inbox_batches} are list-valued keys, \code{NULL} by default: \code{checks} is what a
 deployment's job passes to \code{\link[=inbox_run]{inbox_run()}} for its import flags (a list, or a zero-argument
 function returning one), and \code{site_keywords} maps a site code to the
-keywords by which the ACIRL gas adapter recognises that site in a workbook.
+keywords by which the gas adapter recognises that site in a workbook.
 \code{inbox_batches} is \code{NULL} or an \code{\link[=inbox_batches]{inbox_batches()}} object: which folders of
 the input directory \code{\link[=inbox_run]{inbox_run()}} treats as batches, how long they settle and
 what happens to the files an import leaves behind. \code{NULL} means
 \code{inbox_batches()}: every non-hidden subfolder, settled at once, left in place.
+
+\code{report_dir} is the directory the auto-import job keeps its status note, logs,
+lock and gate in (default: a \code{reports} folder under \code{tools::R_user_dir("sampleTidy", "data")};
+a deployment sets \code{SAMPLETIDY_REPORT_DIR}). \code{gas_template_slots} is \code{NULL}
+or a character vector of feature names that the lab's gas template prints
+at a site that has no such probe: the gas adapter skips a numeric reading
+at one as \code{template_slot}. It is list-valued, so it cannot come from an
+env var.
 }

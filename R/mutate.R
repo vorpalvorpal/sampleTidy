@@ -912,7 +912,7 @@ review_queue <- function(con, status = "open") {
 #' human's job). This is the reader that closes that gap.
 #'
 #' A review item's ordered candidate feature uuids can travel in ONE of TWO
-#' carriers (R-16.24; RULING-F, `dev/tdd-run/run-state.md`): most producers
+#' carriers (R-16.24; RULING-F): most producers
 #' embed the array in `review_queue.payload`'s `candidates` diagnostics key,
 #' because at the time they run there is no real `review_queue.uuid` yet to
 #' key a child row to (`.rc_feature_review()`, `R/reconcile.R`, is the

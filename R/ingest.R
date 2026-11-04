@@ -38,7 +38,7 @@
 #'
 #' @param con an open read-write DBI connection.
 #' @param routed the tibble returned by [route_files()].
-#' @param dry_run T1.2 (Robin's ruling): a dry run makes NO `ingest_file`
+#' @param dry_run T1.2 (ruling): a dry run makes NO `ingest_file`
 #'   state transitions at all, not just no core-table writes. Parsing itself
 #'   still runs (so a dry-run preview can be built), but the `parsed`/
 #'   `failed` transition below is skipped - the file stays at whatever state
@@ -110,7 +110,7 @@
 #
 # `.ig_als_gate()` used to sit here. A74 (2026-08-01) held that an ACIRL water
 # sheet could only be imported when we hold the ALS report it cites, because
-# most of the sheet is ALS data copied by hand. A79 (Robin, 2026-08-02)
+# most of the sheet is ALS data copied by hand. A79 (2026-08-02)
 # withdrew that: the ACIRL report is NATA-certified, so its data imports on its
 # own and a missing ALS source no longer withholds anything (it held back 17 of
 # 154 real workbooks, 644 rows). Supersession now happens at reconcile - an
@@ -126,7 +126,7 @@
 # ---- assemble-state application -----------------------------------------
 
 #' Apply every `assemble_events()` state-transition row (R-9.5 step d)
-#' @param dry_run T1.2 (Robin's ruling): skip every `ingest_file` write - a
+#' @param dry_run T1.2 (ruling): skip every `ingest_file` write - a
 #'   dry run leaves no state trace for a later run to trip over.
 #' @keywords internal
 #' @noRd
@@ -270,13 +270,13 @@
 #' real run would do, instead of assuming reconcile's proposed `clean` rows
 #' would all commit.
 #'
-#' T1.2 (Robin's ruling): a dry run makes ZERO `ingest_file` state
+#' T1.2 (ruling): a dry run makes ZERO `ingest_file` state
 #' transitions, full stop - not just no core-table writes. Before this fix,
 #' the event's kept files were moved `assembled -> reconciled`
 #' UNCONDITIONALLY (even under `dry_run`), which permanently poisoned the
 #' input directory: a following REAL run found those files already past
 #' `claimed` and silently ingested nothing (reproduced, probe P7,
-#' `dev/tdd-run/probes/p7-r3-commit-probes.R`). The `reconciled` transition
+#' the p7-r3 commit probes). The `reconciled` transition
 #' (and the error-path `failed` transition below) are now both skipped
 #' entirely when `dry_run`.
 #'
@@ -455,14 +455,14 @@
 
 # ---- retain non-tabular deliverables (R-15.36, B-15.F17) -----------------
 
-# R-15.36b (Robin, 2026-07-28): the separate ruling that `archive_file()`'s
+# R-15.36b (2026-07-28): the separate ruling that `archive_file()`'s
 # roxygen (R/archive.R) asks for before any retained kind is typed as anything
 # other than the default.
 #
 # Mapped onto the vocabulary the live `asset` table ALREADY uses rather than
-# onto new strings, because the point of `type` is that Robin's existing
+# onto new strings, because the point of `type` is that the existing
 # queries keep working. "Certificate of analysis" is the one exception: it was
-# a new string when Robin ruled it on 2026-07-23, and on 2026-07-28 he had the
+# a new string when it was ruled on 2026-07-23, and on 2026-07-28 the
 # 259 legacy COA rows retyped to match, so it is now in the live vocabulary
 # too. Live split after that retype: 679 "Chemical analysis" / 272 "QA" /
 # 259 "Certificate of analysis" / 222 "QC" / 34 NA.
@@ -482,8 +482,8 @@
   # A chain of custody is a QA record - who took the sample, when, and who
   # handled it - not a result.
   list(pattern = "(?i)_coc(\\[[0-9]+\\])?\\.[a-z0-9]+$", type = "QA"),
-  # R-22.G2 (Robin 2026-10-25): an ALS sample receipt notification
-  # ("ES2653158_0_SRN_260929155925.pdf") records what arrived and when - QA,
+  # R-22.G2 (2026-10-25): an ALS sample receipt notification
+  # ("ES9100080_0_SRN_260929155925.pdf") records what arrived and when - QA,
   # like the COC. Unlike the tokens above it is followed by "_<digits>" (a
   # timestamp) before the extension.
   list(pattern = "(?i)_srn_[0-9]+(\\[[0-9]+\\])?\\.[a-z0-9]+$", type = "QA"),
@@ -524,14 +524,14 @@
 
 # R-9.8: does this filename carry an ACIRL-shaped work-order token?
 #
-# `2400-9538-02` and friends CANNOT be parsed from a filename (false merges AND
+# `2400-9006-02` and friends CANNOT be parsed from a filename (false merges AND
 # false splits - see the ACIRL work-order trap in R/commit.R), and that refusal
 # stays. A file carrying one is not merely "unidentifiable": it POSITIVELY
 # DECLARES a work order of its own, one we decline to name, so this treats that
 # as a reason to leave the file alone rather than adopt it onto a folder-mate's
 # work order.
 #
-# R-9.12 (Robin, 2026-07-28): this is now used ONLY to SELECT ACIRL files for
+# R-9.12 (2026-07-28): this is now used ONLY to SELECT ACIRL files for
 # retention, never to refuse them. The earlier version blocked folder inference
 # for an ACIRL-shaped name on the theory that adopting it onto a folder-mate's
 # work order would be a false merge. That was overturned on the evidence: an
@@ -558,7 +558,7 @@
 #     dialect, which the work-order evidence file records as a real spelling
 #     ("job 6989 only ever appears unhyphenated"). `24009089-10` has only two
 #     digits after its hyphen, so `[0-9]{4}-[0-9]{4}` never matched it;
-#   * it FALSELY matched 4 real non-ACIRL scans - `Blx Quarterly
+#   * it FALSELY matched 4 real non-ACIRL scans - `Site Quarterly
 #     13-06-21062024141257-0001.pdf` and friends, whose scanner timestamp
 #     contains a 4-4 digit run. Under R-9.12 a false match is no longer
 #     harmless: the selector now RETAINS, and folder inference then attaches,
@@ -573,7 +573,7 @@
 
 #' The work order a folder unambiguously belongs to, or `NA` (R-9.8)
 #'
-#' PowerAutomate drops one lab email's attachments into their own folder, so
+#' A mail flow (e.g. Power Automate) drops one lab email's attachments into their own folder, so
 #' folder membership is an association that needs no filename parsing: if the
 #' *other* files here resolved to a work order, a token-less deliverable
 #' belongs to it.
@@ -588,7 +588,7 @@
 #' already have one, so an inferred target is by construction a work order we
 #' have really seen data for (R-15.36a's ruling, applied here too).
 #'
-#' R-22.G2 (Robin 2026-10-25) extension, used only when the folder holds NO
+#' R-22.G2 (2026-10-25) extension, used only when the folder holds NO
 #' ALS work order token at all (the rule above has precedence and is
 #' unchanged, including its NA for several work orders): if the files
 #' committed from this folder (this run or earlier; matched by hash against
@@ -614,7 +614,7 @@
   )
   candidates <- unique(guesses[!is.na(guesses)])
   if (length(candidates) == 0) {
-    # R-22.G2 (Robin 2026-10-25): no ALS work order in the folder - fall back
+    # R-22.G2 (2026-10-25): no ALS work order in the folder - fall back
     # to the one project the folder's committed files map to, if exactly one.
     hashes <- unique(routed$hash[same_folder][!is.na(routed$hash[same_folder])])
     if (length(hashes) == 0) {
@@ -661,9 +661,9 @@
 #' The work order of the project holding a same-stem report workbook, or `NA`
 #' (R-22.G1)
 #'
-#' Robin 2026-10-25: gas report PDFs have no ES token and no ALS folder-mate.
-#' An ACIRL gas PDF ("2400-9538-09-01 September Monthly Gas Monitoring
-#' Northvale WMF.pdf") is the print of the workbook of the same name, which was
+#' 2026-10-25: gas report PDFs have no ES token and no ALS folder-mate.
+#' An ACIRL gas PDF ("2400-9006-09-01 September Monthly Gas Monitoring
+#' Site N.pdf") is the print of the workbook of the same name, which was
 #' archived under the right project when it was parsed. Matches the file's
 #' stem (basename without extension, case-insensitive, whitespace-trimmed)
 #' against the stems of `asset.filename` rows that have a project, ignoring
@@ -734,8 +734,8 @@
 #' tokens are used, per `file_meta()`); (2) folder inference
 #' (`.ig_folder_work_order()`); (3) R-22.G1, a stem match against the
 #' filename of an already-archived report workbook (`.ig_stem_work_order()`),
-#' which is how an ACIRL gas PDF finds its project. R-22.G2 (Robin
-#' 2026-10-25) adds two things: ALS sample receipt notifications
+#' which is how an ACIRL gas PDF finds its project. R-22.G2
+#' (2026-10-25) adds two things: ALS sample receipt notifications
 #' (`ES#######_0_SRN_<digits>.pdf`) pass the selection gate and are typed "QA";
 #' and any other unclaimed `.pdf` (case-insensitive) - a scanned field sheet -
 #' is a candidate too, but is retained ONLY if folder inference resolves
@@ -750,7 +750,7 @@
 #' was ("no event for that work order committed in THIS run"), which was never
 #' what the SQL did. `project` is a persistent table (559 rows in the live DB),
 #' so a COA arriving in its own email a day after the data attaches to the work
-#' order the earlier run committed - Robin ruled on 2026-07-28 that it must
+#' order the earlier run committed - it was ruled on 2026-07-28 that it must
 #' (R-15.36a, PLAN-09 R-9.10). Equally binding is the other half of that
 #' ruling: this stays **find-only** and must never become
 #' `.ct_ensure_project()`'s find-or-create. A work order we have never seen
@@ -800,14 +800,14 @@
   # R-9.12 widens this to the ACIRL shape as well. Measured over the 1,227
   # files in assets/unprocessed: of 272 ACIRL files, ZERO carry a
   # COA/COC/QC/QCI/XTAB token - real ACIRL names are descriptive
-  # ("2400-9454-05 May 2025 Monthly Millbrook WMF.pdf"). So the token gate
+  # ("2400-9011-05 May 2025 Monthly Site M.pdf"). So the token gate
   # excluded all 137 ACIRL PDFs from retention AND, because it narrows the
   # warning too, from being reported at all: they routed quarantined in
   # silence. `\d{4}-\d{4}` is still a POSITIVE shape, so ordinary cruft
   # (README.md, photo.jpg, notes.docx) stays excluded and stays silent - the
   # round-3 commit-5 fix above is preserved, and pinned by its own test.
   #
-  # R-22.G2 (Robin 2026-10-25): the gate also takes the SRN shape
+  # R-22.G2 (2026-10-25): the gate also takes the SRN shape
   # (`_srn_<digits>`; `\\b` cannot be used, `_` is a word character), and a
   # SECOND, weaker candidate class: any other unclaimed .pdf (scanned field
   # sheets). Those "extra" candidates are retained only when folder inference
@@ -837,7 +837,7 @@
 
     # Round-2 item 5: contain a per-file failure here, mirroring
     # .ig_parse_claimed() (A27). archive_file() cli_abort()s on a
-    # dir.create()/file.copy() failure (a dehydrated OneDrive placeholder, a
+    # dir.create()/file.copy() failure (a dehydrated cloud placeholder, a
     # permission error, a rejected filename), and this loop previously had NO
     # tryCatch at all - reproduced: one unarchivable retained sibling threw
     # ingest_dir() out AFTER commits had already landed (6 samples committed,
@@ -859,7 +859,7 @@
           work_order <- .ig_folder_work_order(con, routed, path)
         }
 
-        # R-22.G1 (Robin 2026-10-25: gas report PDFs have no ES token and no
+        # R-22.G1 (2026-10-25: gas report PDFs have no ES token and no
         # ALS folder-mate): third and last fallback. Only reached when steps
         # 1 and 2 found nothing, so it can never override either. Matches the
         # file's stem to an archived workbook's filename stem; the 2400-*
@@ -871,7 +871,7 @@
         }
 
         if (is.na(work_order) && is_extra) {
-          # R-22.G2 (Robin 2026-10-25): a scanned field sheet whose folder
+          # R-22.G2 (2026-10-25): a scanned field sheet whose folder
           # does not resolve is cruft-shaped: stay quarantined, say nothing.
           NA_character_
         } else if (is.na(work_order)) {
@@ -917,7 +917,7 @@
             # the blanket "Chemical analysis" every other archived file gets -
             # a retained sibling is evidence, not chemistry data (PLAN-15
             # F.17) - and typed only the COA, parking the rest pending a
-            # ruling. Robin ruled the remaining kinds on 2026-07-28
+            # ruling. the remaining kinds were ruled on 2026-07-28
             # (R-15.36b), so all five now route through one pinned lookup.
             sibling_type <- if (is_extra) "QA" else .ig_retained_asset_type(basename(path))
             # commit-3 (round-3): `archive_file()` (writes the `asset` row)
@@ -945,7 +945,7 @@
               # no-op before migration 048; the tryCatch is a backstop so
               # that nothing in it can ever block retention.
               #
-              # R-22.S (Robin 2026-10-25): an SRN (type "QA", `_SRN_` token) is
+              # R-22.S (2026-10-25): an SRN (type "QA", `_SRN_` token) is
               # parsed here too, in the same transaction and under the same
               # backstop; a DB without the receipt schema skips it silently.
               if (identical(sibling_type, "QC") ||
@@ -1008,7 +1008,7 @@
     return(FALSE)
   }
   all(vapply(entries, function(p) {
-    # R-22.E (Robin 2026-10-25): `_email.eml` is ignored by ignore_rule() but
+    # R-22.E (2026-10-25): `_email.eml` is ignored by ignore_rule() but
     # the inbox still has to file it, so it keeps the folder alive.
     if (identical(basename(p), "_email.eml")) {
       return(FALSE)
@@ -1018,7 +1018,7 @@
     #
     #   * a PERMANENT property of the file - `.bak`, `.tmp`, `.DS_Store`. Safe.
     #   * `empty_file`, which is a property of the file RIGHT NOW. On a
-    #     OneDrive/PowerAutomate inbox a 0-byte file is routinely an attachment
+    #     a mail-flow inbox on a cloud store a 0-byte file is routinely an attachment
     #     mid-delivery. Treating it as ignorable meant: attachment 1 commits
     #     and is removed -> `removed_files` non-empty -> folder judged spent ->
     #     unlink(recursive = TRUE) destroys attachment 2 before it was ever
@@ -1136,7 +1136,7 @@
 #' * the source file still exists.
 #'
 #' The content check is not redundant with the existence check: the archive
-#' lives on OneDrive/SharePoint, where a dehydrated placeholder, a truncated
+#' lives on a cloud store (e.g. SharePoint), where a dehydrated placeholder, a truncated
 #' upload or a conflicted rewrite all present as a regular file of the right
 #' name. Deletion is irreversible, so "a file is there" is not sufficient
 #' evidence that "the data is there".
@@ -1194,7 +1194,7 @@
       next
     }
 
-    # EXISTENCE IS NOT ENOUGH. The archive lives on OneDrive/SharePoint, where a
+    # EXISTENCE IS NOT ENOUGH. The archive lives on a cloud store (e.g. SharePoint), where a
     # copy can be a dehydrated placeholder, a truncated upload, or a conflicted
     # rewrite - all of which are regular files of the right name. Re-hash the
     # archived bytes and require them to equal the hash we are about to delete
@@ -1297,7 +1297,7 @@
 #' returned report reflects what the run *would* do), but skips
 #' `commit_event()` and the snapshot entirely - the only two core-table/
 #' snapshot writers - so a dry run makes zero core-table writes and
-#' produces no snapshot file. T1.2 (Robin's ruling, 2026-07-26): a dry run
+#' produces no snapshot file. T1.2 (ruling, 2026-07-26): a dry run
 #' ALSO makes zero `ingest_file` STATE writes - parsing/assembly/reconcile
 #' still run in memory to build the preview, but none of it is persisted, so
 #' a following run (dry or real) re-discovers the same files at the same
@@ -1367,7 +1367,7 @@ ingest_dir <- function(path, db = st_config("live_db"), dry_run = FALSE,
 
       routed <- route_files(paths, con, dry_run, reconsider)
 
-      # R-22.E (Robin 2026-10-25): identify the delivering email. A dry run
+      # R-22.E (2026-10-25): identify the delivering email. A dry run
       # writes nothing (a message_id without its email row is what the
       # dangling db_check flags).
       if (!dry_run) {
@@ -1389,7 +1389,7 @@ ingest_dir <- function(path, db = st_config("live_db"), dry_run = FALSE,
       # that has a `project` row. NOT "committed in this run", which is what
       # this comment used to say and what the SQL never did - `project` is
       # persistent, so a COA arriving in its own email a day later attaches to
-      # the work order an EARLIER run committed (Robin's ruling, R-15.36a).
+      # the work order an EARLIER run committed (ruling, R-15.36a).
       # Skipped on `dry_run` - archiving is a core-table write, and
       # `ingest_dir()`'s own contract is that a dry run makes ZERO core-table
       # writes (see roxygen above).
@@ -1483,7 +1483,7 @@ ingest_dir <- function(path, db = st_config("live_db"), dry_run = FALSE,
 
 #' Ingest an inbox of per-email folders, one batch per folder
 #'
-#' PowerAutomate saves the attachments of a single lab email into their own
+#' A mail flow (e.g. Power Automate) saves the attachments of a single lab email into their own
 #' folder under the inbox root, so a folder is the durable record of "these
 #' files arrived together". [ingest_dir()] is deliberately non-recursive (A8,
 #' R-9.5) and stays that way; this walks the root's immediate subdirectories

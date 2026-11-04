@@ -18,13 +18,13 @@
   live_db = function() {
     file.path(tools::R_user_dir("sampleTidy", "data"), "monitoring.duckdb")
   },
-  # A76 (Robin, 2026-08-01): the field set is MAXIMAL. Every entry below is
+  # A76 (2026-08-01): the field set is MAXIMAL. Every entry below is
   # matched exactly (after `str_squish()` + upper-case) against an ACIRL water
   # sheet's parameter label. The list is grounded in two measurements, not in
   # the analyte names of the ruling:
   #
   #   (a) a label census over the real corpus (156 workbooks, 13768 label rows,
-  #       296 distinct labels - `scratchpad/a76_label_counts.csv`), and
+  #       296 distinct labels - measured on the corpus), and
   #   (b) the 32 `lab_method` rows already carrying `method = 'field'`, whose
   #       `name` column IS the ACIRL sheet label ("Electrical Conductivity",
   #       "Water Depth", "Flow observation", ...).
@@ -87,14 +87,14 @@
   # TSS is gravimetric (filter, dry at 104C, weigh), so the method implies it
   # too. ACIRL's two `field` TSS lab_methods asserted the opposite; both carried
   # ZERO analyses and were deleted from the live database on 2026-08-02
-  # (change_log uuid_row 29cfea72, c8b85ce2) on Robin's ruling. So the name can
+  # (change_log uuid_row 29cfea72, c8b85ce2) on the ruling. So the name can
   # no longer resolve to a field method at all - this list is the belt to that
   # braces, keeping the label out of the allowlist path even if someone later
   # adds it there.
   acirl_transcription_labels = function() {
     c("Total Suspended Solids", "Suspended Solids (SS)", "TSS")
   },
-  # TRUE since 2026-07-23 (Robin): a successfully ingested source file is
+  # TRUE since 2026-07-23: a successfully ingested source file is
   # deleted from the input directory once its archive copy has been verified.
   # Supersedes the original A13 default of FALSE. The safety property A13
   # actually cares about is unchanged and in fact strengthened - see
@@ -135,6 +135,17 @@
   inbox_batches = function() {
     NULL
   },
+  # The directory the auto-import job keeps its status note, logs, lock and
+  # gate in (`dev/auto-import.R`). A deployment sets SAMPLETIDY_REPORT_DIR.
+  report_dir = function() {
+    file.path(tools::R_user_dir("sampleTidy", "data"), "reports")
+  },
+  # `gas_template_slots` (NULL or a character vector of feature names): names
+  # the lab's gas template prints at a site that has no such probe; see
+  # `.st_gas_template_slots()`. List-valued, so no env var.
+  gas_template_slots = function() {
+    NULL
+  },
   # Deliberately reads SAMPLETIDY_CORPUS (not the SAMPLETIDY_CORPUS_DIR
   # pattern used for the option/env-var lookup below) - see PLAN-01 R-1.1.
   corpus_dir = function() {
@@ -153,7 +164,7 @@
 #' @keywords internal
 #' @noRd
 .st_config_list_keys <- c("field_analytes", "acirl_transcription_labels", "archive_settle",
-                          "checks", "site_keywords", "inbox_batches")
+                          "checks", "site_keywords", "inbox_batches", "gas_template_slots")
 
 #' Get or set a sampleTidy configuration value
 #'
@@ -182,11 +193,19 @@
 #' `inbox_batches` are list-valued keys, `NULL` by default: `checks` is what a
 #' deployment's job passes to [inbox_run()] for its import flags (a list, or a zero-argument
 #' function returning one), and `site_keywords` maps a site code to the
-#' keywords by which the ACIRL gas adapter recognises that site in a workbook.
+#' keywords by which the gas adapter recognises that site in a workbook.
 #' `inbox_batches` is `NULL` or an [inbox_batches()] object: which folders of
 #' the input directory [inbox_run()] treats as batches, how long they settle and
 #' what happens to the files an import leaves behind. `NULL` means
 #' `inbox_batches()`: every non-hidden subfolder, settled at once, left in place.
+#'
+#' `report_dir` is the directory the auto-import job keeps its status note, logs,
+#' lock and gate in (default: a `reports` folder under `tools::R_user_dir("sampleTidy", "data")`;
+#' a deployment sets `SAMPLETIDY_REPORT_DIR`). `gas_template_slots` is `NULL`
+#' or a character vector of feature names that the lab's gas template prints
+#' at a site that has no such probe: the gas adapter skips a numeric reading
+#' at one as `template_slot`. It is list-valued, so it cannot come from an
+#' env var.
 #'
 #' @param key configuration key, e.g. `"live_db"`, `"input_dir"`.
 #' @param value if supplied, the value to set for `key`.
@@ -245,7 +264,8 @@ st_config <- function(key, value) {
 #' @export
 st_capabilities <- function() {
   c("timezone", "checks_option", "checks_streams", "site_names",
-    "site_keywords", "date_overrides_env", "inbox_batches", "renderer_hooks")
+    "site_keywords", "date_overrides_env", "inbox_batches", "renderer_hooks",
+    "report_dir", "gas_template_slots")
 }
 
 # Validated zones, memoised per value (OlsonNames() is slow-ish).

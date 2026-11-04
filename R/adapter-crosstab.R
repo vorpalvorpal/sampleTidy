@@ -684,7 +684,7 @@ als_enmrg_adapter <- function() {
     cas_number <- if (is.na(cas_val) || !nzchar(cas_val)) NA_character_ else cas_val
     unit_val <- .st_ct_at(row_trimmed, unit_col)
     units_raw <- if (is.na(unit_val)) NA_character_ else normalise_lab_text(unit_val)
-    # Robin ruled 2026-10-20 (overriding the earlier "ruling 8" caution for
+    # Ruled 2026-10-20 (overriding the earlier "ruling 8" caution for
     # ALS SAR): ALS leaves the Units cell blank for Sodium Adsorption Ratio,
     # which is dimensionless; live uses unit "1". Other analytes with blank
     # units stay NA (-> units_missing downstream). The ACIRL field adapter is
