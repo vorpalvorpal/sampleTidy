@@ -4,7 +4,7 @@
 \alias{register_hook}
 \title{Register a hook that \code{inbox_run()} fires}
 \usage{
-register_hook(event, fn, replace_default = TRUE)
+register_hook(event, fn, replace_default = TRUE, renderer = FALSE)
 }
 \arguments{
 \item{event}{one of \code{"after_run"} (argument: the list \code{inbox_run()}
@@ -12,12 +12,17 @@ returns), \code{"after_status"} (the status list written to \code{status.json}) 
 \code{"work_complete"} (a \code{\link[=completed_work]{completed_work()}} tibble of the projects that
 became complete during the run).}
 
-\item{fn}{a function of one argument.}
+\item{fn}{a function of one argument, or of two to receive the \code{context}.}
 
-\item{replace_default}{a single \code{TRUE} or \code{FALSE} (default \code{TRUE}). The
-event's default renderer is suppressed if at least one hook registered for
-the event has \code{replace_default = TRUE}. Has no effect for \code{"work_complete"},
-which has no default.}
+\item{replace_default}{a single \code{TRUE} or \code{FALSE} (default \code{TRUE}). Ignored:
+the core has no default renderers. Kept for one release so that existing
+calls still work.}
+
+\item{renderer}{a single \code{TRUE} or \code{FALSE} (default \code{FALSE}). \code{TRUE} is
+allowed only for \code{"after_status"} and \code{"after_run"} and marks the hook as
+a renderer, the kind the deprecated \code{\link[=import_status]{import_status()}} and \code{\link[=import_report]{import_report()}}
+fire. A renderer fires in \code{\link[=inbox_run]{inbox_run()}} like any other hook. An \code{"after_run"}
+renderer should do nothing when \code{context$day} is \code{NULL}.}
 }
 \value{
 \code{fn}, invisibly.
@@ -25,9 +30,19 @@ which has no default.}
 \description{
 Hooks are session state (not persisted). Hooks of one event run in
 registration order; the same function may be registered twice and then runs
-twice. Registering a hook for \code{"after_status"} or \code{"after_run"} replaces that
-event's default markdown renderer, unless every hook registered for the event
-has \code{replace_default = FALSE}: then the default runs first and the hooks run
-after it, in registration order. An error inside a hook never fails
-\code{\link[=inbox_run]{inbox_run()}}; it is recorded as a problem in the status.
+twice. The core writes no markdown of its own: a deployment that wants
+notes registers a renderer for \code{"after_status"} and \code{"after_run"}. An error
+inside a hook never fails \code{\link[=inbox_run]{inbox_run()}}; it is recorded as a problem in the
+status, as \verb{hook <event>[<i>] failed: <message>} where \code{i} is the hook's
+1-based registration index within the event.
+}
+\details{
+A hook of two or more formals (or one with \code{...}) is called
+\code{fn(arg, context)}; any other is called \code{fn(arg)}. \code{context} is a list:
+\code{source} (\code{"inbox_run"}, \code{"import_status"} or \code{"import_report"}),
+\code{report_dir}, \code{input_dir} (\code{NA} for \code{"import_report"}), \code{db}, \code{now},
+\code{timezone}, and \code{day}. \code{day} is \code{NULL} except for \code{"after_run"}, where it is
+the day digest (\code{date}, \code{time}, \code{review_items_open} and \code{runs}, one entry per
+non-dry-run log line of the local day, each with \code{started_at}, \code{time},
+\code{imports}, \code{filed} and \code{problems}) when the day has news, else \code{NULL}.
 }

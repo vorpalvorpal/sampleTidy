@@ -9,7 +9,7 @@ suppressMessages(devtools::load_all(repo, quiet = TRUE, helpers = FALSE))
 
 # A deployment attaches its hooks by naming a file in SAMPLETIDY_HOOKS_FILE; it
 # never errors, a bad file shows up in the status Problems.
-load_hooks_file()
+hooks_problem <- load_hooks_file()
 
 nz <- function(x) if (nzchar(x)) x else NULL
 db <- nz(Sys.getenv("SAMPLETIDY_AUTOIMPORT_DB")) %||% st_config("live_db")
@@ -30,6 +30,19 @@ report_dir <- nz(Sys.getenv("SAMPLETIDY_AUTOIMPORT_REPORT")) %||%
 # its hooks file sets st_config("checks"), typically to a function so the tables
 # are re-read on every status build.
 
+# The deployment's recogniser (st_config("inbox_batches")) normally comes from
+# the hooks file. If that failed to load, sweep nothing rather than fall back on
+# the generic default (every subfolder, no settle time); "^$" matches no folder,
+# so the status is still refreshed and carries the problem.
+batch <- if (length(hooks_problem)) inbox_batches(pattern = "^$") else
+  st_config("inbox_batches") %||% inbox_batches()
+
 inbox_run(input_dir = input_dir, db = db,
           backup_dir = file.path(dirname(db), "migration-backups"),
-          report_dir = report_dir, checks = st_config("checks"))
+          report_dir = report_dir, checks = st_config("checks"), batch = batch)
+
+# Exit non-zero so that auto-import.sh records the failure and notifies.
+if (length(hooks_problem)) {
+  cat("hooks file problem:", hooks_problem, "\n", file = stderr())
+  quit(save = "no", status = 3)
+}

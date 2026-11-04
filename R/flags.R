@@ -1086,7 +1086,7 @@ import_flags <- function(db = st_config("live_db"), now = Sys.time(), checks) {
   stats::setNames(s[ok], k[ok])
 }
 
-# Flags + first_seen for the note: list(flags = data.frame with first_seen,
+# Flags + first_seen for the status: list(flags = data.frame with first_seen,
 # errors = named character).
 .flags_for_status <- function(db, now, checks, report_dir) {
   prev <- .flags_prev_seen(report_dir)
@@ -1113,52 +1113,6 @@ import_flags <- function(db = st_config("live_db"), now = Sys.time(), checks) {
   fl$first_seen <- if (nrow(fl)) ifelse(fl$key %in% names(prev), unname(prev[fl$key]),
                                         .inbox_fmt_utc(now)) else character(0)
   list(flags = fl, errors = errs, site_names = ck$site_names)
-}
-
-.flags_note_lines <- function(fs) {
-  fl <- fs$flags
-  errs <- fs$errors
-  out <- c("## Flags", "")
-  if (length(errs)) {
-    msg <- gsub("\\s*\n\\s*", " ", unname(errs))
-    out <- c(out, sprintf("- check %s failed: %s", names(errs), msg), "")
-  }
-  if (nrow(fl) == 0) return(c(out, "No flags.", ""))
-  for (ck in intersect(.flags_checks, fl$check)) {
-    g <- fl[fl$check == ck, , drop = FALSE]
-    out <- c(out, sprintf("**%s** — %s", ck, .flags_meanings[[ck]]))
-    # Ruling R6: the newest 15 per check; the JSON keeps every flag.
-    for (i in seq_len(min(nrow(g), 15L))) {
-      site <- g$site[[i]]
-      site <- if (!is.null(fs$site_names) && site %in% names(fs$site_names)) {
-        unname(fs$site_names[[site]])
-      } else site
-      what <- paste(stats::na.omit(c(g$feature[[i]], g$analyte[[i]])), collapse = " ")
-      val <- if (is.na(g$value[[i]])) NA else
-        trimws(paste(.flags_fmt(g$value[[i]]), if (is.na(g$unit[[i]])) "" else g$unit[[i]]))
-      parts <- c(g$date[[i]], site, what, val, g$threshold[[i]], g$detail[[i]])
-      parts <- parts[!is.na(parts) & nzchar(parts)]
-      out <- c(out, paste0("- ", paste(parts, collapse = " · ")))
-    }
-    if (nrow(g) > 15) out <- c(out, sprintf("- +%d more — see .import-status.json", nrow(g) - 15))
-    out <- c(out, "")
-  }
-  out
-}
-
-# "<n> flag(s) (overdue 12, gas_criterion 5, site_history 3)" for the
-# frontmatter summary: the top 3 checks by count.
-.flags_summary <- function(fs) {
-  n <- nrow(fs$flags)
-  out <- sprintf("%d flag(s)", n)
-  if (n > 0) {
-    tb <- table(factor(fs$flags$check, levels = .flags_checks))
-    tb <- tb[tb > 0]
-    tb <- tb[order(-tb, match(names(tb), .flags_checks))][seq_len(min(3, length(tb)))]
-    out <- paste0(out, " (", paste(names(tb), tb, collapse = ", "), ")")
-  }
-  if (length(fs$errors)) out <- paste0(out, sprintf(", %d check(s) failed", length(fs$errors)))
-  out
 }
 
 .flags_json <- function(fs) {

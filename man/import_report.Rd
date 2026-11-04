@@ -2,21 +2,28 @@
 % Please edit documentation in R/inbox.R
 \name{import_report}
 \alias{import_report}
-\title{Write the dated import note}
+\title{Render the dated import note (deprecated)}
 \usage{
 import_report(db = st_config("live_db"), report_dir, now = Sys.time())
 }
 \arguments{
 \item{db}{the live database.}
 
-\item{report_dir}{where the note and \code{.imports.log} live.}
+\item{report_dir}{where \code{events.jsonl} lives.}
 
 \item{now}{current time.}
 }
 \value{
-the note's path, invisibly.
+\verb{<report_dir>/<YYYY-MM-DD>-imports.md} for the local date of \code{now},
+invisibly. The core does not write it; a renderer does.
 }
 \description{
-Writes \verb{<report_dir>/<YYYY-MM-DD>-imports.md} for the local date of \code{now}:
-what was imported that day and that day's problems. Read-only on the DB.
+Deprecated: the core no longer writes markdown. \code{\link[=inbox_run]{inbox_run()}} hands the day
+digest to the \code{"after_run"} hooks as \code{context$day}. This wrapper builds the
+same digest for the local date of \code{now} and calls only the \code{"after_run"}
+hooks registered with \code{renderer = TRUE} (\code{\link[=register_hook]{register_hook()}}), as
+\code{fn(NULL, context)} with \code{context$source == "import_report"}. With none
+registered it warns (class \code{sampletidy_deprecated}) and writes nothing; a
+failing renderer is a warning of class \code{sampletidy_hook_failed}. Read-only
+on the DB.
 }

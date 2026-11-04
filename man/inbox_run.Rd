@@ -10,33 +10,40 @@ inbox_run(
   backup_dir,
   report_dir,
   now = Sys.time(),
-  settle_minutes = 10,
+  settle_minutes = NULL,
   keep_backups = 10,
   dry_run = FALSE,
-  checks = NULL
+  checks = NULL,
+  batch = .inbox_default_batch()
 )
 }
 \arguments{
-\item{input_dir}{the inbox directory (one \verb{input*} subdirectory per email).}
+\item{input_dir}{the inbox directory (one subdirectory per delivery).}
 
 \item{db}{the live database.}
 
 \item{backup_dir}{where pre-import backups go.}
 
-\item{report_dir}{where the notes, state and log live.}
+\item{report_dir}{where the status, state and log live.}
 
 \item{now}{current time.}
 
-\item{settle_minutes}{a folder is settled when no file changed this recently.}
+\item{settle_minutes}{\code{NULL} (use \code{batch$settle_minutes}) or a number that
+replaces it: a folder is settled when no file changed this recently.}
 
 \item{keep_backups}{how many \code{monitoring_pre-auto-import_*.duckdb} to keep.}
 
-\item{dry_run}{if \code{TRUE}: no backup, no live-DB write, no removal, no state.}
+\item{dry_run}{if \code{TRUE}: no backup, no live-DB write, no removal, no state.
+The status records what would be done in \code{dry_run_plan}.}
 
-\item{checks}{\code{NULL} (no Flags section), the check inputs for
+\item{checks}{\code{NULL} (no flags in the status), the check inputs for
 \code{\link[=import_flags]{import_flags()}}, or a zero-argument function returning them. A function
-is called on every status-note refresh, so a deployment can re-read its
-tables each time; if it fails, the Flags section says so.}
+is called on every status refresh, so a deployment can re-read its
+tables each time; if it fails, the status says so.}
+
+\item{batch}{which folders are batches, how long they settle and what
+happens to their leftovers: an \code{\link[=inbox_batches]{inbox_batches()}} object. The default is
+\code{st_config("inbox_batches")}, or \code{inbox_batches()} when that is unset.}
 }
 \value{
 (invisibly) a list: action, ran, locked, dry_run, started_at,
@@ -46,5 +53,7 @@ folders_arriving, folders, backup_path, errors, stale_lock.
 \description{
 Does nothing unless \code{\link[=inbox_check]{inbox_check()}} says something changed. See the
 auto-import spec for the rules (settled gate, backup first, one
-\code{\link[=ingest_dir]{ingest_dir()}} per folder oldest first, lock, run log, notes).
+\code{\link[=ingest_dir]{ingest_dir()}} per folder oldest first, lock, run log, status). It writes
+\code{status.json} (and the identical \code{.import-status.json}) and the run log, and
+fires the hooks (\code{\link[=register_hook]{register_hook()}}); it writes no markdown.
 }
