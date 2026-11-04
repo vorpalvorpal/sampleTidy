@@ -295,7 +295,16 @@ test_that("hooks file: dev/auto-import.R calls load_hooks_file() after loading t
 # report dir, with SAMPLETIDY_HOOKS_FILE set.
 hf_run_auto_import <- function(s, hooks_file, extra_env = character(0), env = parent.frame()) {
   scratch <- withr::local_tempdir(.local_envir = env)
+  # Rscript reads ~/.Renviron after inheriting our environment, and a value set
+  # there wins. A deployment's ~/.Renviron sets SAMPLETIDY_HOOKS_FILE and the
+  # archive/snapshot/input dirs, which would silently replace the scratch values
+  # below (and point the run at live directories). Point R at an empty user
+  # Renviron/Rprofile so only the variables set here apply.
+  empty <- file.path(scratch, "empty-rprofile")
+  file.create(empty)
   envs <- c(
+    R_ENVIRON_USER = empty,
+    R_PROFILE_USER = empty,
     SAMPLETIDY_AUTOIMPORT_DB = s$db,
     SAMPLETIDY_AUTOIMPORT_INPUT = s$input_dir,
     SAMPLETIDY_AUTOIMPORT_REPORT = s$report_dir,
