@@ -8,8 +8,12 @@
   over several minutes, so StartInterval re-checks every 10 minutes until it settles. Each tick
   is cheap: auto-import.sh hashes stat() metadata and exits when nothing changed, and R holds a
   lock, so overlapping triggers (this one, Obsidian's) cannot run two imports at once.
-  A template: dev/launchd/install.sh fills in @REPO@, @INPUT@ and @HOME@ and installs it to
-  ~/Library/LaunchAgents. Do not load this file directly.
+  The job runs a small launcher app (dev/launchd/helper) rather than /bin/bash: under launchd
+  macOS refuses /bin/bash access to the OneDrive folder, and granting that to bash would grant
+  it to every bash script. The launcher spawns dev/auto-import.sh as a child, so only the
+  launcher app needs Full Disk Access.
+  A template: dev/launchd/install.sh fills in @HELPER@, @REPO@, @INPUT@ and @HOME@ and installs
+  it to ~/Library/LaunchAgents. Do not load this file directly.
 -->
 <plist version="1.0">
 <dict>
@@ -17,8 +21,7 @@
   <string>net.robinshannon.sampletidy-autoimport</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/bin/bash</string>
-    <string>@REPO@/dev/auto-import.sh</string>
+    <string>@HELPER@</string>
   </array>
   <key>WatchPaths</key>
   <array>
