@@ -173,19 +173,20 @@ test_that("inbox_check() (R14): a state without a usable checked_at -> 'status';
   expect_identical(r14_check(s, t0 + 86400), "run")
 })
 
-test_that("inbox_run() (R14): a new-day 'status' rewrites the note read-only and records the new day", {
+test_that("inbox_run() (R14): a new-day 'status' rewrites status.json read-only and records the new day", {
   s <- inbox_setup()
   t0 <- as.POSIXct("2026-10-19 01:00:00", tz = "UTC")
   run_inbox(s, now = t0)
   backups <- list.files(s$backup_dir)
   db_md5 <- file_md5(s$db)
-  unlink(status_note_path(s$report_dir))
+  unlink(file.path(s$report_dir, c("status.json", ".import-status.json")))
   t1 <- as.POSIXct("2026-10-20 01:00:00", tz = "UTC")
   r <- run_inbox(s, now = t1)
   expect_identical(r$action, "status")
   expect_false(r$ran)
-  l <- read_status_note(s$report_dir)
-  expect_match(l[nzchar(trimws(l))][[1]], "updated 2026-10-20 12:00", fixed = TRUE)
+  expect_identical(read_status_json(s$report_dir)$updated, "2026-10-20 12:00")
+  expect_identical(read_status_json(s$report_dir)$timezone, "Australia/Sydney")
+  expect_length(report_md_files(s$report_dir), 0)
   expect_identical(file_md5(s$db), db_md5)
   expect_identical(list.files(s$backup_dir), backups)
   expect_identical(read_inbox_state(s$report_dir)$checked_at, "2026-10-20T01:00:00Z")
@@ -221,7 +222,7 @@ test_that("inbox_run(): a 'none' check does nothing at all (ran = FALSE)", {
   expect_false(file.exists(inbox_lock_path(s$db)))
 })
 
-test_that("inbox_run(): only input* subdirectories are candidates; bare 'input', other dirs and loose files are left alone", {
+test_that("inbox_run(): only input* subdirectories are candidates; bare 'input', other dirs and loose files are left alone (loose files are listed in status.json)", {
   s <- inbox_setup()
   now <- Sys.time()
   make_inbox_folder(s$input_dir, "input2026-10-18 0900 PROJ_A", inbox_proj_a_files(), now = now)
@@ -246,12 +247,15 @@ test_that("inbox_run(): only input* subdirectories are candidates; bare 'input',
                    na.rm = TRUE))
   expect_true("PROJ_A.ESDAT_XX1234567_0.Chemistry2e.CSV" %in% fn)
 
-  # the loose file is listed as waiting in the status note
-  waiting <- md_section(read_status_note(s$report_dir), "Waiting")
-  expect_true(any(grepl("loose_ES2670610.csv", waiting, fixed = TRUE)))
+  # the loose file is listed in status.json, with its path
+  js <- read_status_json(s$report_dir)
+  expect_length(js$loose, 1)
+  expect_identical(js$loose[[1]]$file, "loose_ES2670610.csv")
+  expect_identical(js$loose[[1]]$path, file.path(s$input_dir, "loose_ES2670610.csv"))
   # sibling directories (archive, bare input, the user's own folders) are not listed
-  expect_false(any(grepl("Robin's notes", waiting, fixed = TRUE)))
-  expect_false(any(grepl("not an import folder", waiting, fixed = TRUE)))
+  listed <- vapply(js$waiting, function(w) w$folder, character(1))
+  expect_false(any(c("input", "Robin's notes") %in% listed))
+  expect_false(any(vapply(js$loose, function(l) l$file, character(1)) %in% c("input", "Robin's notes")))
 })
 
 test_that("inbox_run(): settled gate - a folder with a recently-modified file is 'arriving', not imported; pending makes the next call run", {
@@ -260,7 +264,8 @@ test_that("inbox_run(): settled gate - a folder with a recently-modified file is
   make_inbox_folder(s$input_dir, "input2026-10-18 0900 settled", inbox_proj_a_files(), age_min = 60, now = now)
   # one old file and one written 2 minutes ago: not settled (settle_minutes = 10)
   arr <- make_inbox_folder(s$input_dir, "input2026-10-18 0950 arriving", inbox_rain_files(), age_min = 60, now = now)
-  Sys.setFileTime(file.path(arr, basename(inbox_rain_files()[[1]])), now - 120)
+  t_last <- as.POSIXct(floor(as.numeric(now)) - 120, origin = "1970-01-01", tz = "UTC")
+  Sys.setFileTime(file.path(arr, basename(inbox_rain_files()[[1]])), t_last)
   dir.create(file.path(s$input_dir, "input2026-10-18 0955 empty"))
 
   res <- run_inbox(s, now = now, settle_minutes = 10)
@@ -272,11 +277,15 @@ test_that("inbox_run(): settled gate - a folder with a recently-modified file is
   expect_setequal(list.files(arr), basename(inbox_rain_files()))
   expect_false(any(basename(inbox_rain_files()) %in% ingest_file_rows(s$db)$filename))
 
-  waiting <- md_section(read_status_note(s$report_dir), "Waiting")
-  arr_line <- waiting[grepl("0950 arriving", waiting, fixed = TRUE)]
-  expect_gt(length(arr_line), 0)
-  expect_true(any(grepl("arriving", waiting, ignore.case = TRUE)))
-  expect_true(any(grepl("file:///", arr_line, fixed = TRUE)))
+  e <- status_waiting(s$report_dir, "input2026-10-18 0950 arriving")
+  expect_identical(e$status, "arriving")
+  expect_identical(e$path, file.path(s$input_dir, "input2026-10-18 0950 arriving"))
+  expect_identical(e$last_written, format(t_last, "%Y-%m-%dT%H:%M:%SZ", tz = "UTC"))
+  expect_setequal(unlist(e$files), basename(inbox_rain_files()))
+  empty <- status_waiting(s$report_dir, "input2026-10-18 0955 empty")
+  expect_identical(empty$status, "arriving")
+  expect_true("last_written" %in% names(empty))
+  expect_null(empty$last_written)
 
   st <- read_inbox_state(s$report_dir)
   expect_true(isTRUE(st$pending))
@@ -299,7 +308,7 @@ test_that("inbox_run(): a settled folder counts files' mtimes, not the folder's 
   expect_identical(res$folders_processed, "input2026-10-18 0900 a")
 })
 
-test_that("inbox_run(): signature changed but nothing new to import -> no backup, no DB write; status note and state written, no dated note", {
+test_that("inbox_run(): signature changed but nothing new to import -> no backup, no DB write; status.json and state written, no markdown", {
   s <- inbox_setup()
   now <- Sys.time()
   d <- make_inbox_folder(s$input_dir, "input2026-10-18 0900 corrupt", inbox_corrupt_file(), now = now)
@@ -312,9 +321,9 @@ test_that("inbox_run(): signature changed but nothing new to import -> no backup
   expect_identical(length(list.files(s$backup_dir)), 0L)
   expect_true(is.na(res$backup_path))
   expect_identical(file_md5(s$db), db_md5)
-  expect_true(file.exists(status_note_path(s$report_dir)))
+  expect_true(file.exists(file.path(s$report_dir, "status.json")))
   expect_true(file.exists(file.path(s$report_dir, ".imports.state")))
-  expect_false(file.exists(inbox_report_path(s$report_dir, now)))
+  expect_length(report_md_files(s$report_dir), 0)
   # the failed file and its folder stay
   expect_true(file.exists(file.path(d, basename(inbox_corrupt_file()))))
 })
@@ -378,12 +387,9 @@ test_that("inbox_run(): a backup that fails verification aborts the run - error 
   expect_length(res$folders_processed, 0)
   expect_false(file.exists(inbox_lock_path(s$db)))
 
-  # reported as a Problem in the day's note and the status note
-  day <- read_report(s$report_dir, now)
-  expect_true(any(grepl("Nothing imported today.", md_section(day, "Imported today"), fixed = TRUE)))
-  expect_true(any(grepl("backup", md_section(day, "Problems"), ignore.case = TRUE)))
-  expect_true(any(grepl("backup", md_section(read_status_note(s$report_dir), "Problems"),
-                        ignore.case = TRUE)))
+  # reported as a Problem in status.json, and as an error in the run's log line
+  expect_true(any(grepl("backup", unlist(read_status_json(s$report_dir)$problems), ignore.case = TRUE)))
+  expect_true(any(grepl("backup", unlist(read_inbox_log(s$report_dir)[[1]]$errors), ignore.case = TRUE)))
   # the failed run must not record the inbox as handled
   expect_identical(inbox_check(s$input_dir, s$report_dir, now = now, db = s$db), "run")
 })
@@ -435,8 +441,10 @@ test_that("inbox_run(): one folder failing does not stop the next; the failure i
   # the corrupt file failed inside ingest_dir: recorded as a file left behind
   expect_true(basename(inbox_corrupt_file()) %in% res$folders[["input2026-10-18 0830 corrupt"]]$files_left)
 
-  day <- read_report(s$report_dir, now)
-  expect_true(any(grepl("XYZZY", md_section(day, "Problems"), fixed = TRUE)))
+  logged <- read_inbox_log(s$report_dir)[[1]]$folders[["input2026-10-18 0800 boom"]]
+  expect_true(isTRUE(logged$failed))
+  expect_match(logged$error, "XYZZY")
+  expect_true(any(grepl("XYZZY", unlist(read_status_json(s$report_dir)$problems), fixed = TRUE)))
 })
 
 test_that("inbox_run(): archived files are removed, emptied folders removed, unfinished folders kept", {
@@ -462,13 +470,15 @@ test_that("inbox_run(): archived files are removed, emptied folders removed, unf
   expect_length(res$folders[["input2026-10-18 0900 done"]]$files_left, 0)
 
   # the unfinished folder is listed as waiting, naming its files and their state
-  waiting <- md_section(read_status_note(s$report_dir), "Waiting")
-  expect_true(any(grepl("0930 mixed", waiting, fixed = TRUE)))
-  corrupt_line <- waiting[grepl(basename(inbox_corrupt_file()), waiting, fixed = TRUE)]
-  expect_gt(length(corrupt_line), 0)
-  expect_true(any(grepl("failed", corrupt_line)))
-  random_line <- waiting[grepl("random.csv", waiting, fixed = TRUE)]
-  expect_true(any(grepl("quarantined", random_line)))
+  e <- status_waiting(s$report_dir, "input2026-10-18 0930 mixed")
+  expect_identical(e$status, "left")
+  expect_true(e$unfinished)
+  expect_identical(e$path, file.path(s$input_dir, "input2026-10-18 0930 mixed"))
+  st_of <- stats::setNames(vapply(e$files, function(f) f$state, character(1)),
+                           vapply(e$files, function(f) f$file, character(1)))
+  expect_identical(st_of[[basename(inbox_corrupt_file())]], "failed")
+  expect_identical(st_of[["random.csv"]], "quarantined")
+  expect_null(status_waiting(s$report_dir, "input2026-10-18 0900 done"))
 })
 
 test_that("inbox_run(): a live lock makes a second run exit immediately, writing nothing", {
@@ -501,8 +511,9 @@ test_that("inbox_run(): a lock whose PID is dead is stale: taken over and report
   expect_true(isTRUE(res$stale_lock))
   expect_identical(res$folders_processed, "input2026-10-18 0900 a")
   expect_false(file.exists(inbox_lock_path(s$db)))
-  expect_true(any(grepl("stale", md_section(read_report(s$report_dir, now), "Problems"), ignore.case = TRUE)))
-  expect_true(any(grepl("stale", md_section(read_status_note(s$report_dir), "Problems"), ignore.case = TRUE)))
+  expect_true(isTRUE(read_inbox_log(s$report_dir)[[1]]$stale_lock))
+  expect_true(any(grepl("stale", unlist(read_status_json(s$report_dir)$problems), ignore.case = TRUE)))
+  expect_length(report_md_files(s$report_dir), 0)
 })
 
 test_that("inbox_run(): a lock older than 2 hours is stale even if its PID is alive", {
@@ -546,7 +557,7 @@ test_that("inbox_run(): appends one JSON line per run with the documented fields
   expect_length(read_inbox_log(s$report_dir), 2)
 })
 
-test_that("inbox_run(dry_run = TRUE): no backup, no DB write, no removal, no state; DRY RUN banner", {
+test_that("inbox_run(dry_run = TRUE): no backup, no DB write, no removal, no state; status.json has the plan and is flagged dry_run", {
   s <- inbox_setup()
   now <- Sys.time()
   d <- make_inbox_folder(s$input_dir, "input2026-10-18 0900 a", inbox_proj_a_files(), now = now)
@@ -561,26 +572,29 @@ test_that("inbox_run(dry_run = TRUE): no backup, no DB write, no removal, no sta
   expect_identical(tree_snapshot(s$input_dir), in_before)
   # a dry run must not mark the inbox as handled, or the real run would skip it
   expect_false(file.exists(file.path(s$report_dir, ".imports.state")))
-  notes <- c(if (file.exists(inbox_report_path(s$report_dir, now))) read_report(s$report_dir, now),
-             if (file.exists(status_note_path(s$report_dir))) read_status_note(s$report_dir))
-  expect_gt(length(notes), 0)
-  expect_true(any(grepl("DRY RUN", notes, fixed = TRUE)))
+  js <- read_status_json(s$report_dir)
+  expect_true(js$dry_run)
+  expect_identical(unlist(js$dry_run_plan$would_import), "input2026-10-18 0900 a")
+  expect_length(js$dry_run_plan$would_file, 0)
+  expect_length(report_md_files(s$report_dir), 0)
 
   real <- run_inbox(s, now = now)
   expect_true(real$ran)
   expect_identical(real$folders_processed, "input2026-10-18 0900 a")
 })
 
-test_that("inbox_run(): a DB change alone refreshes the status note read-only; a resolved item disappears", {
+test_that("inbox_run(): a DB change alone refreshes status.json read-only; a resolved item disappears", {
   s <- inbox_setup()
   now <- sydney_midday()
   make_inbox_folder(s$input_dir, "input2026-10-18 0900 a", inbox_rain_files(), now = now)
   run_inbox(s, now = now)
-  nr <- md_section(read_status_note(s$report_dir), "Needs review")
-  expect_true(any(grepl("ES2664217", nr, fixed = TRUE)))
-  # Instead of sleeping: backdate the dated note so a rewrite would show.
+  review_wos <- function() {
+    vapply(read_status_json(s$report_dir)$needs_review, function(g) g$work_order, character(1))
+  }
+  expect_true("ES2664217" %in% review_wos())
+  # Instead of sleeping: backdate the log so a rewrite would show.
   backdate_tree(s$report_dir)
-  day_before <- tree_snapshot(s$report_dir)[paste0(sydney_date(now), "-imports.md")]
+  log_before <- tree_snapshot(s$report_dir)[".imports.log"]
   log_n <- length(read_inbox_log(s$report_dir))
   backups <- list.files(s$backup_dir)
 
@@ -598,12 +612,12 @@ test_that("inbox_run(): a DB change alone refreshes the status note read-only; a
   res <- run_inbox(s, now = now + 60)
   expect_identical(res$action, "status")
   expect_false(res$ran)
-  nr2 <- md_section(read_status_note(s$report_dir), "Needs review")
-  expect_false(any(grepl("ES2664217", nr2, fixed = TRUE)))
+  expect_false("ES2664217" %in% review_wos())
   expect_identical(file_md5(s$db), db_md5)                 # read-only
   expect_identical(list.files(s$backup_dir), backups)       # no backup
-  expect_identical(tree_snapshot(s$report_dir)[paste0(sydney_date(now), "-imports.md")], day_before)
+  expect_identical(tree_snapshot(s$report_dir)[".imports.log"], log_before)
   expect_length(read_inbox_log(s$report_dir), log_n)        # no import logged
+  expect_length(report_md_files(s$report_dir), 0)
   # the refresh records the DB stat, so the next check is quiet again
   expect_identical(inbox_check(s$input_dir, s$report_dir, now = now + 120, db = s$db), "none")
 })
@@ -613,90 +627,57 @@ test_that("inbox_run(): quiet days get one status-only refresh per Sydney day, n
   now <- sydney_midday()
   make_inbox_folder(s$input_dir, "input2026-10-18 0900 a", inbox_rain_files(), now = now)
   run_inbox(s, now = now)
-  dated <- tree_snapshot(s$report_dir)[paste0(sydney_date(now), "-imports.md")]
+  backdate_tree(s$report_dir)
+  log_snap <- tree_snapshot(s$report_dir)[".imports.log"]
   log_n <- length(read_inbox_log(s$report_dir))
   backups <- list.files(s$backup_dir)
   db_md5 <- file_md5(s$db)
   for (k in 1:3) {
-    unlink(status_note_path(s$report_dir))
+    unlink(file.path(s$report_dir, c("status.json", ".import-status.json")))
     r <- run_inbox(s, now = now + k * 86400)
     expect_identical(r$action, "status")
     expect_false(r$ran)
-    expect_true(file.exists(status_note_path(s$report_dir)))       # rewritten
+    expect_true(file.exists(file.path(s$report_dir, "status.json")))       # rewritten
+    expect_identical(read_status_json(s$report_dir)$updated,
+                     format(now + k * 86400, "%Y-%m-%d %H:%M", tz = "Australia/Sydney"))
     expect_identical(run_inbox(s, now = now + k * 86400 + 3600)$action, "none")  # once a day
   }
   expect_identical(file_md5(s$db), db_md5)
   expect_identical(list.files(s$backup_dir), backups)
   expect_length(read_inbox_log(s$report_dir), log_n)                 # nothing imported or logged
-  expect_identical(tree_snapshot(s$report_dir)[paste0(sydney_date(now), "-imports.md")], dated)
+  expect_identical(tree_snapshot(s$report_dir)[".imports.log"], log_snap)
+  expect_length(report_md_files(s$report_dir), 0)
 })
 
-test_that("import_report(): the dated note is named for the Sydney date of now; header and footer use Sydney time", {
-  s <- inbox_setup()
-  # 14:30 UTC on 18 Oct is 01:30 AEDT on 19 Oct in Sydney
-  now <- as.POSIXct("2026-10-18 14:30:00", tz = "UTC")
-  # a problem (stale lock) makes this a day that gets a dated note
-  write_inbox_lock(s$db, dead_pid(), now - 5 * 60)
-  run_inbox(s, now = now)
-
-  path <- file.path(s$report_dir, "2026-10-19-imports.md")
-  expect_true(file.exists(path))
-  expect_false(file.exists(file.path(s$report_dir, "2026-10-18-imports.md")))
-  l <- strip_frontmatter(readLines(path, warn = FALSE, encoding = "UTF-8"))
-  l <- l[nzchar(trimws(l))]
-  expect_identical(l[[1]], "*Imports · 01:30 · 0 folder(s) imported today, 0 review item(s) open*")
-  expect_identical(l[[length(l)]], "*Last run 01:30; next within the hour. Log: .imports.log*")
-  expect_true(any(grepl("Nothing imported today.", md_section(l, "Imported today"), fixed = TRUE)))
-})
-
-test_that("import_report(): Imported today groups work orders by site with counts and source folder links; no Needs review/Waiting", {
+test_that("inbox_run(): a work order's site and counts are in the log, the return value and status.json", {
   s <- inbox_setup()
   now <- Sys.time()
   make_inbox_folder(s$input_dir, "input2026-10-18 0900 PROJ_A", inbox_proj_a_files(), now = now)
   make_inbox_folder(s$input_dir, "input2026-10-18 0930 rain", inbox_rain_files(), now = now)
   res <- run_inbox(s, now = now)
 
-  l <- read_report(s$report_dir, now)
-  nonblank <- l[nzchar(trimws(l))]
-  expect_match(nonblank[[1]], "^\\*Imports · \\d{2}:\\d{2} · 2 folder\\(s\\) imported today, \\d+ review item\\(s\\) open\\*$")
-  sec <- md_section(l, "Imported today")
-  expect_gt(length(sec), 0)
-  site_idx <- grep("^(#+\\s*|\\*\\*)?(Northvale|Millbrook|Other)\\b", sec, ignore.case = TRUE)
-  site_of <- function(i) {
-    prev <- site_idx[site_idx < i]
-    if (!length(prev)) return(NA_character_)
-    tolower(regmatches(sec[[max(prev)]], regexpr("(?i)northvale|millbrook|other", sec[[max(prev)]], perl = TRUE)))
+  wo_of <- function(folder, name) {
+    for (w in res$folders[[folder]]$work_orders) if (identical(w$name, name)) return(w)
+    NULL
   }
-  a <- grep("XX1234567", sec, fixed = TRUE)
-  b <- grep("ES2664217", sec, fixed = TRUE)
-  expect_length(a, 1)
-  expect_length(b, 1)
-  expect_identical(site_of(a), "northvale")
-  expect_identical(site_of(b), "other")
+  a <- wo_of("input2026-10-18 0900 PROJ_A", "XX1234567")
+  b <- wo_of("input2026-10-18 0930 rain", "ES2664217")
+  expect_false(is.null(a))
+  expect_false(is.null(b))
+  expect_identical(a$site, "B")                      # the code, not a label
+  expect_true(is.na(b$site))                         # dangling aliases: no site
+  expect_match(a$kind, "ALS")
+  expect_gt(a$samples, 0)
+  expect_identical(a$analyses, res$folders[["input2026-10-18 0900 PROJ_A"]]$rows_new)
+  expect_identical(b$analyses, res$folders[["input2026-10-18 0930 rain"]]$rows_new)
 
-  la <- sec[[a]]
-  expect_match(la, "ALS")
-  expect_match(la, "input2026-10-18 0900 PROJ_A", fixed = TRUE)
-  expect_match(la, "file:///", fixed = TRUE)
-  rows_a <- res$folders[["input2026-10-18 0900 PROJ_A"]]$rows_new
-  expect_match(la, paste0("\\b", rows_a, " analys"))
-  expect_match(la, "\\b\\d+ samples?")
-  expect_match(sec[[b]], paste0("\\b", res$folders[["input2026-10-18 0930 rain"]]$rows_new, " analys"))
-
-  expect_length(md_section(l, "Needs review"), 0)
-  expect_length(md_section(l, "Waiting"), 0)
-  expect_false(any(grepl("^#+\\s*Problems", l)))
-})
-
-test_that("import_report(): rewriting with nothing changed gives an identical file", {
-  s <- inbox_setup()
-  now <- Sys.time()
-  make_inbox_folder(s$input_dir, "input2026-10-18 0900 PROJ_A", inbox_proj_a_files(), now = now)
-  run_inbox(s, now = now)
-  p <- quiet_run(import_report(db = s$db, report_dir = s$report_dir, now = now))
-  first <- readLines(inbox_report_path(s$report_dir, now))
-  quiet_run(import_report(db = s$db, report_dir = s$report_dir, now = now))
-  expect_identical(readLines(inbox_report_path(s$report_dir, now)), first)
+  # the log and status.json carry the same, a missing site as JSON null
+  recent <- read_status_json(s$report_dir)$recent_imports
+  by_wo <- stats::setNames(recent, vapply(recent, function(r) r$work_order, character(1)))
+  expect_identical(by_wo[["XX1234567"]]$site, "B")
+  expect_null(by_wo[["ES2664217"]]$site)
+  expect_identical(by_wo[["XX1234567"]]$date, sydney_date(now))
+  expect_length(report_md_files(s$report_dir), 0)
 })
 
 # ---- section 2a: import_status() (the standing note) --------------------------
@@ -722,97 +703,6 @@ review_fixture <- function(now) {
     stringsAsFactors = FALSE
   )
 }
-
-test_that("import_status(): header line counts open items and waiting folders", {
-  s <- inbox_setup()
-  now <- as.POSIXct("2026-10-18 14:30:00", tz = "UTC")
-  insert_review_items(s$db, review_fixture(now))
-  make_inbox_folder(s$input_dir, "input2026-10-19 0125 arriving", inbox_proj_a_files(), age_min = 1, now = now)
-  quiet_run(import_status(db = s$db, input_dir = s$input_dir, report_dir = s$report_dir, now = now))
-  l <- read_status_note(s$report_dir)
-  l <- l[nzchar(trimws(l))]
-  expect_identical(l[[1]], "*Import status · updated 2026-10-19 01:30 · 10 review item(s) open, 1 folder(s) waiting*")
-})
-
-test_that("import_status(): Needs review grouped by kind then work order, counts, oldest date, plain-language line, **new**, notes collapsed last", {
-  s <- inbox_setup()
-  now <- as.POSIXct("2026-10-18 14:30:00", tz = "UTC")
-  insert_review_items(s$db, review_fixture(now))
-  quiet_run(import_status(db = s$db, input_dir = s$input_dir, report_dir = s$report_dir, now = now))
-  sec <- md_section(read_status_note(s$report_dir), "Needs review")
-  sec <- sec[nzchar(trimws(sec))]
-  expect_gt(length(sec), 0)
-
-  # date_conflict/a77: one group for the work order, count 2, oldest date, meaning
-  dc <- sec[grepl("2400-1111-01", sec, fixed = TRUE)]
-  expect_length(dc, 1)
-  expect_match(dc, "\\b2\\b")
-  oldest <- now - 200 * 3600
-  expect_true(grepl(format(oldest, "%Y-%m-%d", tz = "Australia/Sydney"), dc, fixed = TRUE) ||
-                grepl(format(oldest, "%d %b", tz = "Australia/Sydney"), dc, fixed = TRUE))
-  expect_false(grepl("**new**", dc, fixed = TRUE))
-  expect_true(any(grepl("dust block dates disagree; held until released", sec, fixed = TRUE)))
-  expect_true(any(grepl("lab file for a work order already in the database; held", sec, fixed = TRUE)))
-  expect_true(any(grepl("sampling point not recognised", sec, fixed = TRUE)))
-
-  # opened within the last 24 h -> **new**; 30 h / 400 h old -> not new
-  expect_match(sec[grepl("ES1111111", sec, fixed = TRUE)], "**new**", fixed = TRUE)
-  expect_match(sec[grepl("ES3333333", sec, fixed = TRUE)], "**new**", fixed = TRUE)
-  expect_false(grepl("**new**", sec[grepl("ES4444444", sec, fixed = TRUE)], fixed = TRUE))
-  es2 <- sec[grepl("ES2222222", sec, fixed = TRUE)]
-  expect_length(es2, 1)
-  expect_match(es2, "\\b2\\b")
-
-  # grouped by kind: each kind's work orders sit together
-  uf <- which(grepl("ES2222222|ES3333333|ES4444444", sec))
-  expect_length(uf, 3)
-  between <- sec[min(uf):max(uf)]
-  expect_false(any(grepl("2400-1111-01|ES1111111", between)))
-
-  # resolved items are not listed
-  expect_false(any(grepl("ES9999999", sec, fixed = TRUE)))
-
-  # self_precedence_note: one count line, last, work orders not itemised
-  notes <- grep("precedence", sec, ignore.case = TRUE)
-  expect_length(notes, 1)
-  expect_identical(notes, length(sec))
-  expect_match(sec[[notes]], "\\b3\\b")
-  expect_false(any(grepl("ES555555", sec, fixed = TRUE)))
-})
-
-test_that("import_status(): Recent imports lists the last 14 days' work orders, newest first, linking the dated note", {
-  s <- inbox_setup()
-  now <- Sys.time()
-  make_inbox_folder(s$input_dir, "input2026-10-18 0900 PROJ_A", inbox_proj_a_files(), now = now)
-  run_inbox(s, now = now)
-  Sys.sleep(1.1)
-  make_inbox_folder(s$input_dir, "input2026-10-18 1000 rain", inbox_rain_files(), now = now)
-  run_inbox(s, now = now)
-
-  sec <- md_section(read_status_note(s$report_dir), "Recent imports")
-  a <- grep("XX1234567", sec, fixed = TRUE)
-  b <- grep("ES2664217", sec, fixed = TRUE)
-  expect_length(a, 1)
-  expect_length(b, 1)
-  link <- paste0("[[", sydney_date(now), "-imports]]")
-  expect_match(sec[[a]], link, fixed = TRUE)
-  expect_match(sec[[b]], link, fixed = TRUE)
-  expect_lt(b, a)   # newest first
-})
-
-test_that("import_status(): Problems shows only the most recent run's problems, omitted when none", {
-  s <- inbox_setup()
-  local_db_checks_pass()
-  now <- Sys.time()
-  write_inbox_lock(s$db, dead_pid(), now - 5 * 60)
-  run_inbox(s, now = now)
-  expect_true(any(grepl("stale", md_section(read_status_note(s$report_dir), "Problems"),
-                        ignore.case = TRUE)))
-
-  make_inbox_folder(s$input_dir, "input2026-10-18 0900 PROJ_A", inbox_proj_a_files(), now = now)
-  run_inbox(s, now = now)
-  expect_false(any(grepl("^#+\\s*Problems", read_status_note(s$report_dir))))
-})
 
 test_that("import_status(): writes .import-status.json with the same content as data", {
   s <- inbox_setup()
@@ -868,12 +758,3 @@ test_that(".inbox_review_groups(): drops rows whose subkind is self_precedence_n
   expect_identical(NROW(.inbox_review_groups(rv[c(1, 3), , drop = FALSE], now)), 0L)
 })
 
-test_that("import_status(): rewriting with nothing changed gives an identical file", {
-  s <- inbox_setup()
-  now <- as.POSIXct("2026-10-18 14:30:00", tz = "UTC")
-  insert_review_items(s$db, review_fixture(now))
-  quiet_run(import_status(db = s$db, input_dir = s$input_dir, report_dir = s$report_dir, now = now))
-  first <- read_status_note(s$report_dir)
-  quiet_run(import_status(db = s$db, input_dir = s$input_dir, report_dir = s$report_dir, now = now))
-  expect_identical(read_status_note(s$report_dir), first)
-})

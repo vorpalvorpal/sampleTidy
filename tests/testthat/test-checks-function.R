@@ -21,7 +21,7 @@ test_that("checks function: called once per status build (a run, then a status r
   r1 <- cf_run(s, f)
   expect_identical(r1$action, "run")
   expect_identical(n, 1L)
-  unlink(status_note_path(s$report_dir))
+  unlink(file.path(s$report_dir, c("status.json", ".import-status.json")))
   Sys.setFileTime(s$db, Sys.time() + 120)          # DB stat changed -> "status"
   r2 <- cf_run(s, f, now = fl_now() + 3600)
   expect_identical(r2$action, "status")
@@ -57,13 +57,11 @@ test_that("checks function: import_flags() stays list-only", {
   expect_error(import_flags(db = db, now = fl_now(), checks = function() list()))
 })
 
-test_that("checks function: one that errors still writes the Flags section, records the error, and does not fail the run", {
+test_that("checks function: one that errors still writes the flags keys, records the error, and does not fail the run", {
   s <- fl_status_setup()
   f <- function() stop("tables are unreadable")
   expect_no_error(r <- cf_run(s, f))
   expect_identical(r$action, "run")
-  sec <- md_section(read_status_note(s$report_dir), "Flags")
-  expect_true(any(grepl("check checks failed: tables are unreadable", sec, fixed = TRUE)))
   js <- fl_status_json(s)
   expect_identical(vapply(js$flag_errors, function(e) e$check, ""), "checks")
   expect_match(js$flag_errors[[1]]$message, "tables are unreadable", fixed = TRUE)
@@ -75,10 +73,9 @@ test_that("checks function: a result that is not a list is handled the same way"
     s <- fl_status_setup()
     f <- function() bad
     expect_no_error(cf_run(s, f))
-    sec <- md_section(read_status_note(s$report_dir), "Flags")
-    expect_true(any(grepl("check checks failed: ", sec, fixed = TRUE)))
     js <- fl_status_json(s)
     expect_identical(vapply(js$flag_errors, function(e) e$check, ""), "checks")
+    expect_match(js$flag_errors[[1]]$message, "checks", fixed = FALSE)
     expect_length(js$flags, 0)
   }
 })
@@ -90,7 +87,7 @@ test_that("checks function: the checks that follow a failure recover on the next
   cf_run(s, f)
   expect_length(fl_status_json(s)$flags, 0)
   ok <- TRUE
-  unlink(status_note_path(s$report_dir))
+  unlink(file.path(s$report_dir, c("status.json", ".import-status.json")))
   Sys.setFileTime(s$db, Sys.time() + 120)
   cf_run(s, f, now = fl_now() + 3600)
   js <- fl_status_json(s)

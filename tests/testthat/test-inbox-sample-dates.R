@@ -2,6 +2,8 @@
 # dates" for deliveries whose samples carry only `sample.date` (datetime NULL -
 # live: ES2652688, every ACIRL field / gas / dust row). The import line's date
 # range must use COALESCE(datetime, date), the LOCAL_DATE rule of R/flags.R.
+# The core no longer renders the note; the range is the work order's
+# date_start/date_end in the run's return value and log line.
 #
 # ingest_dir() is mocked (namespace binding, as test-inbox.R does) to commit one
 # work order's samples directly, so the test controls which column is set.
@@ -27,20 +29,21 @@ sd_run <- function(ts_col, stamps, wo = "ES2652688") {
     list(n_events_committed = 1L, rows_new = length(stamps), rows_already_present = 0L,
          rows_superseded = 0L, review_items_opened = 0L)
   }, .env = parent.frame())
-  run_inbox(s, now = now)
-  sec <- md_section(read_report(s$report_dir, now), "Imported today")
-  sec[grepl(wo, sec, fixed = TRUE)]
+  res <- run_inbox(s, now = now)
+  wos <- res$folders[["input2026-10-19 0900 dates"]]$work_orders
+  Filter(function(w) identical(w$name, wo), wos)
 }
 
-test_that("dated note: samples with only `date` (datetime NULL) show their date range, not 'no sample dates'", {
-  line <- sd_run("date", c("2026-09-14 00:00:00", "2026-09-16 00:00:00"))
-  expect_length(line, 1)
-  expect_false(grepl("no sample dates", line, fixed = TRUE))
-  expect_match(line, "2026-09-14 to 2026-09-16", fixed = TRUE)
+test_that("work orders: samples with only `date` (datetime NULL) get their date range, not NA", {
+  w <- sd_run("date", c("2026-09-14 00:00:00", "2026-09-16 00:00:00"))
+  expect_length(w, 1)
+  expect_identical(w[[1]]$date_start, "2026-09-14")
+  expect_identical(w[[1]]$date_end, "2026-09-16")
 })
 
-test_that("dated note: samples with `datetime` still show their date range", {
-  line <- sd_run("datetime", c("2026-09-14 01:00:00", "2026-09-16 01:00:00"))
-  expect_length(line, 1)
-  expect_match(line, "2026-09-14 to 2026-09-16", fixed = TRUE)
+test_that("work orders: samples with `datetime` still get their date range", {
+  w <- sd_run("datetime", c("2026-09-14 01:00:00", "2026-09-16 01:00:00"))
+  expect_length(w, 1)
+  expect_identical(w[[1]]$date_start, "2026-09-14")
+  expect_identical(w[[1]]$date_end, "2026-09-16")
 })

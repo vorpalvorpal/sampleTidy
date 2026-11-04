@@ -85,12 +85,17 @@ test_that("P20.1: a dry run writes status.json identical to .import-status.json,
   expect_true(jsonlite::fromJSON(so_path(s, "status.json"))$dry_run)
 })
 
-test_that("P20.1: import_status() called directly also writes status.json (identical to .import-status.json) and still writes Import status.md", {
+test_that("P20.1: import_status() called directly (deprecated, no renderer) warns, writes both json files and no markdown, and returns the Import status.md path invisibly", {
   s <- inbox_setup()
-  suppressWarnings(suppressMessages(
-    import_status(db = s$db, input_dir = s$input_dir, report_dir = s$report_dir,
-                  now = sydney_midday())))
-  expect_true(file.exists(so_path(s, "Import status.md")))
+  expect_warning(
+    r <- withVisible(suppressMessages(
+      import_status(db = s$db, input_dir = s$input_dir, report_dir = s$report_dir,
+                    now = sydney_midday()))),
+    class = "sampletidy_deprecated")
+  expect_false(r$visible)
+  expect_identical(r$value, file.path(s$report_dir, "Import status.md"))
+  expect_false(file.exists(so_path(s, "Import status.md")))
+  expect_length(report_md_files(s$report_dir), 0)
   expect_true(file.exists(so_path(s, ".import-status.json")))
   expect_true(file.exists(so_path(s, "status.json")))
   expect_true(so_same_bytes(so_path(s, "status.json"), so_path(s, ".import-status.json")))
@@ -107,7 +112,7 @@ test_that("P20.1: import_status() with `checks` also keeps the two json files by
                                       simplifyVector = FALSE)$flags), 0)
 })
 
-test_that("P20.1: import_status() and import_report() called directly run no hooks", {
+test_that("P20.1: import_status() and import_report() called directly run renderer hooks only, never the others", {
   s <- inbox_setup()
   now <- sydney_midday()
   clear_hooks()
@@ -116,22 +121,37 @@ test_that("P20.1: import_status() and import_report() called directly run no hoo
   register_hook("after_status", function(x) fired <<- c(fired, "after_status"))
   register_hook("after_run", function(x) fired <<- c(fired, "after_run"))
   register_hook("work_complete", function(x) fired <<- c(fired, "work_complete"))
-  suppressWarnings(suppressMessages({
+  # no renderer registered: each wrapper warns and runs nothing
+  expect_warning(suppressMessages(
+    import_status(db = s$db, input_dir = s$input_dir, report_dir = s$report_dir, now = now)),
+    class = "sampletidy_deprecated")
+  expect_warning(suppressMessages(import_report(db = s$db, report_dir = s$report_dir, now = now)),
+                 class = "sampletidy_deprecated")
+  expect_length(fired, 0)
+  # with renderers registered, only they run
+  register_hook("after_status", function(x, context) fired <<- c(fired, "status renderer"),
+                renderer = TRUE)
+  register_hook("after_run", function(x, context) fired <<- c(fired, "run renderer"),
+                renderer = TRUE)
+  expect_no_warning(suppressMessages({
     import_status(db = s$db, input_dir = s$input_dir, report_dir = s$report_dir, now = now)
     import_report(db = s$db, report_dir = s$report_dir, now = now)
   }))
-  expect_length(fired, 0)
-  # and with hooks registered the direct call still writes the note (it is the renderer)
-  expect_true(file.exists(so_path(s, "Import status.md")))
-  expect_true(file.exists(inbox_report_path(s$report_dir, now)))
+  expect_setequal(fired, c("status renderer", "run renderer"))
+  expect_length(fired, 2)
 })
 
-test_that("P20.1: import_report() called directly writes the dated note only (not status.json)", {
+test_that("P20.1: import_report() called directly (deprecated, no renderer) warns, writes nothing and returns the dated note's path", {
   s <- inbox_setup()
   now <- sydney_midday()
-  suppressWarnings(suppressMessages(import_report(db = s$db, report_dir = s$report_dir, now = now)))
-  expect_true(file.exists(inbox_report_path(s$report_dir, now)))
+  expect_warning(
+    r <- withVisible(suppressMessages(import_report(db = s$db, report_dir = s$report_dir, now = now))),
+    class = "sampletidy_deprecated")
+  expect_false(r$visible)
+  expect_identical(r$value, file.path(s$report_dir, paste0(sydney_date(now), "-imports.md")))
+  expect_false(file.exists(r$value))
   expect_false(file.exists(so_path(s, "status.json")))
+  expect_length(report_md_files(s$report_dir), 0)
 })
 
 # ---- events.jsonl ----------------------------------------------------------------------
@@ -217,20 +237,20 @@ test_that("P20.1: a status-only refresh appends nothing to either log", {
 
 # ---- readers ---------------------------------------------------------------------------
 
-test_that("P20.1 readers: the status note reads recent imports from events.jsonl alone (no .imports.log)", {
+test_that("P20.1 readers: status.json reads recent imports from events.jsonl alone (no .imports.log)", {
   s <- inbox_setup()
   now <- sydney_midday()
   dir.create(s$report_dir, showWarnings = FALSE, recursive = TRUE)
   writeLines(so_log_line("ES9000777", now - 3600), so_path(s, "events.jsonl"))
   suppressWarnings(suppressMessages(
     import_status(db = s$db, input_dir = s$input_dir, report_dir = s$report_dir, now = now)))
-  recent <- md_section(read_status_note(s$report_dir), "Recent imports")
-  expect_true(any(grepl("ES9000777", recent, fixed = TRUE)))
   js <- jsonlite::fromJSON(so_path(s, "status.json"), simplifyVector = FALSE)
   expect_identical(vapply(js$recent_imports, function(r) r$work_order, ""), "ES9000777")
+  # the log's site value is passed through verbatim (a label in an old line)
+  expect_identical(js$recent_imports[[1]]$site, "Northvale")
 })
 
-test_that("P20.1 readers: when both logs exist the status note reads events.jsonl, not .imports.log", {
+test_that("P20.1 readers: when both logs exist status.json reads events.jsonl, not .imports.log", {
   s <- inbox_setup()
   now <- sydney_midday()
   dir.create(s$report_dir, showWarnings = FALSE, recursive = TRUE)
@@ -238,12 +258,11 @@ test_that("P20.1 readers: when both logs exist the status note reads events.json
   writeLines(so_log_line("ES9000222", now - 3600), so_path(s, "events.jsonl"))
   suppressWarnings(suppressMessages(
     import_status(db = s$db, input_dir = s$input_dir, report_dir = s$report_dir, now = now)))
-  recent <- md_section(read_status_note(s$report_dir), "Recent imports")
-  expect_true(any(grepl("ES9000222", recent, fixed = TRUE)))
-  expect_false(any(grepl("ES9000111", recent, fixed = TRUE)))
+  recent <- vapply(read_status_json(s$report_dir)$recent_imports, function(r) r$work_order, "")
+  expect_identical(recent, "ES9000222")
 })
 
-test_that("P20.1 readers: the status note's Problems come from events.jsonl's last line when it exists", {
+test_that("P20.1 readers: status.json's problems come from events.jsonl's last line when it exists", {
   s <- inbox_setup()
   now <- sydney_midday()
   dir.create(s$report_dir, showWarnings = FALSE, recursive = TRUE)
@@ -253,25 +272,28 @@ test_that("P20.1 readers: the status note's Problems come from events.jsonl's la
              so_path(s, "events.jsonl"))
   suppressWarnings(suppressMessages(
     import_status(db = s$db, input_dir = s$input_dir, report_dir = s$report_dir, now = now)))
-  prob <- md_section(read_status_note(s$report_dir), "Problems")
+  prob <- unlist(read_status_json(s$report_dir)$problems)
   expect_true(any(grepl("problem from the events log", prob, fixed = TRUE)))
   expect_false(any(grepl("problem from the legacy log", prob, fixed = TRUE)))
 })
 
-test_that("P20.1 readers: the daily report reads events.jsonl when it exists", {
+test_that("P20.1 readers: the day digest reads events.jsonl when it exists", {
   s <- inbox_setup()
+  rec <- record_hook("after_run", renderer = TRUE)
   now <- sydney_midday()
   dir.create(s$report_dir, showWarnings = FALSE, recursive = TRUE)
   writeLines(so_log_line("ES9000111", now - 7200), so_path(s, ".imports.log"))
   writeLines(so_log_line("ES9000222", now - 3600), so_path(s, "events.jsonl"))
   suppressWarnings(suppressMessages(import_report(db = s$db, report_dir = s$report_dir, now = now)))
-  day <- md_section(read_report(s$report_dir, now), "Imported today")
-  expect_true(any(grepl("ES9000222", day, fixed = TRUE)))
-  expect_false(any(grepl("ES9000111", day, fixed = TRUE)))
+  expect_length(rec$calls, 1)
+  day <- rec$calls[[1]]$context$day
+  wos <- unlist(lapply(day$runs, function(r) vapply(r$imports, function(w) w$name, "")))
+  expect_identical(wos, "ES9000222")
 })
 
-test_that("P20.1 readers: with only the legacy .imports.log, both notes still read it", {
+test_that("P20.1 readers: with only the legacy .imports.log, status.json and the day digest still read it", {
   s <- inbox_setup()
+  rec <- record_hook("after_run", renderer = TRUE)
   now <- sydney_midday()
   dir.create(s$report_dir, showWarnings = FALSE, recursive = TRUE)
   writeLines(so_log_line("ES9000333", now - 3600), so_path(s, ".imports.log"))
@@ -279,20 +301,28 @@ test_that("P20.1 readers: with only the legacy .imports.log, both notes still re
     import_status(db = s$db, input_dir = s$input_dir, report_dir = s$report_dir, now = now)
     import_report(db = s$db, report_dir = s$report_dir, now = now)
   }))
-  expect_true(any(grepl("ES9000333", md_section(read_status_note(s$report_dir), "Recent imports"), fixed = TRUE)))
-  expect_true(any(grepl("ES9000333", md_section(read_report(s$report_dir, now), "Imported today"), fixed = TRUE)))
+  expect_identical(vapply(read_status_json(s$report_dir)$recent_imports, function(r) r$work_order, ""),
+                   "ES9000333")
+  day <- rec$calls[[1]]$context$day
+  expect_identical(day$runs[[1]]$imports[[1]]$name, "ES9000333")
 })
 
-test_that("P20.1 readers: after a full run the status note and the daily report agree with events.jsonl", {
+test_that("P20.1 readers: after a full run status.json, the log and the day digest agree", {
   s <- so_setup()
+  rec <- record_hook("after_run", renderer = TRUE)
   testthat::local_mocked_bindings(ingest_dir = function(path, db, ...) stop("simulated folder failure"))
   res <- run_inbox(s, now = s$now)
   expect_true(res$ran)
   expect_true(file.exists(so_path(s, "events.jsonl")))
   expect_true(any(grepl("simulated folder failure",
-                        md_section(read_status_note(s$report_dir), "Problems"), fixed = TRUE)))
+                        unlist(read_status_json(s$report_dir)$problems), fixed = TRUE)))
   expect_true(any(grepl("simulated folder failure",
-                        md_section(read_report(s$report_dir, s$now), "Problems"), fixed = TRUE)))
+                        read_inbox_log(s$report_dir)[[1]]$folders[["input2026-10-18 0900 a"]]$error,
+                        fixed = TRUE)))
+  expect_length(rec$calls, 1)
+  expect_true(any(grepl("simulated folder failure",
+                        unlist(rec$calls[[1]]$context$day$runs[[1]]$problems), fixed = TRUE)))
+  expect_length(report_md_files(s$report_dir), 0)
 })
 
 # ---- flags first_seen carry-over --------------------------------------------------------

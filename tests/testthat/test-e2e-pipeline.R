@@ -489,7 +489,9 @@ test_that("R-10.6: NAMESPACE exports equal the CONTRACT-pinned public API exactl
     "archive_settle",
     # Stage 1 of the layer move: what a deployment's hooks file feature-detects
     # before it sets the zone, the checks and the site keywords.
-    "st_capabilities"
+    "st_capabilities",
+    # Stage 2 of the layer move: the recogniser for the inbox's batches.
+    "inbox_batches"
   )
   actual <- getNamespaceExports("sampleTidy")
   expect_setequal(actual, pinned)

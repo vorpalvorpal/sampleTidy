@@ -22,7 +22,7 @@
 #     with <path> as given. On success it returns character(0) invisibly.
 #   * A recorded problem is session state, like the hooks: it appears in the
 #     Problems of every status inbox_run() writes afterwards in the session
-#     (status.json, .import-status.json and the "Import status.md" note), on a
+#     (status.json and .import-status.json), on a
 #     full run and on action "status", AFTER the log-derived problems and
 #     BEFORE this run's own hook failures. It is not a run error (not in
 #     inbox_run()'s `errors`) and is never written to events.jsonl or
@@ -34,6 +34,12 @@
 #   dev/auto-import.R calls load_hooks_file() after the package is loaded and
 #   before inbox_run(), so a site sets SAMPLETIDY_HOOKS_FILE in the launchd
 #   job's environment to attach its hooks to the live import.
+#
+#   Stage 2: a hooks file that fails to load must not leave the import running
+#   on the generic defaults (which sweep every subfolder, with no settle time).
+#   Then auto-import.R sweeps nothing (inbox_batches(pattern = "^$")), still
+#   writes status.json with the problem, and exits with status 3 so that
+#   auto-import.sh records a failure and notifies.
 
 # ---- helpers ---------------------------------------------------------------------------
 
@@ -168,7 +174,7 @@ test_that("hooks file: hooks it registers fire on the next inbox_run(), with hel
   expect_identical(readLines(marker), "fired:run")
 })
 
-test_that("hooks file: a missing file's problem is in status.json, .import-status.json and the status note's Problems; the run still runs", {
+test_that("hooks file: a missing file's problem is in status.json and .import-status.json; the run still runs", {
   hf_clean()
   s <- inbox_setup()
   local_db_checks_pass()
@@ -179,8 +185,6 @@ test_that("hooks file: a missing file's problem is in status.json, .import-statu
   want <- sprintf("hooks file %s not found", p)
   expect_true(want %in% hf_json_problems(s$report_dir))
   expect_true(want %in% hf_json_problems(s$report_dir, ".import-status.json"))
-  prob <- md_section(read_status_note(s$report_dir), "Problems")
-  expect_true(any(grepl(want, prob, fixed = TRUE)))
   expect_identical(res$errors, character(0))
 })
 
@@ -320,6 +324,24 @@ test_that("hooks file: dev/auto-import.R passes st_config(\"checks\") to its sin
   expect_true(any(grepl("SAMPLETIDY_HOOKS_FILE", src, fixed = TRUE)))
 })
 
+# Stage 2: the sweep is the deployment's (st_config("inbox_batches")); a failed
+# hooks file sweeps nothing.
+test_that("hooks file: dev/auto-import.R sweeps nothing when the hooks file failed to load, and otherwise uses the configured batches", {
+  skip_if_not(dir.exists(hf_dev_file()), "no dev/ (installed package)")
+  src <- readLines(hf_dev_file("auto-import.R"), warn = FALSE)
+  code <- sub("#.*$", "", src)                     # ignore comments
+  txt <- paste(code, collapse = "\n")
+  i_hooks <- grep("load_hooks_file\\(", code)
+  i_run <- grep("inbox_run\\(", code)
+  expect_length(i_hooks, 1)
+  expect_length(i_run, 1)
+  expect_lt(i_hooks, i_run)
+  expect_true(grepl("inbox_batches(pattern = \"^$\")", txt, fixed = TRUE))
+  expect_true(grepl("st_config(\"inbox_batches\")", txt, fixed = TRUE))
+  call_txt <- sub("^.*inbox_run\\(", "", txt)
+  expect_match(call_txt, "batch\\s*=")
+})
+
 test_that("hooks file: the deployment's check tables are no longer shipped in dev/", {
   skip_if_not(dir.exists(hf_dev_file()), "no dev/ (installed package)")
   for (f in c("expected_schedule.csv", "qc_criteria.csv", "qc_requirements.csv")) {
@@ -372,15 +394,25 @@ test_that("hooks file e2e: dev/auto-import.R sources SAMPLETIDY_HOOKS_FILE and i
   expect_identical(readLines(marker), "fired:run")
 })
 
-test_that("hooks file e2e: a failing hooks file does not stop dev/auto-import.R; the failure is in status.json's problems", {
+test_that("hooks file e2e: a failing hooks file makes dev/auto-import.R sweep nothing, write status.json with the problem, and exit 3", {
   skip_on_cran()
   skip_if_not(dir.exists(hf_dev_file()), "no dev/ (installed package)")
   skip_if_not_installed("devtools")
   s <- inbox_setup()
+  # a settled folder the generic defaults would sweep
+  d <- make_inbox_folder(s$input_dir, "batch-1", inbox_proj_a_files(), age_min = 60)
+  in_before <- tree_snapshot(s$input_dir)
   p <- hf_file('stop("deliberate hooks-file failure")')
   r <- hf_run_auto_import(s, p)
-  expect_identical(r$status, 0L, info = paste(r$out, collapse = "\n"))
+  expect_identical(r$status, 3L, info = paste(r$out, collapse = "\n"))
   expect_true(file.exists(file.path(s$report_dir, "status.json")), info = paste(r$out, collapse = "\n"))
   expect_true(sprintf("hooks file %s failed: deliberate hooks-file failure", p) %in%
                 hf_json_problems(s$report_dir))
+  # nothing was swept: the log line saw no folder, and the folder is untouched
+  log <- read_inbox_log(s$report_dir)
+  expect_length(log, 1)
+  expect_length(unlist(log[[1]]$folders_seen), 0)
+  expect_length(unlist(log[[1]]$folders_processed), 0)
+  expect_true(dir.exists(d))
+  expect_identical(tree_snapshot(s$input_dir), in_before)
 })

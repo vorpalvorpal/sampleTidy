@@ -805,16 +805,14 @@ test_that("overdue (R12): suppressed when an invoiced_not_received flag covers t
   expect_setequal(fl_of(f, "invoiced_not_received")$date, c("2026-08-19", "2026-07-10"))
 })
 
-test_that("status note and JSON (R12): the overdue line omits the source; the JSON flag carries it", {
+test_that("status.json (R12): the overdue detail omits the source; the JSON flag carries it", {
   s <- fl_status_setup()
   fl_status(s, checks = fl_checks(schedule = fl_schedule(
     list(site = "K", months = "8", source = "ACIRL revised schedule Aug 2026"))))
-  sec <- md_section(read_status_note(s$report_dir), "Flags")
-  line <- sec[grepl("^- .*2026-08-01", sec)]
-  expect_length(line, 1)
-  expect_match(line, "no acirl_water sample dated in Aug 2026", fixed = TRUE)
-  expect_false(grepl("revised schedule", line, fixed = TRUE))
   fl <- fl_status_json(s)$flags[[1]]
+  expect_identical(fl$date, "2026-08-01")
+  expect_match(fl$detail, "no acirl_water sample dated in Aug 2026", fixed = TRUE)
+  expect_false(grepl("revised schedule", fl$detail, fixed = TRUE))
   expect_identical(fl$source, "ACIRL revised schedule Aug 2026")
 })
 
@@ -877,52 +875,24 @@ test_that("checks given as CSV paths give the same flags as data.frames; a missi
 
 # ---- the status note and JSON ------------------------------------------------------------------
 
-test_that("import_status(checks = NULL): no Flags section and no `flags` in the JSON (phase-1 output)", {
+test_that("import_status(checks = NULL): no flags keys in the JSON (phase-1 output)", {
   s <- fl_status_setup()
   fl_status(s, checks = NULL)
-  lines <- read_status_note(s$report_dir)
-  expect_false(any(grepl("^## Flags", lines)))
   js <- fl_status_json(s)
   expect_false("flags" %in% names(js))
   expect_false("flag_errors" %in% names(js))
+  expect_false("flag_checks" %in% names(js))
+  expect_false("site_names" %in% names(js))
 })
 
-test_that("import_status(checks): '## Flags' sits between Needs review and Waiting; 'No flags.' when none", {
+test_that("import_status(checks): `flags` is present and empty when none, with flag_checks and site_names", {
   s <- fl_status_setup()
   fl_status(s, checks = fl_checks())
-  lines <- read_status_note(s$report_dir)
-  i_nr <- which(lines == "## Needs review")
-  i_fl <- which(lines == "## Flags")
-  i_wa <- which(lines == "## Waiting")
-  expect_length(i_fl, 1)
-  expect_true(i_nr < i_fl && i_fl < i_wa)
-  expect_true("No flags." %in% md_section(lines, "Flags"))
   js <- fl_status_json(s)
+  expect_true("flags" %in% names(js))
   expect_length(js$flags, 0)
-})
-
-test_that("import_status(checks): flags grouped by check in the fixed order, newest first within a group", {
-  s <- fl_status_setup()
-  fl_with(s$db, function(con) {
-    fl_sample(con, "N.E01", "ES2600110", "2026-09-11", results = list(`NH3-N` = 2))
-  })
-  fl_status(s, checks = fl_checks(schedule = fl_schedule(list(site = "K", months = "7;8")),
-                                  limits = fl_limits(list(max = "0.9"))))
-  sec <- md_section(read_status_note(s$report_dir), "Flags")
-  h_od <- grep("^\\*\\*overdue\\*\\*", sec)
-  h_ll <- grep("^\\*\\*licence_limit\\*\\*", sec)
-  expect_length(h_od, 1)
-  expect_length(h_ll, 1)
-  expect_true(h_od < h_ll)
-  i_aug <- grep("^- .*2026-08-01", sec)
-  i_jul <- grep("^- .*2026-07-01", sec)
-  i_nh3 <- grep("^- .*2026-09-11", sec)
-  expect_length(i_aug, 1)
-  expect_length(i_jul, 1)
-  expect_length(i_nh3, 1)
-  expect_true(h_od < i_aug && i_aug < i_jul && i_jul < h_ll && h_ll < i_nh3)
-  expect_match(sec[[i_nh3]], "N.E01", fixed = TRUE)
-  expect_false("No flags." %in% sec)
+  expect_true(all(c("flag_checks", "site_names") %in% names(js)))
+  expect_identical(js$flag_checks[[1]]$check, "overdue")
 })
 
 test_that(".import-status.json: flags carry first_seen, kept by key across runs; new flags get now; gone flags drop", {
@@ -963,61 +933,50 @@ test_that(".import-status.json: flags carry first_seen, kept by key across runs;
   expect_false("2026-07-01" %in% dates2)                  # cleared overdue dropped
 })
 
-test_that("status note (R6): at most 15 lines per check, newest first, then '+N more'; the JSON keeps all", {
+test_that("status.json (R6): keeps every flag, 22 here; the 15-line cap belongs to a renderer", {
   s <- fl_status_setup()
   # no samples: B and K each overdue Oct 2025 .. Aug 2026 = 22 flags
   chk <- fl_checks(schedule = fl_schedule(list(site = "B"), list(site = "K")))
   fl_status(s, checks = chk)
-  sec <- md_section(read_status_note(s$report_dir), "Flags")
-  h <- grep("^\\*\\*overdue\\*\\*", sec)
-  expect_length(h, 1)
-  rest <- sec[(h + 1):length(sec)]
-  nxt <- grep("^\\*\\*", rest)
-  grp <- if (length(nxt)) rest[seq_len(nxt[[1]] - 1)] else rest
-  items <- grp[grepl("^- ", grp) & !grepl("more — see", grp, fixed = TRUE)]
-  expect_length(items, 15)
-  expect_true(any(grepl("+7 more — see .import-status.json", grp, fixed = TRUE)))
-  expect_match(items[[1]], "2026-08-01", fixed = TRUE)
-  expect_false(any(grepl("2025-10-01", items, fixed = TRUE)))
-  expect_length(fl_status_json(s)$flags, 22)
+  js <- fl_status_json(s)
+  expect_length(js$flags, 22)
+  expect_true(all(vapply(js$flags, function(f) f$check, "") == "overdue"))
 })
 
-test_that("a failing check does not break the note: 'check <name> failed: <msg>' in Flags; other checks still listed", {
+test_that("a failing check does not break the status: it is a flag_errors entry; other checks still listed", {
   s <- fl_status_setup()
   chk <- fl_checks(schedule = fl_schedule(list(site = "K", months = "8")),
                    limits = file.path(s$report_dir, "no-such-limits.csv"))
   expect_no_error(fl_status(s, checks = chk))
-  sec <- md_section(read_status_note(s$report_dir), "Flags")
-  expect_true(any(grepl("check licence_limit failed: ", sec, fixed = TRUE)))
-  expect_true(any(grepl("^- .*2026-08-01", sec)))
   js <- fl_status_json(s)
   expect_identical(vapply(js$flag_errors, function(e) e$check, ""), "licence_limit")
   expect_true(nzchar(js$flag_errors[[1]]$message))
   expect_length(js$flags, 1)
+  expect_identical(js$flags[[1]]$date, "2026-08-01")
 })
 
-test_that("inbox_run(checks = ...) passes checks to the status note on a run and on a status refresh", {
+test_that("inbox_run(checks = ...) passes checks to status.json on a run and on a status refresh", {
   s <- fl_status_setup()
   chk <- fl_checks(schedule = fl_schedule(list(site = "K", months = "8")))
   run <- function(now) quiet_run(inbox_run(input_dir = s$input_dir, db = s$db,
                                            backup_dir = s$backup_dir, report_dir = s$report_dir,
                                            now = now, checks = fl_with_defaults(chk)))
+  dates <- function() vapply(read_status_json(s$report_dir)$flags, function(f) f$date, "")
   r1 <- run(fl_now())
   expect_identical(r1$action, "run")
-  sec <- md_section(read_status_note(s$report_dir), "Flags")
-  expect_true(any(grepl("^- .*2026-08-01", sec)))
+  expect_true("2026-08-01" %in% dates())
 
-  unlink(status_note_path(s$report_dir))
+  unlink(file.path(s$report_dir, c("status.json", ".import-status.json")))
   Sys.setFileTime(s$db, Sys.time() + 120)          # DB stat changed -> "status"
   r2 <- run(fl_now() + 3600)
   expect_identical(r2$action, "status")
-  sec2 <- md_section(read_status_note(s$report_dir), "Flags")
-  expect_true(any(grepl("^- .*2026-08-01", sec2)))
+  expect_true("2026-08-01" %in% dates())
 })
 
-test_that("inbox_run() without checks writes no Flags section (backward compatible)", {
+test_that("inbox_run() without checks writes no flags keys (backward compatible)", {
   s <- fl_status_setup()
   quiet_run(inbox_run(input_dir = s$input_dir, db = s$db, backup_dir = s$backup_dir,
                       report_dir = s$report_dir, now = fl_now()))
-  expect_false(any(grepl("^## Flags", read_status_note(s$report_dir))))
+  js <- read_status_json(s$report_dir)
+  expect_false(any(c("flags", "flag_errors", "flag_checks", "site_names") %in% names(js)))
 })

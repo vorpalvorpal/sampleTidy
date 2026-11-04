@@ -28,6 +28,14 @@ hk_status_names <- c("updated", "host", "dry_run", "review_items_open",
                      "folders_waiting", "needs_review", "non_blocking_notes",
                      "waiting", "problems", "recent_imports", "db_checks")
 
+# Keys the status gained in stage 2 (A5). Their position is not pinned; the
+# original keys keep their relative order.
+hk_status_new <- c("timezone", "loose", "dry_run_plan")
+hk_expect_status_names <- function(got) {
+  expect_setequal(got, c(hk_status_names, hk_status_new))
+  expect_identical(got[got %in% hk_status_names], hk_status_names)
+}
+
 # Insert a project with `samples` samples, optionally with one open review item
 # that names it by work order (rule (a): blocks completeness).
 hk_add_project <- function(db, uuid, name, samples = 1L, open_review = FALSE,
@@ -252,7 +260,7 @@ test_that("P20.2: action 'status' fires after_status only, with the status list"
   expect_identical(res$action, "status")
   expect_identical(hk_events(rec), "after_status")
   arg <- rec$calls[[1]]$arg
-  expect_identical(names(arg), hk_status_names)
+  hk_expect_status_names(names(arg))
   expect_false(arg$dry_run)
   expect_true(file.exists(file.path(s$report_dir, "status.json")))
 })
@@ -269,7 +277,7 @@ test_that("P20.2: a dry run fires after_status only; its argument has dry_run = 
   expect_true(res$ran)
   expect_identical(hk_events(rec), "after_status")
   expect_true(rec$calls[[1]]$arg$dry_run)
-  expect_identical(names(rec$calls[[1]]$arg), hk_status_names)
+  hk_expect_status_names(names(rec$calls[[1]]$arg))
   expect_false(file.exists(file.path(s$report_dir, "events.jsonl")))
   expect_false(file.exists(file.path(s$report_dir, ".imports.log")))
 })
@@ -317,7 +325,7 @@ test_that("P20.2: after_status receives the status list (names, types), and show
   run_inbox(s, now = now)
   expect_length(rec$calls, 1)
   arg <- rec$calls[[1]]$arg
-  expect_identical(names(arg), hk_status_names)
+  hk_expect_status_names(names(arg))
   expect_type(arg$updated, "character")
   expect_type(arg$host, "character")
   expect_false(arg$dry_run)
@@ -330,7 +338,7 @@ test_that("P20.2: after_status receives the status list (names, types), and show
   js <- hk_json(s$report_dir)
   expect_identical(js$updated, arg$updated)
   expect_identical(js$review_items_open, arg$review_items_open)
-  expect_identical(names(js), hk_status_names)
+  hk_expect_status_names(names(js))
 })
 
 test_that("P20.2: work_complete receives a completed_work() tibble of only the newly complete projects", {
@@ -510,188 +518,7 @@ test_that("P20.2: status.json does not exist yet when after_run fires, and exist
   expect_true(at_status)
 })
 
-# ---- default renderers -------------------------------------------------------------------
-
-# A run that has news (one import and one failed folder), so the daily report is
-# written by default and the log holds a problem.
-hk_news_run <- function(s, now, ...) {
-  hk_folder(s, now, "input2026-10-18 0900 good")
-  hk_folder(s, now, "input2026-10-18 1000 boom")
-  testthat::local_mocked_bindings(
-    ingest_dir = function(path, db, ...) {
-      if (grepl("boom", basename(path))) stop("simulated folder failure")
-      hk_add_project(db, "hk-new-1", "HK-NEW-1")
-      list(n_events_committed = 1L, rows_new = 1L)
-    },
-    .env = parent.frame()
-  )
-  run_inbox(s, now = now, ...)
-}
-
-test_that("P20.2 default renderers: with no hooks, Import status.md and the daily report equal import_status()/import_report() on the same inputs", {
-  hk_clean()
-  s <- inbox_setup()
-  now <- sydney_midday()
-  hk_news_run(s, now)
-
-  note <- status_note_path(s$report_dir)
-  day <- inbox_report_path(s$report_dir, now)
-  expect_true(file.exists(note))
-  expect_true(file.exists(day))
-
-  # Same inputs through the exported functions, in a fresh report_dir that holds a
-  # copy of the run log (the legacy name, which every reader falls back to).
-  other <- withr::local_tempdir()
-  file.copy(file.path(s$report_dir, ".imports.log"), file.path(other, ".imports.log"))
-  suppressWarnings(suppressMessages({
-    import_status(db = s$db, input_dir = s$input_dir, report_dir = other, now = now)
-    import_report(db = s$db, report_dir = other, now = now)
-  }))
-  expect_identical(readLines(note, warn = FALSE),
-                   readLines(status_note_path(other), warn = FALSE))
-  expect_identical(readLines(day, warn = FALSE),
-                   readLines(inbox_report_path(other, now), warn = FALSE))
-  # and the content is the familiar one
-  expect_true(any(grepl("HK-NEW-1", md_section(read_report(s$report_dir, now), "Imported today"))))
-  expect_true(any(grepl("boom", md_section(read_status_note(s$report_dir), "Problems"))))
-})
-
-test_that("P20.2 default renderers: with no hooks status.json and .import-status.json are written too", {
-  hk_clean()
-  s <- inbox_setup()
-  hk_news_run(s, sydney_midday())
-  expect_true(file.exists(file.path(s$report_dir, "status.json")))
-  expect_true(file.exists(file.path(s$report_dir, ".import-status.json")))
-})
-
-test_that("P20.2: a registered after_status hook replaces the Import status.md renderer; status.json and .import-status.json are still written", {
-  hk_clean()
-  s <- inbox_setup()
-  now <- sydney_midday()
-  register_hook("after_status", function(x) NULL)
-  hk_news_run(s, now)
-  expect_false(file.exists(status_note_path(s$report_dir)))
-  expect_true(file.exists(file.path(s$report_dir, "status.json")))
-  expect_true(file.exists(file.path(s$report_dir, ".import-status.json")))
-  # the after_run default is untouched: the daily report is still written
-  expect_true(file.exists(inbox_report_path(s$report_dir, now)))
-})
-
-test_that("P20.2: a registered after_run hook replaces the daily-report renderer; Import status.md is still written", {
-  hk_clean()
-  s <- inbox_setup()
-  now <- sydney_midday()
-  register_hook("after_run", function(x) NULL)
-  hk_news_run(s, now)
-  expect_false(file.exists(inbox_report_path(s$report_dir, now)))
-  expect_true(file.exists(status_note_path(s$report_dir)))
-})
-
-test_that("P20.2: with both an after_run and an after_status hook neither markdown note is written", {
-  hk_clean()
-  s <- inbox_setup()
-  now <- sydney_midday()
-  register_hook("after_run", function(x) NULL)
-  register_hook("after_status", function(x) NULL)
-  hk_news_run(s, now)
-  expect_false(file.exists(inbox_report_path(s$report_dir, now)))
-  expect_false(file.exists(status_note_path(s$report_dir)))
-  expect_true(file.exists(file.path(s$report_dir, "status.json")))
-})
-
-test_that("P20.2: work_complete has no default and does not replace either renderer", {
-  hk_clean()
-  s <- inbox_setup()
-  now <- sydney_midday()
-  register_hook("work_complete", function(x) NULL)
-  hk_news_run(s, now)
-  expect_true(file.exists(inbox_report_path(s$report_dir, now)))
-  expect_true(file.exists(status_note_path(s$report_dir)))
-})
-
-# ---- additive hooks: register_hook(replace_default = FALSE) --------------------------
-
-test_that("additive hooks: a replace_default = FALSE after_run hook runs and the daily report is still written", {
-  hk_clean()
-  s <- inbox_setup()
-  now <- sydney_midday()
-  rec <- hk_rec()
-  register_hook("after_run", hk_hook(rec, "after_run"), replace_default = FALSE)
-  hk_news_run(s, now)
-  expect_identical(hk_events(rec), "after_run")
-  expect_true(file.exists(inbox_report_path(s$report_dir, now)))
-  expect_true(file.exists(status_note_path(s$report_dir)))
-})
-
-test_that("additive hooks: a replace_default = FALSE after_status hook runs and Import status.md is still written", {
-  hk_clean()
-  s <- inbox_setup()
-  now <- sydney_midday()
-  rec <- hk_rec()
-  register_hook("after_status", hk_hook(rec, "after_status"), replace_default = FALSE)
-  hk_news_run(s, now)
-  expect_identical(hk_events(rec), "after_status")
-  expect_true(file.exists(status_note_path(s$report_dir)))
-})
-
-test_that("additive hooks: any replace_default = TRUE hook suppresses the default, whatever the order", {
-  hk_clean()
-  s <- inbox_setup()
-  now <- sydney_midday()
-  register_hook("after_run", function(x) NULL, replace_default = FALSE)
-  register_hook("after_run", function(x) NULL, replace_default = TRUE)
-  register_hook("after_run", function(x) NULL, replace_default = FALSE)
-  hk_news_run(s, now)
-  expect_false(file.exists(inbox_report_path(s$report_dir, now)))
-  expect_true(file.exists(status_note_path(s$report_dir)))
-})
-
-test_that("additive hooks: replace_default defaults to TRUE", {
-  hk_clean()
-  s <- inbox_setup()
-  now <- sydney_midday()
-  register_hook("after_run", function(x) NULL)
-  register_hook("after_run", function(x) NULL, replace_default = FALSE)
-  hk_news_run(s, now)
-  expect_false(file.exists(inbox_report_path(s$report_dir, now)))
-})
-
-test_that("additive hooks: the default runs first, then additive hooks in registration order", {
-  hk_clean()
-  s <- inbox_setup()
-  now <- sydney_midday()
-  day <- inbox_report_path(s$report_dir, now)
-  seen <- character(0)
-  a <- function(x) seen <<- c(seen, paste0("a:", file.exists(day)))
-  b <- function(x) seen <<- c(seen, "b")
-  register_hook("after_run", a, replace_default = FALSE)
-  register_hook("after_run", b, replace_default = FALSE)
-  register_hook("after_run", a, replace_default = FALSE)
-  hk_news_run(s, now)
-  expect_identical(seen, c("a:TRUE", "b", "a:TRUE"))
-})
-
-test_that("additive hooks: a failing additive hook is a problem and the default still ran", {
-  hk_clean()
-  s <- inbox_setup()
-  now <- sydney_midday()
-  register_hook("after_run", function(x) stop("additive boom"), replace_default = FALSE)
-  hk_news_run(s, now)
-  expect_true(file.exists(inbox_report_path(s$report_dir, now)))
-  expect_true(any(grepl("hook after_run\\[1\\] failed: additive boom", hk_problems(s$report_dir))))
-})
-
-test_that("additive hooks: replace_default has no effect for work_complete", {
-  hk_clean()
-  s <- inbox_setup()
-  now <- sydney_midday()
-  rec <- hk_rec()
-  register_hook("work_complete", hk_hook(rec, "work_complete"), replace_default = FALSE)
-  hk_news_run(s, now)
-  expect_true(file.exists(inbox_report_path(s$report_dir, now)))
-  expect_true(file.exists(status_note_path(s$report_dir)))
-  expect_length(hooks("work_complete"), 1)
-})
+# ---- replace_default (kept only as a validated, ignored argument) -----------------
 
 test_that("additive hooks: replace_default must be a single TRUE or FALSE", {
   hk_clean()
@@ -713,20 +540,23 @@ test_that("additive hooks: hooks() still lists the functions and clear_hooks() c
   expect_length(hooks("after_run"), 0)
 })
 
-test_that("P20.2: a dry run with an after_status hook writes no Import status.md; without one it writes it as before", {
+test_that("P20.2: a dry run writes status.json (dry_run TRUE) and no markdown, with or without an after_status hook", {
   hk_clean()
   s <- inbox_setup()
   now <- sydney_midday()
   hk_folder(s, now)
   testthat::local_mocked_bindings(ingest_dir = hk_ingest())
   run_inbox(s, now = now, dry_run = TRUE)
-  expect_true(any(grepl("DRY RUN", read_status_note(s$report_dir), fixed = TRUE)))
+  js <- hk_json(s$report_dir)
+  expect_true(js$dry_run)
+  expect_identical(unlist(js$dry_run_plan$would_import), "input2026-10-18 0900 a")
+  expect_length(report_md_files(s$report_dir), 0)
 
   s2 <- inbox_setup()
   hk_folder(s2, now)
   register_hook("after_status", function(x) NULL)
   run_inbox(s2, now = now, dry_run = TRUE)
-  expect_false(file.exists(status_note_path(s2$report_dir)))
+  expect_length(report_md_files(s2$report_dir), 0)
   expect_true(file.exists(file.path(s2$report_dir, "status.json")))
 })
 
@@ -755,7 +585,7 @@ test_that("P20.2 failures: a failing after_run hook never fails the run, stops l
   expect_identical(res$errors, character(0))     # hook problems are not run errors
 })
 
-test_that("P20.2 failures: the exact problem string 'hook after_run[<id>] failed: <msg>' is in status.json, .import-status.json and the status note's Problems; id is the 1-based position", {
+test_that("P20.2 failures: the exact problem string 'hook after_run[<id>] failed: <msg>' is in status.json and .import-status.json; id is the 1-based position", {
   hk_clean()
   s <- inbox_setup()
   now <- sydney_midday()
@@ -768,8 +598,6 @@ test_that("P20.2 failures: the exact problem string 'hook after_run[<id>] failed
   expect_true(want %in% hk_problems(s$report_dir))
   expect_true(want %in% hk_problems(s$report_dir, ".import-status.json"))
   expect_false("hook after_run[1] failed: boom2" %in% hk_problems(s$report_dir))
-  prob <- md_section(read_status_note(s$report_dir), "Problems")
-  expect_true(any(grepl(want, prob, fixed = TRUE)))
 })
 
 test_that("P20.2 failures: hook problems come after the log-derived problems, and are not written to the run log", {
@@ -805,14 +633,11 @@ test_that("P20.2 failures: a failing work_complete hook is recorded as 'hook wor
   later <- 0L
   register_hook("work_complete", function(x) stop("wcboom"))
   register_hook("work_complete", function(x) later <<- later + 1L)
-  # No after_status hook: the default renderer must write the note read below.
   res <- run_inbox(s, now = now)
   expect_true(res$ran)
   expect_identical(later, 1L)
   expect_true("hook work_complete[1] failed: wcboom" %in% hk_problems(s$report_dir))
   expect_true("hook work_complete[1] failed: wcboom" %in% hk_problems(s$report_dir, ".import-status.json"))
-  prob <- md_section(read_status_note(s$report_dir), "Problems")
-  expect_true(any(grepl("hook work_complete[1] failed: wcboom", prob, fixed = TRUE)))
 })
 
 test_that("P20.2 failures: a failing completed_work() snapshot is recorded as 'hook work_complete[snapshot] failed: <msg>' and the run still completes", {
@@ -868,36 +693,6 @@ test_that("P20.2 failures: a failing after_status hook on action 'status' and on
   res <- expect_no_error(run_inbox(s, now = now, dry_run = TRUE))
   expect_true(res$ran)
   expect_true("hook after_status[1] failed: sboom2" %in% hk_problems(s$report_dir))
-})
-
-test_that("P20.2 failures: a failing default after_status renderer is recorded as 'hook after_status[default] failed: ...' and the run completes", {
-  hk_clean()
-  s <- inbox_setup()
-  now <- sydney_midday()
-  hk_folder(s, now)
-  testthat::local_mocked_bindings(ingest_dir = hk_ingest())
-  # a directory where the note must be written makes the default renderer fail
-  dir.create(status_note_path(s$report_dir), recursive = TRUE)
-  res <- expect_no_error(run_inbox(s, now = now))
-  expect_true(res$ran)
-  p <- hk_problems(s$report_dir)
-  expect_true(any(startsWith(p, "hook after_status[default] failed: ")))
-  expect_true(file.exists(file.path(s$report_dir, "status.json")))
-})
-
-test_that("P20.2 failures: a failing default after_run renderer is recorded as 'hook after_run[default] failed: ...', in status.json and the status note's Problems", {
-  hk_clean()
-  s <- inbox_setup()
-  now <- sydney_midday()
-  hk_folder(s, now, "input2026-10-18 0900 boom")
-  testthat::local_mocked_bindings(ingest_dir = hk_ingest(fail = TRUE))   # news: a failed folder
-  dir.create(inbox_report_path(s$report_dir, now), recursive = TRUE)
-  res <- expect_no_error(run_inbox(s, now = now))
-  expect_true(res$ran)
-  p <- hk_problems(s$report_dir)
-  expect_true(any(startsWith(p, "hook after_run[default] failed: ")))
-  prob <- md_section(read_status_note(s$report_dir), "Problems")
-  expect_true(any(grepl("hook after_run[default] failed: ", prob, fixed = TRUE)))
 })
 
 test_that("P20.2 failures: a failing hook leaves the other files of the run intact (events.jsonl line, status.json)", {

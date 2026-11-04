@@ -12,9 +12,9 @@
 #                 "checked_at" is ISO-8601 UTC of the `now` of the run (or
 #                 status refresh) that wrote the state; inbox_check() compares
 #                 its Sydney day with now's (ruling 2026-10-19 R14).
-#   * status:     <report_dir>/Import status.md and .import-status.json (2a)
+#   * status:     <report_dir>/status.json and the identical .import-status.json
+#                 (the core writes no markdown: renderers are deployment hooks)
 #   * run log:    <report_dir>/.imports.log, one JSON object per line
-#   * report:     <report_dir>/<YYYY-MM-DD>-imports.md (Sydney date of `now`)
 
 inbox_fixture <- function(...) testthat::test_path("fixtures", ...)
 
@@ -107,51 +107,6 @@ sydney_midday <- function() {
 sydney_date <- function(now) format(now, "%Y-%m-%d", tz = "Australia/Sydney")
 sydney_hhmm <- function(now) format(now, "%H:%M", tz = "Australia/Sydney")
 
-inbox_report_path <- function(report_dir, now) {
-  file.path(report_dir, paste0(sydney_date(now), "-imports.md"))
-}
-
-#' Ruling R8 (2026-10-19): both notes start with a YAML frontmatter block
-#' (`---` / `summary:` / `  - '...'` / `---`). Returns the frontmatter lines
-#' (without the fences), or NULL when the note has none.
-note_frontmatter <- function(lines) {
-  if (length(lines) < 2 || !identical(lines[[1]], "---")) return(NULL)
-  end <- which(lines == "---")
-  end <- end[end > 1]
-  if (length(end) == 0) return(NULL)
-  if (end[[1]] == 2) character(0) else lines[2:(end[[1]] - 1)]
-}
-
-#' The note body after its frontmatter (unchanged when there is none), so the
-#' header-line assertions keep reading the header.
-strip_frontmatter <- function(lines) {
-  fm <- note_frontmatter(lines)
-  if (is.null(fm)) return(lines)
-  n <- length(fm) + 2L
-  if (n >= length(lines)) character(0) else lines[(n + 1L):length(lines)]
-}
-
-read_report <- function(report_dir, now) {
-  strip_frontmatter(readLines(inbox_report_path(report_dir, now), warn = FALSE,
-                              encoding = "UTF-8"))
-}
-
-#' Lines of the markdown section whose heading matches `title` (a `#` heading),
-#' up to the next heading of the same or a higher level. character(0) if the
-#' section is absent.
-md_section <- function(lines, title) {
-  is_h <- grepl("^#+\\s", lines)
-  start <- which(is_h & grepl(paste0("^#+\\s*", title), lines, ignore.case = TRUE))
-  if (length(start) == 0) return(character(0))
-  start <- start[[1]]
-  level <- nchar(sub("^(#+).*", "\\1", lines[[start]]))
-  later <- which(is_h & seq_along(lines) > start)
-  later <- later[nchar(sub("^(#+).*", "\\1", lines[later])) <= level]
-  end <- if (length(later)) later[[1]] - 1L else length(lines)
-  if (end <= start) return(character(0))
-  lines[(start + 1L):end]
-}
-
 read_inbox_log <- function(report_dir) {
   p <- file.path(report_dir, ".imports.log")
   if (!file.exists(p)) return(list())
@@ -176,16 +131,133 @@ mutate_inbox_state <- function(report_dir, ...) {
   invisible(st)
 }
 
+#' The parsed status.json written by the last run or status refresh (nested
+#' lists, so arrays stay lists and JSON null reads as NULL).
+read_status_json <- function(report_dir) {
+  jsonlite::read_json(file.path(report_dir, "status.json"), simplifyVector = FALSE)
+}
+
+#' The `waiting` entry for folder `name` in status.json, or NULL.
+status_waiting <- function(report_dir, name) {
+  w <- read_status_json(report_dir)$waiting
+  for (e in w) if (identical(e$folder, name)) return(e)
+  NULL
+}
+
+#' Markdown files in a report dir (the core writes none).
+report_md_files <- function(report_dir) {
+  list.files(report_dir, pattern = "\\.md$", all.files = TRUE)
+}
+
+#' Register a recording hook for `event`; returns an environment whose `calls`
+#' lists `list(arg, context, nargs)` per call. `renderer = TRUE` tags it. The
+#' hook is two-argument, so it receives the context. Cleared when the calling
+#' test ends.
+record_hook <- function(event, renderer = FALSE, env = parent.frame()) {
+  rec <- new.env()
+  rec$calls <- list()
+  fn <- function(arg, context) {
+    rec$calls[[length(rec$calls) + 1L]] <- list(arg = arg, context = context)
+    invisible(NULL)
+  }
+  if (renderer) register_hook(event, fn, renderer = TRUE) else register_hook(event, fn)
+  withr::defer(clear_hooks(), envir = env)
+  rec
+}
+
+# ---- stage 2 helpers: the generic inbox (test-inbox-batches.R and friends) ---------
+# The setup file pins the legacy recogniser (input*, 10 minutes, _emails) for the
+# older suites. The stage 2 tests clear it, so they run on the package defaults
+# (every non-hidden subfolder, settled at once, leftovers left in place) unless
+# they pass `batch` themselves. Synthetic folders: batch-1, batch-2, misc.
+
+#' inbox_setup() with the batch option cleared (for the rest of the calling test).
+bt_setup <- function(env = parent.frame()) {
+  s <- inbox_setup(env)
+  withr::local_options(list(sampletidy.inbox_batches = NULL), .local_envir = env)
+  s
+}
+
+#' A folder of the XX1234567 esdat triple (plus `extra` bytes-files by name),
+#' every file's mtime `age_sec` seconds before `now`.
+bt_folder <- function(s, name, now, age_sec = 3600, files = inbox_proj_a_files(),
+                      extra = character(0)) {
+  d <- file.path(s$input_dir, name)
+  dir.create(d, recursive = TRUE, showWarnings = FALSE)
+  for (f in files) stopifnot(file.copy(f, file.path(d, basename(f)), overwrite = TRUE))
+  for (nm in extra) {
+    writeBin(c(as.raw(c(0xff, 0xd8, 0xff, 0xe0)), charToRaw(paste0("body-", nm))), file.path(d, nm))
+  }
+  fs <- list.files(d, full.names = TRUE)
+  if (length(fs)) Sys.setFileTime(fs, now - age_sec)
+  d
+}
+
+#' A whole-second `now` (no sub-second mtime comparisons).
+bt_now <- function() as.POSIXct(floor(as.numeric(Sys.time())), origin = "1970-01-01", tz = "UTC")
+
+#' Stand-in for ingest_dir(): commits one work order at site `site` (or, for
+#' NULL, leaves the seeded site alone), with one sample dated 2026-10-10.
+bt_ingest <- function(wo = "ES9990001", site = "N") {
+  force(wo)
+  force(site)
+  function(path, ..., db) {
+    con <- seed_con(db)
+    on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
+    if (!is.null(site)) {
+      DBI::dbExecute(con, sprintf(
+        "UPDATE feature SET site = '%s'
+          WHERE uuid IN (SELECT uuid_feature FROM feature_alias WHERE uuid = 'fa-0001')", site))
+    }
+    DBI::dbExecute(con, "INSERT INTO project (uuid, name, type) VALUES (?, ?, 'Work order')",
+                   params = list(paste0("p-", wo), wo))
+    DBI::dbExecute(con, "INSERT INTO \"sample\" (uuid, uuid_feature_alias, uuid_project, datetime, organisation)
+                         VALUES (?, 'fa-0001', ?, TIMESTAMP '2026-10-10 01:00:00', 'ACIRL')",
+                   params = list(paste0("s-", wo), paste0("p-", wo)))
+    DBI::dbExecute(con, "INSERT INTO analysis (uuid, uuid_sample, uuid_lab, value, quantified)
+                         VALUES (?, ?, 'lm-0001', 7, TRUE)",
+                   params = list(paste0("a-", wo), paste0("s-", wo)))
+    list(n_events_committed = 1L, rows_new = 1L, rows_already_present = 0L,
+         rows_superseded = 0L, review_items_opened = 0L)
+  }
+}
+
+#' One synthetic run-log line (the JSON `inbox_run()` appends to events.jsonl),
+#' started at `when`, importing one work order at `site`.
+inbox_log_line <- function(when, wo = "ES9990001", site = "N", dry_run = FALSE,
+                           folder = "batch-0", filed = NULL, errors = character(0)) {
+  w <- list(name = wo, kind = "unknown", site = site, date_start = "2026-10-10",
+            date_end = "2026-10-10", samples = 1L, analyses = 3L)
+  entry <- list(
+    events_committed = 1L, rows_new = 3L, rows_already_present = 0L, rows_superseded = 0L,
+    review_items_opened = 0L, failed = FALSE, error = NA_character_, files_left = I(character(0)),
+    folder_path = file.path("/fixture/inbox", folder), work_orders = if (is.null(wo)) list() else list(w),
+    files_filed = if (is.null(filed)) list(to = NA_character_, files = I(character(0))) else
+      list(to = filed$to, files = I(filed$files)))
+  folders <- list()
+  folders[[folder]] <- entry
+  lg <- list(action = "run", ran = TRUE, locked = FALSE, dry_run = dry_run,
+             started_at = format(when, "%Y-%m-%dT%H:%M:%SZ", tz = "UTC"),
+             ended_at = format(when + 5, "%Y-%m-%dT%H:%M:%SZ", tz = "UTC"),
+             folders_seen = I(folder), folders_settled = I(folder),
+             folders_processed = I(folder), folders_arriving = I(character(0)),
+             folders = folders, backup_path = NA_character_, errors = I(errors),
+             stale_lock = FALSE)
+  as.character(jsonlite::toJSON(lg, auto_unbox = TRUE, null = "null", na = "null", digits = NA))
+}
+
+#' Write `lines` as the report dir's events.jsonl (created if needed).
+write_events <- function(report_dir, lines) {
+  dir.create(report_dir, showWarnings = FALSE, recursive = TRUE)
+  writeLines(lines, file.path(report_dir, "events.jsonl"))
+  invisible(file.path(report_dir, "events.jsonl"))
+}
+
 #' inbox_run() against a setup from inbox_setup(), messages/warnings muffled.
 run_inbox <- function(s, now = Sys.time(), ...) {
   quiet_run(inbox_run(input_dir = s$input_dir, db = s$db,
                       backup_dir = s$backup_dir, report_dir = s$report_dir,
                       now = now, ...))
-}
-
-status_note_path <- function(report_dir) file.path(report_dir, "Import status.md")
-read_status_note <- function(report_dir) {
-  strip_frontmatter(readLines(status_note_path(report_dir), warn = FALSE, encoding = "UTF-8"))
 }
 
 #' Snapshot of a directory tree: relative path -> "size|mtime|md5", used to

@@ -1,8 +1,8 @@
-# Stage 1 of the layer move: the status note's site names come from
-# `checks$site_names` (a named character vector, code -> name), not from the
-# hard-coded .inbox_site_label(). The status.json flags keep the raw code.
-# Synthetic: sites N (mapped), M (unmapped) and B (which the old hard-coded
-# label used to turn into a name).
+# Stage 1 of the layer move: the site names come from `checks$site_names` (a
+# named character vector, code -> name), not from a hard-coded label. Stage 2:
+# the core renders nothing, so the map travels in status.json as `site_names`
+# and the flags keep the raw code. Synthetic: sites N (mapped), M (unmapped)
+# and B (which the old hard-coded label used to turn into a name).
 
 sn_chk <- function(site_names) {
   sx_checks(site_names = site_names,
@@ -11,32 +11,22 @@ sn_chk <- function(site_names) {
                                    list(site = "B", stream = "field", months = "8")))
 }
 
-# The "· <site> ·" cell of the note's overdue lines, by site code's date line.
-sn_lines <- function(s) {
-  sec <- md_section(read_status_note(s$report_dir), "Flags")
-  sec[grepl("^- 2026-08-01", sec)]
-}
-
-test_that("site names: the note shows the mapped name; an unmapped site shows the code (never the old hard-coded label)", {
+test_that("site names: status.json carries the map as `site_names`; the flags keep the raw codes (never a label)", {
   s <- fl_status_setup()
   fl_status(s, checks = sn_chk(c(N = "Northvale")))
-  ln <- sn_lines(s)
-  expect_length(ln, 3)
-  expect_true(any(grepl("2026-08-01 · Northvale ·", ln, fixed = TRUE)))
-  expect_true(any(grepl("2026-08-01 · M ·", ln, fixed = TRUE)))
-  expect_true(any(grepl("2026-08-01 · B ·", ln, fixed = TRUE)))
-  expect_false(any(grepl("Northvale", ln, fixed = TRUE)))
-  expect_false(any(grepl("· N ·", ln, fixed = TRUE)))
+  js <- fl_status_json(s)
+  expect_identical(js$site_names, list(N = "Northvale"))
+  expect_setequal(vapply(js$flags, function(x) x$site, ""), c("N", "M", "B"))
+  expect_false(grepl("Northvale", paste(readLines(file.path(s$report_dir, "status.json")), collapse = "\n"),
+                     fixed = TRUE))
 })
 
-test_that("site names: a NULL map shows every raw code", {
+test_that("site names: a NULL map is an empty object, never null or an array", {
   s <- fl_status_setup()
   fl_status(s, checks = sn_chk(NULL))
-  ln <- sn_lines(s)
-  expect_length(ln, 3)
-  for (code in c("N", "M", "B")) {
-    expect_true(any(grepl(sprintf("2026-08-01 · %s ·", code), ln, fixed = TRUE)), info = code)
-  }
+  txt <- paste(readLines(file.path(s$report_dir, "status.json"), warn = FALSE), collapse = "\n")
+  expect_match(txt, "\"site_names\": {}", fixed = TRUE)
+  expect_length(fl_status_json(s)$site_names, 0)
 })
 
 test_that("site names: status.json keeps the raw code whatever the map says", {

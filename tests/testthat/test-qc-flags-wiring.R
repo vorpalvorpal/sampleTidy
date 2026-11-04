@@ -132,7 +132,7 @@ test_that("section 6: a qc_feature table with no rows gives no qc_* rows and no 
   expect_false(any(f$check %in% c("qc_dup_rpd", "qc_blank_detect", "qc_unresolved")))
 })
 
-test_that("R-19.22: the status note's QC line ends with the action text; the JSON carries `action`", {
+test_that("R-19.22: status.json carries the QC flag's `action`", {
   s <- fl_status_setup()
   fl_with(s$db, qc_create_tables)
   fl_with(s$db, function(con) {
@@ -145,11 +145,6 @@ test_that("R-19.22: the status note's QC line ends with the action text; the JSO
       qc_lab("Nickel", 0.011, rl = 0.001)))
   })
   fl_status(s, checks = qc_checks())
-  sec <- md_section(read_status_note(s$report_dir), "Flags")
-  expect_length(grep("^\\*\\*qc_dup_rpd\\*\\*", sec), 1)
-  line <- sec[grepl("^- ", sec) & grepl("Q.JD42", sec, fixed = TRUE)]
-  expect_length(line, 1)
-  expect_match(line, "→ qualify[^→]*$")
   js <- fl_status_json(s)
   dup <- Filter(function(x) identical(x$check, "qc_dup_rpd"), js$flags)
   expect_length(dup, 1)
