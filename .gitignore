@@ -36,3 +36,6 @@ dev/migrations/*-SKIPPED*.csv
 dev/*.pdf
 dev/epa_monitoring_data_K_*.xlsx
 dev/~$*
+
+# Operational state notes: deployment-specific, kept on disk only
+dev/STATE.md
