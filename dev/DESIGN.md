@@ -152,11 +152,11 @@ either may be empty.
 |---|---|---|
 | `source_hash` | chr | content hash of the original file — idempotency key |
 | `source_ref` | chr | cell/row coordinate within the source (`Sheet1!B14`) |
-| `work_order` | chr | lab report number (`ES2551546`) — **primary grouping key** |
+| `work_order` | chr | lab report number (`ES9100001`) — **primary grouping key** |
 | `revision` | int | lab report revision (`_0`, `_1`, …) — supersede trigger |
 | `org` | chr | source organisation (`ALS`, `ACIRL`, `internal`, …) |
 | `adapter` | chr | adapter id + version that produced the row |
-| `lab_sample_id` | chr | lab's sample code (`ES2515460001`) |
+| `lab_sample_id` | chr | lab's sample code (`ES9100001001`) |
 | `sample_type` | chr | verbatim lab type (`Normal`, `LCS`, `MB`, `LAB_D`, `MS`, `NCP`); adapters default `"Normal"` when the source has no concept of it |
 | `feature_raw` | chr | sampling point as written (`Field_ID` / client sample ID) |
 | `analyte_raw` | chr | analyte name as written |
