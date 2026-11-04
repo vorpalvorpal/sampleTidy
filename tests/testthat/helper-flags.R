@@ -197,7 +197,10 @@ fl_schedule <- function(...) {
   df[, c("site", "stream", "months", "features", "due_days", "from", "to", "source")]
 }
 
-fl_limits <- function(...) {
+#' The nine licence-limit columns only: no behaviour columns, so a limits table
+#' as a deployment that sets none would ship it. Used by the tests of the
+#' optional columns themselves (test-flags-limits-behaviour.R).
+fl_limits_plain <- function(...) {
   rows <- list(...)
   df <- do.call(rbind, lapply(rows, function(r) {
     d <- list(site = "B", feature_pattern = "^N\\.E01$", analyte = "NH3-N", min = "",
@@ -207,6 +210,21 @@ fl_limits <- function(...) {
   }))
   df[, c("site", "feature_pattern", "analyte", "min", "max", "unit", "factor",
          "condition", "note")]
+}
+
+#' fl_limits_plain() plus the three behaviour columns, filled the way the
+#' deployment these suites were written for sets them (they used to be keyed off
+#' the condition text): R2.3 rows are gas-grid points whose "solid waste" levels
+#' apply at the grid only, and L2* rows carry the storm-exemption suffix. This
+#' keeps every pre-stage-1 test of licence_limit / gas_criterion as it was.
+fl_limits <- function(...) {
+  df <- fl_limits_plain(...)
+  r23 <- df$condition %in% "R2.3"
+  df$gas_grid <- ifelse(r23, "TRUE", NA_character_)
+  df$grid_only_level <- ifelse(r23, "solid waste", NA_character_)
+  df$detail_suffix <- ifelse(grepl("^L2", df$condition),
+                             "storm exemption (L2.5) not assessed", NA_character_)
+  df
 }
 
 fl_requirements <- function(...) {
@@ -231,10 +249,40 @@ fl_points <- function(...) {
   }))
 }
 
+#' The stream table of the deployment these suites were written for (it
+#' reproduces the constants `.flags_streams` and friends used to hard-code):
+#' dust first, then gas, then the ACIRL field and ALS lab evidence streams.
+fl_test_streams <- function() {
+  data.frame(
+    stream = c("acirl_dust", "acirl_dust", "acirl_gas", "acirl_gas", "acirl_water", "als_lab"),
+    project_type = c("Dust monitoring", NA, "Monthly gas monitoring", NA, NA, NA),
+    feature_pattern = c(NA, "\\.D[0-9]", NA, NA, NA, NA),
+    matrix = c(NA, NA, NA, "air", NA, NA),
+    organisation = c(NA, NA, NA, NA, "ACIRL", "ALS"),
+    kind = c(NA, NA, NA, NA, "field", "lab"),
+    water = c(FALSE, FALSE, FALSE, FALSE, TRUE, TRUE),
+    gas = c(FALSE, FALSE, TRUE, TRUE, FALSE, FALSE),
+    window_months = c(0L, 0L, 1L, 1L, 0L, 0L),
+    expects_qci = c(FALSE, FALSE, FALSE, FALSE, FALSE, TRUE),
+    stringsAsFactors = FALSE)
+}
+
+#' `checks` with the deployment's `streams` and `site_names` added when those
+#' NAMES are absent (a test that names them, even as NULL, keeps its value).
+#' NULL stays NULL (no checks at all).
+fl_with_defaults <- function(checks) {
+  if (!is.list(checks)) return(checks)
+  if (!"streams" %in% names(checks)) checks["streams"] <- list(fl_test_streams())
+  if (!"site_names" %in% names(checks)) {
+    checks["site_names"] <- list(c(B = "Northvale", K = "Millbrook"))
+  }
+  checks
+}
+
 fl_checks <- function(schedule = NULL, limits = NULL, requirements = NULL,
                       points = NULL, invoices = NULL) {
-  list(schedule = schedule, limits = limits, requirements = requirements,
-       points = points, invoices = invoices)
+  fl_with_defaults(list(schedule = schedule, limits = limits, requirements = requirements,
+                        points = points, invoices = invoices))
 }
 
 # `source` added by ruling 2026-10-19 R12 (the schedule row's source, overdue only).
@@ -244,7 +292,7 @@ fl_flag_cols <- c("check", "site", "feature", "analyte", "date", "value", "unit"
 
 #' import_flags() on a DB, warnings/messages muffled.
 fl_run <- function(db, checks, now = fl_now()) {
-  suppressWarnings(suppressMessages(import_flags(db = db, now = now, checks = checks)))
+  suppressWarnings(suppressMessages(import_flags(db = db, now = now, checks = fl_with_defaults(checks))))
 }
 
 fl_of <- function(flags, check) flags[flags$check == check, , drop = FALSE]
@@ -267,7 +315,7 @@ fl_status_setup <- function(env = parent.frame()) {
 fl_status <- function(s, checks, now = fl_now()) {
   suppressWarnings(suppressMessages(
     import_status(db = s$db, input_dir = s$input_dir, report_dir = s$report_dir,
-                  now = now, checks = checks)))
+                  now = now, checks = fl_with_defaults(checks))))
 }
 
 fl_status_json <- function(s) {

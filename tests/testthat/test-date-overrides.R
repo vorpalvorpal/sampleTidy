@@ -110,6 +110,41 @@ test_that("loader: the default path honours option sampletidy.date_overrides_pat
   expect_identical(o$hash, H1)
 })
 
+test_that("loader: the shipped package file is header-only (the overrides are deployment data)", {
+  shipped <- system.file("extdata", "sample-date-overrides.csv", package = "sampleTidy")
+  expect_true(nzchar(shipped))
+  raw <- utils::read.csv(shipped, colClasses = "character", na.strings = character(0))
+  expect_identical(names(raw), c("hash", "date_from", "date_to", "authority", "reason"))
+  expect_equal(nrow(raw), 0L)
+})
+
+test_that("loader: path resolution is option, then env SAMPLETIDY_DATE_OVERRIDES, then the shipped file", {
+  withr::local_options(list(sampletidy.date_overrides_path = NULL))
+  pa <- ov_csv(c(paste0(H1, ",2023-04-14,2023-04-13,a,r"),
+                 paste0(H2, ",2022-01-05,2023-01-05,a,r")))
+  pb <- ov_csv(paste0(H2, ",2024-02-02,2024-02-01,b,r"))
+  # the env var alone
+  withr::local_envvar(c(SAMPLETIDY_DATE_OVERRIDES = pa))
+  oa <- sampleTidy:::.ig_date_overrides()
+  expect_equal(nrow(oa), 2L)
+  expect_identical(oa$hash, c(H1, H2))
+  # the option beats the env var
+  withr::local_options(list(sampletidy.date_overrides_path = pb))
+  ob <- sampleTidy:::.ig_date_overrides()
+  expect_equal(nrow(ob), 1L)
+  expect_identical(ob$authority, "b")
+  # an empty env var and no option: the shipped file (header-only)
+  withr::local_options(list(sampletidy.date_overrides_path = NULL))
+  withr::local_envvar(c(SAMPLETIDY_DATE_OVERRIDES = ""))
+  expect_equal(nrow(sampleTidy:::.ig_date_overrides()), 0L)
+})
+
+test_that("loader: an env path to a missing file aborts with sampletidy_error", {
+  withr::local_options(list(sampletidy.date_overrides_path = NULL))
+  withr::local_envvar(c(SAMPLETIDY_DATE_OVERRIDES = file.path(tempdir(), "no-such-overrides.csv")))
+  expect_error(sampleTidy:::.ig_date_overrides(), class = "sampletidy_error")
+})
+
 # ---- applier ----------------------------------------------------------------
 
 test_that("applier: matching hash and date are rewritten to date_to (date-only stays date-only)", {

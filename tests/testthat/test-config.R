@@ -141,3 +141,36 @@ test_that("R-12.11: an option-set field_analytes value wins before the env-var g
   withr::local_envvar(c(SAMPLETIDY_FIELD_ANALYTES = "should-not-be-read"))
   expect_identical(st_config("field_analytes"), c("X", "Y"))
 })
+
+# ---- stage 1 of the layer move: new keys and st_capabilities() -------------------------
+
+test_that("stage 1: `checks` and `site_keywords` default to NULL", {
+  withr::local_options(list(sampletidy.checks = NULL, sampletidy.site_keywords = NULL))
+  withr::local_envvar(c(SAMPLETIDY_CHECKS = NA, SAMPLETIDY_SITE_KEYWORDS = NA))
+  expect_null(st_config("checks"))
+  expect_null(st_config("site_keywords"))
+})
+
+test_that("stage 1: `checks` and `site_keywords` are list-valued keys: an env var for either aborts sampletidy_error", {
+  withr::local_options(list(sampletidy.checks = NULL, sampletidy.site_keywords = NULL))
+  withr::local_envvar(c(SAMPLETIDY_CHECKS = "x"))
+  expect_error(st_config("checks"), class = "sampletidy_error")
+  withr::local_envvar(c(SAMPLETIDY_CHECKS = NA, SAMPLETIDY_SITE_KEYWORDS = "x"))
+  expect_error(st_config("site_keywords"), class = "sampletidy_error")
+})
+
+test_that("stage 1: `checks` set in code may be a function and round-trips", {
+  withr::local_options(list(sampletidy.checks = NULL))
+  f <- function() list()
+  st_config("checks", f)
+  expect_identical(st_config("checks"), f)
+})
+
+test_that("stage 1: st_capabilities() is exported and names the six features", {
+  expect_true("st_capabilities" %in% getNamespaceExports("sampleTidy"))
+  caps <- st_capabilities()
+  expect_type(caps, "character")
+  expect_true(all(c("timezone", "checks_option", "checks_streams", "site_names",
+                    "site_keywords", "date_overrides_env") %in% caps))
+})
+

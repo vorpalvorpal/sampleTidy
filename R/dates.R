@@ -31,11 +31,11 @@
 #' under the `"crosstab"` `"%d/%m/%Y"` preset is `NA`, not rolled over into a
 #' different month/year). A wall-clock time that does not exist in `tz` (a
 #' DST spring-forward gap, e.g. `"05 Oct 2025 02:30"` in
-#' `"Australia/Sydney"`) is likewise `NA` rather than silently normalised to
-#' a different instant (e.g. that day's midnight) - detected by comparing
+#' a zone that springs forward that day) is likewise `NA` rather than
+#' silently normalised to a different instant (e.g. that day's midnight) - detected by comparing
 #' the literal parsed fields against the tz-normalised result, not by string
 #' round-trip. An ambiguous fall-back time (ie one that occurs twice, e.g.
-#' the first Sunday of April in `"Australia/Sydney"`) is unaffected and
+#' a clock hour repeated when DST ends) is unaffected and
 #' still parses non-`NA`.
 #'
 #' @param x character vector of raw datetime strings.
@@ -43,13 +43,14 @@
 #'   `"crosstab"`, `"iso"`, or a character vector of `strptime()` format
 #'   strings to try directly, in order.
 #' @param tz timezone to interpret naive lab datetimes in. Defaults to
-#'   `"Australia/Sydney"` (CONTRACT A9).
+#'   the configured time zone, `st_config("timezone")` (CONTRACT A9).
 #' @return a `POSIXct` vector, same length as `x`, in `tz`.
 #' @keywords internal
 #' @noRd
-parse_lab_datetime <- function(x, formats, tz = "Australia/Sydney") {
+parse_lab_datetime <- function(x, formats, tz = st_config("timezone")) {
   checkmate::assert_character(x, min.len = 0)
   checkmate::assert_string(tz)
+  .st_check_tz(tz, "tz")
   fmt_vec <- .resolve_lab_datetime_formats(formats)
 
   n <- length(x)

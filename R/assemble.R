@@ -197,7 +197,7 @@
 
   samples_date <- as.Date(
     parse_lab_datetime(samples$sample_datetime_raw, .st_join_datetime_formats),
-    tz = "Australia/Sydney"
+    tz = .st_tz()
   )
   samples_feature_key <- .st_normalise_key(samples$feature_raw)
   results_feature_key <- .st_normalise_key(results$feature_raw)

@@ -1,6 +1,6 @@
 # PLAN-17 - the `acirl_gas_xlsx` adapter: ACIRL "Monthly Gas Monitoring"
 # workbooks (`2400-*... Gas Monitoring ... .xls`). One front page plus
-# `Gas Landfil #n` / `Gas Building(s)` sheets (and at Millbrook a
+# `Gas Landfil #n` / `Gas Building(s)` sheets (and at some sites a
 # `Biofliter and Bores` sheet) holding CH4 readings in % v/v.
 #
 # Geometry is found by HEADER TEXT, never by position (the files come in three
@@ -8,8 +8,11 @@
 # each `CH4 Reading` header cell pairs with the `Location` cell to its left,
 # with an optional `Reference` column between them.
 #
-# The site (`B.` / `K.`) comes from the workbook's own text, never the
-# filename - probe numbers are not site-unique (PLAN-17).
+# The site code (the feature-name prefix) comes from the workbook's own text,
+# never the filename - probe numbers are not site-unique (PLAN-17). Which
+# keywords identify which site is configuration: `st_config("site_keywords")`.
+# With none set there is no inference: the features carry no site prefix and
+# the sample's site is found by the ordinary feature-alias step.
 
 #' Construct the `acirl_gas_xlsx` adapter
 #' @return a list with elements `id`, `version`, `match`, `parse`.
@@ -136,6 +139,48 @@ acirl_gas_xlsx_adapter <- function() {
 # point_absent).
 .st_gas_template_slots <- c("N.G201", "M.G365", "M.G366")
 
+# `st_config("site_keywords")`, validated: NULL, or a named list mapping a site
+# code to a character vector of keywords. Returns a list (empty = no inference).
+.st_gas_site_keywords <- function() {
+  kw <- st_config("site_keywords")
+  if (is.null(kw) || length(kw) == 0L) return(list())
+  ok <- is.list(kw) && !is.null(names(kw)) && !anyNA(names(kw)) && all(nzchar(names(kw))) &&
+    !anyDuplicated(names(kw)) &&
+    all(vapply(kw, function(v) is.character(v) && length(v) > 0L && !anyNA(v) && all(nzchar(v)),
+               logical(1)))
+  if (!ok) {
+    cli::cli_abort(
+      "{.code st_config(\"site_keywords\")} must be NULL or a named list mapping a site code
+       to a character vector of keywords.",
+      class = "sampletidy_error"
+    )
+  }
+  kw
+}
+
+# The site code the workbook's text names (NA when no keywords are configured).
+# Per code, the number of cells matching any of its keywords (fixed,
+# case-insensitive); a single maximum above zero wins, else it is a parse error.
+.st_gas_infer_site <- function(site_text, kw, path) {
+  if (length(kw) == 0L) return(NA_character_)
+  low <- tolower(site_text)
+  n <- vapply(kw, function(words) {
+    hit <- rep(FALSE, length(low))
+    for (w in tolower(words)) hit <- hit | grepl(w, low, fixed = TRUE)
+    sum(hit)
+  }, numeric(1))
+  if (max(n) == 0 || sum(n == max(n)) > 1L) {
+    cli::cli_abort(
+      "{.path {path}}: cannot tell the site ({.val {names(kw)}}) from the workbook's own text.",
+      class = "sampletidy_parse_error"
+    )
+  }
+  names(kw)[[which.max(n)]]
+}
+
+# The feature-name prefix for a site code: "<site>." or "" when there is none.
+.st_gas_prefix <- function(site) if (is.na(site)) "" else paste0(site, ".")
+
 .st_gas_text_reason <- function(v) {
   k <- tolower(stringr::str_squish(v))
   if (k == "ns") return("no_sample")
@@ -190,9 +235,9 @@ acirl_gas_xlsx_adapter <- function() {
       # A blank cell still takes its place in a repeated Reference's #n count.
       feature <- if (building) {
         if (grepl("^gas bore$", tolower(loc)) && grepl("^mp\\s*[0-9]+$", tolower(ref))) {
-          paste0(site, ".MP_", sub("^mp\\s*", "", tolower(ref)))
+          paste0(.st_gas_prefix(site), "MP_", sub("^mp\\s*", "", tolower(ref)))
         } else {
-          nm <- paste0(site, ".", loc, " - ", ref)
+          nm <- paste0(.st_gas_prefix(site), loc, " - ", ref)
           if (nm %in% seen) {
             i <- 2L
             while (paste(nm, paste0("#", i)) %in% seen) i <- i + 1L
@@ -201,11 +246,11 @@ acirl_gas_xlsx_adapter <- function() {
           nm
         }
       } else if (grepl("^g[0-9]+$", tolower(loc))) {
-        paste0(site, ".", toupper(loc))
+        paste0(.st_gas_prefix(site), toupper(loc))
       } else if (grepl("^[0-9]+$", loc)) {
-        paste0(site, ".Weekly ", loc)
+        paste0(.st_gas_prefix(site), "Weekly ", loc)
       } else {
-        paste0(site, ".", loc)
+        paste0(.st_gas_prefix(site), loc)
       }
       seen <- c(seen, feature)
       if (is.na(val)) next
@@ -276,7 +321,7 @@ acirl_gas_xlsx_adapter <- function() {
         if (!is_cell_value(v)) next
         out[[length(out) + 1L]] <- list(
           row = g$rows[[ri]], col = cc,
-          feature = sprintf("%s.%s R%dC%d", site, full, ri, cc - base_col + 1L),
+          feature = sprintf("%s%s R%dC%d", .st_gas_prefix(site), full, ri, cc - base_col + 1L),
           raw = v, bio = TRUE
         )
       }
@@ -356,15 +401,7 @@ acirl_gas_xlsx_adapter <- function() {
     if (length(m)) site_text <- c(site_text, as.vector(m[seq_len(min(6, nrow(m))), , drop = FALSE]))
   }
   site_text <- site_text[!is.na(site_text)]
-  nb <- sum(grepl("northvale", site_text, ignore.case = TRUE))
-  nk <- sum(grepl("millbrook", site_text, ignore.case = TRUE))
-  if (nb == nk) {
-    cli::cli_abort(
-      "{.path {path}}: cannot tell the site (Northvale or Millbrook) from the workbook's own text.",
-      class = "sampletidy_parse_error"
-    )
-  }
-  site <- if (nb > nk) "B" else "K"
+  site <- .st_gas_infer_site(site_text, .st_gas_site_keywords(), path)
 
   # --- dates --------------------------------------------------------------------------------
   sample_date <- .st_gas_serial_to_date(header$sample_date)

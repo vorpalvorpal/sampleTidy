@@ -135,8 +135,8 @@
 # `feature.date_end`) is a DATE and every comparison happens at DATE
 # granularity. `as.Date()` on a POSIXct is TIMEZONE-DEPENDENT - it is the
 # silent-corruption bug already fixed once at the `.rq_row()` driver boundary
-# (a local Australia/Sydney timestamp before 10:00 truncates to the PREVIOUS
-# day in UTC) - so a POSIXct bound is REJECTED here rather than coerced, the
+# (a local timestamp before the zone's UTC offset has passed truncates to
+# the PREVIOUS day in UTC) - so a POSIXct bound is REJECTED here rather than coerced, the
 # same ruling (Robin, 2026-07-25) `.rq_row()` follows. Coercing would make
 # this function silently PICK a day instead of storing the wrong one.
 
@@ -499,7 +499,7 @@
       feat[["date_start"]][match(cand$uuid_feature, feat$uuid)],
       what = "feature$date_start")
     if (!is.null(de) || !is.null(ds)) {
-      d <- as.Date(sample_date, tz = "Australia/Sydney")
+      d <- as.Date(sample_date, tz = .st_tz())
       live <- rep(TRUE, nrow(cand))
       if (!is.null(de)) live <- live & (is.na(de) | de >= d)
       if (!is.null(ds)) live <- live & (is.na(ds) | ds <= d)
@@ -738,16 +738,16 @@
     # Round-3 H11: pin tz= explicitly, same reasoning as .rc_narrow_live()
     # just above - a no-op on the current Date-typed columns, but the guard
     # against a future POSIXct bound turning this into a silent NA.
-    if (!is.na(de) && as.Date(de, tz = "Australia/Sydney") <
-          as.Date(sample_date, tz = "Australia/Sydney")) {
+    if (!is.na(de) && as.Date(de, tz = .st_tz()) <
+          as.Date(sample_date, tz = .st_tz())) {
       return(NA_character_)
     }
     # 2026-10-21: nor onto a feature that does not exist yet (`date_start`
     # after the row date; inclusive), as in `.rc_narrow_live_feature()`. An
     # absent column = unbounded.
     ds <- feat[["date_start"]][match(u, feat$uuid)]
-    if (!is.null(ds) && !is.na(ds) && as.Date(ds, tz = "Australia/Sydney") >
-          as.Date(sample_date, tz = "Australia/Sydney")) {
+    if (!is.null(ds) && !is.na(ds) && as.Date(ds, tz = .st_tz()) >
+          as.Date(sample_date, tz = .st_tz())) {
       return(NA_character_)
     }
   }
@@ -934,7 +934,7 @@
   # Per-row date, parsed locally for date_end narrowing only (R-8.5 re-parses
   # canonically later; this read-only pass never mutates the row).
   parsed_dt <- parse_lab_datetime(rows$sample_datetime_raw, .rc_datetime_formats)
-  row_dates <- as.Date(parsed_dt, tz = "Australia/Sydney")
+  row_dates <- as.Date(parsed_dt, tz = .st_tz())
 
   uuid_feature <- rep(NA_character_, n)
   uuid_alias <- rep(NA_character_, n)
@@ -2330,9 +2330,9 @@
   keep <- !is.na(parsed_dt)
 
   sample_date <- as.Date(rep(NA, n))
-  sample_date[keep] <- as.Date(parsed_dt[keep], tz = "Australia/Sydney")
+  sample_date[keep] <- as.Date(parsed_dt[keep], tz = .st_tz())
 
-  sample_datetime <- as.POSIXct(rep(NA_real_, n), origin = "1970-01-01", tz = "Australia/Sydney")
+  sample_datetime <- as.POSIXct(rep(NA_real_, n), origin = "1970-01-01", tz = .st_tz())
   set_dt <- keep & .rc_is_true_vec(has_time)
   sample_datetime[set_dt] <- parsed_dt[set_dt]
 
@@ -2354,7 +2354,7 @@
   # optional start date never holds the row).
   if ("sample_date_start_raw" %in% names(rows)) {
     start_dt <- parse_lab_datetime(rows$sample_date_start_raw, .rc_datetime_formats)
-    kept$sample_date_start <- as.Date(as.Date(start_dt, tz = "Australia/Sydney")[keep])
+    kept$sample_date_start <- as.Date(as.Date(start_dt, tz = .st_tz())[keep])
   }
 
   review <- if (length(review_list) > 0) dplyr::bind_rows(review_list) else .rc_proto_review()
@@ -2461,11 +2461,12 @@
 }
 
 #' TRUE where a committed sample's datetime is a legacy PLACEHOLDER clock:
-#' exactly 11:00:00 or 11:01:00 Australia/Sydney wall clock (DST-aware - 01:00
-#' / 01:01 UTC in AEST months, 00:00 / 00:01 UTC in AEDT months).
+#' exactly 11:00:00 or 11:01:00 wall clock in the configured time zone
+#' (DST-aware). The 11:00/11:01 placeholders are artefacts of the original
+#' deployment's UTC offset, so this is only meaningful under that zone.
 #'
 #' C1 (2026-10-20). The legacy import stamped every time-unknown sample at
-#' 11:00 Sydney - 2,575 committed samples carry that clock - and migration
+#' 11:00 local - 2,575 committed samples carry that clock - and migration
 #' 005 gave each one's lab twin 11:01. Neither is a time anyone observed, so
 #' an incoming row with a real clock (09:25) is not PROVABLY a different
 #' sampling event from such a sample. See `.rc_candidate_datetime()` for when
@@ -2475,7 +2476,7 @@
 .rc_placeholder_datetime <- function(x) {
   secs <- as.numeric(x)
   wall <- format(as.POSIXct(secs, origin = "1970-01-01", tz = "UTC"),
-                 "%H:%M:%S", tz = "Australia/Sydney")
+                 "%H:%M:%S", tz = .st_tz())
   !is.na(secs) & !is.na(wall) & wall %in% c("11:00:00", "11:01:00")
 }
 
@@ -2600,7 +2601,7 @@
        JOIN analysis a ON a.uuid_sample = s.uuid
        LEFT JOIN project p ON p.uuid = s.uuid_project
        JOIN feature_alias fa ON fa.uuid = s.uuid_feature_alias
-       WHERE ', feat_clause, ' AND ', .ct_sydney_day_sql("s.date"), ' = ? AND a.uuid_lab = ?',
+       WHERE ', feat_clause, ' AND ', .ct_local_day_sql("s.date"), ' = ? AND a.uuid_lab = ?',
       if (is.na(sample)) '' else ' AND s.uuid = ?', '
        ORDER BY a.uuid'
     ),
@@ -2996,7 +2997,7 @@
        LEFT JOIN project p ON p.uuid = s.uuid_project
        JOIN feature_alias fa ON fa.uuid = s.uuid_feature_alias
        JOIN lab_method lm ON lm.uuid = a.uuid_lab
-       WHERE ', feat_clause, ' AND ', .ct_sydney_day_sql("s.date"), ' = ? AND lm.uuid_analyte = ?
+       WHERE ', feat_clause, ' AND ', .ct_local_day_sql("s.date"), ' = ? AND lm.uuid_analyte = ?
          AND ', org_clause, '
        ORDER BY a.uuid'
     ),

@@ -11,7 +11,7 @@ inbox_check(input_dir, report_dir, now = Sys.time(), db = st_config("live_db"))
 
 \item{report_dir}{directory holding \code{.imports.state}.}
 
-\item{now}{current time; a Sydney day other than that of the state's
+\item{now}{current time; a local day other than that of the state's
 \code{checked_at} is a \code{"status"} reason (ruling R14).}
 
 \item{db}{the live database file, stat-ed for the second trigger.}
@@ -19,7 +19,7 @@ inbox_check(input_dir, report_dir, now = Sys.time(), db = st_config("live_db"))
 \value{
 \code{"run"} (inbox changed, nothing recorded yet, or a folder was left
 arriving), \code{"status"} (the database file changed, or this is the first
-check of a new Sydney day) or \code{"none"}.
+check of a new local day) or \code{"none"}.
 }
 \description{
 Read-only: writes nothing, not even a \code{checked_at}.

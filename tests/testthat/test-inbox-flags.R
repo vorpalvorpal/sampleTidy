@@ -694,9 +694,12 @@ test_that("gas_criterion (R9): the 500 ppm solid-waste trigger applies only at R
   expect_identical(gc$feature[grepl("lower explosive", gc$threshold, fixed = TRUE)], "N.MW02")
   expect_identical(gc$feature[grepl("impact assessment", gc$threshold, fixed = TRUE)], "N.D01")
   expect_equal(nrow(gc), 3)
-  # with no limits table there are no grid points: the trigger applies nowhere
+  # Stage 1 of the layer move (deliberate change): with no limits table there
+  # are no grid points AND no grid-only levels, so the trigger is a level like
+  # any other and applies at every point. (It used to apply nowhere.)
   gc0 <- fl_of(fl_run(db, fl_checks()), "gas_criterion")
-  expect_false(any(grepl("solid waste", gc0$threshold, fixed = TRUE)))
+  expect_setequal(gc0$feature[grepl("solid waste", gc0$threshold, fixed = TRUE)],
+                  c("N.G01", "N.MW01", "N.MW02", "N.TG01"))
 })
 
 test_that("missing_point (R10): a gas-round reading at a water point does not make it sampled for a water round", {
@@ -998,7 +1001,7 @@ test_that("inbox_run(checks = ...) passes checks to the status note on a run and
   chk <- fl_checks(schedule = fl_schedule(list(site = "K", months = "8")))
   run <- function(now) quiet_run(inbox_run(input_dir = s$input_dir, db = s$db,
                                            backup_dir = s$backup_dir, report_dir = s$report_dir,
-                                           now = now, checks = chk))
+                                           now = now, checks = fl_with_defaults(chk)))
   r1 <- run(fl_now())
   expect_identical(r1$action, "run")
   sec <- md_section(read_status_note(s$report_dir), "Flags")

@@ -1,6 +1,6 @@
 # Same-day sample collision checks in R/feature-alias.R must compare the
 # Australia/Sydney calendar day, not CAST(date AS DATE) (cf. commit 7986ee3,
-# .ct_sydney_day_sql). Legacy rows store Sydney midnight as a plain TIMESTAMP
+# .ct_local_day_sql). Legacy rows store Sydney midnight as a plain TIMESTAMP
 # holding the UTC instant (06-09 14:00 = 06-10 00:00 Sydney); pipeline-written
 # rows store naive midnight (06-10 00:00 = Sydney day 06-10).
 #

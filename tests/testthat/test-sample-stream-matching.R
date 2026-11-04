@@ -275,7 +275,7 @@ ss_samples_at <- function(con, uuid_feature, day = ss_day) {
        LEFT JOIN project p ON p.uuid = s.uuid_project
        LEFT JOIN project pp ON pp.uuid = p.uuid_parent
        LEFT JOIN project pr ON pr.uuid = p.uuid_root
-      WHERE fa.uuid_feature = ? AND ", sampleTidy:::.ct_sydney_day_sql("s.date"), " = ?
+      WHERE fa.uuid_feature = ? AND ", sampleTidy:::.ct_local_day_sql("s.date"), " = ?
       ORDER BY s.uuid"), params = list(uuid_feature, day))
   s$labs <- vapply(s$uuid, function(u) {
     paste(sort(DBI::dbGetQuery(con, "SELECT uuid_lab FROM analysis WHERE uuid_sample = ?",

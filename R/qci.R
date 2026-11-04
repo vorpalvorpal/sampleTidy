@@ -599,7 +599,7 @@
       LEFT JOIN feature_alias fa ON fa.uuid = s.uuid_feature_alias
      WHERE p.name = ?", params = list(work_order))
   if (nrow(s) == 0) return(o)
-  s$date <- .flags_syd_date(s$ts)
+  s$date <- .flags_local_date(s$ts)
   reg <- list(feature = DBI::dbGetQuery(con, "SELECT * FROM feature"),
               feature_alias = DBI::dbGetQuery(con, "SELECT * FROM feature_alias"))
   ids <- unique(o$client_id[r2])

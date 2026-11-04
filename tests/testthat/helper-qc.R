@@ -200,7 +200,7 @@ qc_checks <- function(criteria = qc_criteria_df(), requirements = qc_requirement
                       qc = list(criteria = criteria, requirements = requirements), ...) {
   ch <- fl_checks(...)
   if (!is.null(qc)) ch$qc <- qc
-  ch
+  fl_with_defaults(ch)
 }
 
 .qc_phase1_checks <- c("qc_dup_rpd", "qc_blank_detect", "qc_missing", "qc_unresolved",

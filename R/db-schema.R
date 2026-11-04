@@ -731,9 +731,10 @@ ingest_file_set_message_id <- function(con, hashes, message_id) {
     # Round-2 audit FD9: REJECT a non-Date bound rather than coercing it.
     # Reproduced end to end through the real DuckDB driver: a POSIXct
     # `date_start` looks plausible but is silently DATE-truncated at the
-    # driver boundary IN UTC, so a local Australia/Sydney timestamp before
-    # 10:00 stores the PREVIOUS day (`as.POSIXct("2022-03-04 09:00:00", tz =
-    # "Australia/Sydney")` -> stored `2022-03-03`). RULING (Robin,
+    # driver boundary IN UTC, so a local timestamp early in the day (before
+    # the zone's UTC offset has passed) stores the PREVIOUS day
+    # (`as.POSIXct("2022-03-04 09:00:00", tz = "<an ahead-of-UTC zone>")` ->
+    # stored `2022-03-03`). RULING (Robin,
     # 2026-07-25), followed exactly: do NOT "fix" this by calling as.Date()
     # on the incoming value here, because as.Date.POSIXct() is ITSELF
     # timezone-dependent - that is the very bug, one layer up. Coercing

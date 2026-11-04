@@ -12,7 +12,7 @@
 
 # lab_qc_report gains these columns. NULL on QC/QCI rows except `received_at`,
 # which a QCI front page also prints. received_at is a UTC instant (the lab's
-# Australia/Sydney local time converted), like every stored timestamp.
+# configured-zone local time converted), like every stored timestamp.
 .lab_receipt_report_cols <- c(
   received_at = "TIMESTAMP", client_due_date = "DATE", scheduled_report_date = "DATE",
   delivery_mode = "VARCHAR", security_seal = "VARCHAR", n_coolers = "INTEGER",
@@ -60,15 +60,13 @@
 
 # ---- small pieces ------------------------------------------------------------------------
 
-.srn_tz <- "Australia/Sydney"
-
 # A lab-local "dd-Mon-yyyy" (+ optional "HH:MM") -> UTC POSIXct. A date alone
-# is 00:00 Sydney (the same convention as sample.date). NA when unparseable.
+# is 00:00 in the configured time zone (the same convention as sample.date). NA when unparseable.
 .srn_utc <- function(date_str, time_str = NA_character_) {
   d <- .qci_date(date_str)
   if (is.na(d)) return(as.POSIXct(NA_real_, origin = "1970-01-01", tz = "UTC"))
   hm <- if (!is.na(time_str) && grepl("^[0-9]{1,2}:[0-9]{2}$", time_str)) time_str else "00:00"
-  x <- as.POSIXct(paste(format(d, "%Y-%m-%d"), hm), format = "%Y-%m-%d %H:%M", tz = .srn_tz)
+  x <- as.POSIXct(paste(format(d, "%Y-%m-%d"), hm), format = "%Y-%m-%d %H:%M", tz = .st_tz())
   attr(x, "tzone") <- "UTC"
   x
 }

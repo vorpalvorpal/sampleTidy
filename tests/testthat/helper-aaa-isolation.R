@@ -23,4 +23,5 @@ if (identical(Sys.getenv("TESTTHAT"), "true")) local({
       do.call(Sys.setenv, stats::setNames(list(dest), var))
     }
   }
+
 })

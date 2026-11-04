@@ -1118,10 +1118,10 @@ confirm_feature_aliases <- function(uuid_alias, uuid_feature = NULL, confirmed_b
     con,
     paste0('
     SELECT DISTINCT s1.uuid AS uuid_new, s2.uuid AS uuid_existing,
-           ', .ct_sydney_day_sql("s1.date"), ' AS collision_date
+           ', .ct_local_day_sql("s1.date"), ' AS collision_date
     FROM "sample" s1
     JOIN "sample" s2
-      ON ', .ct_sydney_day_sql("s2.date"), ' = ', .ct_sydney_day_sql("s1.date"), ' AND s2.uuid != s1.uuid
+      ON ', .ct_local_day_sql("s2.date"), ' = ', .ct_local_day_sql("s1.date"), ' AND s2.uuid != s1.uuid
     JOIN feature_alias fa2 ON fa2.uuid = s2.uuid_feature_alias
     WHERE s1.uuid_feature_alias = ?
       AND fa2.uuid_feature = ?
@@ -1145,10 +1145,10 @@ confirm_feature_aliases <- function(uuid_alias, uuid_feature = NULL, confirmed_b
     con,
     paste0('
     SELECT DISTINCT s1.uuid AS uuid_a, s2.uuid AS uuid_b,
-           ', .ct_sydney_day_sql("s1.date"), ' AS collision_date
+           ', .ct_local_day_sql("s1.date"), ' AS collision_date
     FROM "sample" s1
     JOIN "sample" s2
-      ON ', .ct_sydney_day_sql("s2.date"), ' = ', .ct_sydney_day_sql("s1.date"), ' AND s2.uuid > s1.uuid
+      ON ', .ct_local_day_sql("s2.date"), ' = ', .ct_local_day_sql("s1.date"), ' AND s2.uuid > s1.uuid
     WHERE s1.uuid_feature_alias = ?
       AND s2.uuid_feature_alias = ?
     '),

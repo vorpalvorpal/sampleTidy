@@ -435,7 +435,10 @@ test_that("R-10.6: NAMESPACE exports equal the CONTRACT-pinned public API exactl
     # PLAN-18 section 4 (phase 2, Robin 2026-10-19), added to CONTRACT.md's
     # public-API list in the same change: the deterministic checks behind the
     # status note's Flags section, callable on their own (read-only).
-    "import_flags", "sampling_rounds",  # + PLAN-18 4.6 ledger reader (superseded the PDF parser)
+    "import_flags",
+    # `sampling_rounds` (PLAN-18 4.6, the contractor-work ledger reader) moved to
+    # the deployment's own package in stage 1 of the layer move: it is no longer
+    # exported here.
     # PLAN-22 Part A (2026-10-22), added to CONTRACT.md's public-API list in the
     # same change: the standing DB checks and the migration gate.
     "db_check", "db_checks", "db_checks_core", "db_checks_params", "mig_db_checks_gate",
@@ -483,7 +486,10 @@ test_that("R-10.6: NAMESPACE exports equal the CONTRACT-pinned public API exactl
     # test-archive-settle.R), added to CONTRACT.md's public-API list in the
     # same change: re-records the hash of archived files that the file store
     # rewrites after archiving. Operator-callable; ingest_dir() also runs it.
-    "archive_settle"
+    "archive_settle",
+    # Stage 1 of the layer move: what a deployment's hooks file feature-detects
+    # before it sets the zone, the checks and the site keywords.
+    "st_capabilities"
   )
   actual <- getNamespaceExports("sampleTidy")
   expect_setequal(actual, pinned)

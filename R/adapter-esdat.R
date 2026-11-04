@@ -332,7 +332,7 @@ esdat_adapter <- function() {
 
   analysed_raw <- df$Analysed_Date
   analysed_dt <- parse_lab_datetime(analysed_raw, formats = "esdat")
-  analysed_date <- as.Date(analysed_dt, tz = "Australia/Sydney")
+  analysed_date <- as.Date(analysed_dt, tz = .st_tz())
 
   warnings_vec <- character(0)
   bad_date <- !is.na(analysed_raw) & trimws(analysed_raw) != "" & is.na(analysed_date)
