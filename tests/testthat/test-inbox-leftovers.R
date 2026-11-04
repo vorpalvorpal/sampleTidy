@@ -27,11 +27,13 @@
 #   * DATA kinds (coordinator ruling 2026-10-19): anything an adapter claims,
 #     plus extensions csv, tsv, txt, json, xml, xls, xlsx, xlsm, xlsb, zip. An
 #     unclaimed one keeps the folder (unfiled, listed under Waiting).
-#   * the dated <date>-imports.md has a "Filed" section: one entry per filed
-#     folder naming the folder, each file, and a file:/// link to the
-#     destination; a day whose only activity is filing still writes it.
-#   * dry run: the status note carries a line "would file ..." naming the
-#     folder.
+#   * status.json: a kept folder is a `waiting` entry (status "left",
+#     unfinished TRUE, the unfinished data files with their state, and an
+#     `other_files` count for the leftovers); a filed folder is not listed.
+#   * a day whose only activity is filing gives the after_run hook a day digest
+#     with a `filed` entry (the core writes no markdown).
+#   * dry run: status.json's dry_run_plan$would_file names the folder, the
+#     destination and the file count.
 
 # ---- local helpers (definitions only) ---------------------------------------
 
@@ -147,13 +149,9 @@ test_that("inbox_run(): a filed folder is no longer listed under Waiting", {
   make_inbox_folder(s$input_dir, name, c(inbox_proj_a_files(), make_leftovers()), now = now)
   run_inbox(s, now = now)
 
-  note <- read_status_note(s$report_dir)
-  waiting <- md_section(note, "Waiting")
-  expect_false(any(grepl("0900 a", waiting, fixed = TRUE)))
-  expect_false(any(grepl("_email.eml", waiting, fixed = TRUE)))
-  expect_true(grepl("\\b0 folder\\(s\\) waiting", note[[1]]))
-  js <- jsonlite::fromJSON(file.path(s$report_dir, ".import-status.json"),
-                           simplifyVector = FALSE)
+  expect_null(status_waiting(s$report_dir, name))
+  js <- read_status_json(s$report_dir)
+  expect_false(any(grepl("_email.eml", jsonlite::toJSON(js$waiting, auto_unbox = TRUE), fixed = TRUE)))
   expect_equal(as.integer(js$folders_waiting), 0L)
 })
 
@@ -170,18 +168,16 @@ expect_nothing_filed <- function(s, d, name, before, res, unfinished, leftovers)
   expect_false(dir.exists(file.path(emails_root(s), name)))
   expect_length(filed_files(res$folders[[name]]), 0)
 
-  waiting <- md_section(read_status_note(s$report_dir), "Waiting")
-  expect_true(any(grepl(name, waiting, fixed = TRUE)))
-  for (fn in unfinished) {
-    expect_true(any(grepl(fn, waiting, fixed = TRUE)), info = fn)
-  }
+  e <- status_waiting(s$report_dir, name)
+  expect_false(is.null(e))
+  expect_identical(e$status, "left")
+  expect_true(e$unfinished)
+  listed <- vapply(e$files, function(f) f$file, character(1))
+  expect_setequal(listed, unfinished)
   # leftovers are counted, not itemised
-  for (fn in leftovers) {
-    expect_false(any(grepl(fn, waiting, fixed = TRUE)), info = fn)
-  }
-  count_line <- waiting[grepl(sprintf("\\b%d other file\\(s\\)", length(leftovers)), waiting)]
-  expect_length(count_line, 1)
-  expect_true(grepl("filed", count_line, fixed = TRUE))
+  for (fn in leftovers) expect_false(fn %in% listed, info = fn)
+  expect_identical(e$other_files, length(leftovers))
+  expect_gte(as.integer(read_status_json(s$report_dir)$folders_waiting), 1L)
 }
 
 test_that("inbox_run(): a folder still holding a needs_review data file moves nothing; Waiting lists only that file plus a leftover count", {
@@ -327,11 +323,12 @@ test_that("inbox_run(): an existing _emails/<folder>/ is never overwritten; the 
 
 # ---- 4. dry run ----------------------------------------------------------------------
 
-test_that("inbox_run(dry_run = TRUE): nothing is filed or removed, and the note says what would be filed", {
+test_that("inbox_run(dry_run = TRUE): nothing is filed or removed, and status.json's dry_run_plan says what would be filed", {
   s <- inbox_setup()
   now <- Sys.time()
   name <- "input2026-10-18 0900 a"
-  make_inbox_folder(s$input_dir, name, c(inbox_proj_a_files(), make_leftovers()), now = now)
+  lo <- make_leftovers()
+  make_inbox_folder(s$input_dir, name, c(inbox_proj_a_files(), lo), now = now)
   in_before <- snap(s$input_dir)
   arch_before <- snap(s$archive_dir)
 
@@ -341,11 +338,12 @@ test_that("inbox_run(dry_run = TRUE): nothing is filed or removed, and the note 
   expect_identical(snap(s$archive_dir), arch_before)
   expect_false(dir.exists(emails_root(s)))
 
-  notes <- c(if (file.exists(inbox_report_path(s$report_dir, now))) read_report(s$report_dir, now),
-             if (file.exists(status_note_path(s$report_dir))) read_status_note(s$report_dir))
-  would <- notes[grepl("(?i)would file", notes, perl = TRUE)]
-  expect_gt(length(would), 0)
-  expect_true(any(grepl(name, would, fixed = TRUE)))
+  plan <- read_status_json(s$report_dir)$dry_run_plan
+  expect_length(plan$would_file, 1)
+  expect_identical(plan$would_file[[1]]$folder, name)
+  expect_identical(plan$would_file[[1]]$to, file.path(s$archive_dir, "_emails", name))
+  # every file still in the folder (a dry run removes none)
+  expect_identical(plan$would_file[[1]]$files, length(inbox_proj_a_files()) + length(lo))
 
   # and the real run afterwards still files them
   run_inbox(s, now = now)
@@ -373,8 +371,8 @@ test_that("inbox_run(): a folder holding only leftovers (an email with just a PD
   expect_identical(unname(file_facts(dest)$md5[basename(lo)]),
                    unname(before$md5[basename(lo)]))
   expect_setequal(filed_files(res$folders[[name]]), basename(lo))
-  waiting <- md_section(read_status_note(s$report_dir), "Waiting")
-  expect_false(any(grepl(name, waiting, fixed = TRUE)))
+  expect_null(status_waiting(s$report_dir, name))
+  expect_equal(as.integer(read_status_json(s$report_dir)$folders_waiting), 0L)
 })
 
 test_that("inbox_run(): a backlog folder left by an earlier import (only leftovers remain, already known to the DB) is filed", {
@@ -450,31 +448,11 @@ for (odd in c("bundle.zip", "notes.txt")) {
   })
 }
 
-# ---- 8. filing is visible in the dated note (ruling 4) --------------------------------------
+# ---- 8. filing is visible to the after_run hook (ruling 4) ----------------------------------
 
-test_that("import_report(): the dated note has a Filed section naming each filed folder, its files and a file:/// link to the destination", {
+test_that("inbox_run(): a day whose only activity is filing still gives the after_run hook a day digest, with a filed entry", {
   s <- inbox_setup()
-  now <- Sys.time()
-  name <- "input2026-10-18 0900 ALS results"
-  lo <- make_leftovers()
-  make_inbox_folder(s$input_dir, name, c(inbox_proj_a_files(), lo), now = now)
-  run_inbox(s, now = now)
-
-  day <- read_report(s$report_dir, now)
-  filed <- md_section(day, "Filed")
-  expect_gt(length(filed), 0)
-  expect_true(any(grepl(name, filed, fixed = TRUE)))
-  for (fn in basename(lo)) expect_true(any(grepl(fn, filed, fixed = TRUE)), info = fn)
-  link <- filed[grepl("file://", filed, fixed = TRUE)]
-  expect_gt(length(link), 0)
-  # the link points at the _emails destination (spaces URL-encoded)
-  expect_true(any(grepl(paste0("_emails/", utils::URLencode(name)), link, fixed = TRUE)))
-  # imports still appear as before
-  expect_gt(length(md_section(day, "Imported today")), 0)
-})
-
-test_that("inbox_run(): a day whose only activity is filing still writes the dated note, with a Filed section", {
-  s <- inbox_setup()
+  rec <- record_hook("after_run", renderer = TRUE)
   now <- Sys.time()
   name <- "input2026-10-17 0900 old"
   lo <- make_leftovers(names = c("_email.eml", "image001.png"))
@@ -484,22 +462,16 @@ test_that("inbox_run(): a day whose only activity is filing still writes the dat
 
   run_inbox(s, now = now)
 
-  expect_true(file.exists(inbox_report_path(s$report_dir, now)))
-  if (!file.exists(inbox_report_path(s$report_dir, now))) return(invisible())
-  day <- read_report(s$report_dir, now)
-  filed <- md_section(day, "Filed")
-  expect_true(any(grepl(name, filed, fixed = TRUE)))
-  for (fn in basename(lo)) expect_true(any(grepl(fn, filed, fixed = TRUE)), info = fn)
+  expect_length(rec$calls, 1)
+  day <- rec$calls[[1]]$context$day
+  expect_false(is.null(day))
+  expect_length(day$runs, 1)
+  expect_length(day$runs[[1]]$imports, 0)
+  filed <- day$runs[[1]]$filed
+  expect_length(filed, 1)
+  expect_identical(filed[[1]]$folder, name)
+  expect_setequal(as.character(unlist(filed[[1]]$files)), basename(lo))
+  expect_identical(np(filed[[1]]$to), np(file.path(emails_root(s), name)))
+  expect_length(report_md_files(s$report_dir), 0)
 })
 
-test_that("import_report(): no Filed section on a day nothing was filed", {
-  s <- inbox_setup()
-  now <- Sys.time()
-  # imports, but the folder holds an unfinished data file, so nothing is filed
-  make_inbox_folder(s$input_dir, "input2026-10-18 0900 mixed",
-                    c(inbox_proj_a_files(), inbox_corrupt_file(), make_leftovers()), now = now)
-  run_inbox(s, now = now)
-  day <- read_report(s$report_dir, now)
-  expect_length(md_section(day, "Filed"), 0)
-  expect_false(any(grepl("^#+\\s*Filed", day)))
-})

@@ -11,7 +11,7 @@
 # R-22.H (Robin 2026-10-25): an atomic mkdir lock, and a run-health record
 # ($REPORT/.imports.health) that drives retry-after-failure, one notification per
 # failed run, a once-per-Sydney-day "no success for N hours" notification, and the
-# SAMPLETIDY_AUTOIMPORT_PREV_FAILURE text that import_status() shows under Problems.
+# SAMPLETIDY_AUTOIMPORT_PREV_FAILURE text that appears in status.json problems.
 export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"   # Obsidian's PATH lacks Rscript
 HERE="$(cd "$(dirname "$0")" && pwd)"
 DB="${SAMPLETIDY_AUTOIMPORT_DB:-$HOME/Library/Application Support/org.R-project.R/R/sampleTidy/monitoring.duckdb}"

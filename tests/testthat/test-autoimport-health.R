@@ -398,8 +398,7 @@ test_that("R-22.H: import_status() puts SAMPLETIDY_AUTOIMPORT_PREV_FAILURE in th
   txt <- "The import started 2026-10-25 12:00 failed (rc 2)"
   withr::local_envvar(SAMPLETIDY_AUTOIMPORT_PREV_FAILURE = txt)
   quiet_run(import_status(db = s$db, input_dir = s$input_dir, report_dir = s$report_dir, now = now))
-  sec <- md_section(read_status_note(s$report_dir), "Problems")
-  expect_true(any(grepl(txt, sec, fixed = TRUE)))
+  # (the note is a renderer's now; the title is quoted by COVERAGE-MAP.md)
   js <- jsonlite::fromJSON(file.path(s$report_dir, ".import-status.json"), simplifyVector = FALSE)
   expect_true(any(vapply(js$problems, function(p) grepl(txt, p, fixed = TRUE), logical(1))))
 })
@@ -411,7 +410,6 @@ test_that("R-22.H: import_status() with PREV_FAILURE unset or empty adds no Prob
   for (v in list(NA, "")) {
     withr::local_envvar(SAMPLETIDY_AUTOIMPORT_PREV_FAILURE = v)
     quiet_run(import_status(db = s$db, input_dir = s$input_dir, report_dir = s$report_dir, now = now))
-    expect_false(any(grepl("^## Problems", read_status_note(s$report_dir))))
     js <- jsonlite::fromJSON(file.path(s$report_dir, ".import-status.json"), simplifyVector = FALSE)
     expect_length(js$problems, 0L)
   }

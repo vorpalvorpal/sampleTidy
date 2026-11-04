@@ -166,11 +166,13 @@ test_that("stage 1: `checks` set in code may be a function and round-trips", {
   expect_identical(st_config("checks"), f)
 })
 
-test_that("stage 1: st_capabilities() is exported and names the six features", {
+test_that("st_capabilities() is exported and names the eight features (six from stage 1, two from stage 2)", {
   expect_true("st_capabilities" %in% getNamespaceExports("sampleTidy"))
   caps <- st_capabilities()
   expect_type(caps, "character")
   expect_true(all(c("timezone", "checks_option", "checks_streams", "site_names",
-                    "site_keywords", "date_overrides_env") %in% caps))
+                    "site_keywords", "date_overrides_env",
+                    "inbox_batches", "renderer_hooks") %in% caps))
+  expect_length(caps, 8)
 })
 

@@ -2,16 +2,17 @@
 % Please edit documentation in R/inbox.R
 \name{import_status}
 \alias{import_status}
-\title{Write the standing import status note}
+\title{Write the standing import status (deprecated as a note writer)}
 \usage{
 import_status(
   db = st_config("live_db"),
   input_dir,
   report_dir,
   now = Sys.time(),
-  settle_minutes = 10,
+  settle_minutes = NULL,
   dry_run = NULL,
-  checks = NULL
+  checks = NULL,
+  batch = .inbox_default_batch()
 )
 }
 \arguments{
@@ -19,29 +20,42 @@ import_status(
 
 \item{input_dir}{the inbox directory.}
 
-\item{report_dir}{where the notes live.}
+\item{report_dir}{where the status lives.}
 
 \item{now}{current time.}
 
-\item{settle_minutes}{settle window used to tell arriving from waiting.}
+\item{settle_minutes}{\code{NULL} (use \code{batch$settle_minutes}) or a number that
+replaces it; the settle window used to tell arriving from waiting.}
 
-\item{dry_run}{optional banner lines (a dry run).}
+\item{dry_run}{\code{NULL}, or any value to mark the status as a dry run (its
+\code{dry_run_plan} stays \code{null}).}
 
-\item{checks}{\code{NULL} (no Flags section, phase-1 output), the \code{checks}
-list of \code{\link[=import_flags]{import_flags()}}, or a zero-argument function returning it (called
-on every build).}
+\item{checks}{\code{NULL} (no flags), the \code{checks} list of \code{\link[=import_flags]{import_flags()}}, or a
+zero-argument function returning it (called on every build).}
+
+\item{batch}{an \code{\link[=inbox_batches]{inbox_batches()}} object; the default is
+\code{st_config("inbox_batches")}, or \code{inbox_batches()} when that is unset.}
 }
 \value{
-the note's path, invisibly.
+\verb{<report_dir>/Import status.md}, invisibly. The core does not write
+it; a renderer does.
 }
 \description{
-Rewrites \verb{<report_dir>/Import status.md}, \code{.import-status.json} and
-\code{status.json} (the two json files are identical): open
-review items, folders waiting in the inbox, the latest run's problems and
-the last 14 days of imports, and the hourly standing DB checks
-(\code{\link[=db_checks]{db_checks()}}: error-level failures and checks that could not run are
-Problems, warn-level failures a count under DB checks, the full result in
-the json; they never block anything). Read-only on the DB. With \code{checks}, also a
-Flags section from \code{\link[=import_flags]{import_flags()}}, each flag's \code{first_seen} carried over
-by key from the previous \code{status.json} (else \code{.import-status.json}).
+Deprecated: the core no longer writes markdown. This wrapper builds the
+status exactly as \code{\link[=inbox_run]{inbox_run()}} does, writes \code{status.json} and
+\code{.import-status.json} (the two are identical), and calls only the
+\code{"after_status"} hooks registered with \code{renderer = TRUE}
+(\code{\link[=register_hook]{register_hook()}}), with \code{context$source == "import_status"}. A failing
+renderer is added to the status \code{problems} and the json files are rewritten.
+With no renderer registered it warns (class \code{sampletidy_deprecated}) after
+writing the json.
+
+The status holds, as json: the open review items, the folders waiting in the
+inbox and the loose files, the latest run's problems, the last 14 days of
+imports, and the hourly standing DB checks (\code{\link[=db_checks]{db_checks()}}: error-level
+failures and checks that could not run are problems; the full result is in
+\code{db_checks}; they never block anything). Read-only on the DB. With \code{checks},
+also the flags from \code{\link[=import_flags]{import_flags()}}, their \code{flag_checks} (each check with its
+meaning) and \code{site_names}, each flag's \code{first_seen} carried over by key from
+the previous \code{status.json} (else \code{.import-status.json}).
 }

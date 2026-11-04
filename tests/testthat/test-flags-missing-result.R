@@ -152,7 +152,7 @@ test_that("missing_result: registered after unit_change with the exact meaning t
     "a result is blank on the report (\"_\" or similar) — ask the supplier for the value or why it wasn't measured")
 })
 
-test_that("missing_result: status note Flags section and .import-status.json, first_seen kept", {
+test_that("missing_result: status.json flags and flag_checks meaning, first_seen kept", {
   s <- fl_status_setup()
   fl_with(s$db, function(con) {
     mr_txt(con)
@@ -160,10 +160,10 @@ test_that("missing_result: status note Flags section and .import-status.json, fi
   })
   t1 <- fl_now()
   fl_status(s, checks = fl_checks(), now = t1)
-  sec <- md_section(read_status_note(s$report_dir), "Flags")
-  expect_true(any(grepl("**missing_result** — a result is blank on the report",
-                        sec, fixed = TRUE)))
   js1 <- fl_status_json(s)
+  fc <- Filter(function(x) identical(x$check, "missing_result"), js1$flag_checks)
+  expect_length(fc, 1)
+  expect_identical(fc[[1]]$meaning, unname(sampleTidy:::.flags_meanings[["missing_result"]]))
   f1 <- Filter(function(x) identical(x$check, "missing_result"), js1$flags)
   expect_length(f1, 1)
   expect_identical(f1[[1]]$first_seen, "2026-10-19T02:00:00Z")

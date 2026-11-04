@@ -9,8 +9,8 @@ for (.ev in .hook_events) .hook_env[[.ev]] <- list()
 rm(.ev)
 # Problems from load_hooks_file(), surfaced in every status afterwards (session state).
 .hook_env$file_problems <- character(0)
-# Parallel to the function lists: one replace_default flag per registered hook.
-.hook_env$replace <- stats::setNames(rep(list(logical(0)), length(.hook_events)), .hook_events)
+# Parallel to the function lists: one renderer flag per registered hook.
+.hook_env$renderer <- stats::setNames(rep(list(logical(0)), length(.hook_events)), .hook_events)
 
 .hook_check_event <- function(event) {
   if (!is.character(event) || length(event) != 1 || is.na(event) ||
@@ -27,24 +27,37 @@ rm(.ev)
 #'
 #' Hooks are session state (not persisted). Hooks of one event run in
 #' registration order; the same function may be registered twice and then runs
-#' twice. Registering a hook for `"after_status"` or `"after_run"` replaces that
-#' event's default markdown renderer, unless every hook registered for the event
-#' has `replace_default = FALSE`: then the default runs first and the hooks run
-#' after it, in registration order. An error inside a hook never fails
-#' [inbox_run()]; it is recorded as a problem in the status.
+#' twice. The core writes no markdown of its own: a deployment that wants
+#' notes registers a renderer for `"after_status"` and `"after_run"`. An error
+#' inside a hook never fails [inbox_run()]; it is recorded as a problem in the
+#' status, as `hook <event>[<i>] failed: <message>` where `i` is the hook's
+#' 1-based registration index within the event.
+#'
+#' A hook of two or more formals (or one with `...`) is called
+#' `fn(arg, context)`; any other is called `fn(arg)`. `context` is a list:
+#' `source` (`"inbox_run"`, `"import_status"` or `"import_report"`),
+#' `report_dir`, `input_dir` (`NA` for `"import_report"`), `db`, `now`,
+#' `timezone`, and `day`. `day` is `NULL` except for `"after_run"`, where it is
+#' the day digest (`date`, `time`, `review_items_open` and `runs`, one entry per
+#' non-dry-run log line of the local day, each with `started_at`, `time`,
+#' `imports`, `filed` and `problems`) when the day has news, else `NULL`.
 #'
 #' @param event one of `"after_run"` (argument: the list `inbox_run()`
 #'   returns), `"after_status"` (the status list written to `status.json`) or
 #'   `"work_complete"` (a [completed_work()] tibble of the projects that
 #'   became complete during the run).
-#' @param fn a function of one argument.
-#' @param replace_default a single `TRUE` or `FALSE` (default `TRUE`). The
-#'   event's default renderer is suppressed if at least one hook registered for
-#'   the event has `replace_default = TRUE`. Has no effect for `"work_complete"`,
-#'   which has no default.
+#' @param fn a function of one argument, or of two to receive the `context`.
+#' @param replace_default a single `TRUE` or `FALSE` (default `TRUE`). Ignored:
+#'   the core has no default renderers. Kept for one release so that existing
+#'   calls still work.
+#' @param renderer a single `TRUE` or `FALSE` (default `FALSE`). `TRUE` is
+#'   allowed only for `"after_status"` and `"after_run"` and marks the hook as
+#'   a renderer, the kind the deprecated [import_status()] and [import_report()]
+#'   fire. A renderer fires in [inbox_run()] like any other hook. An `"after_run"`
+#'   renderer should do nothing when `context$day` is `NULL`.
 #' @return `fn`, invisibly.
 #' @export
-register_hook <- function(event, fn, replace_default = TRUE) {
+register_hook <- function(event, fn, replace_default = TRUE, renderer = FALSE) {
   .hook_check_event(event)
   if (!is.function(fn)) {
     cli::cli_abort("{.arg fn} must be a function.", class = "sampletidy_error")
@@ -54,8 +67,18 @@ register_hook <- function(event, fn, replace_default = TRUE) {
     cli::cli_abort("{.arg replace_default} must be a single {.val TRUE} or {.val FALSE}.",
                    class = "sampletidy_error")
   }
+  if (!is.logical(renderer) || length(renderer) != 1 || is.na(renderer)) {
+    cli::cli_abort("{.arg renderer} must be a single {.val TRUE} or {.val FALSE}.",
+                   class = "sampletidy_error")
+  }
+  if (renderer && !event %in% c("after_status", "after_run")) {
+    cli::cli_abort(
+      "{.code renderer = TRUE} is only allowed for {.val after_status} and {.val after_run}.",
+      class = "sampletidy_error"
+    )
+  }
   .hook_env[[event]] <- c(.hook_env[[event]], list(fn))
-  .hook_env$replace[[event]] <- c(.hook_env$replace[[event]], replace_default)
+  .hook_env$renderer[[event]] <- c(.hook_env$renderer[[event]], renderer)
   invisible(fn)
 }
 
@@ -67,12 +90,12 @@ register_hook <- function(event, fn, replace_default = TRUE) {
 clear_hooks <- function(event = NULL) {
   if (is.null(event)) {
     for (ev in .hook_events) .hook_env[[ev]] <- list()
-    for (ev in .hook_events) .hook_env$replace[[ev]] <- logical(0)
+    for (ev in .hook_events) .hook_env$renderer[[ev]] <- logical(0)
     .hook_env$file_problems <- character(0)
   } else {
     .hook_check_event(event)
     .hook_env[[event]] <- list()
-    .hook_env$replace[[event]] <- logical(0)
+    .hook_env$renderer[[event]] <- logical(0)
   }
   invisible(NULL)
 }
@@ -127,26 +150,39 @@ hooks <- function(event = NULL) {
   .hook_env[[event]]
 }
 
-# Run every hook of `event` with `arg`, each inside tryCatch. With no hook
-# registered, or none has replace_default = TRUE, `default` (if any) runs first
-# with id "default"; then the hooks, in registration order. Returns
-# the problem strings, `hook <event>[<id>] failed: <msg>`.
-.hooks_run <- function(event, arg, default = NULL) {
+# Is a renderer registered for `event`?
+.hooks_have_renderer <- function(event) any(.hook_env$renderer[[event]])
+
+# The context every hook can ask for (see register_hook()). `day` is the day
+# digest for after_run, else NULL.
+.hook_context <- function(source, report_dir, input_dir, db, now, day = NULL) {
+  list(source = source, report_dir = report_dir, input_dir = input_dir, db = db,
+       now = now, timezone = .st_tz(), day = day)
+}
+
+# Does `fn` take the context? A non-primitive with two or more formals, or `...`.
+.hook_takes_context <- function(fn) {
+  if (is.primitive(fn)) return(FALSE)
+  f <- names(formals(fn))
+  length(f) >= 2L || "..." %in% f
+}
+
+# Run every hook of `event` (only the renderers if `only_renderers`) with `arg`,
+# each inside tryCatch, in registration order. Returns the problem strings,
+# `hook <event>[<i>] failed: <msg>`, i being the registration index.
+.hooks_run <- function(event, arg, context, only_renderers = FALSE) {
   fns <- .hook_env[[event]]
-  ids <- seq_along(fns)
-  if (!is.null(default) && !any(.hook_env$replace[[event]])) {
-    fns <- c(list(default), fns)
-    ids <- c("default", ids)
-  }
+  rend <- .hook_env$renderer[[event]]
   problems <- character(0)
   for (i in seq_along(fns)) {
+    if (only_renderers && !isTRUE(rend[[i]])) next
     fn <- fns[[i]]
     msg <- tryCatch({
-      fn(arg)
+      if (.hook_takes_context(fn)) fn(arg, context) else fn(arg)
       NULL
     }, error = function(e) conditionMessage(e))
     if (!is.null(msg)) {
-      problems <- c(problems, sprintf("hook %s[%s] failed: %s", event, ids[[i]], msg))
+      problems <- c(problems, sprintf("hook %s[%d] failed: %s", event, i, msg))
     }
   }
   problems

@@ -129,6 +129,12 @@
   site_keywords = function() {
     NULL
   },
+  # `inbox_batches` (NULL or an `inbox_batches()` object) says which folders of
+  # the input directory are batches, how long they settle and what happens to
+  # their leftovers; NULL means the generic recogniser, `inbox_batches()`.
+  inbox_batches = function() {
+    NULL
+  },
   # Deliberately reads SAMPLETIDY_CORPUS (not the SAMPLETIDY_CORPUS_DIR
   # pattern used for the option/env-var lookup below) - see PLAN-01 R-1.1.
   corpus_dir = function() {
@@ -147,7 +153,7 @@
 #' @keywords internal
 #' @noRd
 .st_config_list_keys <- c("field_analytes", "acirl_transcription_labels", "archive_settle",
-                          "checks", "site_keywords")
+                          "checks", "site_keywords", "inbox_batches")
 
 #' Get or set a sampleTidy configuration value
 #'
@@ -172,11 +178,15 @@
 #' for its fields.
 #'
 #' `timezone` is the time zone of local calendar days (default `"UTC"`);
-#' it must be one string in [OlsonNames()]. `checks` and `site_keywords` are
-#' list-valued keys, `NULL` by default: `checks` is what a deployment's
-#' job passes to [inbox_run()] for its import flags (a list, or a zero-argument
+#' it must be one string in [OlsonNames()]. `checks`, `site_keywords` and
+#' `inbox_batches` are list-valued keys, `NULL` by default: `checks` is what a
+#' deployment's job passes to [inbox_run()] for its import flags (a list, or a zero-argument
 #' function returning one), and `site_keywords` maps a site code to the
 #' keywords by which the ACIRL gas adapter recognises that site in a workbook.
+#' `inbox_batches` is `NULL` or an [inbox_batches()] object: which folders of
+#' the input directory [inbox_run()] treats as batches, how long they settle and
+#' what happens to the files an import leaves behind. `NULL` means
+#' `inbox_batches()`: every non-hidden subfolder, settled at once, left in place.
 #'
 #' @param key configuration key, e.g. `"live_db"`, `"input_dir"`.
 #' @param value if supplied, the value to set for `key`.
@@ -235,7 +245,7 @@ st_config <- function(key, value) {
 #' @export
 st_capabilities <- function() {
   c("timezone", "checks_option", "checks_streams", "site_names",
-    "site_keywords", "date_overrides_env")
+    "site_keywords", "date_overrides_env", "inbox_batches", "renderer_hooks")
 }
 
 # Validated zones, memoised per value (OlsonNames() is slow-ish).

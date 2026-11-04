@@ -1,14 +1,14 @@
 # PLAN-22 A3: the hourly db_checks() inside import_status().
 #
 # import_status() runs db_checks(con, tier = "hourly") on the DB it reads:
-#   * every failing check of severity "error" is a line in `## Problems` (and
-#     in the status json's `problems`) that names the check;
-#   * failing "warn" checks are counted in a `## DB checks` section and are
-#     NOT problems;
+#   * every failing check of severity "error" is an entry in the status json's
+#     `problems` that names the check;
+#   * failing "warn" checks are NOT problems: they are `db_checks` records with
+#     status "fail" and severity "warn" (rendering them is a renderer's job);
 #   * the full result goes to `.import-status.json` under `db_checks`, one
 #     record per check (name, status, ...);
 #   * a check whose SQL errors, or db_checks() itself failing, never breaks
-#     import_status() - the note and json are still written.
+#     import_status() - the json is still written.
 # Failures never block an import (PLAN-22 A3); nothing here runs inbox_run().
 
 dbc_status <- function(db, env = parent.frame()) {
@@ -17,7 +17,6 @@ dbc_status <- function(db, env = parent.frame()) {
   now <- as.POSIXct("2026-10-22 03:00:00", tz = "UTC")
   quiet_run(import_status(db = db, input_dir = input_dir, report_dir = report_dir, now = now))
   list(
-    note = read_status_note(report_dir),
     json = jsonlite::read_json(file.path(report_dir, ".import-status.json"), simplifyVector = FALSE)
   )
 }
@@ -37,7 +36,6 @@ test_that("import_status(): a clean DB -> every hourly check recorded as pass in
   jc <- dbc_json_checks(st$json)
   expect_setequal(jc$name, dbc_hourly_names)
   expect_true(all(jc$status == "pass"), info = paste(jc$name[jc$status != "pass"], collapse = ","))
-  expect_false(any(grepl("^#+\\s*Problems", st$note)))
   expect_length(st$json$problems, 0)
 })
 
@@ -54,19 +52,13 @@ test_that("import_status(): error-severity failures are Problems; warn failures 
   })
   st <- dbc_status(db)
 
-  probs <- md_section(st$note, "Problems")
-  expect_true(any(grepl("dup_asset_hash", probs, fixed = TRUE)), info = paste(probs, collapse = "\n"))
-  expect_false(any(grepl("vocab_feature_flow", probs, fixed = TRUE)))
-  expect_false(any(grepl("feature_coords", probs, fixed = TRUE)))
   jp <- vapply(st$json$problems, as.character, "")
   expect_true(any(grepl("dup_asset_hash", jp, fixed = TRUE)))
   expect_false(any(grepl("vocab_feature_flow|feature_coords", jp)))
 
-  sec <- md_section(st$note, "DB checks")
-  expect_gt(length(sec), 0)
-  expect_true(any(grepl("\\b2\\b[^0-9]*warn", sec, ignore.case = TRUE)), info = paste(sec, collapse = "\n"))
-
   jc <- dbc_json_checks(st$json)
+  sev <- vapply(st$json$db_checks, function(r) as.character(r$severity), "")
+  expect_identical(sum(jc$status == "fail" & sev == "warn"), 2L)
   expect_setequal(jc$name, dbc_hourly_names)
   expect_identical(jc$status[jc$name == "dup_asset_hash"], "fail")
   expect_identical(jc$status[jc$name == "vocab_feature_flow"], "fail")
@@ -76,23 +68,22 @@ test_that("import_status(): error-severity failures are Problems; warn failures 
   expect_identical(as.character(rec$severity), "error")
 })
 
-test_that("import_status(): a check whose SQL errors is recorded as 'error' and the note is still written", {
+test_that("import_status(): a check whose SQL errors is recorded as 'error' and status.json is still written", {
   db <- dbc_db()
   dbc_with(db, function(con) DBI::dbExecute(con, "DROP TABLE lab_qc_outlier"))
   st <- dbc_status(db)
-  expect_true(any(grepl("^#+\\s*Needs review", st$note)))
+  expect_true("needs_review" %in% names(st$json))
   jc <- dbc_json_checks(st$json)
   expect_identical(jc$status[jc$name == "orphan_qc_refs"], "error")
 })
 
-test_that("import_status(): db_checks() itself failing does not break the status note", {
+test_that("import_status(): db_checks() itself failing does not break status.json", {
   db <- dbc_db()
   local_mocked_bindings(db_checks = function(...) stop("db_checks exploded"))
   input_dir <- withr::local_tempdir()
   report_dir <- withr::local_tempdir()
   expect_no_error(quiet_run(import_status(db = db, input_dir = input_dir, report_dir = report_dir,
                                           now = as.POSIXct("2026-10-22 03:00:00", tz = "UTC"))))
-  note <- read_status_note(report_dir)
-  expect_true(any(grepl("^#+\\s*Needs review", note)))
   expect_true(file.exists(file.path(report_dir, ".import-status.json")))
+  expect_true("needs_review" %in% names(jsonlite::read_json(file.path(report_dir, ".import-status.json"))))
 })

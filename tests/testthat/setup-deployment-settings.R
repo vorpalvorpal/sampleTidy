@@ -10,5 +10,13 @@
 # inside a test run, so this can never reach a live import.
 Sys.unsetenv(c("SAMPLETIDY_TIMEZONE", "SAMPLETIDY_DATE_OVERRIDES",
                "SAMPLETIDY_SITE_KEYWORDS"))
+# Stage 2: the inbox recogniser the existing suites were written against
+# (input* folders, 10 minutes to settle, leftovers filed under _emails). Built
+# with structure() rather than inbox_batches() so that this file does not
+# depend on the constructor; test-inbox-batches.R pins the two equal. New tests
+# clear it with withr::local_options(sampletidy.inbox_batches = NULL).
 options(sampletidy.timezone = "Australia/Sydney",
-        sampletidy.site_keywords = list(B = "northvale", K = "millbrook"))
+        sampletidy.site_keywords = list(B = "northvale", K = "millbrook"),
+        sampletidy.inbox_batches = structure(
+          list(pattern = "^input.+", settle_minutes = 10, leftovers = "_emails"),
+          class = "sampletidy_inbox_batches"))
