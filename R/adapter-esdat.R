@@ -90,7 +90,7 @@ esdat_adapter <- function() {
       ),
       extra
     )
-    do.call(readr::read_csv, args)
+    .st_esdat_read_tolerating_empty_trailing(args)
   }
   .st_read_grid_with_encoding_fallback(
     read_fn = read_one,
@@ -99,6 +99,65 @@ esdat_adapter <- function() {
     text_extractor = function(d) unlist(d, use.names = FALSE),
     source_label = filename
   )
+}
+
+# readr::read_csv() for an ESdat CSV, tolerating rows that carry extra
+# trailing fields which are EMPTY (e.g. a trailing comma on every data row).
+# vroom treats those as a parsing problem: it warns and leaves the surplus
+# commas glued onto the last field's text ("a_15,"). That is harmless noise
+# for ESdat exports, but any other problem (extra field with content, too few
+# columns, type problems) is still real, so the warning is only withheld
+# when every problem is a wider-than-header row and all the surplus fields
+# are empty. Otherwise the original result and warnings pass through
+# unchanged - there is deliberately no blanket suppressWarnings().
+.st_esdat_read_tolerating_empty_trailing <- function(args) {
+  caught <- list()
+  df <- withCallingHandlers(
+    do.call(readr::read_csv, args),
+    warning = function(w) {
+      caught[[length(caught) + 1L]] <<- w
+      invokeRestart("muffleWarning")
+    }
+  )
+  resignal <- function() {
+    for (w in caught) {
+      warning(w)
+    }
+    df
+  }
+  if (length(caught) == 0L) {
+    return(df)
+  }
+
+  # Only vroom's parsing-issues warning is a candidate for recovery.
+  probs <- readr::problems(df)
+  if (nrow(probs) == 0L) {
+    return(resignal())
+  }
+  n_expected <- suppressWarnings(as.integer(sub(" .*$", "", probs$expected)))
+  n_actual <- suppressWarnings(as.integer(sub(" .*$", "", probs$actual)))
+  wider <- grepl("columns$", probs$expected) & grepl("columns$", probs$actual) &
+    !is.na(n_expected) & !is.na(n_actual) & n_actual > n_expected
+  if (!all(wider)) {
+    return(resignal())
+  }
+
+  # vroom caps the column count at the first row's width, so a wider re-read
+  # is not possible; instead it folds each row's surplus fields into the last
+  # column's text. Surplus EMPTY fields therefore show up as trailing commas
+  # on that value, and that is what we verify (and strip) per affected row.
+  # `row` counts the header line, so data row i is problem row i + 1.
+  last <- ncol(df)
+  rows <- probs$row - 1L
+  n_surplus <- n_actual - n_expected
+  vals <- df[[last]][rows]
+  commas <- ifelse(is.na(vals), NA_integer_, nchar(sub("^.*?(,*)$", "\\1", vals, perl = TRUE)))
+  if (anyNA(commas) || any(commas != n_surplus) ||
+    any(rows < 1L | rows > nrow(df))) {
+    return(resignal())
+  }
+  df[[last]][rows] <- sub(",+$", "", vals)
+  df
 }
 
 .st_esdat_read_header <- function(path, filename = basename(path)) {

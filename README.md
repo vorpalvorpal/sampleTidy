@@ -31,4 +31,4 @@ The architecture, data model and ingestion-pipeline design live in the pinned
 
 ## Status
 
-Greenfield, pre-alpha. Skeleton only.
+In development (version 0.0.0.9000) and in production use for one monitoring programme. The pipeline from input folder to reconciled database rows is built; see `dev/STATE.md` for the current state.

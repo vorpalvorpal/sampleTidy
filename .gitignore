@@ -31,8 +31,17 @@ dev/asset-swap-backup-2026-07-23/
 dev/migrations/*-BACKUP*.csv
 dev/migrations/*-INSERTED*.csv
 dev/migrations/*-SKIPPED*.csv
+dev/migrations/*-DISCREPANCIES*.csv
+# Source files and records-system numbers of the history imports: never in this public repo
+dev/migrations/*-TRIM.csv
+dev/migrations/*-FILES/
+dev/migrations/*-OLDFILES/
+dev/migrations/*-ORIGINALS/
 
 # EPA licences and EPA monitoring-data workbooks: real documents, never committed
 dev/*.pdf
 dev/epa_monitoring_data_K_*.xlsx
 dev/~$*
+
+# Operational state notes: deployment-specific, kept on disk only
+dev/STATE.md
