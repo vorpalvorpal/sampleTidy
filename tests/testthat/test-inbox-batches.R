@@ -129,10 +129,29 @@ test_that("st_config(\"inbox_batches\") defaults to NULL and round-trips a recog
   expect_identical(st_config("inbox_batches"), b)
 })
 
-test_that("the option the setup file pins equals inbox_batches(\"^input.+\", 10, \"_emails\")", {
+test_that("the test recogniser: unset at the top of a test, set by inbox_setup(), equal to inbox_batches(\"^batch-.+\", 10, \"filed-mail\")", {
   # (the older suites run on this)
-  pinned <- getOption("sampletidy.inbox_batches")
-  expect_identical(pinned, inbox_batches("^input.+", settle_minutes = 10, leftovers = "_emails"))
+  expect_null(getOption("sampletidy.inbox_batches"))
+  expect_identical(test_batches(),
+                   inbox_batches("^batch-.+", settle_minutes = 10, leftovers = "filed-mail"))
+  inbox_setup()
+  expect_identical(getOption("sampletidy.inbox_batches"), test_batches())
+})
+
+test_that("the older suites use the generic folder names: no legacy dated-input folders or underscore-mail subdirectory", {
+  dir <- testthat::test_path()
+  skip_if_not(dir.exists(dir) && length(list.files(dir, pattern = "^test-.*[.]R$")) > 50,
+              "test sources not present")
+  files <- list.files(dir, pattern = "[.]R$", full.names = TRUE)
+  files <- files[basename(files) != "test-processed-dedupe.R"]
+  # the patterns are assembled so that this file does not match itself
+  legacy <- c(paste0("\"", "inp", "ut20"), paste0("'", "inp", "ut20"), paste0("_", "emails"))
+  for (f in files) {
+    txt <- readLines(f, warn = FALSE)
+    for (pat in legacy) {
+      expect_false(any(grepl(pat, txt, fixed = TRUE)), info = paste(basename(f), pat))
+    }
+  }
 })
 
 # ---- settling ---------------------------------------------------------------------------------
@@ -179,9 +198,9 @@ test_that("under the leave policy an import leaves the folder holding its non-da
   ff <- res$folders[["batch-1"]]$files_filed
   expect_true(is.na(ff$to))
   expect_length(ff$files, 0)
-  # nothing was filed: no _emails, no folder named for the batch, under the archive
+  # nothing was filed: no filed-mail, no folder named for the batch, under the archive
   arch <- list.files(s$archive_dir, recursive = TRUE, include.dirs = TRUE, all.files = TRUE)
-  expect_false(any(grepl("_emails|batch-1", arch)))
+  expect_false(any(grepl("filed-mail|batch-1", arch)))
 
   # a second run, after a new folder arrives, processes only the new folder
   bt_folder(s, "batch-2", now, files = inbox_rain_files())
@@ -213,7 +232,7 @@ test_that("leftovers = \"filed-mail\": the folder moves to <archive>/filed-mail/
   expect_true(dir.exists(dest))
   expect_identical(list.files(dest), "photo.jpg")
   expect_false(dir.exists(file.path(s$input_dir, "batch-1")))
-  expect_false(dir.exists(file.path(s$archive_dir, "_emails")))
+  expect_false(dir.exists(file.path(s$archive_dir, "mail")))   # only the configured name is used
   expect_identical(np(res$folders[["batch-1"]]$files_filed$to), np(dest))
   logged <- read_inbox_log(s$report_dir)[[1]]$folders[["batch-1"]]$files_filed
   expect_identical(np(logged$to), np(dest))

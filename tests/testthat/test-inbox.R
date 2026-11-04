@@ -27,7 +27,7 @@
 
 test_that("inbox_signature() is a stable string over an unchanged tree", {
   d <- withr::local_tempdir()
-  make_inbox_folder(d, "input2026-10-18 0900 a", inbox_proj_a_files())
+  make_inbox_folder(d, "batch-2026-10-18 0900 a", inbox_proj_a_files())
   s1 <- inbox_signature(d)
   s2 <- inbox_signature(d)
   expect_type(s1, "character")
@@ -37,7 +37,7 @@ test_that("inbox_signature() is a stable string over an unchanged tree", {
 
 test_that("inbox_signature() is built from metadata only, never file contents", {
   d <- withr::local_tempdir()
-  f <- st_test_write_file(d, "input2026-10-18 0900 a/report.csv", raw = charToRaw("AAAAAAAAAA"))
+  f <- st_test_write_file(d, "batch-2026-10-18 0900 a/report.csv", raw = charToRaw("AAAAAAAAAA"))
   t0 <- as.POSIXct("2026-10-01 00:00:00", tz = "UTC")
   Sys.setFileTime(f, t0)
   s1 <- inbox_signature(d)
@@ -49,7 +49,7 @@ test_that("inbox_signature() is built from metadata only, never file contents", 
 
 test_that("inbox_signature() changes with mtime, size, add, remove, rename, new folder", {
   d <- withr::local_tempdir()
-  f <- st_test_write_file(d, "input2026-10-18 0900 a/report.csv", raw = charToRaw("AAAAAAAAAA"))
+  f <- st_test_write_file(d, "batch-2026-10-18 0900 a/report.csv", raw = charToRaw("AAAAAAAAAA"))
   t0 <- as.POSIXct("2026-10-01 00:00:00", tz = "UTC")
   Sys.setFileTime(f, t0)
   base <- inbox_signature(d)
@@ -63,7 +63,7 @@ test_that("inbox_signature() changes with mtime, size, add, remove, rename, new 
   Sys.setFileTime(f, t0)
   base <- inbox_signature(d)
 
-  g <- st_test_write_file(d, "input2026-10-18 0900 a/coa.pdf", "x")
+  g <- st_test_write_file(d, "batch-2026-10-18 0900 a/coa.pdf", "x")
   s_add <- inbox_signature(d)
   expect_false(identical(s_add, base), info = "file added inside a folder")
   file.rename(g, file.path(dirname(g), "coa2.pdf"))
@@ -73,7 +73,7 @@ test_that("inbox_signature() changes with mtime, size, add, remove, rename, new 
   expect_false(identical(inbox_signature(d), s_ren), info = "file removed")
 
   s_before_dir <- inbox_signature(d)
-  dir.create(file.path(d, "input2026-10-18 1000 b"))
+  dir.create(file.path(d, "batch-2026-10-18 1000 b"))
   expect_false(identical(inbox_signature(d), s_before_dir), info = "folder added")
   s_before_loose <- inbox_signature(d)
   st_test_write_file(d, "loose.csv", "x")
@@ -84,7 +84,7 @@ test_that("inbox_signature() changes with mtime, size, add, remove, rename, new 
 
 test_that("inbox_check(): no state file -> 'run', and the check writes nothing", {
   s <- inbox_setup()
-  make_inbox_folder(s$input_dir, "input2026-10-18 0900 a", inbox_proj_a_files())
+  make_inbox_folder(s$input_dir, "batch-2026-10-18 0900 a", inbox_proj_a_files())
   before_r <- tree_snapshot(s$report_dir)
   before_i <- tree_snapshot(s$input_dir)
   expect_identical(inbox_check(s$input_dir, s$report_dir, now = Sys.time(), db = s$db), "run")
@@ -197,7 +197,7 @@ test_that("inbox_run() (R14): a new-day 'status' rewrites status.json read-only 
 
 test_that("inbox_run(): a 'none' check does nothing at all (ran = FALSE)", {
   s <- inbox_setup()
-  make_inbox_folder(s$input_dir, "input2026-10-18 0900 a", inbox_proj_a_files())
+  make_inbox_folder(s$input_dir, "batch-2026-10-18 0900 a", inbox_proj_a_files())
   first <- run_inbox(s)
   expect_true(first$ran)
   backups <- list.files(s$backup_dir)
@@ -222,25 +222,25 @@ test_that("inbox_run(): a 'none' check does nothing at all (ran = FALSE)", {
   expect_false(file.exists(inbox_lock_path(s$db)))
 })
 
-test_that("inbox_run(): only input* subdirectories are candidates; bare 'input', other dirs and loose files are left alone (loose files are listed in status.json)", {
+test_that("inbox_run(): only batch-* subdirectories are candidates; bare 'batch-', other dirs and loose files are left alone (loose files are listed in status.json)", {
   s <- inbox_setup()
   now <- Sys.time()
-  make_inbox_folder(s$input_dir, "input2026-10-18 0900 PROJ_A", inbox_proj_a_files(), now = now)
-  make_inbox_folder(s$input_dir, "input", inbox_fixture("crosstab", "ES2670610_0_XTAB.csv"), now = now)
-  make_inbox_folder(s$input_dir, "Robin's notes", inbox_fixture("crosstab", "ES2570540_0_ENMRG.CSV"), now = now)
+  make_inbox_folder(s$input_dir, "batch-2026-10-18 0900 PROJ_A", inbox_proj_a_files(), now = now)
+  make_inbox_folder(s$input_dir, "batch-", inbox_fixture("crosstab", "ES2670610_0_XTAB.csv"), now = now)
+  make_inbox_folder(s$input_dir, "my notes", inbox_fixture("crosstab", "ES2570540_0_ENMRG.CSV"), now = now)
   loose <- file.path(s$input_dir, "loose_ES2670610.csv")
   file.copy(inbox_fixture("crosstab", "ES2670610_0_XTAB.csv"), loose)
   Sys.setFileTime(loose, now - 3600)
 
   res <- run_inbox(s, now = now)
   expect_true(res$ran)
-  expect_identical(res$folders_processed, "input2026-10-18 0900 PROJ_A")
-  expect_false("input" %in% res$folders_seen)
-  expect_false("Robin's notes" %in% res$folders_seen)
+  expect_identical(res$folders_processed, "batch-2026-10-18 0900 PROJ_A")
+  expect_false("batch-" %in% res$folders_seen)
+  expect_false("my notes" %in% res$folders_seen)
 
   # untouched, and never routed
-  expect_true(file.exists(file.path(s$input_dir, "input", "ES2670610_0_XTAB.csv")))
-  expect_true(file.exists(file.path(s$input_dir, "Robin's notes", "ES2570540_0_ENMRG.CSV")))
+  expect_true(file.exists(file.path(s$input_dir, "batch-", "ES2670610_0_XTAB.csv")))
+  expect_true(file.exists(file.path(s$input_dir, "my notes", "ES2570540_0_ENMRG.CSV")))
   expect_true(file.exists(loose))
   fn <- ingest_file_rows(s$db)$filename
   expect_false(any(fn %in% c("ES2670610_0_XTAB.csv", "ES2570540_0_ENMRG.CSV", "loose_ES2670610.csv"),
@@ -252,37 +252,37 @@ test_that("inbox_run(): only input* subdirectories are candidates; bare 'input',
   expect_length(js$loose, 1)
   expect_identical(js$loose[[1]]$file, "loose_ES2670610.csv")
   expect_identical(js$loose[[1]]$path, file.path(s$input_dir, "loose_ES2670610.csv"))
-  # sibling directories (archive, bare input, the user's own folders) are not listed
+  # sibling directories (archive, bare batch-, the user's own folders) are not listed
   listed <- vapply(js$waiting, function(w) w$folder, character(1))
-  expect_false(any(c("input", "Robin's notes") %in% listed))
-  expect_false(any(vapply(js$loose, function(l) l$file, character(1)) %in% c("input", "Robin's notes")))
+  expect_false(any(c("batch-", "my notes") %in% listed))
+  expect_false(any(vapply(js$loose, function(l) l$file, character(1)) %in% c("batch-", "my notes")))
 })
 
 test_that("inbox_run(): settled gate - a folder with a recently-modified file is 'arriving', not imported; pending makes the next call run", {
   s <- inbox_setup()
   now <- Sys.time()
-  make_inbox_folder(s$input_dir, "input2026-10-18 0900 settled", inbox_proj_a_files(), age_min = 60, now = now)
+  make_inbox_folder(s$input_dir, "batch-2026-10-18 0900 settled", inbox_proj_a_files(), age_min = 60, now = now)
   # one old file and one written 2 minutes ago: not settled (settle_minutes = 10)
-  arr <- make_inbox_folder(s$input_dir, "input2026-10-18 0950 arriving", inbox_rain_files(), age_min = 60, now = now)
+  arr <- make_inbox_folder(s$input_dir, "batch-2026-10-18 0950 arriving", inbox_rain_files(), age_min = 60, now = now)
   t_last <- as.POSIXct(floor(as.numeric(now)) - 120, origin = "1970-01-01", tz = "UTC")
   Sys.setFileTime(file.path(arr, basename(inbox_rain_files()[[1]])), t_last)
-  dir.create(file.path(s$input_dir, "input2026-10-18 0955 empty"))
+  dir.create(file.path(s$input_dir, "batch-2026-10-18 0955 empty"))
 
   res <- run_inbox(s, now = now, settle_minutes = 10)
-  expect_identical(res$folders_settled, "input2026-10-18 0900 settled")
-  expect_identical(res$folders_processed, "input2026-10-18 0900 settled")
-  expect_setequal(res$folders_arriving, c("input2026-10-18 0950 arriving", "input2026-10-18 0955 empty"))
+  expect_identical(res$folders_settled, "batch-2026-10-18 0900 settled")
+  expect_identical(res$folders_processed, "batch-2026-10-18 0900 settled")
+  expect_setequal(res$folders_arriving, c("batch-2026-10-18 0950 arriving", "batch-2026-10-18 0955 empty"))
 
   # the arriving folder is untouched and none of its files were routed
   expect_setequal(list.files(arr), basename(inbox_rain_files()))
   expect_false(any(basename(inbox_rain_files()) %in% ingest_file_rows(s$db)$filename))
 
-  e <- status_waiting(s$report_dir, "input2026-10-18 0950 arriving")
+  e <- status_waiting(s$report_dir, "batch-2026-10-18 0950 arriving")
   expect_identical(e$status, "arriving")
-  expect_identical(e$path, file.path(s$input_dir, "input2026-10-18 0950 arriving"))
+  expect_identical(e$path, file.path(s$input_dir, "batch-2026-10-18 0950 arriving"))
   expect_identical(e$last_written, format(t_last, "%Y-%m-%dT%H:%M:%SZ", tz = "UTC"))
   expect_setequal(unlist(e$files), basename(inbox_rain_files()))
-  empty <- status_waiting(s$report_dir, "input2026-10-18 0955 empty")
+  empty <- status_waiting(s$report_dir, "batch-2026-10-18 0955 empty")
   expect_identical(empty$status, "arriving")
   expect_true("last_written" %in% names(empty))
   expect_null(empty$last_written)
@@ -295,23 +295,23 @@ test_that("inbox_run(): settled gate - a folder with a recently-modified file is
   later <- now + 3600
   res2 <- run_inbox(s, now = later)
   expect_true(res2$ran)
-  expect_identical(res2$folders_processed, "input2026-10-18 0950 arriving")
+  expect_identical(res2$folders_processed, "batch-2026-10-18 0950 arriving")
   expect_true(all(basename(inbox_rain_files()) %in% ingest_file_rows(s$db)$filename))
 })
 
 test_that("inbox_run(): a settled folder counts files' mtimes, not the folder's own fresh mtime", {
   s <- inbox_setup()
   now <- Sys.time()
-  d <- make_inbox_folder(s$input_dir, "input2026-10-18 0900 a", inbox_proj_a_files(), age_min = 30, now = now)
+  d <- make_inbox_folder(s$input_dir, "batch-2026-10-18 0900 a", inbox_proj_a_files(), age_min = 30, now = now)
   Sys.setFileTime(d, now)   # the folder itself was just touched
   res <- run_inbox(s, now = now)
-  expect_identical(res$folders_processed, "input2026-10-18 0900 a")
+  expect_identical(res$folders_processed, "batch-2026-10-18 0900 a")
 })
 
 test_that("inbox_run(): signature changed but nothing new to import -> no backup, no DB write; status.json and state written, no markdown", {
   s <- inbox_setup()
   now <- Sys.time()
-  d <- make_inbox_folder(s$input_dir, "input2026-10-18 0900 corrupt", inbox_corrupt_file(), now = now)
+  d <- make_inbox_folder(s$input_dir, "batch-2026-10-18 0900 corrupt", inbox_corrupt_file(), now = now)
   quiet_run(ingest_dir(d, db = s$db))   # the file is now known: state 'failed'
   expect_true(file.exists(file.path(d, basename(inbox_corrupt_file()))))
   db_md5 <- file_md5(s$db)
@@ -331,7 +331,7 @@ test_that("inbox_run(): signature changed but nothing new to import -> no backup
 test_that("inbox_run(): the backup is taken before any write and is a verified copy of the pre-run DB", {
   s <- inbox_setup()
   now <- Sys.time()
-  make_inbox_folder(s$input_dir, "input2026-10-18 0900 a", inbox_proj_a_files(), now = now)
+  make_inbox_folder(s$input_dir, "batch-2026-10-18 0900 a", inbox_proj_a_files(), now = now)
   pre_md5 <- file_md5(s$db)
 
   res <- run_inbox(s, now = now)
@@ -356,7 +356,7 @@ test_that("inbox_run(): rotation keeps the newest keep_backups matching files an
   others <- c("monitoring_pre-migration-030_20260101.duckdb", "README.txt",
               "monitoring_pre-auto-import_notes.txt")
   for (o in others) writeLines("keep me", file.path(s$backup_dir, o))
-  make_inbox_folder(s$input_dir, "input2026-10-18 0900 a", inbox_proj_a_files(), now = now)
+  make_inbox_folder(s$input_dir, "batch-2026-10-18 0900 a", inbox_proj_a_files(), now = now)
 
   res <- run_inbox(s, now = now, keep_backups = 10)
   left <- list.files(s$backup_dir)
@@ -370,7 +370,7 @@ test_that("inbox_run(): rotation keeps the newest keep_backups matching files an
 test_that("inbox_run(): a backup that fails verification aborts the run - error reported, no DB write, inputs untouched, retried next time", {
   s <- inbox_setup()
   now <- Sys.time()
-  d <- make_inbox_folder(s$input_dir, "input2026-10-18 0900 a", inbox_proj_a_files(), now = now)
+  d <- make_inbox_folder(s$input_dir, "batch-2026-10-18 0900 a", inbox_proj_a_files(), now = now)
   pre_md5 <- file_md5(s$db)
   in_before <- tree_snapshot(s$input_dir)
 
@@ -398,10 +398,10 @@ test_that("inbox_run(): folders are imported oldest name first, one ingest_dir()
   s <- inbox_setup()
   now <- Sys.time()
   # created newest-name-first, with mtimes in the opposite order to the names
-  make_inbox_folder(s$input_dir, "input2026-10-18 1000 c", inbox_fixture("crosstab", "ES2670610_0_XTAB.csv"),
+  make_inbox_folder(s$input_dir, "batch-2026-10-18 1000 c", inbox_fixture("crosstab", "ES2670610_0_XTAB.csv"),
                     age_min = 300, now = now)
-  make_inbox_folder(s$input_dir, "input2026-10-18 0900 b", inbox_rain_files(), age_min = 200, now = now)
-  make_inbox_folder(s$input_dir, "input2026-10-17 2300 a", inbox_proj_a_files(), age_min = 100, now = now)
+  make_inbox_folder(s$input_dir, "batch-2026-10-18 0900 b", inbox_rain_files(), age_min = 200, now = now)
+  make_inbox_folder(s$input_dir, "batch-2026-10-17 2300 a", inbox_proj_a_files(), age_min = 100, now = now)
 
   real_ingest_dir <- ingest_dir
   calls <- character(0)
@@ -410,7 +410,7 @@ test_that("inbox_run(): folders are imported oldest name first, one ingest_dir()
     real_ingest_dir(path, ...)
   })
   res <- run_inbox(s, now = now)
-  want <- c("input2026-10-17 2300 a", "input2026-10-18 0900 b", "input2026-10-18 1000 c")
+  want <- c("batch-2026-10-17 2300 a", "batch-2026-10-18 0900 b", "batch-2026-10-18 1000 c")
   expect_identical(calls, want)
   expect_identical(res$folders_processed, want)
 })
@@ -418,9 +418,9 @@ test_that("inbox_run(): folders are imported oldest name first, one ingest_dir()
 test_that("inbox_run(): one folder failing does not stop the next; the failure is recorded", {
   s <- inbox_setup()
   now <- Sys.time()
-  make_inbox_folder(s$input_dir, "input2026-10-18 0800 boom", inbox_rain_files(), now = now)
-  make_inbox_folder(s$input_dir, "input2026-10-18 0830 corrupt", inbox_corrupt_file(), now = now)
-  make_inbox_folder(s$input_dir, "input2026-10-18 0900 good", inbox_proj_a_files(), now = now)
+  make_inbox_folder(s$input_dir, "batch-2026-10-18 0800 boom", inbox_rain_files(), now = now)
+  make_inbox_folder(s$input_dir, "batch-2026-10-18 0830 corrupt", inbox_corrupt_file(), now = now)
+  make_inbox_folder(s$input_dir, "batch-2026-10-18 0900 good", inbox_proj_a_files(), now = now)
 
   real_ingest_dir <- ingest_dir
   testthat::local_mocked_bindings(ingest_dir = function(path, ...) {
@@ -430,18 +430,18 @@ test_that("inbox_run(): one folder failing does not stop the next; the failure i
   res <- run_inbox(s, now = now)
 
   expect_identical(res$folders_processed,
-                   c("input2026-10-18 0800 boom", "input2026-10-18 0830 corrupt", "input2026-10-18 0900 good"))
-  boom <- res$folders[["input2026-10-18 0800 boom"]]
+                   c("batch-2026-10-18 0800 boom", "batch-2026-10-18 0830 corrupt", "batch-2026-10-18 0900 good"))
+  boom <- res$folders[["batch-2026-10-18 0800 boom"]]
   expect_true(isTRUE(boom$failed))
   expect_match(boom$error, "XYZZY")
-  good <- res$folders[["input2026-10-18 0900 good"]]
+  good <- res$folders[["batch-2026-10-18 0900 good"]]
   expect_false(isTRUE(good$failed))
   expect_gte(good$events_committed, 1)
   expect_true("PROJ_A.ESDAT_XX1234567_0.Chemistry2e.CSV" %in% ingest_file_rows(s$db)$filename)
   # the corrupt file failed inside ingest_dir: recorded as a file left behind
-  expect_true(basename(inbox_corrupt_file()) %in% res$folders[["input2026-10-18 0830 corrupt"]]$files_left)
+  expect_true(basename(inbox_corrupt_file()) %in% res$folders[["batch-2026-10-18 0830 corrupt"]]$files_left)
 
-  logged <- read_inbox_log(s$report_dir)[[1]]$folders[["input2026-10-18 0800 boom"]]
+  logged <- read_inbox_log(s$report_dir)[[1]]$folders[["batch-2026-10-18 0800 boom"]]
   expect_true(isTRUE(logged$failed))
   expect_match(logged$error, "XYZZY")
   expect_true(any(grepl("XYZZY", unlist(read_status_json(s$report_dir)$problems), fixed = TRUE)))
@@ -450,13 +450,13 @@ test_that("inbox_run(): one folder failing does not stop the next; the failure i
 test_that("inbox_run(): archived files are removed, emptied folders removed, unfinished folders kept", {
   s <- inbox_setup()
   now <- Sys.time()
-  make_inbox_folder(s$input_dir, "input2026-10-18 0900 done", inbox_proj_a_files(), now = now)
-  mixed <- make_inbox_folder(s$input_dir, "input2026-10-18 0930 mixed",
+  make_inbox_folder(s$input_dir, "batch-2026-10-18 0900 done", inbox_proj_a_files(), now = now)
+  mixed <- make_inbox_folder(s$input_dir, "batch-2026-10-18 0930 mixed",
                              c(inbox_rain_files(), inbox_corrupt_file(), inbox_fixture("esdat", "random.csv")),
                              now = now)
   res <- run_inbox(s, now = now)
 
-  expect_false(dir.exists(file.path(s$input_dir, "input2026-10-18 0900 done")))
+  expect_false(dir.exists(file.path(s$input_dir, "batch-2026-10-18 0900 done")))
   expect_true(dir.exists(mixed))
   states <- ingest_file_rows(s$db)
   for (fn in basename(inbox_rain_files())) {
@@ -465,26 +465,26 @@ test_that("inbox_run(): archived files are removed, emptied folders removed, unf
   }
   expect_true(file.exists(file.path(mixed, basename(inbox_corrupt_file()))))
   expect_true(file.exists(file.path(mixed, "random.csv")))
-  expect_setequal(res$folders[["input2026-10-18 0930 mixed"]]$files_left,
+  expect_setequal(res$folders[["batch-2026-10-18 0930 mixed"]]$files_left,
                   c(basename(inbox_corrupt_file()), "random.csv"))
-  expect_length(res$folders[["input2026-10-18 0900 done"]]$files_left, 0)
+  expect_length(res$folders[["batch-2026-10-18 0900 done"]]$files_left, 0)
 
   # the unfinished folder is listed as waiting, naming its files and their state
-  e <- status_waiting(s$report_dir, "input2026-10-18 0930 mixed")
+  e <- status_waiting(s$report_dir, "batch-2026-10-18 0930 mixed")
   expect_identical(e$status, "left")
   expect_true(e$unfinished)
-  expect_identical(e$path, file.path(s$input_dir, "input2026-10-18 0930 mixed"))
+  expect_identical(e$path, file.path(s$input_dir, "batch-2026-10-18 0930 mixed"))
   st_of <- stats::setNames(vapply(e$files, function(f) f$state, character(1)),
                            vapply(e$files, function(f) f$file, character(1)))
   expect_identical(st_of[[basename(inbox_corrupt_file())]], "failed")
   expect_identical(st_of[["random.csv"]], "quarantined")
-  expect_null(status_waiting(s$report_dir, "input2026-10-18 0900 done"))
+  expect_null(status_waiting(s$report_dir, "batch-2026-10-18 0900 done"))
 })
 
 test_that("inbox_run(): a live lock makes a second run exit immediately, writing nothing", {
   s <- inbox_setup()
   now <- Sys.time()
-  make_inbox_folder(s$input_dir, "input2026-10-18 0900 a", inbox_proj_a_files(), now = now)
+  make_inbox_folder(s$input_dir, "batch-2026-10-18 0900 a", inbox_proj_a_files(), now = now)
   lock <- write_inbox_lock(s$db, live_child_pid(), now - 5 * 60)
   lock_md5 <- file_md5(lock)
   pre_md5 <- file_md5(s$db)
@@ -503,13 +503,13 @@ test_that("inbox_run(): a live lock makes a second run exit immediately, writing
 test_that("inbox_run(): a lock whose PID is dead is stale: taken over and reported", {
   s <- inbox_setup()
   now <- Sys.time()
-  make_inbox_folder(s$input_dir, "input2026-10-18 0900 a", inbox_proj_a_files(), now = now)
+  make_inbox_folder(s$input_dir, "batch-2026-10-18 0900 a", inbox_proj_a_files(), now = now)
   write_inbox_lock(s$db, dead_pid(), now - 5 * 60)
 
   res <- run_inbox(s, now = now)
   expect_true(res$ran)
   expect_true(isTRUE(res$stale_lock))
-  expect_identical(res$folders_processed, "input2026-10-18 0900 a")
+  expect_identical(res$folders_processed, "batch-2026-10-18 0900 a")
   expect_false(file.exists(inbox_lock_path(s$db)))
   expect_true(isTRUE(read_inbox_log(s$report_dir)[[1]]$stale_lock))
   expect_true(any(grepl("stale", unlist(read_status_json(s$report_dir)$problems), ignore.case = TRUE)))
@@ -519,19 +519,19 @@ test_that("inbox_run(): a lock whose PID is dead is stale: taken over and report
 test_that("inbox_run(): a lock older than 2 hours is stale even if its PID is alive", {
   s <- inbox_setup()
   now <- Sys.time()
-  make_inbox_folder(s$input_dir, "input2026-10-18 0900 a", inbox_proj_a_files(), now = now)
+  make_inbox_folder(s$input_dir, "batch-2026-10-18 0900 a", inbox_proj_a_files(), now = now)
   write_inbox_lock(s$db, live_child_pid(), now - 3 * 3600)
 
   res <- run_inbox(s, now = now)
   expect_true(res$ran)
   expect_true(isTRUE(res$stale_lock))
-  expect_identical(res$folders_processed, "input2026-10-18 0900 a")
+  expect_identical(res$folders_processed, "batch-2026-10-18 0900 a")
 })
 
 test_that("inbox_run(): appends one JSON line per run with the documented fields", {
   s <- inbox_setup()
   now <- Sys.time()
-  make_inbox_folder(s$input_dir, "input2026-10-18 0900 a", inbox_proj_a_files(), now = now)
+  make_inbox_folder(s$input_dir, "batch-2026-10-18 0900 a", inbox_proj_a_files(), now = now)
   res <- run_inbox(s, now = now)
   log <- read_inbox_log(s$report_dir)
   expect_length(log, 1)
@@ -540,18 +540,18 @@ test_that("inbox_run(): appends one JSON line per run with the documented fields
               "folders_processed", "folders", "backup_path", "errors")) {
     expect_true(k %in% names(l), info = k)
   }
-  expect_identical(unlist(l$folders_processed), "input2026-10-18 0900 a")
-  f <- l$folders[["input2026-10-18 0900 a"]]
+  expect_identical(unlist(l$folders_processed), "batch-2026-10-18 0900 a")
+  f <- l$folders[["batch-2026-10-18 0900 a"]]
   for (k in c("events_committed", "rows_new", "rows_already_present", "rows_superseded",
               "review_items_opened", "failed", "files_left")) {
     expect_true(k %in% names(f), info = k)
   }
-  expect_identical(as.integer(f$rows_new), as.integer(res$folders[["input2026-10-18 0900 a"]]$rows_new))
+  expect_identical(as.integer(f$rows_new), as.integer(res$folders[["batch-2026-10-18 0900 a"]]$rows_new))
   expect_gt(as.integer(f$rows_new), 0)
   expect_identical(l$backup_path, res$backup_path)
 
   # a second real run appends rather than rewrites; a 'none' call appends nothing
-  make_inbox_folder(s$input_dir, "input2026-10-18 1000 b", inbox_rain_files(), now = now)
+  make_inbox_folder(s$input_dir, "batch-2026-10-18 1000 b", inbox_rain_files(), now = now)
   run_inbox(s, now = now)
   run_inbox(s, now = now)
   expect_length(read_inbox_log(s$report_dir), 2)
@@ -560,7 +560,7 @@ test_that("inbox_run(): appends one JSON line per run with the documented fields
 test_that("inbox_run(dry_run = TRUE): no backup, no DB write, no removal, no state; status.json has the plan and is flagged dry_run", {
   s <- inbox_setup()
   now <- Sys.time()
-  d <- make_inbox_folder(s$input_dir, "input2026-10-18 0900 a", inbox_proj_a_files(), now = now)
+  d <- make_inbox_folder(s$input_dir, "batch-2026-10-18 0900 a", inbox_proj_a_files(), now = now)
   pre_md5 <- file_md5(s$db)
   in_before <- tree_snapshot(s$input_dir)
 
@@ -574,22 +574,22 @@ test_that("inbox_run(dry_run = TRUE): no backup, no DB write, no removal, no sta
   expect_false(file.exists(file.path(s$report_dir, ".imports.state")))
   js <- read_status_json(s$report_dir)
   expect_true(js$dry_run)
-  expect_identical(unlist(js$dry_run_plan$would_import), "input2026-10-18 0900 a")
+  expect_identical(unlist(js$dry_run_plan$would_import), "batch-2026-10-18 0900 a")
   # The folder's files are all new data, so it would be filed after import too
   # (the same verdict main's "Would file" banner line reported).
   expect_length(js$dry_run_plan$would_file, 1)
-  expect_identical(js$dry_run_plan$would_file[[1]]$folder, "input2026-10-18 0900 a")
+  expect_identical(js$dry_run_plan$would_file[[1]]$folder, "batch-2026-10-18 0900 a")
   expect_length(report_md_files(s$report_dir), 0)
 
   real <- run_inbox(s, now = now)
   expect_true(real$ran)
-  expect_identical(real$folders_processed, "input2026-10-18 0900 a")
+  expect_identical(real$folders_processed, "batch-2026-10-18 0900 a")
 })
 
 test_that("inbox_run(): a DB change alone refreshes status.json read-only; a resolved item disappears", {
   s <- inbox_setup()
   now <- sydney_midday()
-  make_inbox_folder(s$input_dir, "input2026-10-18 0900 a", inbox_rain_files(), now = now)
+  make_inbox_folder(s$input_dir, "batch-2026-10-18 0900 a", inbox_rain_files(), now = now)
   run_inbox(s, now = now)
   review_wos <- function() {
     vapply(read_status_json(s$report_dir)$needs_review, function(g) g$work_order, character(1))
@@ -628,7 +628,7 @@ test_that("inbox_run(): a DB change alone refreshes status.json read-only; a res
 test_that("inbox_run(): quiet days get one status-only refresh per Sydney day, never an import (R14)", {
   s <- inbox_setup()
   now <- sydney_midday()
-  make_inbox_folder(s$input_dir, "input2026-10-18 0900 a", inbox_rain_files(), now = now)
+  make_inbox_folder(s$input_dir, "batch-2026-10-18 0900 a", inbox_rain_files(), now = now)
   run_inbox(s, now = now)
   backdate_tree(s$report_dir)
   log_snap <- tree_snapshot(s$report_dir)[".imports.log"]
@@ -655,24 +655,24 @@ test_that("inbox_run(): quiet days get one status-only refresh per Sydney day, n
 test_that("inbox_run(): a work order's site and counts are in the log, the return value and status.json", {
   s <- inbox_setup()
   now <- Sys.time()
-  make_inbox_folder(s$input_dir, "input2026-10-18 0900 PROJ_A", inbox_proj_a_files(), now = now)
-  make_inbox_folder(s$input_dir, "input2026-10-18 0930 rain", inbox_rain_files(), now = now)
+  make_inbox_folder(s$input_dir, "batch-2026-10-18 0900 PROJ_A", inbox_proj_a_files(), now = now)
+  make_inbox_folder(s$input_dir, "batch-2026-10-18 0930 rain", inbox_rain_files(), now = now)
   res <- run_inbox(s, now = now)
 
   wo_of <- function(folder, name) {
     for (w in res$folders[[folder]]$work_orders) if (identical(w$name, name)) return(w)
     NULL
   }
-  a <- wo_of("input2026-10-18 0900 PROJ_A", "XX1234567")
-  b <- wo_of("input2026-10-18 0930 rain", "ES2664217")
+  a <- wo_of("batch-2026-10-18 0900 PROJ_A", "XX1234567")
+  b <- wo_of("batch-2026-10-18 0930 rain", "ES2664217")
   expect_false(is.null(a))
   expect_false(is.null(b))
   expect_identical(a$site, "B")                      # the code, not a label
   expect_true(is.na(b$site))                         # dangling aliases: no site
   expect_match(a$kind, "ALS")
   expect_gt(a$samples, 0)
-  expect_identical(a$analyses, res$folders[["input2026-10-18 0900 PROJ_A"]]$rows_new)
-  expect_identical(b$analyses, res$folders[["input2026-10-18 0930 rain"]]$rows_new)
+  expect_identical(a$analyses, res$folders[["batch-2026-10-18 0900 PROJ_A"]]$rows_new)
+  expect_identical(b$analyses, res$folders[["batch-2026-10-18 0930 rain"]]$rows_new)
 
   # the log and status.json carry the same, a missing site as JSON null
   recent <- read_status_json(s$report_dir)$recent_imports

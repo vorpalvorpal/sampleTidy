@@ -166,13 +166,29 @@ test_that("stage 1: `checks` set in code may be a function and round-trips", {
   expect_identical(st_config("checks"), f)
 })
 
-test_that("st_capabilities() is exported and names the eight features (six from stage 1, two from stage 2)", {
+test_that("st_capabilities() is exported and names the ten features (six from stage 1, two each from stages 2 and 3), in order", {
   expect_true("st_capabilities" %in% getNamespaceExports("sampleTidy"))
   caps <- st_capabilities()
   expect_type(caps, "character")
   expect_true(all(c("timezone", "checks_option", "checks_streams", "site_names",
                     "site_keywords", "date_overrides_env",
-                    "inbox_batches", "renderer_hooks") %in% caps))
-  expect_length(caps, 8)
+                    "inbox_batches", "renderer_hooks",
+                    "report_dir", "gas_template_slots") %in% caps))
+  expect_length(caps, 10)
+  expect_identical(caps[9:10], c("report_dir", "gas_template_slots"))
 })
 
+test_that("stage 3: report_dir defaults to <R_user_dir data>/reports", {
+  withr::local_options(list(sampletidy.report_dir = NULL))
+  withr::local_envvar(c(SAMPLETIDY_REPORT_DIR = NA))
+  expect_identical(st_config("report_dir"),
+                   file.path(tools::R_user_dir("sampleTidy", "data"), "reports"))
+})
+
+test_that("stage 3: report_dir honours SAMPLETIDY_REPORT_DIR, and the option wins over it", {
+  withr::local_options(list(sampletidy.report_dir = NULL))
+  withr::local_envvar(c(SAMPLETIDY_REPORT_DIR = "/env/report/dir"))
+  expect_identical(st_config("report_dir"), "/env/report/dir")
+  st_config("report_dir", "/option/report/dir")
+  expect_identical(st_config("report_dir"), "/option/report/dir")
+})

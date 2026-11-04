@@ -11,7 +11,7 @@
 sd_run <- function(ts_col, stamps, wo = "ES2652688") {
   s <- inbox_setup(env = parent.frame())
   now <- sydney_midday()
-  make_inbox_folder(s$input_dir, "input2026-10-19 0900 dates", inbox_proj_a_files(), now = now)
+  make_inbox_folder(s$input_dir, "batch-2026-10-19 0900 dates", inbox_proj_a_files(), now = now)
   testthat::local_mocked_bindings(ingest_dir = function(path, ..., db) {
     con <- seed_con(db)
     on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
@@ -30,7 +30,7 @@ sd_run <- function(ts_col, stamps, wo = "ES2652688") {
          rows_superseded = 0L, review_items_opened = 0L)
   }, .env = parent.frame())
   res <- run_inbox(s, now = now)
-  wos <- res$folders[["input2026-10-19 0900 dates"]]$work_orders
+  wos <- res$folders[["batch-2026-10-19 0900 dates"]]$work_orders
   Filter(function(w) identical(w$name, wo), wos)
 }
 

@@ -248,3 +248,121 @@ test_that("install.sh rejects unknown arguments with exit 2 and never calls laun
   expect_false(file.exists(calls), info = "launchctl must not be called for a bad argument")
   expect_false(dir.exists(file.path(d, "Helper.app")))
 })
+
+# ---- stage 3: install.sh --print and the @LOCALE@ placeholder ----------------------------------
+
+# Run install.sh in a CLEAN environment (like `env -i`): HOME is a temp dir, the
+# only SAMPLETIDY_* variables are those in `env`, and launchctl is a stub that
+# records its calls. R's user environ file is the one named by R_ENVIRON_USER.
+lh_print_setup <- function(env = parent.frame()) {
+  skip_on_os(c("windows", "linux", "solaris"))
+  skip_if(Sys.which("plutil") == "", "no plutil")
+  d <- normalizePath(withr::local_tempdir(.local_envir = env))
+  s <- list(dir = d, home = file.path(d, "home"), stubs = file.path(d, "bin"),
+            calls = file.path(d, "launchctl-calls.txt"), app = file.path(d, "H.app"),
+            assets = file.path(d, "a s", "assets"), environ = file.path(d, "environ"))
+  for (p in c(s$home, s$stubs, file.path(s$assets, "input"))) dir.create(p, recursive = TRUE)
+  writeLines(c("#!/bin/bash", sprintf('echo "$*" >> "%s"', s$calls)), file.path(s$stubs, "launchctl"))
+  Sys.chmod(file.path(s$stubs, "launchctl"), "755")
+  writeLines(sprintf("SAMPLETIDY_INPUT_DIR='%s'", file.path(s$assets, "input")), s$environ)
+  s
+}
+
+lh_print <- function(s, env = character(), args = "--print") {
+  base <- c(HOME = s$home, PATH = paste(s$stubs, "/usr/bin:/bin:/usr/sbin:/sbin", sep = ":"),
+            SAMPLETIDY_HELPER_APP = s$app, R_ENVIRON_USER = s$environ)
+  base <- base[setdiff(names(base), names(env))]
+  processx::run("/bin/bash", c(file.path(lh_launchd_dir(), "install.sh"), args),
+                env = c(base, env), error_on_status = FALSE, timeout = 60)
+}
+
+lh_plist_json <- function(text, env = parent.frame()) {
+  f <- withr::local_tempfile(fileext = ".plist", .local_envir = env)
+  writeLines(text, f)
+  list(lint = processx::run("plutil", c("-lint", "-s", f), error_on_status = FALSE),
+       json = jsonlite::fromJSON(processx::run("plutil", c("-convert", "json", "-o", "-", f))$stdout,
+                                 simplifyVector = FALSE))
+}
+
+test_that("install.sh --print writes a valid plist to stdout and does nothing else", {
+  s <- lh_print_setup()
+  res <- lh_print(s)
+  expect_identical(res$status, 0L, info = res$stderr)
+  p <- lh_plist_json(res$stdout)
+  expect_identical(p$lint$status, 0L, info = p$lint$stderr)
+  expect_identical(p$json$WatchPaths, list(s$assets))
+  expect_identical(p$json$ProgramArguments,
+                   list(file.path(s$app, "Contents", "MacOS", "sampletidy-autoimport")))
+  expect_identical(p$json$StandardOutPath,
+                   file.path(s$home, "Library", "Logs", "sampletidy-autoimport-launchd.log"))
+  expect_false(grepl("@[A-Z]+@", res$stdout))
+  # no launchctl call (not even the bootout of install mode), no app, no file written
+  expect_false(file.exists(s$calls))
+  expect_false(dir.exists(s$app))
+  expect_length(list.files(file.path(s$home, "Library"), recursive = TRUE, all.files = TRUE), 0)
+  expect_false(dir.exists(file.path(s$home, "Applications")))
+})
+
+test_that("install.sh --print takes SAMPLETIDY_INPUT_DIR from the environment before the environ file", {
+  s <- lh_print_setup()
+  other <- file.path(s$dir, "other", "assets")
+  dir.create(file.path(other, "input"), recursive = TRUE)
+  res <- lh_print(s, env = c(SAMPLETIDY_INPUT_DIR = file.path(other, "input")))
+  expect_identical(res$status, 0L, info = res$stderr)
+  expect_identical(lh_plist_json(res$stdout)$json$WatchPaths, list(other))
+})
+
+test_that("install.sh --print keeps the install-mode checks: a missing input dir exits 1, a path with & < > is refused", {
+  s <- lh_print_setup()
+  writeLines("SAMPLETIDY_INPUT_DIR=/no/such/dir/input", s$environ)
+  res <- lh_print(s)
+  expect_identical(res$status, 1L)
+  expect_false(file.exists(s$calls))
+  amp <- file.path(s$dir, "a&b", "assets")
+  dir.create(file.path(amp, "input"), recursive = TRUE)
+  writeLines(sprintf("SAMPLETIDY_INPUT_DIR=%s", file.path(amp, "input")), s$environ)
+  res2 <- lh_print(s)
+  expect_identical(res2$status, 1L)
+  expect_false(file.exists(s$calls))
+})
+
+test_that("install.sh --print puts the locale in LANG and LC_ALL: a UTF-8 $LANG, else en_US.UTF-8, else SAMPLETIDY_LAUNCHD_LOCALE", {
+  s <- lh_print_setup()
+  locales <- function(env) {
+    res <- lh_print(s, env = env)
+    expect_identical(res$status, 0L, info = res$stderr)
+    ev <- lh_plist_json(res$stdout)$json$EnvironmentVariables
+    expect_identical(ev$LANG, ev$LC_ALL)
+    ev$LANG
+  }
+  expect_identical(locales(c(LANG = "en_AU.UTF-8")), "en_AU.UTF-8")
+  expect_identical(locales(c(LANG = "C")), "en_US.UTF-8")
+  expect_identical(locales(c(LANG = "C", SAMPLETIDY_LAUNCHD_LOCALE = "fr_FR.UTF-8")), "fr_FR.UTF-8")
+  expect_identical(locales(c(LANG = "en_AU.UTF-8", SAMPLETIDY_LAUNCHD_LOCALE = "fr_FR.UTF-8")), "fr_FR.UTF-8")
+})
+
+test_that("the usage line names --print, and --print takes no further argument", {
+  s <- lh_print_setup()
+  res <- lh_print(s, args = "bogus")
+  expect_identical(res$status, 2L)
+  expect_match(res$stderr, "--print", fixed = TRUE)
+  expect_identical(lh_print(s, args = c("--print", "extra"))$status, 2L)
+  expect_false(file.exists(s$calls))
+})
+
+test_that("the plist template has @LOCALE@ as LANG and LC_ALL and keeps today's keys", {
+  tmpl <- readLines(file.path(lh_launchd_dir(), "net.robinshannon.sampletidy-autoimport.plist"), warn = FALSE)
+  txt <- paste(tmpl, collapse = "\n")
+  expect_identical(lengths(regmatches(txt, gregexpr("<string>@LOCALE@</string>", txt, fixed = TRUE))), 2L)
+  skip_on_os(c("windows", "linux", "solaris"))
+  skip_if(Sys.which("plutil") == "", "no plutil")
+  p <- lh_plist_json(tmpl)
+  expect_setequal(names(p$json),
+                  c("Label", "ProgramArguments", "WatchPaths", "StartInterval", "RunAtLoad",
+                    "ThrottleInterval", "ProcessType", "Nice", "LowPriorityIO",
+                    "LowPriorityBackgroundIO", "EnvironmentVariables", "StandardOutPath",
+                    "StandardErrorPath"))
+  expect_setequal(names(p$json$EnvironmentVariables), c("PATH", "LANG", "LC_ALL"))
+  expect_identical(p$json$EnvironmentVariables$LANG, "@LOCALE@")
+  expect_identical(p$json$EnvironmentVariables$LC_ALL, "@LOCALE@")
+})
