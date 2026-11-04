@@ -37,6 +37,9 @@ dev/migrations/*-TRIM.csv
 dev/migrations/*-FILES/
 dev/migrations/*-OLDFILES/
 dev/migrations/*-ORIGINALS/
+# Real-data migration inputs (from migration 100 on): never in this public repo.
+# INPUT CSVs tracked before this rule stay tracked; new ones are kept on disk only.
+dev/migrations/*-INPUT*.csv
 
 # EPA licences and EPA monitoring-data workbooks: real documents, never committed
 dev/*.pdf
