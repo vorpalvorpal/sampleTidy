@@ -539,3 +539,19 @@ test_that("gate: a missing input folder exits 0 without running and logs that it
   expect_match(ai_log(s), "input folder not found")
   expect_equal(sum(grepl("input folder not found", ai_lines(s$log))), 1L)
 })
+
+# ---- 7. live script loads no test helpers ----------------------------------
+# 2026-10-20: load_all() sourced tests/testthat/helper-*.R, one of which
+# redirected SAMPLETIDY_ARCHIVE_DIR to tempdir(), so a live run filed real input
+# into an R tempdir. The live script must pass helpers = FALSE.
+
+test_that("dev/auto-import.R passes helpers = FALSE to every load_all() call", {
+  script <- testthat::test_path("..", "..", "dev", "auto-import.R")
+  skip_if_not(file.exists(script), "dev/auto-import.R not available")
+  lines <- readLines(script, warn = FALSE)
+  lines <- lines[!grepl("^\\s*#", lines)]
+  txt <- paste(lines, collapse = "\n")
+  calls <- regmatches(txt, gregexpr("load_all\\([^)]*(\\([^)]*\\)[^)]*)*\\)", txt))[[1]]
+  expect_gte(length(calls), 1L)
+  for (cl in calls) expect_match(cl, "helpers\\s*=\\s*FALSE", info = cl)
+})
