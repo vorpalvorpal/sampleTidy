@@ -166,16 +166,17 @@ test_that("stage 1: `checks` set in code may be a function and round-trips", {
   expect_identical(st_config("checks"), f)
 })
 
-test_that("st_capabilities() is exported and names the ten features (six from stage 1, two each from stages 2 and 3), in order", {
+test_that("st_capabilities() is exported and names the eleven features (six from stage 1, two each from stages 2 and 3, then acirl_job_prefix), in order", {
   expect_true("st_capabilities" %in% getNamespaceExports("sampleTidy"))
   caps <- st_capabilities()
   expect_type(caps, "character")
   expect_true(all(c("timezone", "checks_option", "checks_streams", "site_names",
                     "site_keywords", "date_overrides_env",
                     "inbox_batches", "renderer_hooks",
-                    "report_dir", "gas_template_slots") %in% caps))
-  expect_length(caps, 10)
-  expect_identical(caps[9:10], c("report_dir", "gas_template_slots"))
+                    "report_dir", "gas_template_slots",
+                    "acirl_job_prefix") %in% caps))
+  expect_length(caps, 11)
+  expect_identical(caps[9:11], c("report_dir", "gas_template_slots", "acirl_job_prefix"))
 })
 
 test_that("stage 3: report_dir defaults to <R_user_dir data>/reports", {

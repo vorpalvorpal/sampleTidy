@@ -19,7 +19,7 @@
 # inside a test run, so this can never reach a live import.
 Sys.unsetenv(c("SAMPLETIDY_TIMEZONE", "SAMPLETIDY_DATE_OVERRIDES",
                "SAMPLETIDY_SITE_KEYWORDS", "SAMPLETIDY_REPORT_DIR",
-               "SAMPLETIDY_INPUT_DIR"))
+               "SAMPLETIDY_INPUT_DIR", "SAMPLETIDY_ACIRL_JOB_PREFIX"))
 local({
   empty_environ <- tempfile("empty-renviron-")
   file.create(empty_environ)
@@ -28,4 +28,5 @@ local({
 })
 options(sampletidy.timezone = "Australia/Sydney",
         sampletidy.site_keywords = list(B = "northvale", K = "millbrook"),
-        sampletidy.gas_template_slots = c("N.G201", "M.G365", "M.G366"))
+        sampletidy.gas_template_slots = c("N.G201", "M.G365", "M.G366"),
+        sampletidy.acirl_job_prefix = "2400")

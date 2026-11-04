@@ -27,7 +27,7 @@ someone went looking by hand.
 \code{work_order_guess} is derived from the STORED filename, never by re-reading
 the file: by the time anyone runs this report the input folder is routinely
 gone, and a report that errors on a missing file is a report nobody runs.
-It uses the same helper \code{\link[=file_meta]{file_meta()}} does, so an ACIRL \verb{2400-*} name yields
+It uses the same helper \code{\link[=file_meta]{file_meta()}} does, so an ACIRL \verb{<prefix>-*} name yields
 \code{NA} here exactly as it does everywhere else - the report must not become
 the one place that guesses.
 

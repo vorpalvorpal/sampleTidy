@@ -54,4 +54,9 @@ or a character vector of feature names that the lab's gas template prints
 at a site that has no such probe: the gas adapter skips a numeric reading
 at one as \code{template_slot}. It is list-valued, so it cannot come from an
 env var.
+
+\code{acirl_job_prefix} is \code{NULL} (the default) or one string of 1-8 ASCII
+digits, the job prefix that makes a filename ACIRL-shaped (\verb{<prefix>-NNNN}).
+With no prefix configured no name is ACIRL-shaped. It may come from the
+env var \code{SAMPLETIDY_ACIRL_JOB_PREFIX}; any other value aborts where it is used.
 }

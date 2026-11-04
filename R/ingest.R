@@ -490,16 +490,36 @@
   # XTAB.XLS genuinely IS results: an ALS crosstab rendering of the same
   # chemistry its `.csv` twin carries, which we merely cannot read yet
   # (SpreadsheetML, parked post-MVP - R/adapter-crosstab.R).
-  list(pattern = "(?i)_xtab(\\[[0-9]+\\])?\\.[a-z0-9]+$", type = "Chemical analysis"),
-  # R-9.12: ACIRL reports. LAST, so a hypothetical ACIRL file that also carried
-  # a deliverable token would still be typed by the token. "Chemical analysis"
-  # is the legacy majority - 108 of the 124 ACIRL asset rows in the live DB
-  # (the other 16 are "QA", with no rule distinguishing them). Listed
-  # explicitly rather than left to the fallback below, because relying on a
-  # fallback to encode a RULING makes the ruling invisible at the point of
-  # decision.
-  list(pattern = "(^|[^0-9])2400-?[0-9]{4}", type = "Chemical analysis")
+  list(pattern = "(?i)_xtab(\\[[0-9]+\\])?\\.[a-z0-9]+$", type = "Chemical analysis")
+  # R-9.12: ACIRL reports are typed after this table, by
+  # `.ig_retained_asset_type()`, because their pattern depends on the
+  # configured ACIRL job prefix (`st_config("acirl_job_prefix")`) and so is
+  # built at use. LAST, so a hypothetical ACIRL file that also carried a
+  # deliverable token would still be typed by the token.
 )
+
+# The configured ACIRL job prefix, validated: NULL (none configured), or one
+# string of 1-8 ASCII digits. Validated at use, like `gas_template_slots`.
+.ig_acirl_prefix <- function() {
+  p <- st_config("acirl_job_prefix")
+  if (is.null(p)) return(NULL)
+  if (!is.character(p) || length(p) != 1L || is.na(p) ||
+      !grepl("^[0-9]{1,8}$", p)) {
+    cli::cli_abort(
+      "{.code st_config(\"acirl_job_prefix\")} must be NULL or one string of
+       1-8 ASCII digits.",
+      class = "sampletidy_error"
+    )
+  }
+  p
+}
+
+# The ACIRL-shaped filename pattern for the configured job prefix, or NULL.
+.ig_acirl_pattern <- function() {
+  p <- .ig_acirl_prefix()
+  if (is.null(p)) return(NULL)
+  sprintf("(^|[^0-9])%s-?[0-9]{4}", p)
+}
 
 #' `asset.type` for one retained non-tabular deliverable (R-15.36b)
 #'
@@ -510,7 +530,7 @@
 #' accident. (An earlier version of this comment claimed the fallback was
 #' unreachable. R-9.12's widening made that false - real ACIRL names carry no
 #' token, so every one of them reached the fallback - which is exactly why the
-#' ACIRL row is now listed explicitly above.)
+#' ACIRL rule is now listed explicitly below the table.)
 #' @keywords internal
 #' @noRd
 .ig_retained_asset_type <- function(filename) {
@@ -519,12 +539,22 @@
       return(entry$type)
     }
   }
+  # R-9.12: "Chemical analysis" is the legacy majority of ACIRL assets - 108
+  # of the 124 ACIRL asset rows in the live DB (the other 16 are "QA", with
+  # no rule distinguishing them). Listed explicitly rather than left to the
+  # fallback below, because relying on a fallback to encode a RULING makes
+  # the ruling invisible at the point of decision. Only when a prefix is
+  # configured.
+  acirl <- .ig_acirl_pattern()
+  if (!is.null(acirl) && grepl(acirl, filename)) {
+    return("Chemical analysis")
+  }
   "Chemical analysis"
 }
 
 # R-9.8: does this filename carry an ACIRL-shaped work-order token?
 #
-# `2400-9006-02` and friends CANNOT be parsed from a filename (false merges AND
+# `<prefix>-9006-02` and friends CANNOT be parsed from a filename (false merges AND
 # false splits - see the ACIRL work-order trap in R/commit.R), and that refusal
 # stays. A file carrying one is not merely "unidentifiable": it POSITIVELY
 # DECLARES a work order of its own, one we decline to name, so this treats that
@@ -541,7 +571,7 @@
 # live DB shows the legacy system already filed 104 of 124 ACIRL assets against
 # an ES####### project, one report per work order.
 #
-# The ACIRL work-order trap is untouched: we still never PARSE `2400-*` into a
+# The ACIRL work-order trap is untouched: we still never PARSE `<prefix>-*` into a
 # work order. The attachment comes from the folder, which is a different and
 # safer question, and it still requires the folder to resolve to exactly one.
 #
@@ -549,14 +579,15 @@
 # whether to STAY OUT of a file's business, so over-matching costs one warning
 # and a file left safely quarantined, while under-matching costs a wrong
 # attachment in the database. Those are not symmetric.
-# Anchored on the literal ACIRL job prefix `2400`, and tolerant of the
+# Anchored on the configured ACIRL job prefix (`st_config("acirl_job_prefix")`;
+# no prefix configured means no name is ACIRL-shaped), and tolerant of the
 # unhyphenated dialect, because the loose `[0-9]{4}-[0-9]{4}` this replaced was
 # wrong in BOTH directions against the real corpus (1,227 files in
 # assets/unprocessed, 272 of them ACIRL):
 #
-#   * it MISSED 27 real ACIRL files - the whole unhyphenated `24009089-01`
+#   * it MISSED 27 real ACIRL files - the whole unhyphenated `<prefix>6989-01`
 #     dialect, which the work-order evidence file records as a real spelling
-#     ("job 6989 only ever appears unhyphenated"). `24009089-10` has only two
+#     ("job 6989 only ever appears unhyphenated"). `<prefix>6989-10` has only two
 #     digits after its hyphen, so `[0-9]{4}-[0-9]{4}` never matched it;
 #   * it FALSELY matched 4 real non-ACIRL scans - `Site Quarterly
 #     13-06-21062024141257-0001.pdf` and friends, whose scanner timestamp
@@ -566,9 +597,11 @@
 #     its source deleted from the input directory.
 #
 # The replacement is exact on that corpus: 272/272 matched, zero false
-# positives. `(^|[^0-9])` stops `12400-1234` from qualifying.
+# positives. `(^|[^0-9])` stops `1<prefix>-1234` from qualifying.
 .ig_is_acirl_shaped <- function(filename) {
-  grepl("(^|[^0-9])2400-?[0-9]{4}", filename)
+  pat <- .ig_acirl_pattern()
+  if (is.null(pat)) return(rep(FALSE, length(filename)))
+  grepl(pat, filename)
 }
 
 #' The work order a folder unambiguously belongs to, or `NA` (R-9.8)
@@ -662,14 +695,14 @@
 #' (R-22.G1)
 #'
 #' 2026-10-25: gas report PDFs have no ES token and no ALS folder-mate.
-#' An ACIRL gas PDF ("2400-9006-09-01 September Monthly Gas Monitoring
+#' An ACIRL gas PDF ("`<prefix>`-9006-09-01 September Monthly Gas Monitoring
 #' Site N.pdf") is the print of the workbook of the same name, which was
 #' archived under the right project when it was parsed. Matches the file's
 #' stem (basename without extension, case-insensitive, whitespace-trimmed)
 #' against the stems of `asset.filename` rows that have a project, ignoring
 #' the file's own bytes (`hash`).
 #'
-#' The 2400-* number is NEVER parsed from the name (the ACIRL work-order
+#' The `<prefix>-*` number is NEVER parsed from the name (the ACIRL work-order
 #' trap, R/commit.R); only the stem is compared. Returns the project `name`
 #' only when every match points at exactly one project; zero matches gives
 #' `NA`, and several distinct projects warns (naming the file) and gives `NA`
@@ -730,7 +763,7 @@
 #' For every routed row still `quarantined`/`unclaimed` (deduped by hash),
 #' finds the file's work order in three steps, in this order: (1) its
 #' filename ([file_meta()]'s `work_order_guess` - NEVER inferred from a bare
-#' `2400-*` filename, which cannot be parsed reliably; only `ES#######`-shaped
+#' `<prefix>-*` filename, which cannot be parsed reliably; only `ES#######`-shaped
 #' tokens are used, per `file_meta()`); (2) folder inference
 #' (`.ig_folder_work_order()`); (3) R-22.G1, a stem match against the
 #' filename of an already-archived report workbook (`.ig_stem_work_order()`),
@@ -800,7 +833,7 @@
   # R-9.12 widens this to the ACIRL shape as well. Measured over the 1,227
   # files in assets/unprocessed: of 272 ACIRL files, ZERO carry a
   # COA/COC/QC/QCI/XTAB token - real ACIRL names are descriptive
-  # ("2400-9011-05 May 2025 Monthly Site M.pdf"). So the token gate
+  # ("<prefix>-9011-05 May 2025 Monthly Site M.pdf"). So the token gate
   # excluded all 137 ACIRL PDFs from retention AND, because it narrows the
   # warning too, from being reported at all: they routed quarantined in
   # silence. `\d{4}-\d{4}` is still a POSITIVE shape, so ordinary cruft
@@ -862,7 +895,7 @@
         # R-22.G1 (2026-10-25: gas report PDFs have no ES token and no
         # ALS folder-mate): third and last fallback. Only reached when steps
         # 1 and 2 found nothing, so it can never override either. Matches the
-        # file's stem to an archived workbook's filename stem; the 2400-*
+        # file's stem to an archived workbook's filename stem; the <prefix>-*
         # number is still never parsed. `ingest_dir()` runs this after the
         # commit stage, so a workbook archived earlier in the SAME run is
         # already in `asset` here.
@@ -875,7 +908,7 @@
           # does not resolve is cruft-shaped: stay quarantined, say nothing.
           NA_character_
         } else if (is.na(work_order)) {
-          # Round-2 item 7: refusing to filename-parse a `2400-*` ACIRL work
+          # Round-2 item 7: refusing to filename-parse a `<prefix>-*` ACIRL work
           # order is CORRECT (see the ACIRL work-order trap, R/commit.R) and
           # must stay - staying silent about the residual exposure is not.
           # Every such file's COA/COC/QC/QCI PDFs and XTAB.XLS stay
@@ -892,7 +925,7 @@
           # stays where a human can find it rather than being filed against a
           # guess.
           #
-          # This is now the ONLY residual for ACIRL (R-9.12): a `2400-*` report
+          # This is now the ONLY residual for ACIRL (R-9.12): a `<prefix>-*` report
           # in a folder that does resolve to exactly one ALS work order is
           # retained and attached to it. The 13 files PLAN-CHANGE-REQUESTS
           # records as lost were ALS, not ACIRL - every one carries an
@@ -1601,7 +1634,7 @@ ingest_inbox <- function(root, db = st_config("live_db"), dry_run = FALSE,
 #' `work_order_guess` is derived from the STORED filename, never by re-reading
 #' the file: by the time anyone runs this report the input folder is routinely
 #' gone, and a report that errors on a missing file is a report nobody runs.
-#' It uses the same helper [file_meta()] does, so an ACIRL `2400-*` name yields
+#' It uses the same helper [file_meta()] does, so an ACIRL `<prefix>-*` name yields
 #' `NA` here exactly as it does everywhere else - the report must not become
 #' the one place that guesses.
 #'
