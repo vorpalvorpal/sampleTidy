@@ -45,10 +45,13 @@ test_that("hash_file(): a genuinely empty file hashes to the empty hash without 
 test_that("hash_file(): a non-empty file whose read yields the empty hash aborts with sampletidy_error", {
   dir <- withr::local_tempdir()
   path <- st_test_write_file(dir, "WO-TEST-001.csv", raw = charToRaw("a,b\n1,2\n"))
+  # Take the package's own hash_file first: under devtools::test() the mock below
+  # also rebinds the bare name hash_file in the test environment.
+  pkg_hash_file <- get("hash_file", envir = asNamespace("sampleTidy"))
   testthat::local_mocked_bindings(
     hash_file = function(...) "99aa06d3014798d86001c324468d497f",
     .package = "rlang"
   )
-  expect_error(hash_file(path), class = "sampletidy_error")
-  expect_error(hash_file(path), "could not be read|read 0 bytes")
+  expect_error(pkg_hash_file(path), class = "sampletidy_error")
+  expect_error(pkg_hash_file(path), "could not be read|read 0 bytes")
 })

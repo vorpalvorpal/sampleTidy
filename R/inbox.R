@@ -676,6 +676,28 @@ inbox_run <- function(input_dir = st_config("input_dir"),
   res$ran <- TRUE
   res$stale_lock <- lk$stale
 
+  # Guard: a test helper that leaked into a live run points archive_dir at the
+  # temp area while the live db is elsewhere. Refuse before touching anything.
+  guard_arch <- tryCatch(st_config("archive_dir"), error = function(e) NULL)
+  if (is.character(guard_arch) && length(guard_arch) == 1 && !is.na(guard_arch) &&
+      nzchar(guard_arch)) {
+    tmp_root <- normalizePath(dirname(tempdir()), mustWork = FALSE)
+    in_tmp <- function(p) startsWith(paste0(normalizePath(p, mustWork = FALSE), "/"),
+                                     paste0(tmp_root, "/"))
+    if (in_tmp(guard_arch) && !in_tmp(db)) {
+      res$errors <- c(res$errors, sprintf(
+        "archive_dir %s is in the temp area but the db is not; refusing to run (a test helper leaked into a live run?)",
+        guard_arch))
+      res$ended_at <- .inbox_fmt_utc(Sys.time())
+      if (!dry_run) {
+        line <- paste0(.inbox_log_json(res), "\n")
+        cat(line, file = .inbox_events_path(report_dir), sep = "", append = TRUE)
+        cat(line, file = .inbox_log_path(report_dir), sep = "", append = TRUE)
+      }
+      return(invisible(res))
+    }
+  }
+
   scan <- .inbox_scan(input_dir, now, settle_minutes)
   cands <- scan$candidates
   settled <- Filter(function(cd) cd$settled, cands)
