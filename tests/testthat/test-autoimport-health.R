@@ -42,9 +42,18 @@ ai_setup <- function(env = parent.frame()) {
             rscript = file.path(d, "stub-rscript.sh"), notify = file.path(d, "stub-notify.sh"),
             code = file.path(d, "code"))
   writeLines("x", s$db); dir.create(s$input); dir.create(s$report); dir.create(s$code)
+  writeLines("x", file.path(s$input, "README.txt"))   # the gate treats an EMPTY listing as "cannot tell"
+  s$once <- file.path(d, "stub-once")
   writeLines(c("#!/bin/bash",
                sprintf('echo "run|$$|${SAMPLETIDY_AUTOIMPORT_PREV_FAILURE:-}" >> "%s"', s$runs),
                sprintf('[ -n "${STUB_HEALTH_COPY:-}" ] && cp "%s/.imports.health" "$STUB_HEALTH_COPY"', s$report),
+               # first invocation only: simulate input arriving / being archived / becoming unreadable mid-run
+               sprintf('if [ ! -e "%s" ]; then touch "%s"', s$once, s$once),
+               '  [ -n "${STUB_ARRIVE:-}" ] && mkdir -p "$STUB_ARRIVE"',
+               '  [ -n "${STUB_ARRIVE_FILE:-}" ] && echo y > "$STUB_ARRIVE_FILE"',
+               '  [ -n "${STUB_REMOVE:-}" ] && rm -rf "$STUB_REMOVE"',
+               '  [ -n "${STUB_LOCK:-}" ] && chmod 000 "$STUB_LOCK"',
+               'fi',
                'sleep "${STUB_SLEEP:-0}"',
                'exit "${STUB_RC:-0}"'), s$rscript)
   writeLines(c("#!/bin/bash",
@@ -56,7 +65,8 @@ ai_setup <- function(env = parent.frame()) {
     SAMPLETIDY_AUTOIMPORT_LOG = s$log, SAMPLETIDY_AUTOIMPORT_CODE = s$code,
     SAMPLETIDY_AUTOIMPORT_OFF = s$off, SAMPLETIDY_AUTOIMPORT_NOTIFY = s$notify,
     SAMPLETIDY_AUTOIMPORT_STALE_HOURS = NA, SAMPLETIDY_AUTOIMPORT_PREV_FAILURE = NA,
-    STUB_SLEEP = NA, STUB_RC = NA, STUB_HEALTH_COPY = NA), .local_envir = env)
+    STUB_SLEEP = NA, STUB_RC = NA, STUB_HEALTH_COPY = NA,
+    STUB_ARRIVE = NA, STUB_ARRIVE_FILE = NA, STUB_REMOVE = NA, STUB_LOCK = NA), .local_envir = env)
   s
 }
 
@@ -405,4 +415,143 @@ test_that("R-22.H: import_status() with PREV_FAILURE unset or empty adds no Prob
     js <- jsonlite::fromJSON(file.path(s$report_dir, ".import-status.json"), simplifyVector = FALSE)
     expect_length(js$problems, 0L)
   }
+})
+
+# ---- 6. gate (fail-safe, mid-run arrivals) ----------------------------------------------
+
+ai_gate <- function(s) file.path(s$report, ".imports.gate")
+ai_state_ok <- function(s) writeLines("{}", file.path(s$report, ".imports.state"))
+ai_skip_if_root <- function() skip_if(identical(Sys.info()[["user"]], "root"), "root can list a mode-000 directory")
+# A subdirectory of the input that `find` cannot descend into. Returns its path;
+# lock it with Sys.chmod(p, "000") when ready. Restored on exit so cleanup works.
+ai_locked_dir <- function(s, env = parent.frame()) {
+  p <- file.path(s$input, "locked"); dir.create(p)
+  withr::defer(Sys.chmod(p, "755"), envir = env)
+  p
+}
+
+test_that("gate: a listing failure is logged, notified once per day, exits non-zero, runs nothing and writes no gate", {
+  s <- ai_setup(); ai_skip_if_root()
+  p <- ai_locked_dir(s); Sys.chmod(p, "000")
+  expect_false(identical(ai_status(s), 0L))
+  expect_length(ai_runs(s), 0L)
+  expect_match(ai_log(s), "cannot list")
+  expect_match(ai_log(s), "Permission denied")
+  expect_equal(sum(grepl("cannot list", ai_lines(s$log))), 1L)
+  expect_length(ai_notes(s), 1L)
+  expect_match(ai_notes(s), "^2\\|[^|]*sampleTidy import")
+  expect_match(ai_notes(s), "list", ignore.case = TRUE)
+  expect_false(file.exists(ai_gate(s)))
+})
+
+test_that("gate: repeat listing failures the same Sydney day notify only once but keep logging and failing", {
+  s <- ai_setup(); ai_skip_if_root()
+  p <- ai_locked_dir(s); Sys.chmod(p, "000")
+  rcs <- c(ai_status(s), ai_status(s), ai_status(s))
+  expect_true(all(rcs != 0L))
+  expect_length(ai_notes(s), 1L)
+  expect_equal(sum(grepl("cannot list", ai_lines(s$log))), 3L)
+  expect_length(ai_runs(s), 0L)
+})
+
+test_that("gate: with a primed matching gate, a listing failure is not skipped as unchanged and leaves the gate alone", {
+  s <- ai_setup(); ai_skip_if_root()
+  p <- ai_locked_dir(s)
+  ai_prime_gate(s)
+  expect_true(file.exists(ai_gate(s)))
+  before <- readLines(ai_gate(s))
+  Sys.chmod(p, "000")
+  expect_false(identical(ai_status(s), 0L))
+  expect_match(ai_log(s), "cannot list")
+  expect_length(ai_runs(s), 0L)
+  expect_identical(readLines(ai_gate(s)), before)
+})
+
+test_that("gate: an empty input listing is not 'unchanged' - it is logged and R runs even with a matching gate", {
+  s <- ai_setup()
+  file.remove(file.path(s$input, "README.txt"))
+  ai_prime_gate(s)                       # one run, gate (if any) written for the empty input
+  expect_identical(ai_status(s), 0L)
+  expect_length(ai_runs(s), 1L)
+  expect_match(ai_log(s), "input listing is empty")
+})
+
+test_that("gate: unchanged input with a primed gate stays silent - no run and nothing appended to the log", {
+  s <- ai_setup()
+  ai_prime_gate(s)
+  before <- ai_log(s)
+  expect_identical(ai_status(s), 0L)
+  expect_length(ai_runs(s), 0L)
+  expect_length(ai_notes(s), 0L)
+  expect_identical(ai_log(s), before)
+})
+
+test_that("gate: a folder that arrives in the input while R runs is processed by the next tick", {
+  s <- ai_setup()
+  withr::local_envvar(STUB_ARRIVE = file.path(s$input, "new-folder"))
+  expect_identical(ai_status(s), 0L)
+  expect_true(dir.exists(file.path(s$input, "new-folder")))
+  ai_state_ok(s)
+  expect_identical(ai_status(s), 0L)
+  expect_length(ai_runs(s), 2L)
+})
+
+test_that("gate: a file that lands inside an existing input folder while R runs is processed by the next tick", {
+  s <- ai_setup()
+  dir.create(file.path(s$input, "batch"))
+  withr::local_envvar(STUB_ARRIVE_FILE = file.path(s$input, "batch", "late.csv"))
+  expect_identical(ai_status(s), 0L)
+  expect_true(file.exists(file.path(s$input, "batch", "late.csv")))
+  ai_state_ok(s)
+  expect_identical(ai_status(s), 0L)
+  expect_length(ai_runs(s), 2L)
+})
+
+test_that("gate: R archiving an input folder during its run causes at most one extra run, then ticks are skipped", {
+  s <- ai_setup()
+  dir.create(file.path(s$input, "processed"))
+  writeLines("y", file.path(s$input, "processed", "a.csv"))
+  withr::local_envvar(STUB_REMOVE = file.path(s$input, "processed"))
+  expect_identical(ai_status(s), 0L)
+  expect_false(dir.exists(file.path(s$input, "processed")))
+  ai_state_ok(s)
+  ai_status(s); ai_status(s)
+  n3 <- length(ai_runs(s))
+  ai_status(s)
+  expect_lte(n3, 2L)
+  expect_identical(length(ai_runs(s)), n3)     # the final tick did not run
+})
+
+test_that("gate: a listing failure after R has run never writes a gate", {
+  s <- ai_setup(); ai_skip_if_root()
+  p <- ai_locked_dir(s)
+  withr::local_envvar(STUB_LOCK = p)           # the stub makes the folder unreadable mid-run
+  ai_status(s)
+  expect_length(ai_runs(s), 1L)
+  expect_false(file.exists(ai_gate(s)))
+})
+
+test_that("gate: a missing input folder exits 0 without running and logs that it was not found", {
+  s <- ai_setup()
+  withr::local_envvar(SAMPLETIDY_AUTOIMPORT_INPUT = file.path(s$dir, "no-such-input"))
+  expect_identical(ai_status(s), 0L)
+  expect_length(ai_runs(s), 0L)
+  expect_match(ai_log(s), "input folder not found")
+  expect_equal(sum(grepl("input folder not found", ai_lines(s$log))), 1L)
+})
+
+# ---- 7. live script loads no test helpers ----------------------------------
+# 2026-10-20: load_all() sourced tests/testthat/helper-*.R, one of which
+# redirected SAMPLETIDY_ARCHIVE_DIR to tempdir(), so a live run filed real input
+# into an R tempdir. The live script must pass helpers = FALSE.
+
+test_that("dev/auto-import.R passes helpers = FALSE to every load_all() call", {
+  script <- testthat::test_path("..", "..", "dev", "auto-import.R")
+  skip_if_not(file.exists(script), "dev/auto-import.R not available")
+  lines <- readLines(script, warn = FALSE)
+  lines <- lines[!grepl("^\\s*#", lines)]
+  txt <- paste(lines, collapse = "\n")
+  calls <- regmatches(txt, gregexpr("load_all\\([^)]*(\\([^)]*\\)[^)]*)*\\)", txt))[[1]]
+  expect_gte(length(calls), 1L)
+  for (cl in calls) expect_match(cl, "helpers\\s*=\\s*FALSE", info = cl)
 })

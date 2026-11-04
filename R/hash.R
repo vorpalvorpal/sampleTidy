@@ -22,6 +22,10 @@
 #' defence against an adversary who can choose file contents. Do not reuse it
 #' for tamper-evidence.
 #'
+#' A non-empty file that hashes as empty input was read as 0 bytes (for example
+#' a cloud-only OneDrive file that was not downloaded), so this aborts rather
+#' than return the empty-input hash.
+#'
 #' @param path path to an existing, readable file.
 #' @return a lower-case hex xxHash128 digest string (32 characters).
 #' @keywords internal
@@ -34,5 +38,13 @@ hash_file <- function(path) {
       class = "sampletidy_error"
     )
   }
-  rlang::hash_file(path)
+  h <- rlang::hash_file(path)
+  if (identical(h, "99aa06d3014798d86001c324468d497f") && isTRUE(file.size(path) > 0)) {
+    cli::cli_abort(
+      c("Cannot hash file: {.path {path}} could not be read.",
+        "i" = "Read 0 bytes of a non-empty file (a cloud-only file that was not downloaded?)."),
+      class = "sampletidy_error"
+    )
+  }
+  h
 }

@@ -3,6 +3,10 @@
 # Run by launchd on the Mac (dev/launchd/); Obsidian's Shell commands trigger was retired 2026-10-25. Does nothing unless this machine holds the
 # live DB and something under input_dir (or the DB file) changed since the last good run.
 # Metadata only: stat, never file contents (Files-On-Demand).
+# Gate rules: never skip silently except on an unchanged gate. A listing failure
+# (find error) logs, notifies once a day and exits 3 before the gate is compared; an
+# empty listing never skips; the gate is written after a good run only if the listing
+# works and nothing in the input changed (ctime) since the run began.
 # Test overrides: SAMPLETIDY_AUTOIMPORT_{DB,INPUT,REPORT,RSCRIPT,LOG,CODE,OFF,NOTIFY,STALE_HOURS}.
 # R-22.H (Robin 2026-10-25): an atomic mkdir lock, and a run-health record
 # ($REPORT/.imports.health) that drives retry-after-failure, one notification per
@@ -19,16 +23,17 @@ if [ -n "${SAMPLETIDY_AUTOIMPORT_INPUT:-}" ]; then INPUT="$SAMPLETIDY_AUTOIMPORT
   INPUT="$(sed -n 's/^SAMPLETIDY_INPUT_DIR=//p' "$HOME/.Renviron" 2>/dev/null | tail -1)"
   [ "$(basename "$INPUT")" = input ] && INPUT="$(dirname "$INPUT")"
 fi
-[ -d "$INPUT" ] || exit 0
+LOG="${SAMPLETIDY_AUTOIMPORT_LOG:-$HOME/Library/Logs/sampletidy-autoimport.log}"
+mkdir -p "$(dirname "$LOG")"
+logline() { echo "=== $(date '+%Y-%m-%d %H:%M:%S') $*" >>"$LOG"; }
+if [ ! -d "$INPUT" ]; then logline "input folder not found: $INPUT"; exit 0; fi
 REPORT="${SAMPLETIDY_AUTOIMPORT_REPORT:-${PKM_VAULT:-$HOME/pkm}/0 Misc/00 Misc/00.09 Import triage}"
 RSCRIPT="${SAMPLETIDY_AUTOIMPORT_RSCRIPT:-Rscript}"
-LOG="${SAMPLETIDY_AUTOIMPORT_LOG:-$HOME/Library/Logs/sampletidy-autoimport.log}"
 STATE="$REPORT/.imports.state"; GATE="$REPORT/.imports.gate"
 LOCK="$REPORT/.imports.lock"; HEALTH="$REPORT/.imports.health"; NOTIFIED="$REPORT/.imports.notified"
 NOTIFY="${SAMPLETIDY_AUTOIMPORT_NOTIFY:-}"
 STALE_HOURS="${SAMPLETIDY_AUTOIMPORT_STALE_HOURS:-24}"
-mkdir -p "$(dirname "$LOG")" "$REPORT"
-logline() { echo "=== $(date '+%Y-%m-%d %H:%M:%S') $*" >>"$LOG"; }
+mkdir -p "$REPORT"
 
 notify() {   # notify <title> <message>
   if [ -n "$NOTIFY" ]; then "$NOTIFY" "$1" "$2"
@@ -82,14 +87,27 @@ fi
 
 # The Sydney date is hashed too (ruling R14): the first tick of each Sydney day
 # passes the gate, so R can refresh the status note's dates.
+# snapshot prints the hash; it returns 1 if the input cannot be listed (find's
+# exit status or any stderr), leaving the listing and error in $LOCK/{list,err}.
 snapshot() {
-  { find "$INPUT" -mindepth 1 -maxdepth 2 ! -name .DS_Store -exec stat -f '%N|%z|%m' {} + 2>/dev/null | LC_ALL=C sort
+  find "$INPUT" -mindepth 1 -maxdepth 2 ! -name .DS_Store -exec stat -f '%N|%z|%m' {} + >"$LOCK/list" 2>"$LOCK/err"
+  local frc=$?
+  if [ $frc -ne 0 ] || [ -s "$LOCK/err" ]; then return 1; fi
+  { LC_ALL=C sort "$LOCK/list"
     stat -f 'DB|%z|%m' "$DB"
     TZ=Australia/Sydney date +%F; } | shasum -a 256 | cut -d' ' -f1
 }
 
-NOW="$(snapshot)"
-if [ -z "$RETRY" ] && [ -f "$GATE" ] && [ -f "$STATE" ] && [ "$(cat "$GATE")" = "$NOW" ] \
+: >"$LOCK/started"   # ctime marker: anything newer arrived (or changed) during the run
+if ! NOW="$(snapshot)"; then
+  logline "cannot list $INPUT: $(head -1 "$LOCK/err")"
+  notify_once "listfail:$(TZ=Australia/Sydney date +%F)" "sampleTidy import cannot read its input" \
+    "The input folder cannot be listed ($INPUT). launchd's bash may need Full Disk Access."
+  exit 3
+fi
+EMPTY=
+if [ ! -s "$LOCK/list" ]; then EMPTY=1; logline "input listing is empty ($INPUT); running anyway"; fi
+if [ -z "$RETRY" ] && [ -z "$EMPTY" ] && [ -f "$GATE" ] && [ -f "$STATE" ] && [ "$(cat "$GATE")" = "$NOW" ] \
    && ! grep -Eq '"pending"[[:space:]]*:[[:space:]]*true' "$STATE"; then
   exit 0
 fi
@@ -115,5 +133,13 @@ write_health running $$ "$STARTED" "" "" "$p_succ"
 rc=$?
 ENDED="$(date -u +%Y-%m-%dT%H:%M:%SZ)"; SUCC="$p_succ"; [ $rc -eq 0 ] && SUCC="$ENDED"
 write_health done $$ "$STARTED" "$ENDED" "$rc" "$SUCC"
-if [ $rc -eq 0 ]; then mkdir -p "$REPORT" && snapshot >"$GATE"; fi   # post-run: R's own clean-up is not a change
+if [ $rc -eq 0 ]; then
+  # Post-run gate: only if the listing works and nothing changed (by ctime; OneDrive
+  # keeps server mtimes) since the marker. Otherwise leave it stale so the next tick runs.
+  if POST="$(snapshot)" && [ -z "$(find "$INPUT" -mindepth 1 -maxdepth 2 ! -name .DS_Store -cnewer "$LOCK/started" 2>/dev/null)" ]; then
+    mkdir -p "$REPORT" && echo "$POST" >"$GATE.tmp.$$" && mv "$GATE.tmp.$$" "$GATE"
+  else
+    logline "input changed during the run; next tick will re-check"
+  fi
+fi
 exit $rc

@@ -4,7 +4,8 @@
 args <- commandArgs(trailingOnly = FALSE)
 here <- gsub("~+~", " ", sub("^--file=", "", args[grepl("^--file=", args)]), fixed = TRUE)  # Rscript encodes spaces
 repo <- if (length(here)) dirname(dirname(normalizePath(here[1]))) else getwd()
-suppressMessages(devtools::load_all(repo, quiet = TRUE))
+# helpers = FALSE: test helpers must never run in a live import.
+suppressMessages(devtools::load_all(repo, quiet = TRUE, helpers = FALSE))
 
 # A deployment attaches its hooks by naming a file in SAMPLETIDY_HOOKS_FILE; it
 # never errors, a bad file shows up in the status Problems.

@@ -28,3 +28,30 @@ test_that("R-1.2: missing file aborts with class sampletidy_error", {
   err <- tryCatch(hash_file(missing_path), error = function(e) e)
   expect_s3_class(err, "sampletidy_error")
 })
+
+# ---- unreadable file must not hash as empty (2026-10-26 incident) -----------
+# A cloud-only OneDrive file reads as 0 bytes, so rlang::hash_file() returned the
+# xxHash128 of empty input for every such file. rlang::hash_file is mocked here
+# to simulate the unreadable read (local_mocked_bindings(.package = "rlang")).
+
+st_empty_hash <- "99aa06d3014798d86001c324468d497f"
+
+test_that("hash_file(): a genuinely empty file hashes to the empty hash without error", {
+  dir <- withr::local_tempdir()
+  path <- st_test_write_file(dir, "empty.csv", raw = raw(0))
+  expect_identical(hash_file(path), st_empty_hash)
+})
+
+test_that("hash_file(): a non-empty file whose read yields the empty hash aborts with sampletidy_error", {
+  dir <- withr::local_tempdir()
+  path <- st_test_write_file(dir, "WO-TEST-001.csv", raw = charToRaw("a,b\n1,2\n"))
+  # Take the package's own hash_file first: under devtools::test() the mock below
+  # also rebinds the bare name hash_file in the test environment.
+  pkg_hash_file <- get("hash_file", envir = asNamespace("sampleTidy"))
+  testthat::local_mocked_bindings(
+    hash_file = function(...) "99aa06d3014798d86001c324468d497f",
+    .package = "rlang"
+  )
+  expect_error(pkg_hash_file(path), class = "sampletidy_error")
+  expect_error(pkg_hash_file(path), "could not be read|read 0 bytes")
+})
