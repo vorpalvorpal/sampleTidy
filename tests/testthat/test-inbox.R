@@ -575,7 +575,10 @@ test_that("inbox_run(dry_run = TRUE): no backup, no DB write, no removal, no sta
   js <- read_status_json(s$report_dir)
   expect_true(js$dry_run)
   expect_identical(unlist(js$dry_run_plan$would_import), "input2026-10-18 0900 a")
-  expect_length(js$dry_run_plan$would_file, 0)
+  # The folder's files are all new data, so it would be filed after import too
+  # (the same verdict main's "Would file" banner line reported).
+  expect_length(js$dry_run_plan$would_file, 1)
+  expect_identical(js$dry_run_plan$would_file[[1]]$folder, "input2026-10-18 0900 a")
   expect_length(report_md_files(s$report_dir), 0)
 
   real <- run_inbox(s, now = now)
