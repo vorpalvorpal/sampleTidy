@@ -741,7 +741,7 @@
 
 .ct_report_project_types <- c("ACIRL report", "Monthly gas monitoring")
 
-#' The Sydney years of raw date strings (`.rc_datetime_formats`, or an Excel
+#' The local years of raw date strings (`.rc_datetime_formats`, or an Excel
 #' serial as a front-page cell may hold one), sorted and de-duplicated
 #' @keywords internal
 #' @noRd
@@ -752,7 +752,7 @@
     return(integer(0))
   }
   ct <- parse_lab_datetime(raw, .rc_datetime_formats)
-  y <- suppressWarnings(as.integer(format(ct, "%Y", tz = "Australia/Sydney")))
+  y <- suppressWarnings(as.integer(format(ct, "%Y", tz = .st_tz())))
   serial <- is.na(y) & grepl("^[0-9]{5}(\\.[0-9]+)?$", raw)
   if (any(serial)) {
     y[serial] <- as.integer(format(excel_date(as.numeric(raw[serial])), "%Y"))
@@ -763,7 +763,7 @@
 
 #' The report year SET of an ACIRL event (C8/D14)
 #'
-#' The Sydney years of the event's own sample dates
+#' The local years of the event's own sample dates
 #' (`event$samples$sample_datetime_raw`, which ingest has already passed
 #' through the C3 per-file overrides), else of the front-page `SAMPLE DATE:`
 #' carried into `event$report$sources[[h]]$sample_date`. `integer(0)` when
@@ -840,7 +840,7 @@
           WHERE (s.uuid_project = ?
                  OR s.uuid_project IN (SELECT uuid FROM project WHERE uuid_parent = ?))
             AND coalesce(s.date, s.datetime) IS NOT NULL",
-        .ct_sydney_day_sql("coalesce(s.date, s.datetime)")
+        .ct_local_day_sql("coalesce(s.date, s.datetime)")
       ),
       params = list(rows$uuid[[k]], rows$uuid[[k]])
     )$y
@@ -1108,7 +1108,7 @@
       con,
       sprintf("SELECT DISTINCT CAST(%s AS VARCHAR) AS d FROM \"sample\"
                 WHERE uuid_project = ? AND date IS NOT NULL",
-              .ct_sydney_day_sql("date")),
+              .ct_local_day_sql("date")),
       params = list(rp$uuid)
     )$d
     if (length(have) > 0 && length(inc) > 0 && length(intersect(have, inc)) == 0) {
@@ -1728,14 +1728,15 @@
 #' @keywords internal
 #' @noRd
 
-# SQL for the Australia/Sydney calendar day of a stored `sample.date`
-# (TIMESTAMP holding a UTC instant). Legacy rows hold Sydney midnight as its
-# UTC instant (14:00/13:00 the previous day), which `CAST(date AS DATE)` reads
-# a day early; pipeline rows hold naive midnight (A44.3), which reads as
-# 10:00/11:00 Sydney on the same day. The Sydney day is right for both, and
+# SQL for the local calendar day (the configured time zone) of a stored
+# `sample.date` (TIMESTAMP holding a UTC instant). Legacy rows hold local
+# midnight as its UTC instant (the previous day, ahead-of-UTC zones), which
+# `CAST(date AS DATE)` reads a day early; pipeline rows hold naive midnight
+# (A44.3), which reads as the same day. The local day is right for both, and
 # the explicit zones keep it independent of the DuckDB session TimeZone.
-.ct_sydney_day_sql <- function(col) {
-  sprintf("CAST(timezone('Australia/Sydney', timezone('UTC', %s)) AS DATE)", col)
+# `.st_tz()` is validated against OlsonNames(), so it is safe to embed.
+.ct_local_day_sql <- function(col) {
+  sprintf("CAST(timezone('%s', timezone('UTC', %s)) AS DATE)", .st_tz(), col)
 }
 
 #' The READ-ONLY half of `.ct_find_or_create_sample()`: the uuid of an
@@ -1820,7 +1821,7 @@
 #' guard and commit all ask this one function, so they cannot disagree.
 #'
 #' Candidates are the samples at the feature (or, for a pending row, the
-#' alias) on the Sydney day that hold at least one analysis of `stream` - the
+#' alias) on the local day that hold at least one analysis of `stream` - the
 #' stream `.rc_lab_stream()` reads from the lab_method, computed here in SQL
 #' for the analyses already stored. A sample with NO analyses is a candidate
 #' for every stream, except one this commit pass has just created: `fresh`
@@ -1866,7 +1867,7 @@
     if (is.na(alias_uuid)) return(out("new"))
     rows <- DBI::dbGetQuery(
       con,
-      paste0(from, 'WHERE s.uuid_feature_alias = ? AND ', .ct_sydney_day_sql("s.date"), ' = ?
+      paste0(from, 'WHERE s.uuid_feature_alias = ? AND ', .ct_local_day_sql("s.date"), ' = ?
          ORDER BY s.uuid'),
       params = list(alias_uuid, as.character(sample_date))
     )
@@ -1875,7 +1876,7 @@
     rows <- DBI::dbGetQuery(
       con,
       paste0(from, 'JOIN feature_alias fa ON fa.uuid = s.uuid_feature_alias
-        WHERE fa.uuid_feature = ? AND ', .ct_sydney_day_sql("s.date"), ' = ?
+        WHERE fa.uuid_feature = ? AND ', .ct_local_day_sql("s.date"), ' = ?
         ORDER BY s.uuid'),
       params = list(match_feature, as.character(sample_date))
     )
@@ -1903,7 +1904,7 @@
   # tzone" warning; equality of instants is tz-independent.
   #
   # C1: AFTER stream scoping, a candidate filed under one of the row's
-  # `work_orders` whose clock is the legacy 11:00 / 11:01 Sydney placeholder
+  # `work_orders` whose clock is the legacy 11:00 / 11:01 local placeholder
   # (`.rc_placeholder_datetime()`: 2,575 time-unknown legacy samples, and
   # migration 005's lab twins one minute later) counts as time-unknown when
   # deciding "provably new" - exactly as `.rc_find_existing()` does, so

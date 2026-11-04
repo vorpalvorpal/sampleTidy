@@ -6,8 +6,6 @@
 # changed (status refresh only). Every decision up to that point is made from
 # file metadata alone - reading a Files-On-Demand file downloads it.
 
-.inbox_tz <- "Australia/Sydney"
-
 # ---- small helpers ----------------------------------------------------------
 
 .inbox_fmt_utc <- function(x) format(x, "%Y-%m-%dT%H:%M:%SZ", tz = "UTC")
@@ -16,7 +14,8 @@
   as.POSIXct(x, format = "%Y-%m-%dT%H:%M:%SZ", tz = "UTC")
 }
 
-.inbox_syd <- function(x, fmt) format(x, fmt, tz = .inbox_tz)
+# Formats in the configured time zone (`.st_tz()`, read at call time).
+.inbox_local <- function(x, fmt) format(x, fmt, tz = .st_tz())
 
 .inbox_state_path <- function(report_dir) file.path(report_dir, ".imports.state")
 .inbox_log_path <- function(report_dir) file.path(report_dir, ".imports.log")
@@ -109,12 +108,12 @@ inbox_signature <- function(input_dir) {
 #'
 #' @param input_dir the inbox directory.
 #' @param report_dir directory holding `.imports.state`.
-#' @param now current time; a Sydney day other than that of the state's
+#' @param now current time; a local day other than that of the state's
 #'   `checked_at` is a `"status"` reason (ruling R14).
 #' @param db the live database file, stat-ed for the second trigger.
 #' @return `"run"` (inbox changed, nothing recorded yet, or a folder was left
 #'   arriving), `"status"` (the database file changed, or this is the first
-#'   check of a new Sydney day) or `"none"`.
+#'   check of a new local day) or `"none"`.
 #' @export
 inbox_check <- function(input_dir, report_dir, now = Sys.time(),
                         db = st_config("live_db")) {
@@ -128,11 +127,11 @@ inbox_check <- function(input_dir, report_dir, now = Sys.time(),
   if (is.null(st) || is.null(st$signature)) return("run")
   if (!identical(as.character(st$signature), inbox_signature(input_dir))) return("run")
   if (isTRUE(st$pending)) return("run")
-  # Ruling R14: the first check of each Sydney day refreshes the status note
+  # Ruling R14: the first check of each local day refreshes the status note
   # (dates and ages in it move on even when nothing else did).
   last <- if (is.character(st$checked_at) && length(st$checked_at) == 1)
     .inbox_parse_utc(st$checked_at) else NA
-  if (is.na(last) || .inbox_syd(last, "%Y-%m-%d") != .inbox_syd(now, "%Y-%m-%d")) {
+  if (is.na(last) || .inbox_local(last, "%Y-%m-%d") != .inbox_local(now, "%Y-%m-%d")) {
     return("status")
   }
   cur <- .inbox_db_stat(db)
@@ -340,8 +339,8 @@ inbox_check <- function(input_dir, report_dir, now = Sys.time(),
     basis <- if (nrow(ns) > 0) ns else post$samples[post$samples$wo == w, , drop = FALSE]
     sites <- stats::na.omit(basis$site)
     site <- if (length(sites)) names(sort(table(sites), decreasing = TRUE))[[1]] else NA_character_
-    # Sydney calendar days (the LOCAL_DATE rule; gas/dust/field rows carry only `date`).
-    dts <- .flags_syd_date(basis$dt[!is.na(basis$dt)])
+    # local calendar days (the LOCAL_DATE rule; gas/dust/field rows carry only `date`).
+    dts <- .flags_local_date(basis$dt[!is.na(basis$dt)])
     list(name = w, kind = kind, site = .inbox_site_label(site),
          date_start = if (length(dts)) format(min(dts)) else NA_character_,
          date_end = if (length(dts)) format(max(dts)) else NA_character_,
@@ -591,8 +590,8 @@ inbox_check <- function(input_dir, report_dir, now = Sys.time(),
                                 digits = NA))
 }
 
-.inbox_line_date <- function(l) .inbox_syd(.inbox_parse_utc(l$started_at), "%Y-%m-%d")
-.inbox_line_time <- function(l) .inbox_syd(.inbox_parse_utc(l$started_at), "%H:%M")
+.inbox_line_date <- function(l) .inbox_local(.inbox_parse_utc(l$started_at), "%Y-%m-%d")
+.inbox_line_time <- function(l) .inbox_local(.inbox_parse_utc(l$started_at), "%H:%M")
 
 # Problem strings for one log line.
 .inbox_line_problems <- function(l) {
@@ -626,8 +625,10 @@ inbox_check <- function(input_dir, report_dir, now = Sys.time(),
 #' @param settle_minutes a folder is settled when no file changed this recently.
 #' @param keep_backups how many `monitoring_pre-auto-import_*.duckdb` to keep.
 #' @param dry_run if `TRUE`: no backup, no live-DB write, no removal, no state.
-#' @param checks `NULL` (no Flags section) or the check inputs for
-#'   [import_flags()], passed to every status-note refresh.
+#' @param checks `NULL` (no Flags section), the check inputs for
+#'   [import_flags()], or a zero-argument function returning them. A function
+#'   is called on every status-note refresh, so a deployment can re-read its
+#'   tables each time; if it fails, the Flags section says so.
 #' @return (invisibly) a list: action, ran, locked, dry_run, started_at,
 #'   ended_at, folders_seen, folders_settled, folders_processed,
 #'   folders_arriving, folders, backup_path, errors, stale_lock.
@@ -644,7 +645,8 @@ inbox_run <- function(input_dir = st_config("input_dir"),
   checkmate::assert_number(settle_minutes, lower = 0)
   checkmate::assert_count(keep_backups)
   checkmate::assert_flag(dry_run)
-  checkmate::assert_list(checks, null.ok = TRUE)
+  checkmate::assert(checkmate::check_list(checks, null.ok = TRUE),
+                    checkmate::check_function(checks))
 
   res <- list(
     action = NA_character_, ran = FALSE, locked = FALSE, dry_run = dry_run,
@@ -882,7 +884,7 @@ inbox_run <- function(input_dir = st_config("input_dir"),
 .inbox_or <- function(a, b) if (is.null(a) || (length(a) == 1 && is.na(a))) b else a
 
 .inbox_today_lines <- function(report_dir, now) {
-  d <- .inbox_syd(now, "%Y-%m-%d")
+  d <- .inbox_local(now, "%Y-%m-%d")
   Filter(function(l) identical(.inbox_line_date(l), d) && !isTRUE(l$dry_run),
          .inbox_read_log(report_dir))
 }
@@ -921,7 +923,7 @@ inbox_run <- function(input_dir = st_config("input_dir"),
 
 #' Write the dated import note
 #'
-#' Writes `<report_dir>/<YYYY-MM-DD>-imports.md` for the Sydney date of `now`:
+#' Writes `<report_dir>/<YYYY-MM-DD>-imports.md` for the local date of `now`:
 #' what was imported that day and that day's problems. Read-only on the DB.
 #'
 #' @param db the live database.
@@ -935,14 +937,14 @@ import_report <- function(db = st_config("live_db"), report_dir, now = Sys.time(
   dir.create(report_dir, recursive = TRUE, showWarnings = FALSE)
   lines_today <- .inbox_today_lines(report_dir, now)
   last_time <- if (length(lines_today)) .inbox_line_time(lines_today[[length(lines_today)]]) else
-    .inbox_syd(now, "%H:%M")
+    .inbox_local(now, "%H:%M")
 
   imports <- unlist(lapply(lines_today, .inbox_line_imports), recursive = FALSE)
   n_folders <- length(unique(vapply(imports, function(w) w$folder, character(1))))
   n_open <- nrow(.inbox_open_reviews(db))
 
   imp <- .inbox_imported_phrase(imports)
-  summary <- sprintf("Imports %s: %s; %d review item(s) open.", .inbox_syd(now, "%Y-%m-%d"),
+  summary <- sprintf("Imports %s: %s; %d review item(s) open.", .inbox_local(now, "%Y-%m-%d"),
                      if (is.null(imp)) "nothing imported" else paste("imported", imp), n_open)
   out <- c(.inbox_frontmatter(summary),
            sprintf("*Imports · %s · %d folder(s) imported today, %d review item(s) open*",
@@ -977,7 +979,7 @@ import_report <- function(db = st_config("live_db"), report_dir, now = Sys.time(
   if (length(probs) > 0) out <- c(out, "## Problems", "", probs, "")
   out <- c(out, sprintf("*Last run %s; next within the hour. Log: .imports.log*", last_time))
 
-  path <- file.path(report_dir, paste0(.inbox_syd(now, "%Y-%m-%d"), "-imports.md"))
+  path <- file.path(report_dir, paste0(.inbox_local(now, "%Y-%m-%d"), "-imports.md"))
   writeLines(out, path, useBytes = TRUE)
   invisible(path)
 }
@@ -1046,7 +1048,7 @@ import_report <- function(db = st_config("live_db"), report_dir, now = Sys.time(
 }
 
 .inbox_oldest_fmt <- function(secs) {
-  .inbox_syd(as.POSIXct(secs, origin = "1970-01-01", tz = "UTC"), "%Y-%m-%d")
+  .inbox_local(as.POSIXct(secs, origin = "1970-01-01", tz = "UTC"), "%Y-%m-%d")
 }
 
 #' Write the standing import status note
@@ -1067,8 +1069,9 @@ import_report <- function(db = st_config("live_db"), report_dir, now = Sys.time(
 #' @param now current time.
 #' @param settle_minutes settle window used to tell arriving from waiting.
 #' @param dry_run optional banner lines (a dry run).
-#' @param checks `NULL` (no Flags section, phase-1 output) or the `checks`
-#'   list of [import_flags()].
+#' @param checks `NULL` (no Flags section, phase-1 output), the `checks`
+#'   list of [import_flags()], or a zero-argument function returning it (called
+#'   on every build).
 #' @return the note's path, invisibly.
 #' @export
 import_status <- function(db = st_config("live_db"), input_dir, report_dir,
@@ -1077,7 +1080,8 @@ import_status <- function(db = st_config("live_db"), input_dir, report_dir,
   checkmate::assert_string(db)
   checkmate::assert_string(input_dir)
   checkmate::assert_string(report_dir)
-  checkmate::assert_list(checks, null.ok = TRUE)
+  checkmate::assert(checkmate::check_list(checks, null.ok = TRUE),
+                    checkmate::check_function(checks))
   dir.create(report_dir, recursive = TRUE, showWarnings = FALSE)
   st <- .inbox_status_build(db, input_dir, report_dir, now, settle_minutes, dry_run, checks)
   path <- file.path(report_dir, "Import status.md")
@@ -1134,7 +1138,7 @@ import_status <- function(db = st_config("live_db"), input_dir, report_dir,
   for (cd in scan$candidates) {
     url <- .inbox_md_link(cd$name, cd$path)
     if (!cd$settled) {
-      last <- if (length(cd$mtimes)) .inbox_syd(as.POSIXct(max(cd$mtimes), origin = "1970-01-01", tz = "UTC"), "%H:%M") else NA
+      last <- if (length(cd$mtimes)) .inbox_local(as.POSIXct(max(cd$mtimes), origin = "1970-01-01", tz = "UTC"), "%H:%M") else NA
       desc <- if (length(cd$files) == 0) "arriving: no files yet" else
         sprintf("arriving: %d file(s), last written %s; imported once settled", length(cd$files), last)
       waiting <- c(waiting, sprintf("- %s — %s", url, desc))
@@ -1200,13 +1204,13 @@ import_status <- function(db = st_config("live_db"), input_dir, report_dir,
   imp <- .inbox_imported_phrase(unlist(lapply(.inbox_today_lines(report_dir, now),
                                                 .inbox_line_imports), recursive = FALSE))
   summary <- paste0(
-    sprintf("Import status updated %s: %d review item(s) open", .inbox_syd(now, "%Y-%m-%d %H:%M"), n_open),
+    sprintf("Import status updated %s: %d review item(s) open", .inbox_local(now, "%Y-%m-%d %H:%M"), n_open),
     if (!is.null(fs)) paste0("; ", .flags_summary(fs)) else "",
     sprintf("; %d folder(s) waiting", n_waiting),
     if (is.null(imp)) "; nothing imported today." else paste0("; imported today: ", imp, "."))
   out <- c(.inbox_frontmatter(summary),
            sprintf("*Import status · updated %s · %d review item(s) open, %d folder(s) waiting*",
-                   .inbox_syd(now, "%Y-%m-%d %H:%M"), n_open, n_waiting), "")
+                   .inbox_local(now, "%Y-%m-%d %H:%M"), n_open, n_waiting), "")
   if (!is.null(dry_run)) out <- c(out, dry_run, "")
 
   out <- c(out, "## Needs review", "")
@@ -1254,7 +1258,7 @@ import_status <- function(db = st_config("live_db"), input_dir, report_dir,
   out <- c(out, "*Written by sampleTidy; log: .imports.log*")
 
   js <- list(
-    updated = .inbox_syd(now, "%Y-%m-%d %H:%M"),
+    updated = .inbox_local(now, "%Y-%m-%d %H:%M"),
     host = unname(Sys.info()[["nodename"]]),
     dry_run = !is.null(dry_run),
     review_items_open = n_open,

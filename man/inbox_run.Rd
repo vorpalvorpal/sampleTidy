@@ -33,8 +33,10 @@ inbox_run(
 
 \item{dry_run}{if \code{TRUE}: no backup, no live-DB write, no removal, no state.}
 
-\item{checks}{\code{NULL} (no Flags section) or the check inputs for
-\code{\link[=import_flags]{import_flags()}}, passed to every status-note refresh.}
+\item{checks}{\code{NULL} (no Flags section), the check inputs for
+\code{\link[=import_flags]{import_flags()}}, or a zero-argument function returning them. A function
+is called on every status-note refresh, so a deployment can re-read its
+tables each time; if it fails, the Flags section says so.}
 }
 \value{
 (invisibly) a list: action, ran, locked, dry_run, started_at,

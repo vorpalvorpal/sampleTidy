@@ -86,7 +86,7 @@ db_check <- function(name, sql, description, tier = "hourly", severity = "error"
 #'   * `bbox`: `c(xmin, ymin, xmax, ymax)` that physical features must lie
 #'     in, or `NULL` (default) for no box - finite coordinates suffice;
 #'   * `tz`: the time zone whose calendar day `sample.date` names (default
-#'     `"Australia/Sydney"`);
+#'     configured time zone, `st_config("timezone")`);
 #'   * `mask_variants`: the registered mask variants (default the core
 #'     `long`, `old`, `gas_report`; a deployment adds its own);
 #'   * `receipt_max_temp_c`, `receipt_lookback_days`: the SRN receipt
@@ -98,7 +98,7 @@ db_checks_params <- function(...) {
   p <- list(
     min_date = "1980-01-01",
     bbox = NULL,
-    tz = .inbox_tz,
+    tz = .st_tz(),
     mask_variants = .st_core_mask_variants,
     # R-22.S: lab_receipt_warm flags an SRN whose warmest cooler is above
     # receipt_max_temp_c (ALS's own "chilled to <= 6 C" note), received within

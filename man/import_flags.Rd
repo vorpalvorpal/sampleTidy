@@ -9,21 +9,44 @@ import_flags(db = st_config("live_db"), now = Sys.time(), checks)
 \arguments{
 \item{db}{the database file.}
 
-\item{now}{current time; "today" is its Australia/Sydney date, and recent
+\item{now}{current time; "today" is its date in the configured time zone, and recent
 deliveries are those with a \code{change_log} insert in the 90 days before it.}
 
-\item{checks}{\code{list(schedule, limits, requirements, points, invoices, qc)}. The
-first four are each a CSV path or a data.frame (\code{expected_schedule.csv},
-\code{epa_licence_limits.csv}, \code{epa_licence_requirements.csv},
-\code{epa_licence_points.csv}); \code{invoices} is \code{data.frame(site, stream, sampled_on, ref)} or \code{NULL}. \code{qc} (PLAN-19) is \code{list(criteria, requirements)}, each a CSV path or a data.frame (\code{qc_criteria.csv},
-\code{qc_requirements.csv}); \code{NULL} disables the \verb{qc_*} checks.}
+\item{checks}{\code{list(schedule, limits, requirements, points, invoices, qc, streams, site_names)}. The first four are each a CSV path or a data.frame
+(the expected schedule and the licence limits, requirements and points
+tables); \code{invoices} is \code{data.frame(site, stream, sampled_on, ref)} or
+\code{NULL}. \code{qc} (PLAN-19) is \code{list(criteria, requirements)}, each a CSV path
+or a data.frame; \code{NULL} disables the \verb{qc_*} checks.
+
+\code{streams} is a CSV path or a data.frame saying which sampling stream each
+sample belongs to; only \code{stream} is required. A claim row has any of
+\code{project_type} (exact match on the project type), \code{feature_pattern}
+(a regular expression on the feature name) and \code{matrix} (exact match);
+its set criteria are ANDed, and a stream's rows ORed. A sample takes the
+first stream, in order of appearance, that claims it. An evidence row has
+\code{organisation} (compared upper-cased with the lab method's organisation)
+and \code{kind} (\code{"field"} or \code{"lab"}); an unclaimed sample counts for the
+stream of each kind of result it holds. Per stream: \code{water} (met only by
+water-stream evidence, and what the QC round check waits for), \code{gas}
+(its samples are assessed by \code{gas_criterion}), \code{window_months} (a
+\code{missing_point} round also accepts samples this many months away) and
+\code{expects_qci} (\code{lab_qc_missing} applies). With no \code{streams} every schedule
+stream is "unknown". \code{site_names} is \code{NULL} or a named character vector
+mapping a site code to the name the status note shows.
+
+The \code{limits} table may carry the optional columns \code{gas_grid} (\code{TRUE} marks
+a row's \verb{(site, feature_pattern)} as licence gas-grid points),
+\code{grid_only_level} (a case-insensitive regular expression: guideline levels
+whose name matches apply only at gas-grid points) and \code{detail_suffix}
+(appended to the \code{licence_limit} detail after \code{"; "}).}
 }
 \value{
 a data.frame, one row per flag, columns \verb{check, site, feature, analyte, date, value, unit, threshold, detail, key, source, action},
 ordered by check then date (newest first). \code{action} (PLAN-19 R-19.22) is
-one of \code{resample}, \code{reanalyse}, \code{ask_acirl}, \code{ask_lab} (ask the non-ACIRL
-lab or supplier), \code{chase}, \code{qualify} for a QC flag, and \code{ask_acirl} or
-\code{ask_lab} for \code{missing_result}; \code{NA} otherwise.
+one of \code{resample}, \code{reanalyse}, \code{ask_acirl}, \code{ask_lab} (ask the lab or
+supplier), \code{chase}, \code{qualify} for a QC flag, and for \code{missing_result}
+\verb{ask_<org>} (the sample's field organisation in the \code{streams} table) or
+\code{ask_lab}; \code{NA} otherwise.
 }
 \description{
 Overdue and invoiced-but-missing deliveries, incomplete recent deliveries,

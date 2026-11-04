@@ -5,7 +5,7 @@
 # into R (the live DB is ~20k samples, ~100k results), and every check works on
 # that image. Each check runs in its own tryCatch - a failure becomes an entry
 # of attr(result, "errors"), never a crash of the note. The package never reads
-# dev/; the caller passes the schedule and licence tables.
+# dev/; the caller passes the schedule, licence tables and stream table.
 
 .flags_checks <- c("overdue", "invoiced_not_received", "missing_point",
                    "missing_analytes", "licence_limit", "gas_criterion",
@@ -18,8 +18,6 @@
 
 .flags_cols <- c("check", "site", "feature", "analyte", "date", "value", "unit",
                  "threshold", "detail", "key", "source", "action")
-
-.flags_streams <- c("acirl_water", "acirl_gas", "acirl_dust", "als_lab")
 
 .flags_meanings <- c(
   overdue = "a scheduled delivery has not arrived by its due date",
@@ -72,7 +70,7 @@
 
 .flags_fmt <- function(x) trimws(formatC(x, digits = 6, format = "fg"))
 
-.flags_syd_date <- function(t) as.Date(format(t, "%Y-%m-%d", tz = .inbox_tz))
+.flags_local_date <- function(t) as.Date(format(t, "%Y-%m-%d", tz = .st_tz()))
 
 # Months as an integer index (year * 12 + month - 1), so month arithmetic is
 # plain integer arithmetic.
@@ -99,7 +97,7 @@
 
 # A CSV path or a data.frame -> data.frame of the named character columns,
 # trimmed, with "" and NA both NA.
-.flags_table <- function(x, what, cols) {
+.flags_table <- function(x, what, cols, optional = character()) {
   if (is.data.frame(x)) {
     d <- x
   } else if (is.character(x) && length(x) == 1 && !is.na(x)) {
@@ -113,6 +111,9 @@
   if (length(miss)) {
     stop(what, " lacks column(s): ", paste(miss, collapse = ", "), call. = FALSE)
   }
+  # An optional column that is absent is all NA.
+  for (cl in setdiff(optional, names(d))) d[[cl]] <- rep(NA_character_, nrow(d))
+  cols <- c(cols, optional)
   out <- d[, cols, drop = FALSE]
   for (cl in cols) {
     v <- trimws(as.character(out[[cl]]))
@@ -133,13 +134,115 @@
   d
 }
 
-# expected_schedule -> a list of rows (site, stream, months, features,
+# `checks$streams` -> the stream table the image and the checks read. `x` is
+# NULL (no streams), a CSV path or a data.frame; only `stream` is required.
+# Returns list(known, water, qci, window, claims, ev). `claims` is a list, in
+# order of first appearance, of one entry per claiming stream: its rows, each
+# a list of the set criteria. `ev` is the evidence rows (stream, org, spelling,
+# kind). Malformed -> stop("streams: ..."), which fails every check.
+.flags_stream_cols <- c("project_type", "feature_pattern", "matrix", "organisation", "kind",
+                        "water", "gas", "window_months", "expects_qci")
+
+.flags_streams_parse <- function(x) {
+  empty <- list(known = character(0), water = character(0), gas = character(0),
+                qci = character(0), window = integer(0), claims = list(),
+                ev = data.frame(stream = character(), org = character(),
+                                spelling = character(), kind = character(),
+                                stringsAsFactors = FALSE))
+  if (is.null(x)) return(empty)
+  t <- .flags_table(x, "streams:", "stream", optional = .flags_stream_cols)
+  if (nrow(t) == 0) return(empty)
+  if (anyNA(t$stream)) stop("streams: a row has no stream", call. = FALSE)
+  lgl <- function(col) {
+    v <- t[[col]]
+    b <- as.logical(v)
+    if (any(!is.na(v) & is.na(b))) {
+      stop("streams: ", col, " must be TRUE or FALSE, not '",
+           v[!is.na(v) & is.na(b)][[1]], "'", call. = FALSE)
+    }
+    b[is.na(b)] <- FALSE
+    b
+  }
+  t$water <- lgl("water")
+  t$gas <- lgl("gas")
+  t$expects_qci <- lgl("expects_qci")
+  wm <- suppressWarnings(as.numeric(t$window_months))
+  if (any(!is.na(t$window_months) & is.na(wm)) || any(wm < 0 | wm != floor(wm), na.rm = TRUE)) {
+    stop("streams: window_months must be a whole number of months, 0 or more", call. = FALSE)
+  }
+  wm[is.na(wm)] <- 0
+  t$window_months <- as.integer(wm)
+  t$kind <- tolower(t$kind)
+  claim_cols <- c("project_type", "feature_pattern", "matrix")
+  is_claim <- is.na(t$organisation) & rowSums(!is.na(t[claim_cols])) > 0
+  is_ev <- !is.na(t$organisation) & rowSums(!is.na(t[claim_cols])) == 0
+  if (any(!is_claim & !is_ev)) {
+    stop("streams: each row must be either a claim row (project_type, feature_pattern or ",
+         "matrix, no organisation) or an evidence row (organisation, no claim criteria); ",
+         "stream ", t$stream[!is_claim & !is_ev][[1]], " is neither", call. = FALSE)
+  }
+  if (any(is_ev & !t$kind %in% c("field", "lab"))) {
+    stop("streams: kind must be \"field\" or \"lab\" on an evidence row", call. = FALSE)
+  }
+  for (st in unique(t$stream)) {
+    r <- t[t$stream == st, , drop = FALSE]
+    if (any(is_claim[t$stream == st]) && any(is_ev[t$stream == st])) {
+      stop("streams: stream ", st, " has both claim and evidence rows", call. = FALSE)
+    }
+    for (col in c("water", "gas", "window_months", "expects_qci")) {
+      if (length(unique(r[[col]])) > 1) {
+        stop("streams: ", col, " differs between the rows of stream ", st, call. = FALSE)
+      }
+    }
+  }
+  pats <- t$feature_pattern[!is.na(t$feature_pattern)]
+  for (pt in pats) {
+    ok <- tryCatch({ grepl(pt, ""); TRUE }, error = function(e) FALSE, warning = function(w) FALSE)
+    if (!ok) stop("streams: feature_pattern is not a valid regular expression: ", pt, call. = FALSE)
+  }
+  known <- unique(t$stream)
+  one <- function(col) t[[col]][match(known, t$stream)]
+  claims <- lapply(unique(t$stream[is_claim]), function(st) {
+    r <- t[is_claim & t$stream == st, , drop = FALSE]
+    list(stream = st, rows = lapply(seq_len(nrow(r)), function(i) {
+      list(project_type = r$project_type[[i]], feature_pattern = r$feature_pattern[[i]],
+           matrix = r$matrix[[i]])
+    }))
+  })
+  e <- t[is_ev, , drop = FALSE]
+  list(known = known,
+       water = known[one("water")], gas = known[one("gas")], qci = known[one("expects_qci")],
+       window = stats::setNames(one("window_months"), known), claims = claims,
+       ev = data.frame(stream = e$stream, org = toupper(e$organisation),
+                       spelling = e$organisation, kind = e$kind, stringsAsFactors = FALSE))
+}
+
+# The streams that claim each sample, by its project type, feature and matrix:
+# a character vector (NA = unclaimed). A sample takes the first stream that
+# claims it; across a stream's rows the criteria are ORed, within a row ANDed.
+.flags_claim_streams <- function(s, st) {
+  out <- rep(NA_character_, nrow(s))
+  for (cl in st$claims) {
+    hit <- rep(FALSE, nrow(s))
+    for (r in cl$rows) {
+      m <- rep(TRUE, nrow(s))
+      if (!is.na(r$project_type)) m <- m & s$ptype %in% r$project_type
+      if (!is.na(r$feature_pattern)) m <- m & grepl(r$feature_pattern, s$feature)
+      if (!is.na(r$matrix)) m <- m & s$matrix %in% r$matrix
+      hit <- hit | m
+    }
+    out[is.na(out) & hit] <- cl$stream
+  }
+  out
+}
+
+# The expected schedule -> a list of rows (site, stream, months, features,
 # due_days, from, to, source). Malformed -> an error (of the calling check).
-.flags_schedule <- function(x) {
+.flags_schedule <- function(x, streams = character(0)) {
   s <- .flags_table(x, "schedule", c("site", "stream", "months", "features",
                                      "due_days", "from", "to", "source"))
   if (anyNA(s$site)) stop("schedule: a row has no site", call. = FALSE)
-  bad <- is.na(s$stream) | !s$stream %in% .flags_streams
+  bad <- is.na(s$stream) | !s$stream %in% streams
   if (any(bad)) {
     stop("schedule: unknown stream(s): ", paste(unique(s$stream[bad]), collapse = ", "),
          call. = FALSE)
@@ -181,9 +284,10 @@
 # Migration actors in change_log (ruling R1): never a delivery.
 .flags_migration_actor <- "^[0-9]{3}-|migration-"
 
-# Samples and results with everything the checks need, dated by the Sydney
+# Samples and results with everything the checks need, dated by the local
 # calendar day of COALESCE(datetime, date) (the LOCAL_DATE rule).
-.flags_load <- function(con, now) {
+.flags_load <- function(con, now, streams = NULL) {
+  st <- .flags_streams_parse(streams)
   s <- DBI::dbGetQuery(con, "
     SELECT s.uuid AS sample, s.uuid_project AS project_uuid, p.name AS project,
            p.type AS ptype, f.uuid AS feature_uuid, f.name AS feature, f.site AS site,
@@ -216,28 +320,39 @@
     data.frame(tbl = character(), uuid_row = character(), at = numeric(),
                actor = character(), source_hash = character())
 
-  today <- .flags_syd_date(now)
-  s$date <- .flags_syd_date(s$ts)
+  today <- .flags_local_date(now)
+  s$date <- .flags_local_date(s$ts)
   s$ym <- .flags_ym(s$date)
 
-  # Field vs lab per result, from the lab method alone (ruling R2).
+  # Field vs lab per result, from the lab method alone (ruling R2): field if
+  # its organisation is an evidence row of kind field in the stream table, or
+  # the method is a "Client Supplied" one (ALS lab-format semantics); else lab
+  # if its organisation is a lab row.
   lorg <- toupper(a$lorg)
-  a$field <- lorg %in% "ACIRL" | grepl("Client Supplied", a$method, fixed = TRUE)
-  a$kind <- ifelse(a$field, "field", ifelse(lorg %in% "ALS", "lab", NA_character_))
+  fld <- st$ev[st$ev$kind == "field", , drop = FALSE]
+  lab <- st$ev[st$ev$kind == "lab", , drop = FALSE]
+  a$field <- lorg %in% fld$org | grepl("Client Supplied", a$method, fixed = TRUE)
+  a$kind <- ifelse(a$field, "field", ifelse(lorg %in% lab$org, "lab", NA_character_))
 
-  # Streams: dust and gas by project/feature; otherwise every stream the
-  # sample's results evidence (field -> acirl_water, lab -> als_lab). Kept as a
-  # long (sample, stream) table, since one sample may count for both.
-  dust <- s$ptype %in% "Dust monitoring" | grepl("\\.D[0-9]", s$feature)
-  gas <- !dust & (s$ptype %in% "Monthly gas monitoring" | s$matrix %in% "air")
-  s$gas <- gas
-  ev <- unique(data.frame(sample = a$sample, stream = ifelse(a$kind %in% "field", "acirl_water",
-                            ifelse(a$kind %in% "lab", "als_lab", NA_character_)),
-                          stringsAsFactors = FALSE))
-  ev <- ev[!is.na(ev$stream) & !ev$sample %in% s$sample[dust | gas], , drop = FALSE]
-  ss <- rbind(data.frame(sample = s$sample[dust], stream = rep("acirl_dust", sum(dust)),
-                         stringsAsFactors = FALSE),
-              data.frame(sample = s$sample[gas], stream = rep("acirl_gas", sum(gas)),
+  # Streams: a sample matching a claim row takes the first stream that claims
+  # it; otherwise it counts for every stream its results evidence (a field
+  # result goes to the field row of its organisation, else the first field
+  # row; a lab result to the lab row of its organisation). Kept as a long
+  # (sample, stream) table, since one sample may count for both.
+  claim <- .flags_claim_streams(s, st)
+  claimed <- !is.na(claim)
+  s$gas <- claimed & claim %in% st$gas
+  ev_stream <- rep(NA_character_, nrow(a))
+  if (nrow(a)) {
+    isf <- a$kind %in% "field"
+    ev_stream[isf] <- if (nrow(fld)) fld$stream[ifelse(is.na(match(lorg[isf], fld$org)), 1L,
+                                                       match(lorg[isf], fld$org))] else NA_character_
+    isl <- a$kind %in% "lab"
+    ev_stream[isl] <- lab$stream[match(lorg[isl], lab$org)]
+  }
+  ev <- unique(data.frame(sample = a$sample, stream = ev_stream, stringsAsFactors = FALSE))
+  ev <- ev[!is.na(ev$stream) & !ev$sample %in% s$sample[claimed], , drop = FALSE]
+  ss <- rbind(data.frame(sample = s$sample[claimed], stream = claim[claimed],
                          stringsAsFactors = FALSE),
               ev)
 
@@ -288,6 +403,7 @@
            CAST(due_extraction AS DATE) AS due_extraction
       FROM lab_qc_outlier") else NULL
   list(con = con, samples = s, streams = ss, results = a, qc_features = qcf,
+       stream_table = st,
        qc_tables = DBI::dbExistsTable(con, "qc_feature"),
        qc_label_conflict_wo = as.character(rq), lab_qc_report = lqr,
        qci_asset_wo = as.character(qci_wo), lab_qc_outlier = lqo)
@@ -306,7 +422,7 @@
 
 .flags_overdue <- function(img, checks, today) {
   if (is.null(checks$schedule)) return(NULL)
-  rows <- .flags_schedule(checks$schedule)
+  rows <- .flags_schedule(checks$schedule, img$stream_table$known)
   ss <- img$streams
   have <- unique(paste(ss$site, ss$stream, ss$ym))
   ti <- .flags_ym(today)
@@ -334,7 +450,7 @@
   if (!is.data.frame(inv) || !all(c("site", "stream", "sampled_on", "ref") %in% names(inv))) {
     stop("invoices must be a data.frame(site, stream, sampled_on, ref)", call. = FALSE)
   }
-  rows <- .flags_schedule(checks$schedule)
+  rows <- .flags_schedule(checks$schedule, img$stream_table$known)
   ss <- img$streams
   d_all <- as.Date(inv$sampled_on)
   out <- list()
@@ -373,16 +489,15 @@
   paste0(paste(x[seq_len(n)], collapse = ", "), ", +", length(x) - n, " more")
 }
 
-.flags_water_streams <- c("acirl_water", "als_lab")
-
 .flags_missing_point <- function(img, checks, today) {
   if (is.null(checks$schedule)) return(NULL)
-  rows <- .flags_schedule(checks$schedule)
+  rows <- .flags_schedule(checks$schedule, img$stream_table$known)
+  water_streams <- img$stream_table$water
   s <- img$samples[!is.na(img$samples$site) & !is.na(img$samples$date), , drop = FALSE]
   sampled_any <- unique(paste(s$site, s$ym, s$feature))
   # Ruling R10: a water round is met by water-stream evidence only (a gas
   # reading at a well does not make the well sampled).
-  ws <- img$streams[img$streams$stream %in% .flags_water_streams, , drop = FALSE]
+  ws <- img$streams[img$streams$stream %in% water_streams, , drop = FALSE]
   sampled_water <- unique(paste(ws$site, ws$ym, ws$feature))
   ns <- img$streams[img$streams$new, , drop = FALSE]
   # One flag per (site, round month, stream) of the recent deliveries' samples.
@@ -398,9 +513,11 @@
     })))
     if (length(exp) == 0) next
     exp <- sort(exp, method = "radix")
-    sampled <- if (stream %in% .flags_water_streams) sampled_water else sampled_any
-    # Gas rounds straddle month ends: a neighbouring month's sample counts.
-    months <- if (stream == "acirl_gas") (m - 1L):(m + 1L) else m
+    sampled <- if (stream %in% water_streams) sampled_water else sampled_any
+    # A stream with window_months n (gas rounds straddle month ends) also
+    # accepts a sample up to n months away.
+    w <- img$stream_table$window[[stream]]
+    months <- (m - w):(m + w)
     hit <- Reduce(`|`, lapply(months, function(mm) paste(site, mm, exp) %in% sampled))
     miss <- exp[!hit]
     if (length(miss) == 0) next
@@ -446,7 +563,7 @@
      WHERE variant = 'EPA' AND name IS NOT NULL AND trim(name) <> ''")
 
   a <- img$results
-  water_s <- unique(img$streams$sample[img$streams$stream %in% .flags_water_streams])
+  water_s <- unique(img$streams$sample[img$streams$stream %in% img$stream_table$water])
   a$water <- a$sample %in% water_s
   ns <- img$samples[img$samples$new & img$samples$feature %in% fmap$feature, , drop = FALSE]
   ns$water <- ns$sample %in% water_s
@@ -546,10 +663,27 @@
   a[a$new & a$quantified & !is.na(a$value), , drop = FALSE]
 }
 
+# Optional limits columns (behaviour, not display): `gas_grid` marks the
+# licence gas-grid points, `grid_only_level` names the guideline levels that
+# apply only there, `detail_suffix` is appended to a licence_limit detail.
+.flags_limit_optional <- c("gas_grid", "grid_only_level", "detail_suffix")
+
+# `gas_grid` cells -> logical (NA = FALSE); anything but TRUE/FALSE is an error.
+.flags_grid_flag <- function(x) {
+  u <- toupper(x)
+  bad <- !is.na(u) & !u %in% c("TRUE", "FALSE")
+  if (any(bad)) {
+    stop("limits: gas_grid must be TRUE or FALSE, not '", x[bad][[1]], "'", call. = FALSE)
+  }
+  u %in% "TRUE"
+}
+
 .flags_licence_limit <- function(img, checks, today) {
   if (is.null(checks$limits)) return(NULL)
   lim <- .flags_table(checks$limits, "limits", c("site", "feature_pattern", "analyte", "min",
-                                                 "max", "unit", "factor", "condition", "note"))
+                                                 "max", "unit", "factor", "condition", "note"),
+                      optional = .flags_limit_optional)
+  .flags_grid_flag(lim$gas_grid)
   num <- function(x, what) {
     v <- suppressWarnings(as.numeric(x))
     if (any(!is.na(x) & is.na(v))) stop("limits: ", what, " is not a number", call. = FALSE)
@@ -589,6 +723,7 @@
     } else if (!is.na(mx[[i]])) sprintf("> %s %s", lim$max[[i]], u) else
       sprintf("< %s %s", lim$min[[i]], u)
     cond <- lim$condition[[i]]
+    sfx <- lim$detail_suffix[[i]]
     kind <- ifelse(x$field, "field", "lab")
     out[[length(out) + 1]] <- .flags_rows(
       "licence_limit",
@@ -597,7 +732,7 @@
       unit = u, threshold = thr,
       detail = paste0(if (is.na(cond)) "licence limit" else cond, "; ", kind, " result, ",
                       x$project,
-                      if (!is.na(cond) && grepl("^L2", cond)) "; storm exemption (L2.5) not assessed" else ""))
+                      if (!is.na(sfx)) paste0("; ", sfx) else ""))
   }
   .flags_dedupe(do.call(rbind, out))
 }
@@ -613,10 +748,11 @@
   if (nrow(gl) == 0 || nrow(a) == 0) return(NULL)
   x <- merge(a, gl, by = "uuid_analyte")
   x <- x[x$value > x$gv, , drop = FALSE]
-  # Ruling R9: the solid waste guidelines trigger is a surface-gas criterion,
-  # applied only at the licence gas grid (limits rows with condition R2.3). An
-  # unreadable limits table is licence_limit's error; here it means no grid.
-  trig <- grepl("solid waste", x$level_name, ignore.case = TRUE)
+  # Ruling R9: a grid-only guideline level (a surface-gas criterion, named by
+  # the limits `grid_only_level` column) applies only at the licence gas grid
+  # (limits rows with `gas_grid` TRUE). An unreadable limits table is
+  # licence_limit's error; here it means no grid and no grid-only levels.
+  trig <- .flags_grid_only(checks, x$level_name)
   grid <- .flags_gas_grid(checks, x$site, x$feature)
   x <- x[!trig | grid, , drop = FALSE]
   if (nrow(x) == 0) return(NULL)
@@ -634,15 +770,31 @@
     detail = sprintf("%s guideline; %s", x$family, x$project)))
 }
 
+# Which guideline levels apply only at the gas grid: those whose name matches
+# (case-insensitively) any non-NA `grid_only_level` of the limits table.
+.flags_grid_only <- function(checks, level_name) {
+  out <- rep(FALSE, length(level_name))
+  if (is.null(checks$limits) || length(level_name) == 0) return(out)
+  lim <- tryCatch(.flags_table(checks$limits, "limits", "site", optional = "grid_only_level"),
+                  error = function(e) NULL)
+  if (is.null(lim)) return(out)
+  for (re in unique(lim$grid_only_level[!is.na(lim$grid_only_level)])) {
+    hit <- tryCatch(grepl(re, level_name, ignore.case = TRUE), error = function(e) FALSE)
+    out <- out | hit
+  }
+  out
+}
+
 # Which (site, feature) pairs are licence gas-grid points: they match the
-# feature_pattern of a limits row of that site with condition R2.3.
+# feature_pattern of a limits row of that site whose `gas_grid` is TRUE.
 .flags_gas_grid <- function(checks, site, feature) {
   out <- rep(FALSE, length(feature))
   if (is.null(checks$limits) || length(feature) == 0) return(out)
-  lim <- tryCatch(.flags_table(checks$limits, "limits", c("site", "feature_pattern", "condition")),
+  lim <- tryCatch(.flags_table(checks$limits, "limits", c("site", "feature_pattern"),
+                               optional = "gas_grid"),
                   error = function(e) NULL)
   if (is.null(lim)) return(out)
-  lim <- lim[lim$condition %in% "R2.3" & !is.na(lim$feature_pattern), , drop = FALSE]
+  lim <- lim[toupper(lim$gas_grid) %in% "TRUE" & !is.na(lim$feature_pattern), , drop = FALSE]
   for (i in seq_len(nrow(lim))) {
     hit <- tryCatch(grepl(lim$feature_pattern[[i]], feature), error = function(e) FALSE)
     out <- out | (site %in% lim$site[[i]] & hit)
@@ -758,7 +910,7 @@
 # (value NULL). Window: the image's `new` column - ruling R1, the recent-delivery
 # window (work order with a pipeline insert in the last 90 days; of it, samples
 # dated in the last 180 days). QC samples are included. One row per (project,
-# feature, Sydney date, sample organisation).
+# feature, local date, sample organisation).
 .flags_missing_result <- function(img, checks, today) {
   a <- img$results
   m <- a[a$new & is.na(a$value) & !is.na(a$units) & nzchar(trimws(a$units)), , drop = FALSE]
@@ -771,18 +923,21 @@
     vc <- ifelse(is.na(x$value_chr) | !nzchar(x$value_chr), "(blank)",
                  sprintf("\"%s\"", x$value_chr))
     org <- x$organisation[[1]]
-    acirl <- !is.na(org) && toupper(org) == "ACIRL"
+    # A sample from a field organisation of the stream table: ask it by name.
+    fo <- if (is.na(org)) NA_character_ else img$stream_table$ev$spelling[
+      img$stream_table$ev$kind == "field" & img$stream_table$ev$org == toupper(org)][1]
+    ask_org <- !is.na(fo)
     n <- nrow(x)
     data.frame(
       site = x$site[[1]], date = x$date[[1]], feature = x$feature[[1]],
       analyte = paste(unique(x$analyte), collapse = ", "),
       threshold = sprintf("%d blank result%s", n, if (n == 1) "" else "s"),
       detail = paste0(paste(paste(x$analyte, vc), collapse = "; "), "; ", x$project[[1]],
-                      if (acirl) " \u2192 ask ACIRL for the value or why it wasn't measured"
+                      if (ask_org) paste0(" \u2192 ask ", fo, " for the value or why it wasn't measured")
                       else " \u2192 ask the lab for the value or why it wasn't measured"),
       key = sprintf("missing_result|%s|%s|%s|%s", x$project[[1]], x$feature[[1]],
                     format(x$date[[1]]), org),
-      action = if (acirl) "ask_acirl" else "ask_lab", stringsAsFactors = FALSE)
+      action = if (ask_org) paste0("ask_", tolower(fo)) else "ask_lab", stringsAsFactors = FALSE)
   })
   x <- do.call(rbind, parts)
   .flags_dedupe(.flags_rows(
@@ -818,37 +973,67 @@
 #' the checks that need it.
 #'
 #' @param db the database file.
-#' @param now current time; "today" is its Australia/Sydney date, and recent
+#' @param now current time; "today" is its date in the configured time zone, and recent
 #'   deliveries are those with a `change_log` insert in the 90 days before it.
-#' @param checks `list(schedule, limits, requirements, points, invoices, qc)`. The
-#'   first four are each a CSV path or a data.frame (`expected_schedule.csv`,
-#'   `epa_licence_limits.csv`, `epa_licence_requirements.csv`,
-#'   `epa_licence_points.csv`); `invoices` is `data.frame(site, stream,
-#'   sampled_on, ref)` or `NULL`. `qc` (PLAN-19) is `list(criteria,
-#'   requirements)`, each a CSV path or a data.frame (`qc_criteria.csv`,
-#'   `qc_requirements.csv`); `NULL` disables the `qc_*` checks.
+#' @param checks `list(schedule, limits, requirements, points, invoices, qc,
+#'   streams, site_names)`. The first four are each a CSV path or a data.frame
+#'   (the expected schedule and the licence limits, requirements and points
+#'   tables); `invoices` is `data.frame(site, stream, sampled_on, ref)` or
+#'   `NULL`. `qc` (PLAN-19) is `list(criteria, requirements)`, each a CSV path
+#'   or a data.frame; `NULL` disables the `qc_*` checks.
+#'
+#'   `streams` is a CSV path or a data.frame saying which sampling stream each
+#'   sample belongs to; only `stream` is required. A claim row has any of
+#'   `project_type` (exact match on the project type), `feature_pattern`
+#'   (a regular expression on the feature name) and `matrix` (exact match);
+#'   its set criteria are ANDed, and a stream's rows ORed. A sample takes the
+#'   first stream, in order of appearance, that claims it. An evidence row has
+#'   `organisation` (compared upper-cased with the lab method's organisation)
+#'   and `kind` (`"field"` or `"lab"`); an unclaimed sample counts for the
+#'   stream of each kind of result it holds. Per stream: `water` (met only by
+#'   water-stream evidence, and what the QC round check waits for), `gas`
+#'   (its samples are assessed by `gas_criterion`), `window_months` (a
+#'   `missing_point` round also accepts samples this many months away) and
+#'   `expects_qci` (`lab_qc_missing` applies). With no `streams` every schedule
+#'   stream is "unknown". `site_names` is `NULL` or a named character vector
+#'   mapping a site code to the name the status note shows.
+#'
+#'   The `limits` table may carry the optional columns `gas_grid` (`TRUE` marks
+#'   a row's `(site, feature_pattern)` as licence gas-grid points),
+#'   `grid_only_level` (a case-insensitive regular expression: guideline levels
+#'   whose name matches apply only at gas-grid points) and `detail_suffix`
+#'   (appended to the `licence_limit` detail after `"; "`).
 #' @return a data.frame, one row per flag, columns `check, site, feature,
 #'   analyte, date, value, unit, threshold, detail, key, source, action`,
 #'   ordered by check then date (newest first). `action` (PLAN-19 R-19.22) is
-#'   one of `resample`, `reanalyse`, `ask_acirl`, `ask_lab` (ask the non-ACIRL
-#'   lab or supplier), `chase`, `qualify` for a QC flag, and `ask_acirl` or
-#'   `ask_lab` for `missing_result`; `NA` otherwise.
+#'   one of `resample`, `reanalyse`, `ask_acirl`, `ask_lab` (ask the lab or
+#'   supplier), `chase`, `qualify` for a QC flag, and for `missing_result`
+#'   `ask_<org>` (the sample's field organisation in the `streams` table) or
+#'   `ask_lab`; `NA` otherwise.
 #' @export
 import_flags <- function(db = st_config("live_db"), now = Sys.time(), checks) {
   checkmate::assert_string(db)
   checkmate::assert_posixct(now, len = 1, any.missing = FALSE)
   checkmate::assert_list(checks, names = "unique")
-  bad <- setdiff(names(checks), c("schedule", "limits", "requirements", "points", "invoices", "qc"))
+  bad <- setdiff(names(checks), c("schedule", "limits", "requirements", "points", "invoices", "qc",
+                                  "streams", "site_names"))
   if (length(bad)) stop("Unknown element(s) of `checks`: ", paste(bad, collapse = ", "))
+  sn <- checks$site_names
+  if (!is.null(sn) && !(is.character(sn) && length(sn) > 0 && !anyNA(sn) && all(nzchar(sn)) &&
+                        !is.null(names(sn)) && !anyNA(names(sn)) && all(nzchar(names(sn))) &&
+                        !anyDuplicated(names(sn)))) {
+    stop("site_names must be NULL or a named character vector (site code -> name) with ",
+         "unique, non-empty names")
+  }
   if (!file.exists(db)) stop("Database not found: ", db)
   con <- .inbox_read_con(db)
   if (is.null(con)) stop("Cannot open the database read-only: ", db)
   on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
 
-  today <- .flags_syd_date(now)
+  today <- .flags_local_date(now)
   errors <- character(0)
   rows <- list()
-  img <- tryCatch(.flags_load(con, now), error = function(e) e)
+  img <- tryCatch(.flags_load(con, now, checks$streams), error = function(e) e)
   img_nq <- if (inherits(img, "error")) img else .flags_drop_qc(img)
   for (ck in .flags_checks) {
     im <- if (ck %in% .flags_qc_blind) img_nq else img
@@ -905,16 +1090,29 @@ import_flags <- function(db = st_config("live_db"), now = Sys.time(), checks) {
 # errors = named character).
 .flags_for_status <- function(db, now, checks, report_dir) {
   prev <- .flags_prev_seen(report_dir)
-  fl <- tryCatch(import_flags(db = db, now = now, checks = checks), error = function(e) e)
-  if (inherits(fl, "error")) {
-    errs <- c(import_flags = conditionMessage(fl))
+  # `checks` may be a zero-argument function, called on every status build; a
+  # failure there (or a result that is not a list) is a "checks" error.
+  ck <- tryCatch({
+    r <- if (is.function(checks)) checks() else checks
+    if (!is.list(r)) stop("checks must return a list, not ", class(r)[[1]], call. = FALSE)
+    r
+  }, error = function(e) e)
+  if (inherits(ck, "error")) {
+    errs <- c(checks = conditionMessage(ck))
     fl <- .flags_empty()
+    ck <- NULL
   } else {
-    errs <- attr(fl, "errors")
+    fl <- tryCatch(import_flags(db = db, now = now, checks = ck), error = function(e) e)
+    if (inherits(fl, "error")) {
+      errs <- c(import_flags = conditionMessage(fl))
+      fl <- .flags_empty()
+    } else {
+      errs <- attr(fl, "errors")
+    }
   }
   fl$first_seen <- if (nrow(fl)) ifelse(fl$key %in% names(prev), unname(prev[fl$key]),
                                         .inbox_fmt_utc(now)) else character(0)
-  list(flags = fl, errors = errs)
+  list(flags = fl, errors = errs, site_names = ck$site_names)
 }
 
 .flags_note_lines <- function(fs) {
@@ -932,7 +1130,9 @@ import_flags <- function(db = st_config("live_db"), now = Sys.time(), checks) {
     # Ruling R6: the newest 15 per check; the JSON keeps every flag.
     for (i in seq_len(min(nrow(g), 15L))) {
       site <- g$site[[i]]
-      site <- if (site %in% c("B", "K")) .inbox_site_label(site) else site
+      site <- if (!is.null(fs$site_names) && site %in% names(fs$site_names)) {
+        unname(fs$site_names[[site]])
+      } else site
       what <- paste(stats::na.omit(c(g$feature[[i]], g$analyte[[i]])), collapse = " ")
       val <- if (is.na(g$value[[i]])) NA else
         trimws(paste(.flags_fmt(g$value[[i]]), if (is.na(g$unit[[i]])) "" else g$unit[[i]]))

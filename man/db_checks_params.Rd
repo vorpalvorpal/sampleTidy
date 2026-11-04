@@ -14,7 +14,7 @@ db_checks_params(...)
 \item \code{bbox}: \code{c(xmin, ymin, xmax, ymax)} that physical features must lie
 in, or \code{NULL} (default) for no box - finite coordinates suffice;
 \item \code{tz}: the time zone whose calendar day \code{sample.date} names (default
-\code{"Australia/Sydney"});
+configured time zone, \code{st_config("timezone")});
 \item \code{mask_variants}: the registered mask variants (default the core
 \code{long}, \code{old}, \code{gas_report}; a deployment adds its own);
 \item \code{receipt_max_temp_c}, \code{receipt_lookback_days}: the SRN receipt

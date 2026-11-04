@@ -111,6 +111,24 @@
   archive_settle = function() {
     NULL
   },
+  # The time zone of "local" calendar days: sample dates, "today" in the
+  # flags, report and status stamps. Read at call time via `.st_tz()`, which
+  # validates it against `OlsonNames()`. The default is UTC; a deployment
+  # sets its own zone.
+  timezone = function() {
+    "UTC"
+  },
+  # `checks` (NULL, a list or a zero-argument function returning a list) is
+  # what a deployment's job passes as `inbox_run(checks = )`; see
+  # `import_flags()` for its elements. `site_keywords` (NULL or a
+  # named list mapping a site code to keywords) lets the ACIRL gas adapter
+  # infer the site from a workbook's own text. Both are list-valued.
+  checks = function() {
+    NULL
+  },
+  site_keywords = function() {
+    NULL
+  },
   # Deliberately reads SAMPLETIDY_CORPUS (not the SAMPLETIDY_CORPUS_DIR
   # pattern used for the option/env-var lookup below) - see PLAN-01 R-1.1.
   corpus_dir = function() {
@@ -128,7 +146,8 @@
 #'
 #' @keywords internal
 #' @noRd
-.st_config_list_keys <- c("field_analytes", "acirl_transcription_labels", "archive_settle")
+.st_config_list_keys <- c("field_analytes", "acirl_transcription_labels", "archive_settle",
+                          "checks", "site_keywords")
 
 #' Get or set a sampleTidy configuration value
 #'
@@ -151,6 +170,13 @@
 #' archive settling off, and a list such as `list()` or
 #' `list(ext = "xls", hold_secs = 600)` turns it on. See [archive_settle()]
 #' for its fields.
+#'
+#' `timezone` is the time zone of local calendar days (default `"UTC"`);
+#' it must be one string in [OlsonNames()]. `checks` and `site_keywords` are
+#' list-valued keys, `NULL` by default: `checks` is what a deployment's
+#' job passes to [inbox_run()] for its import flags (a list, or a zero-argument
+#' function returning one), and `site_keywords` maps a site code to the
+#' keywords by which the ACIRL gas adapter recognises that site in a workbook.
 #'
 #' @param key configuration key, e.g. `"live_db"`, `"input_dir"`.
 #' @param value if supplied, the value to set for `key`.
@@ -197,4 +223,47 @@ st_config <- function(key, value) {
      built-in default.",
     class = "sampletidy_error"
   )
+}
+
+#' Which optional configuration features this version of sampleTidy has
+#'
+#' A deployment's hooks file can test for these names before setting the
+#' matching [st_config()] keys, so that it still loads under an older
+#' sampleTidy.
+#'
+#' @return a character vector of capability names.
+#' @export
+st_capabilities <- function() {
+  c("timezone", "checks_option", "checks_streams", "site_names",
+    "site_keywords", "date_overrides_env")
+}
+
+# Validated zones, memoised per value (OlsonNames() is slow-ish).
+.st_tz_ok <- new.env(parent = emptyenv())
+
+#' The configured time zone, validated
+#'
+#' Read at call time, never cached in a constant. Aborts unless the value is
+#' one string in `OlsonNames()`; the result is therefore safe to embed in SQL.
+#' @keywords internal
+#' @noRd
+.st_tz <- function(tz = st_config("timezone")) {
+  .st_check_tz(tz, "st_config(\"timezone\")")
+}
+
+.st_check_tz <- function(tz, what = "time zone") {
+  if (is.character(tz) && length(tz) == 1L && !is.na(tz) && nzchar(tz) &&
+      !is.null(.st_tz_ok[[tz]])) {
+    return(tz)
+  }
+  if (!is.character(tz) || length(tz) != 1L || is.na(tz) || !nzchar(tz) ||
+      !tz %in% OlsonNames()) {
+    cli::cli_abort(
+      c("{what} must be one time zone name from {.code OlsonNames()}.",
+        x = "Got {.val {if (is.character(tz) && length(tz) == 1L) tz else class(tz)}}."),
+      class = "sampletidy_error"
+    )
+  }
+  assign(tz, TRUE, envir = .st_tz_ok)
+  tz
 }

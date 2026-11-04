@@ -27,8 +27,9 @@ import_status(
 
 \item{dry_run}{optional banner lines (a dry run).}
 
-\item{checks}{\code{NULL} (no Flags section, phase-1 output) or the \code{checks}
-list of \code{\link[=import_flags]{import_flags()}}.}
+\item{checks}{\code{NULL} (no Flags section, phase-1 output), the \code{checks}
+list of \code{\link[=import_flags]{import_flags()}}, or a zero-argument function returning it (called
+on every build).}
 }
 \value{
 the note's path, invisibly.

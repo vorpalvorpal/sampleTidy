@@ -17,6 +17,6 @@ import_report(db = st_config("live_db"), report_dir, now = Sys.time())
 the note's path, invisibly.
 }
 \description{
-Writes \verb{<report_dir>/<YYYY-MM-DD>-imports.md} for the Sydney date of \code{now}:
+Writes \verb{<report_dir>/<YYYY-MM-DD>-imports.md} for the local date of \code{now}:
 what was imported that day and that day's problems. Read-only on the DB.
 }

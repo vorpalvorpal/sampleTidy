@@ -83,7 +83,7 @@
 .qc_criteria_rules <- c("dup_rpd", "dup_absdiff", "dup_lor_multiple", "blank_detect",
                         "blank_factor", "carryover", "filtered_method_regex", "completeness")
 
-#' `dev/qc_criteria.csv` (a path or a data.frame) -> the parameters the checks
+#' the QC criteria table (a path or a data.frame) -> the parameters the checks
 #' use. An unknown rule or a missing required rule is an error.
 #' @keywords internal
 #' @noRd
@@ -118,7 +118,7 @@
        carryover_min = if (length(co)) suppressWarnings(as.numeric(co[[1]])) else 2)
 }
 
-#' `dev/qc_requirements.csv` (a path or a data.frame) -> list of rows.
+#' the QC requirements table (a path or a data.frame) -> list of rows.
 #' @keywords internal
 #' @noRd
 .qc_requirements <- function(x) {
@@ -202,7 +202,7 @@
 }
 
 # The parent point's samples for a QC sample (R19-12): in the same project
-# first, else on the same Sydney date in any project. character(0) when none.
+# first, else on the same local date in any project. character(0) when none.
 .qc_parent_samples <- function(img, q) {
   if (is.na(q$uuid_parent)) return(character(0))
   s <- img$samples
@@ -399,9 +399,9 @@
   cr <- inp$criteria
   req <- inp$requirements
   if (length(req) == 0) return(NULL)
-  sched <- if (is.null(checks$schedule)) list() else .flags_schedule(checks$schedule)
+  sched <- if (is.null(checks$schedule)) list() else .flags_schedule(checks$schedule, img$stream_table$known)
   ss <- img$streams
-  ws <- ss[ss$stream %in% .flags_water_streams & ss$new, , drop = FALSE]
+  ws <- ss[ss$stream %in% img$stream_table$water & ss$new, , drop = FALSE]
   ws <- ws[!ws$sample %in% img$samples$sample[img$samples$qc %in% TRUE], , drop = FALSE]
   rounds <- unique(ws[, c("site", "ym")])
   if (nrow(rounds) == 0) return(NULL)
@@ -423,7 +423,7 @@
     if (length(rr) == 0) next
     # R19-10 (7): wait until every water stream the schedule expects has landed.
     exp_streams <- unique(unlist(lapply(sched, function(r) {
-      if (r$site == site && r$stream %in% .flags_water_streams && mon %in% r$months &&
+      if (r$site == site && r$stream %in% img$stream_table$water && mon %in% r$months &&
           .flags_valid_in(r, m)) r$stream
     })))
     if (length(exp_streams) && !all(paste(site, m, exp_streams) %in% have_stream)) next
@@ -506,7 +506,7 @@
   rep <- img$lab_qc_report
   if (is.null(rep)) return(NULL)
   ss <- img$streams
-  ls <- ss[ss$stream %in% "als_lab" & ss$new & !is.na(ss$project), , drop = FALSE]
+  ls <- ss[ss$stream %in% img$stream_table$qci & ss$new & !is.na(ss$project), , drop = FALSE]
   if (nrow(ls) == 0) return(NULL)
   wos <- sort(unique(ls$project), method = "radix")
   out <- list()

@@ -144,8 +144,10 @@
 
 #' Load the sample-date override table
 #'
-#' Reads `inst/extdata/sample-date-overrides.csv` (or the file named by option
-#' `sampletidy.date_overrides_path`, which tests use to inject a table).
+#' Reads the file named by option `sampletidy.date_overrides_path`, else by
+#' env var `SAMPLETIDY_DATE_OVERRIDES` (when non-empty), else the shipped
+#' `inst/extdata/sample-date-overrides.csv`, which is header-only: a
+#' deployment supplies its own table.
 #' Columns: `hash` (xxHash128 of the source file), `date_from` and `date_to`
 #' (ISO `YYYY-MM-DD`), `authority`, `reason`. A BLANK `date_from` is allowed
 #' (loads as `NA`) and means "this file's samples with a blank sample date";
@@ -156,10 +158,15 @@
 #' @return data.frame with the five columns, dates as `Date`.
 #' @keywords internal
 #' @noRd
-.ig_date_overrides <- function(path = getOption(
-                                 "sampletidy.date_overrides_path",
-                                 system.file("extdata", "sample-date-overrides.csv",
-                                             package = "sampleTidy"))) {
+.ig_date_overrides_path <- function() {
+  opt <- getOption("sampletidy.date_overrides_path")
+  if (!is.null(opt)) return(opt)
+  env <- Sys.getenv("SAMPLETIDY_DATE_OVERRIDES", "")
+  if (nzchar(env)) return(path.expand(env))
+  system.file("extdata", "sample-date-overrides.csv", package = "sampleTidy")
+}
+
+.ig_date_overrides <- function(path = .ig_date_overrides_path()) {
   cols <- c("hash", "date_from", "date_to", "authority", "reason")
   if (!is.character(path) || length(path) != 1L || !nzchar(path) || !file.exists(path)) {
     cli::cli_abort("Sample-date overrides file not found: {.path {path}}.",
@@ -204,8 +211,8 @@
 #'
 #' For each row whose `source_hash` matches a dated override and whose
 #' `sample_datetime_raw` parses (reconcile's parser and formats) to the
-#' Sydney date `date_from`, rewrites `sample_datetime_raw` to `date_to`,
-#' keeping the Sydney clock time. A date-only value is rewritten as
+#' local date `date_from`, rewrites `sample_datetime_raw` to `date_to`,
+#' keeping the local clock time. A date-only value is rewritten as
 #' `%d/%m/%Y`; a datetime as `%d %b %Y %H:%M`; both are in
 #' `.rc_datetime_formats`. Nothing else changes. NA / unparseable values are
 #' untouched.
@@ -221,7 +228,7 @@
       all(c("source_hash", "sample_datetime_raw") %in% names(samples))) {
     raw <- samples$sample_datetime_raw
     ct <- parse_lab_datetime(raw, .rc_datetime_formats)
-    day <- as.Date(format(ct, "%Y-%m-%d", tz = "Australia/Sydney"))
+    day <- as.Date(format(ct, "%Y-%m-%d", tz = .st_tz()))
     timed <- has_clock_time(raw)
     blank <- is.na(raw) | !nzchar(trimws(raw))
     for (i in seq_len(nrow(overrides))) {
@@ -237,7 +244,7 @@
         if (length(hit) == 0L) next
         raw[hit] <- ifelse(
           timed[hit],
-          paste(format(to, "%d %b %Y"), format(ct[hit], "%H:%M", tz = "Australia/Sydney")),
+          paste(format(to, "%d %b %Y"), format(ct[hit], "%H:%M", tz = .st_tz())),
           format(to, "%d/%m/%Y")
         )
       }
