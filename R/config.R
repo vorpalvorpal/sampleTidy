@@ -146,6 +146,13 @@
   gas_template_slots = function() {
     NULL
   },
+  # `acirl_job_prefix` (NULL or one string of 1-8 ASCII digits): the job prefix
+  # that makes a filename ACIRL-shaped; see `.ig_acirl_prefix()`. NULL means
+  # no prefix is configured and no name is ACIRL-shaped. A deployment sets it
+  # (or SAMPLETIDY_ACIRL_JOB_PREFIX).
+  acirl_job_prefix = function() {
+    NULL
+  },
   # Deliberately reads SAMPLETIDY_CORPUS (not the SAMPLETIDY_CORPUS_DIR
   # pattern used for the option/env-var lookup below) - see PLAN-01 R-1.1.
   corpus_dir = function() {
@@ -207,6 +214,11 @@
 #' at one as `template_slot`. It is list-valued, so it cannot come from an
 #' env var.
 #'
+#' `acirl_job_prefix` is `NULL` (the default) or one string of 1-8 ASCII
+#' digits, the job prefix that makes a filename ACIRL-shaped (`<prefix>-NNNN`).
+#' With no prefix configured no name is ACIRL-shaped. It may come from the
+#' env var `SAMPLETIDY_ACIRL_JOB_PREFIX`; any other value aborts where it is used.
+#'
 #' @param key configuration key, e.g. `"live_db"`, `"input_dir"`.
 #' @param value if supplied, the value to set for `key`.
 #' @return the resolved value (get), or `value` invisibly (set).
@@ -265,7 +277,7 @@ st_config <- function(key, value) {
 st_capabilities <- function() {
   c("timezone", "checks_option", "checks_streams", "site_names",
     "site_keywords", "date_overrides_env", "inbox_batches", "renderer_hooks",
-    "report_dir", "gas_template_slots")
+    "report_dir", "gas_template_slots", "acirl_job_prefix")
 }
 
 # Validated zones, memoised per value (OlsonNames() is slow-ish).
