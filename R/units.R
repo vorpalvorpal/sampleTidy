@@ -8,7 +8,7 @@
 # alias for the dimensionless unit `"1"`.
 .unitless_aliases <- c("pH", "pH Unit", "pH_Units")
 
-# C5 (2026-10-20): unit spelling map, Robin-approved corpus step 3. Lab
+# C5 (2026-10-20): unit spelling map, approved corpus step 3. Lab
 # spellings of colony counts that udunits cannot parse are rewritten to
 # parseable equivalents before any comparison or conversion. Exact keys
 # only - no case folding - because the corpus vocabulary has just these two.

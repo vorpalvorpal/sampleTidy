@@ -1,6 +1,6 @@
 /* Launcher for the launchd auto-import job.
  *
- * macOS TCC refuses /bin/bash access to the OneDrive File Provider folder when launchd runs it,
+ * macOS TCC refuses /bin/bash access to a File Provider (cloud-synced) folder when launchd runs it,
  * and granting /bin/bash Full Disk Access would grant it to every bash script. So launchd runs
  * this app instead and only this app gets the grant. TCC attributes a child process to its
  * responsible parent, so the script is SPAWNED and waited for, never exec'd: after exec the

@@ -46,7 +46,7 @@
 #      first delivered by email A and later re-sent by email B stays A's.
 #    * `_email.eml` itself ends `ignored` / `delivery_email`, gets no asset
 #      row, and is never deleted by remove_ingested - the inbox files it to
-#      `_emails/`. A folder left holding only `_email.eml` is NOT spent (R-9.9
+#      `filed-mail/`. A folder left holding only `_email.eml` is NOT spent (R-9.9
 #      must not unlink it before the inbox can file it).
 #    * pinned: a dry run writes no ingest_email row and sets no message_id
 #      (a message_id without its email row is exactly what the dangling check
@@ -80,7 +80,7 @@ ie_b64 <- function(s) jsonlite::base64_enc(charToRaw(enc2utf8(s)))
 
 #' A plausible multipart header block for a lab delivery.
 ie_headers <- function(message_id = "<CAF-0001.7f3a@mail.example.org>",
-                       subject = "EXTERNAL  Northvale Quarterly Aug Report",
+                       subject = "EXTERNAL  Site Quarterly Aug Report",
                        from = "ALS Reports <Reports@Example.org>",
                        date = "Thu, 23 Oct 2026 14:13:05 +1100",
                        in_reply_to = "<req-0001.ab12@example.org>",
@@ -272,7 +272,7 @@ test_that("R-22.E: the mutation layer accepts db_append() to ingest_email and lo
     sent_at = as.POSIXct("2026-10-23 03:13:05", tz = "UTC"),
     sender = "reports@example.org", sender_name = "ALS Reports",
     subject = "Quarterly report", in_reply_to = NA_character_,
-    folder = "input2026-10-23 1413 Quarterly report",
+    folder = "batch-2026-10-23 1413 Quarterly report",
     first_seen_at = as.POSIXct("2026-10-25 00:00:00", tz = "UTC"),
     stringsAsFactors = FALSE
   )
@@ -296,7 +296,7 @@ test_that("R-22.E: email_headers() parses plain headers - id without brackets, F
   expect_identical(h$message_id, "CAF-0001.7f3a@mail.example.org")
   expect_identical(h$sender, "reports@example.org")
   expect_identical(h$sender_name, "ALS Reports")
-  expect_identical(h$subject, "EXTERNAL  Northvale Quarterly Aug Report",
+  expect_identical(h$subject, "EXTERNAL  Site Quarterly Aug Report",
                    info = "internal whitespace is kept (folder names carry the double space)")
   expect_identical(h$in_reply_to, "req-0001.ab12@example.org")
   expect_s3_class(h$sent_at, "POSIXct")
@@ -319,11 +319,11 @@ test_that("R-22.E: email_headers() converts Date offsets to UTC - +1100, +1000, 
 })
 
 test_that("R-22.E: email_headers() unfolds a folded Subject (CRLF + whitespace continuation)", {
-  hdrs <- ie_headers(subject = "EXTERNAL  Northvale Quarterly")
+  hdrs <- ie_headers(subject = "EXTERNAL  Site Quarterly")
   i <- grep("^Subject:", hdrs)
   hdrs <- append(hdrs, " Aug Report", after = i)
   h <- ie_hdr(hdrs)
-  expect_identical(h$subject, "EXTERNAL  Northvale Quarterly Aug Report")
+  expect_identical(h$subject, "EXTERNAL  Site Quarterly Aug Report")
   # the continuation line is not mistaken for a header of its own
   expect_identical(h$message_id, "CAF-0001.7f3a@mail.example.org")
 })
@@ -335,7 +335,7 @@ test_that("R-22.E: email_headers() decodes RFC 2047 B-encoded subjects, includin
 
   # Outlook splits a long subject into several encoded-words on folded lines;
   # the whitespace between adjacent encoded-words is not part of the text.
-  a <- "Northvale Quarterly "
+  a <- "Site Quarterly "
   b <- "Aug Report – 2026"
   hdrs <- ie_headers(subject = paste0("=?UTF-8?B?", ie_b64(a), "?="))
   hdrs <- append(hdrs, paste0(" =?UTF-8?B?", ie_b64(b), "?="), after = grep("^Subject:", hdrs))
@@ -387,7 +387,7 @@ test_that("R-22.E: email_headers() takes Message-ID with or without brackets, fo
   hdrs3 <- sub("^Subject:", "SUBJECT:", hdrs3)
   h3 <- ie_hdr(hdrs3)
   expect_identical(h3$message_id, "case-0004@example.org")
-  expect_identical(h3$subject, "EXTERNAL  Northvale Quarterly Aug Report")
+  expect_identical(h3$subject, "EXTERNAL  Site Quarterly Aug Report")
 })
 
 test_that("R-22.E: email_headers() gives NA in_reply_to when there is none, and NA subject when there is none", {
@@ -416,7 +416,7 @@ test_that("R-22.E: email_headers() stops at the first blank line - a Message-ID 
              "From: someone.else@example.org", "", "inner body", "--=_b1--")
   h <- ie_hdr(ie_headers(), body = inner)
   expect_identical(h$message_id, "CAF-0001.7f3a@mail.example.org")
-  expect_identical(h$subject, "EXTERNAL  Northvale Quarterly Aug Report")
+  expect_identical(h$subject, "EXTERNAL  Site Quarterly Aug Report")
   expect_identical(h$sender, "reports@example.org")
 
   # and an outer block with no Message-ID does not borrow the body's
@@ -429,7 +429,7 @@ test_that("R-22.E: email_headers() gives identical results for LF and CRLF files
   hdrs <- append(hdrs, " continued", after = grep("^Subject:", hdrs))
   a <- ie_hdr(hdrs, eol = "\r\n")
   b <- ie_hdr(hdrs, eol = "\n")
-  expect_identical(a$subject, "EXTERNAL  Northvale Quarterly Aug Report continued")
+  expect_identical(a$subject, "EXTERNAL  Site Quarterly Aug Report continued")
   expect_identical(a, b)
   expect_false(any(grepl("\r", unlist(lapply(a, as.character)), fixed = TRUE)))
 })
@@ -492,7 +492,7 @@ test_that("R-22.E: email_headers() returns NULL, without error, for a file with 
 test_that("R-22.E: ingest_dir() on a delivery folder writes one ingest_email row from _email.eml, its folder the folder's basename", {
   s <- ie_setup()
   parent <- withr::local_tempdir()
-  name <- "input2026-10-23 1413 EXTERNAL  Northvale Quarterly Aug Report"
+  name <- "batch-2026-10-23 1413 EXTERNAL  Site Quarterly Aug Report"
   d <- ie_delivery(parent, name)
   t0 <- Sys.time()
   suppressWarnings(ie_ingest(d, s$db))
@@ -502,7 +502,7 @@ test_that("R-22.E: ingest_dir() on a delivery folder writes one ingest_email row
   expect_identical(em$message_id, "CAF-0001.7f3a@mail.example.org")
   expect_identical(em$sender, "reports@example.org")
   expect_identical(em$sender_name, "ALS Reports")
-  expect_identical(em$subject, "EXTERNAL  Northvale Quarterly Aug Report")
+  expect_identical(em$subject, "EXTERNAL  Site Quarterly Aug Report")
   expect_identical(em$in_reply_to, "req-0001.ab12@example.org")
   expect_identical(em$folder, name)
   expect_identical(ie_utc(em$sent_at), "2026-10-23 03:13:05")
@@ -512,7 +512,7 @@ test_that("R-22.E: ingest_dir() on a delivery folder writes one ingest_email row
 
 test_that("R-22.E: every ingest_file row routed from the folder carries the message_id - archived, retained_sibling, quarantined and ignored alike", {
   s <- ie_setup()
-  d <- ie_delivery(withr::local_tempdir(), "input2026-10-23 1413 delivery")
+  d <- ie_delivery(withr::local_tempdir(), "batch-2026-10-23 1413 delivery")
   suppressWarnings(ie_ingest(d, s$db))
 
   f <- ie_files(s$db)
@@ -530,7 +530,7 @@ test_that("R-22.E: every ingest_file row routed from the folder carries the mess
 
 test_that("R-22.E: _email.eml ends ignored with reason delivery_email - not quarantined/unclaimed - and gets no asset", {
   s <- ie_setup()
-  d <- ie_delivery(withr::local_tempdir(), "input2026-10-23 1413 delivery")
+  d <- ie_delivery(withr::local_tempdir(), "batch-2026-10-23 1413 delivery")
   rep <- suppressWarnings(ie_ingest(d, s$db))
 
   f <- ie_files(s$db)
@@ -544,7 +544,7 @@ test_that("R-22.E: _email.eml ends ignored with reason delivery_email - not quar
 
 test_that("R-22.E: with remove_ingested on, _email.eml is never deleted - it stays for the inbox to file - while the archived sources are removed", {
   s <- ie_setup(remove_ingested = TRUE)
-  d <- ie_delivery(withr::local_tempdir(), "input2026-10-23 1413 delivery")
+  d <- ie_delivery(withr::local_tempdir(), "batch-2026-10-23 1413 delivery")
   eml_md5 <- unname(tools::md5sum(file.path(d, "_email.eml")))
   rep <- suppressWarnings(ie_ingest(d, s$db))
 
@@ -557,7 +557,7 @@ test_that("R-22.E: with remove_ingested on, _email.eml is never deleted - it sta
 test_that("R-22.E: a folder left holding only _email.eml is not spent, so ingest_inbox() does not unlink it before the inbox can file it", {
   s <- ie_setup(remove_ingested = TRUE)
   root <- withr::local_tempdir()
-  name <- "input2026-10-23 1413 delivery"
+  name <- "batch-2026-10-23 1413 delivery"
   d <- file.path(root, name)
   dir.create(d)
   for (f in ie_proj_a()) stopifnot(file.copy(f, file.path(d, basename(f))))
@@ -570,10 +570,10 @@ test_that("R-22.E: a folder left holding only _email.eml is not spent, so ingest
   expect_equal(nrow(ie_query(s$db, "SELECT 1 FROM ingest_email")), 1L)
 })
 
-test_that("R-22.E: inbox_run() files _email.eml to _emails/<folder>/ and records the email under that folder name", {
+test_that("R-22.E: inbox_run() files _email.eml to filed-mail/<folder>/ and records the email under that folder name", {
   s <- inbox_setup()
   now <- Sys.time()
-  name <- "input2026-10-23 1413 EXTERNAL  Northvale Quarterly Aug Report"
+  name <- "batch-2026-10-23 1413 EXTERNAL  Site Quarterly Aug Report"
   tmp <- withr::local_tempdir()
   eml <- file.path(tmp, "_email.eml")
   ie_write_eml(eml, ie_headers())
@@ -581,7 +581,7 @@ test_that("R-22.E: inbox_run() files _email.eml to _emails/<folder>/ and records
 
   run_inbox(s, now = now)
 
-  dest <- file.path(s$archive_dir, "_emails", name)
+  dest <- file.path(s$archive_dir, "filed-mail", name)
   expect_true(file.exists(file.path(dest, "_email.eml")))
   expect_false(dir.exists(d))
   em <- ie_query(s$db, "SELECT message_id, folder FROM ingest_email")
@@ -593,7 +593,7 @@ test_that("R-22.E: inbox_run() files _email.eml to _emails/<folder>/ and records
 
 test_that("R-22.E: re-running ingest_dir() over the same folder neither duplicates the ingest_email row nor errors, and first_seen_at is unchanged", {
   s <- ie_setup()
-  d <- ie_delivery(withr::local_tempdir(), "input2026-10-23 1413 delivery")
+  d <- ie_delivery(withr::local_tempdir(), "batch-2026-10-23 1413 delivery")
   suppressWarnings(ie_ingest(d, s$db))
   first <- ie_query(s$db, "SELECT * FROM ingest_email")
   n_log <- ie_query(s$db, "SELECT count(*) AS n FROM change_log WHERE tbl = 'ingest_email'")$n
@@ -610,7 +610,7 @@ test_that("R-22.E: re-running ingest_dir() over the same folder neither duplicat
 
 test_that("R-22.E: ingest_dir() writes the ingest_email row through the mutation layer (one change_log insert)", {
   s <- ie_setup()
-  d <- ie_delivery(withr::local_tempdir(), "input2026-10-23 1413 delivery")
+  d <- ie_delivery(withr::local_tempdir(), "batch-2026-10-23 1413 delivery")
   suppressWarnings(ie_ingest(d, s$db))
   log <- ie_query(s$db, "SELECT action, actor, reason FROM change_log WHERE tbl = 'ingest_email'")
   expect_equal(nrow(log), 1L)
@@ -622,13 +622,13 @@ test_that("R-22.E: ingest_dir() writes the ingest_email row through the mutation
 test_that("R-22.E: a second folder carrying the same Message-ID adds no row and no error; first sighting wins, the second folder's files still get the id", {
   s <- ie_setup()
   parent <- withr::local_tempdir()
-  d1 <- ie_delivery(parent, "input2026-10-23 1413 first")
+  d1 <- ie_delivery(parent, "batch-2026-10-23 1413 first")
   suppressWarnings(ie_ingest(d1, s$db))
   first <- ie_query(s$db, "SELECT * FROM ingest_email")
 
   # The same email saved again (re-forwarded to the inbox): same id, different
   # bytes, and one new attachment.
-  d2 <- file.path(parent, "input2026-10-24 0900 second")
+  d2 <- file.path(parent, "batch-2026-10-24 0900 second")
   dir.create(d2)
   ie_write_eml(file.path(d2, "_email.eml"),
                ie_headers(extra = "X-Saved-By: power-automate-retry"))
@@ -637,7 +637,7 @@ test_that("R-22.E: a second folder carrying the same Message-ID adds no row and 
 
   em <- ie_query(s$db, "SELECT * FROM ingest_email")
   expect_equal(nrow(em), 1L)
-  expect_identical(em$folder, "input2026-10-23 1413 first")
+  expect_identical(em$folder, "batch-2026-10-23 1413 first")
   expect_identical(em$first_seen_at, first$first_seen_at)
 
   f <- ie_files(s$db)
@@ -649,10 +649,10 @@ test_that("R-22.E: a second folder carrying the same Message-ID adds no row and 
 test_that("R-22.E: a file already linked to one email keeps that message_id when a later email re-delivers the same bytes", {
   s <- ie_setup()
   parent <- withr::local_tempdir()
-  d1 <- ie_delivery(parent, "input2026-10-23 1413 first")
+  d1 <- ie_delivery(parent, "batch-2026-10-23 1413 first")
   suppressWarnings(ie_ingest(d1, s$db))
 
-  d2 <- file.path(parent, "input2026-10-24 0900 resend")
+  d2 <- file.path(parent, "batch-2026-10-24 0900 resend")
   dir.create(d2)
   stopifnot(file.copy(testthat::test_path("fixtures", "esdat", "random.csv"), file.path(d2, "random.csv")))
   ie_write_eml(file.path(d2, "_email.eml"),
@@ -673,7 +673,7 @@ test_that("R-22.E: a file first routed with no email gets its message_id filled 
   f1 <- ie_files(s$db)
   expect_true(all(is.na(f1$message_id)))
 
-  d2 <- file.path(parent, "input2026-10-24 0900 with email")
+  d2 <- file.path(parent, "batch-2026-10-24 0900 with email")
   dir.create(d2)
   stopifnot(file.copy(testthat::test_path("fixtures", "esdat", "random.csv"), file.path(d2, "random.csv")))
   ie_write_eml(file.path(d2, "_email.eml"), ie_headers())
@@ -685,7 +685,7 @@ test_that("R-22.E: a file first routed with no email gets its message_id filled 
 
 test_that("R-22.E: a folder with no _email.eml behaves as before - same terminal states, no ingest_email row, message_id NULL throughout", {
   s <- ie_setup()
-  d <- ie_delivery(withr::local_tempdir(), "input2026-10-23 1413 no email", eml = FALSE)
+  d <- ie_delivery(withr::local_tempdir(), "batch-2026-10-23 1413 no email", eml = FALSE)
   suppressWarnings(ie_ingest(d, s$db))
 
   f <- ie_files(s$db)
@@ -697,7 +697,7 @@ test_that("R-22.E: a folder with no _email.eml behaves as before - same terminal
 
 test_that("R-22.E: an _email.eml with no Message-ID writes no row and no error; the files keep message_id NULL and the eml is still a delivery_email", {
   s <- ie_setup()
-  d <- ie_delivery(withr::local_tempdir(), "input2026-10-23 1413 no id",
+  d <- ie_delivery(withr::local_tempdir(), "batch-2026-10-23 1413 no id",
                    headers = ie_headers(message_id = NULL))
   expect_no_error(suppressWarnings(ie_ingest(d, s$db)))
 
@@ -711,7 +711,7 @@ test_that("R-22.E: an _email.eml with no Message-ID writes no row and no error; 
 
 test_that("R-22.E: a malformed _email.eml (no header block) is not fatal - one warning naming it, message_id NULL, the rest of the import unaffected", {
   s <- ie_setup()
-  d <- ie_delivery(withr::local_tempdir(), "input2026-10-23 1413 malformed", eml = FALSE)
+  d <- ie_delivery(withr::local_tempdir(), "batch-2026-10-23 1413 malformed", eml = FALSE)
   writeBin(as.raw(c(0x00, 0xff, 0x10, 0x0a, 0x0a, 0x41, 0x42)), file.path(d, "_email.eml"))
 
   warns <- character(0)
@@ -737,7 +737,7 @@ test_that("R-22.E: a malformed _email.eml (no header block) is not fatal - one w
 
 test_that("R-22.E: a dry run writes no ingest_email row and sets no message_id; a following real run records both", {
   s <- ie_setup()
-  d <- ie_delivery(withr::local_tempdir(), "input2026-10-23 1413 delivery")
+  d <- ie_delivery(withr::local_tempdir(), "batch-2026-10-23 1413 delivery")
   suppressWarnings(ie_ingest(d, s$db, dry_run = TRUE))
   expect_equal(nrow(ie_query(s$db, "SELECT 1 FROM ingest_email")), 0L)
   expect_true(all(is.na(ie_files(s$db)$message_id)))
@@ -750,7 +750,7 @@ test_that("R-22.E: a dry run writes no ingest_email row and sets no message_id; 
 
 test_that("R-22.E: an _email.eml already stored quarantined/unclaimed (before R-22.E) is re-decided as delivery_email under reconsider = TRUE", {
   s <- ie_setup()
-  d <- file.path(withr::local_tempdir(), "input2026-10-20 0900 old")
+  d <- file.path(withr::local_tempdir(), "batch-2026-10-20 0900 old")
   dir.create(d, recursive = TRUE)
   p <- file.path(d, "_email.eml")
   ie_write_eml(p, ie_headers())
@@ -785,7 +785,7 @@ test_that("R-22.E: ingest_file_email_dangling passes when every message_id resol
                                                    in_reply_to, folder, first_seen_at)
                          VALUES ('clean-0001@example.org', TIMESTAMP '2026-10-23 03:13:05',
                                  'reports@example.org', 'ALS Reports', 'Quarterly',
-                                 NULL, 'input2026-10-23 1413 Quarterly', TIMESTAMP '2026-10-25 00:00:00')")
+                                 NULL, 'batch-2026-10-23 1413 Quarterly', TIMESTAMP '2026-10-25 00:00:00')")
     DBI::dbExecute(con, "INSERT INTO ingest_file (hash, filename, state, state_reason, message_id)
                          VALUES (?, '_email.eml', 'ignored', 'delivery_email', 'clean-0001@example.org')",
                    params = list(dbc_hex(912)))

@@ -1,5 +1,5 @@
 # PLAN-20 phase 1 (P20.5): external filing records. Spec:
-# dev/plans/PLAN-20-phase1-spec.md section P20.5.
+# PLAN-20 phase 1, P20.5.
 
 .af_cols <- c("uuid_asset", "system", "external_id", "external_uri", "container",
               "filed_at", "title", "comments")

@@ -1,22 +1,31 @@
-# Deployment settings (stage 1 of the layer move): the zone, the date
-# overrides file and the gas site keywords come from the environment of the
-# machine that runs the suite (Robin's .Renviron sets the first two). Unset
-# them so the suite sees the package defaults, then pin the options the
-# existing suites were written against. A test of the defaults clears the
-# options itself, with withr::local_options(sampletidy.timezone = NULL).
+# Deployment settings (stages 1-3 of the layer move): the zone, the date
+# overrides file, the gas site keywords, the report and input directories come
+# from the environment of the machine that runs the suite (a writer machine's
+# .Renviron sets several). Unset them so the suite sees the package defaults,
+# then pin the options the existing suites were written against. A test of the
+# defaults clears the options itself, with withr::local_options(sampletidy.timezone = NULL).
+#
+# Isolation (mandatory): R reads R_ENVIRON_USER (else ~/.Renviron) at start-up
+# and that file BEATS exported variables, so an R or bash child that a test
+# starts would otherwise see the live deployment's keys (the live DB, the
+# vault's report dir). Point R_ENVIRON_USER at an empty temp file for the whole
+# session; a test that needs keys writes its own file and sets the variable.
+#
+# The inbox recogniser is no longer pinned here: inbox_setup() sets
+# test_batches() for the calling test (helper-inbox.R).
 #
 # A setup file, not a helper: devtools::load_all() also sources helpers (the
 # live scripts load the package that way), and testthat runs setup files only
 # inside a test run, so this can never reach a live import.
 Sys.unsetenv(c("SAMPLETIDY_TIMEZONE", "SAMPLETIDY_DATE_OVERRIDES",
-               "SAMPLETIDY_SITE_KEYWORDS"))
-# Stage 2: the inbox recogniser the existing suites were written against
-# (input* folders, 10 minutes to settle, leftovers filed under _emails). Built
-# with structure() rather than inbox_batches() so that this file does not
-# depend on the constructor; test-inbox-batches.R pins the two equal. New tests
-# clear it with withr::local_options(sampletidy.inbox_batches = NULL).
+               "SAMPLETIDY_SITE_KEYWORDS", "SAMPLETIDY_REPORT_DIR",
+               "SAMPLETIDY_INPUT_DIR"))
+local({
+  empty_environ <- tempfile("empty-renviron-")
+  file.create(empty_environ)
+  Sys.setenv(R_ENVIRON_USER = empty_environ)
+  withr::defer(unlink(empty_environ), testthat::teardown_env())
+})
 options(sampletidy.timezone = "Australia/Sydney",
         sampletidy.site_keywords = list(B = "northvale", K = "millbrook"),
-        sampletidy.inbox_batches = structure(
-          list(pattern = "^input.+", settle_minutes = 10, leftovers = "_emails"),
-          class = "sampletidy_inbox_batches"))
+        sampletidy.gas_template_slots = c("N.G201", "M.G365", "M.G366"))

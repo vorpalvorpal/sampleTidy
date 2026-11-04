@@ -8,7 +8,7 @@
 #   After a folder is processed, if every DATA file in it is done - no file
 #   remains in state needs_review / failed / quarantined whose kind is
 #   tabular or claimable (an adapter claims it, or it is csv/xls/xlsx/xml) -
-#   MOVE every remaining file into <archive_dir>/_emails/<folder basename>/
+#   MOVE every remaining file into <archive_dir>/filed-mail/<folder basename>/
 #   and remove the now-empty input folder. Never delete a leftover; never
 #   overwrite: an existing destination gets " (2)", " (3)", ... If any data
 #   file is unfinished, move NOTHING. A folder with no data files at all is
@@ -17,7 +17,7 @@
 # Seams pinned here (beyond test-inbox.R's):
 #   * archive root = st_config("archive_dir") (inbox_setup() sets it via the
 #     `sampletidy.archive_dir` option); destination
-#     file.path(archive_dir, "_emails", <folder basename>[ " (n)"]).
+#     file.path(archive_dir, "filed-mail", <folder basename>[ " (n)"]).
 #   * res$folders[[name]]$files_filed (and the same key in the .imports.log
 #     line) is a list(to = <absolute destination folder>, files = <character
 #     basenames moved>). When nothing was filed, `files` is empty.
@@ -67,7 +67,7 @@ make_leftovers <- function(env = parent.frame(),
   file.path(d, names)
 }
 
-emails_root <- function(s) file.path(s$archive_dir, "_emails")
+emails_root <- function(s) file.path(s$archive_dir, "filed-mail")
 
 #' md5 + mtime of every file in a folder, keyed by basename.
 file_facts <- function(dir) {
@@ -90,10 +90,10 @@ snap <- function(dir) suppressWarnings(tree_snapshot(dir))
 
 # ---- 1. all data done -> leftovers filed, input folder gone ----------------
 
-test_that("inbox_run(): a folder whose data all archived has its leftovers MOVED to <archive>/_emails/<folder>/ and the input folder removed", {
+test_that("inbox_run(): a folder whose data all archived has its leftovers MOVED to <archive>/filed-mail/<folder>/ and the input folder removed", {
   s <- inbox_setup()
   now <- Sys.time()
-  name <- "input2026-10-18 0900 ALS results XX1234567"
+  name <- "batch-2026-10-18 0900 ALS results XX1234567"
   lo <- make_leftovers()
   d <- make_inbox_folder(s$input_dir, name, c(inbox_proj_a_files(), lo), now = now)
   before <- file_facts(d)
@@ -117,7 +117,7 @@ test_that("inbox_run(): a folder whose data all archived has its leftovers MOVED
     # mtimes preserved (a rename on one filesystem keeps them)
     expect_true(isTRUE(abs(after$mtime[fn] - before$mtime[fn]) < 2), info = fn)
   }
-  # the data files went to the asset archive as before, not to _emails
+  # the data files went to the asset archive as before, not to filed-mail
   expect_false(any(basename(inbox_proj_a_files()) %in% list.files(dest)))
 
   f <- res$folders[[name]]
@@ -129,7 +129,7 @@ test_that("inbox_run(): a folder whose data all archived has its leftovers MOVED
 test_that("inbox_run(): the run log line records files_filed (names + destination)", {
   s <- inbox_setup()
   now <- Sys.time()
-  name <- "input2026-10-18 0900 a"
+  name <- "batch-2026-10-18 0900 a"
   lo <- make_leftovers()
   make_inbox_folder(s$input_dir, name, c(inbox_proj_a_files(), lo), now = now)
   run_inbox(s, now = now)
@@ -145,7 +145,7 @@ test_that("inbox_run(): the run log line records files_filed (names + destinatio
 test_that("inbox_run(): a filed folder is no longer listed under Waiting", {
   s <- inbox_setup()
   now <- Sys.time()
-  name <- "input2026-10-18 0900 a"
+  name <- "batch-2026-10-18 0900 a"
   make_inbox_folder(s$input_dir, name, c(inbox_proj_a_files(), make_leftovers()), now = now)
   run_inbox(s, now = now)
 
@@ -183,7 +183,7 @@ expect_nothing_filed <- function(s, d, name, before, res, unfinished, leftovers)
 test_that("inbox_run(): a folder still holding a needs_review data file moves nothing; Waiting lists only that file plus a leftover count", {
   s <- inbox_setup()
   now <- Sys.time()
-  name <- "input2026-10-18 0900 review"
+  name <- "batch-2026-10-18 0900 review"
   lo <- make_leftovers(names = c("_email.eml", "image001.png", "image002.jpg"))
   # random.csv is a data file (csv); it is held as needs_review below
   d <- make_inbox_folder(s$input_dir, name,
@@ -233,7 +233,7 @@ test_that("R-22.N: .inbox_classify() counts a needs_review data file as unfinish
 test_that("R-22.N: inbox_run(): a folder holding a needs_review data file that HAS an asset moves nothing; Waiting lists it", {
   s <- inbox_setup()
   now <- Sys.time()
-  name <- "input2026-10-18 0915 review-archived"
+  name <- "batch-2026-10-18 0915 review-archived"
   lo <- make_leftovers(names = c("_email.eml", "image001.png"))
   d <- make_inbox_folder(s$input_dir, name,
                          c(inbox_proj_a_files(), inbox_fixture("esdat", "random.csv"), lo),
@@ -265,7 +265,7 @@ test_that("R-22.N: inbox_run(): a folder holding a needs_review data file that H
 test_that("inbox_run(): a failed or quarantined data file (corrupt CSV, unclaimed csv) also holds the leftovers back", {
   s <- inbox_setup()
   now <- Sys.time()
-  name <- "input2026-10-18 0930 mixed"
+  name <- "batch-2026-10-18 0930 mixed"
   lo <- make_leftovers()
   d <- make_inbox_folder(s$input_dir, name,
                          c(inbox_rain_files(), inbox_corrupt_file(),
@@ -285,10 +285,10 @@ test_that("inbox_run(): a failed or quarantined data file (corrupt CSV, unclaime
 
 # ---- 3. never overwrite: name collisions ------------------------------------------
 
-test_that("inbox_run(): an existing _emails/<folder>/ is never overwritten; the leftovers go to '<folder> (2)', then '(3)'", {
+test_that("inbox_run(): an existing filed-mail/<folder>/ is never overwritten; the leftovers go to '<folder> (2)', then '(3)'", {
   s <- inbox_setup()
   now <- Sys.time()
-  name <- "input2026-10-18 0900 re-delivered"
+  name <- "batch-2026-10-18 0900 re-delivered"
   prior <- file.path(emails_root(s), name)
   dir.create(prior, recursive = TRUE)
   writeLines("an EARLIER email with the same subject line", file.path(prior, "_email.eml"))
@@ -326,7 +326,7 @@ test_that("inbox_run(): an existing _emails/<folder>/ is never overwritten; the 
 test_that("inbox_run(dry_run = TRUE): nothing is filed or removed, and status.json's dry_run_plan says what would be filed", {
   s <- inbox_setup()
   now <- Sys.time()
-  name <- "input2026-10-18 0900 a"
+  name <- "batch-2026-10-18 0900 a"
   lo <- make_leftovers()
   make_inbox_folder(s$input_dir, name, c(inbox_proj_a_files(), lo), now = now)
   in_before <- snap(s$input_dir)
@@ -341,7 +341,7 @@ test_that("inbox_run(dry_run = TRUE): nothing is filed or removed, and status.js
   plan <- read_status_json(s$report_dir)$dry_run_plan
   expect_length(plan$would_file, 1)
   expect_identical(plan$would_file[[1]]$folder, name)
-  expect_identical(plan$would_file[[1]]$to, file.path(s$archive_dir, "_emails", name))
+  expect_identical(plan$would_file[[1]]$to, file.path(s$archive_dir, "filed-mail", name))
   # every file still in the folder (a dry run removes none)
   expect_identical(plan$would_file[[1]]$files, length(inbox_proj_a_files()) + length(lo))
 
@@ -356,7 +356,7 @@ test_that("inbox_run(dry_run = TRUE): nothing is filed or removed, and status.js
 test_that("inbox_run(): a folder holding only leftovers (an email with just a PDF and a logo) is all-done and filed", {
   s <- inbox_setup()
   now <- Sys.time()
-  name <- "input2026-10-18 0900 ACIRL report"
+  name <- "batch-2026-10-18 0900 ACIRL report"
   # an ACIRL 2400-* report PDF with no work order in the DB: never retained
   lo <- make_leftovers(names = c("_email.eml", "image001.png",
                                  "2400-9999-01 Sep 2026 Monthly Millbrook WMF.pdf"))
@@ -381,7 +381,7 @@ test_that("inbox_run(): a backlog folder left by an earlier import (only leftove
   # in them is new to the DB, yet they must stop waiting forever.
   s <- inbox_setup()
   now <- Sys.time()
-  name <- "input2026-10-17 0900 old"
+  name <- "batch-2026-10-17 0900 old"
   lo <- make_leftovers(names = c("_email.eml", "image001.png"))
   d <- make_inbox_folder(s$input_dir, name, c(inbox_proj_a_files(), lo), now = now)
   quiet_run(ingest_dir(d, db = s$db))
@@ -402,7 +402,7 @@ test_that("inbox_run(): a backlog folder left by an earlier import (only leftove
 test_that("inbox_run(): a second run after filing is a no-op (check says 'none'; archive and inbox unchanged)", {
   s <- inbox_setup()
   now <- sydney_midday()
-  name <- "input2026-10-18 0900 a"
+  name <- "batch-2026-10-18 0900 a"
   make_inbox_folder(s$input_dir, name, c(inbox_proj_a_files(), make_leftovers()), now = now)
   run_inbox(s, now = now)
   arch <- snap(s$archive_dir)
@@ -432,7 +432,7 @@ for (odd in c("bundle.zip", "notes.txt")) {
     test_that(sprintf("inbox_run(): an unclaimed %s is a DATA file - it keeps the folder unfiled and is listed under Waiting", odd), {
       s <- inbox_setup()
       now <- Sys.time()
-      name <- paste0("input2026-10-18 0900 with ", odd)
+      name <- paste0("batch-2026-10-18 0900 with ", odd)
       lo <- make_leftovers(names = c("_email.eml", "image001.png"))
       oddf <- make_leftovers(names = odd)
       d <- make_inbox_folder(s$input_dir, name, c(inbox_proj_a_files(), lo, oddf), now = now)
@@ -454,7 +454,7 @@ test_that("inbox_run(): a day whose only activity is filing still gives the afte
   s <- inbox_setup()
   rec <- record_hook("after_run", renderer = TRUE)
   now <- Sys.time()
-  name <- "input2026-10-17 0900 old"
+  name <- "batch-2026-10-17 0900 old"
   lo <- make_leftovers(names = c("_email.eml", "image001.png"))
   d <- make_inbox_folder(s$input_dir, name, c(inbox_proj_a_files(), lo), now = now)
   # imported outside inbox_run(): nothing in today's log is an import

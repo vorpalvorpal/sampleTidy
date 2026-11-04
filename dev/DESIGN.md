@@ -13,7 +13,7 @@ Turn the heterogeneous stream of environmental-monitoring results a programme
 receives into clean, reconciled rows in a DuckDB-backed database, with every
 value linked back to its archived original file.
 
-**Two audiences.** (1) The EXORG waste-monitoring workflow; (2) users of the
+**Two audiences.** (1) The original deployment's monitoring workflow; (2) users of the
 `tidyWaste` ecosystem, of which this package is a central part. The rule that
 enforces the split: **no site-specific strings in package code.** Site names,
 org registries, folder paths, field-analyte lists and adapter thresholds live
@@ -133,7 +133,7 @@ sampling times for lab samples come from ESdat `Sampled_Date_Time`.
 ```
 
 Everything left of the IR is format-specific and small; everything right of it
-is generic and shared. The MVP replaces the transport stage with "Robin points
+is generic and shared. The MVP replaces the transport stage with "the operator points
 `ingest_dir()` at the folder".
 
 ---
@@ -152,11 +152,11 @@ either may be empty.
 |---|---|---|
 | `source_hash` | chr | content hash of the original file — idempotency key |
 | `source_ref` | chr | cell/row coordinate within the source (`Sheet1!B14`) |
-| `work_order` | chr | lab report number (`ES2551546`) — **primary grouping key** |
+| `work_order` | chr | lab report number (`ES9100001`) — **primary grouping key** |
 | `revision` | int | lab report revision (`_0`, `_1`, …) — supersede trigger |
 | `org` | chr | source organisation (`ALS`, `ACIRL`, `internal`, …) |
 | `adapter` | chr | adapter id + version that produced the row |
-| `lab_sample_id` | chr | lab's sample code (`ES2515460001`) |
+| `lab_sample_id` | chr | lab's sample code (`ES9100001001`) |
 | `sample_type` | chr | verbatim lab type (`Normal`, `LCS`, `MB`, `LAB_D`, `MS`, `NCP`); adapters default `"Normal"` when the source has no concept of it |
 | `feature_raw` | chr | sampling point as written (`Field_ID` / client sample ID) |
 | `analyte_raw` | chr | analyte name as written |
@@ -193,7 +193,7 @@ Email-transport fields (`message_id`, `received_at`) attach at the event
 level when the sidecar exists (§12); they are not IR columns the MVP requires.
 
 Raw fields are preserved verbatim in all cases; parsing raw → canonical is the
-reconciler's job, and the canonical timezone is **Australia/Sydney**. Crosstab
+reconciler's job, and the canonical timezone is the configured `st_config("timezone")` (default UTC). Crosstab
 date columns are hard-asserted d/m/y.
 
 ---

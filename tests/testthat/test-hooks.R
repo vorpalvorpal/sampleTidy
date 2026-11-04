@@ -83,7 +83,7 @@ hk_ingest <- function(adder = NULL, fail = FALSE) {
   }
 }
 
-hk_folder <- function(s, now, name = "input2026-10-18 0900 a") {
+hk_folder <- function(s, now, name = "batch-2026-10-18 0900 a") {
   make_inbox_folder(s$input_dir, name, inbox_proj_a_files(), now = now)
 }
 
@@ -309,7 +309,7 @@ test_that("P20.2: after_run receives exactly the list inbox_run() returns", {
   expect_length(rec$calls, 1)
   expect_identical(rec$calls[[1]]$arg, res)
   expect_true(res$ran)
-  expect_identical(res$folders_processed, "input2026-10-18 0900 a")
+  expect_identical(res$folders_processed, "batch-2026-10-18 0900 a")
 })
 
 test_that("P20.2: after_status receives the status list (names, types), and shows the import this run just logged", {
@@ -417,7 +417,7 @@ test_that("P20.2: a project that became complete BETWEEN runs does not fire work
   # incomplete before: it has a sample and an open review item
   hk_add_project(s$db, "hk-held", "HK-HELD", open_review = TRUE)
   testthat::local_mocked_bindings(ingest_dir = hk_ingest())
-  hk_folder(s, now, "input2026-10-18 0900 a")
+  hk_folder(s, now, "batch-2026-10-18 0900 a")
   run_inbox(s, now = now)
 
   # resolved by hand between runs
@@ -427,7 +427,7 @@ test_that("P20.2: a project that became complete BETWEEN runs does not fire work
 
   rec <- hk_rec()
   register_hook("work_complete", hk_hook(rec, "work_complete"))
-  hk_folder(s, now, "input2026-10-18 1000 b")
+  hk_folder(s, now, "batch-2026-10-18 1000 b")
   res <- run_inbox(s, now = now)
   expect_true(res$ran)
   expect_length(rec$calls, 0)
@@ -549,7 +549,7 @@ test_that("P20.2: a dry run writes status.json (dry_run TRUE) and no markdown, w
   run_inbox(s, now = now, dry_run = TRUE)
   js <- hk_json(s$report_dir)
   expect_true(js$dry_run)
-  expect_identical(unlist(js$dry_run_plan$would_import), "input2026-10-18 0900 a")
+  expect_identical(unlist(js$dry_run_plan$would_import), "batch-2026-10-18 0900 a")
   expect_length(report_md_files(s$report_dir), 0)
 
   s2 <- inbox_setup()

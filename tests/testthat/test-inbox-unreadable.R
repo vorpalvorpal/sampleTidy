@@ -16,7 +16,7 @@ unreadable_setup <- function(env = parent.frame()) {
   csv <- file.path(src, "WO-TEST-001 results.csv"); writeLines(c("a,b", "1,2"), csv)
   pdf <- file.path(src, "WO-TEST-001 report.pdf")
   writeBin(c(charToRaw("%PDF-1.4\n"), charToRaw("synthetic")), pdf)
-  s$folder <- make_inbox_folder(s$input_dir, "input2026-10-26 0900 WO-TEST-001",
+  s$folder <- make_inbox_folder(s$input_dir, "batch-2026-10-26 0900 WO-TEST-001",
                                 c(csv, pdf), now = now)
   s$now <- now
   s
@@ -49,7 +49,7 @@ test_that("inbox_run() does not file a folder whose files hash as empty", {
   mock_unreadable_hash()
   res <- run_inbox(s, now = s$now)
   expect_true(dir.exists(s$folder))
-  expect_false(dir.exists(file.path(s$archive_dir, "_emails", basename(s$folder))))
+  expect_false(dir.exists(file.path(s$archive_dir, "filed-mail", basename(s$folder))))
   f <- res$folders[[basename(s$folder)]]
   expect_length(as.character(unlist(f$files_filed$files)), 0L)
 })
@@ -67,7 +67,7 @@ test_that("inbox_run() refuses a temp-area archive_dir when the db is outside th
   arch <- file.path(fake_tmp, "archive"); dir.create(arch)
   withr::local_options("sampletidy.archive_dir" = arch)
   testthat::local_mocked_bindings(tempdir = function(...) fake_tmp, .package = "base")
-  d <- make_inbox_folder(s$input_dir, "input2026-10-26 0900 WO-TEST-002",
+  d <- make_inbox_folder(s$input_dir, "batch-2026-10-26 0900 WO-TEST-002",
                          inbox_proj_a_files(), now = Sys.time())
   before <- ingest_file_rows(s$db)
   res <- run_inbox(s)

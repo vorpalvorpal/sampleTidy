@@ -28,7 +28,7 @@
 )
 .st_ir_samples_cols <- names(.st_ir_samples_types)
 
-# Optional A88 review columns on `results` (dev/plans/OPERATING-RULES.md A88):
+# Optional A88 review columns on `results` (OPERATING-RULES A88):
 # accepted and type-checked when present, never part of the prototype.
 .st_ir_results_optional_types <- c(
   needs_review = "logical", review_kind = "character",

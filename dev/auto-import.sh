@@ -1,33 +1,59 @@
 #!/bin/bash
 # Hourly auto-import trigger (macOS). PLAN-18 sections 0, 3, 5.
-# Run by launchd on the Mac (dev/launchd/); Obsidian's Shell commands trigger was retired 2026-10-25. Does nothing unless this machine holds the
+# Run by launchd on the Mac (dev/launchd/). Does nothing unless this machine holds the
 # live DB and something under input_dir (or the DB file) changed since the last good run.
 # Metadata only: stat, never file contents (Files-On-Demand).
 # Gate rules: never skip silently except on an unchanged gate. A listing failure
 # (find error) logs, notifies once a day and exits 3 before the gate is compared; an
 # empty listing never skips; the gate is written after a good run only if the listing
 # works and nothing in the input changed (ctime) since the run began.
-# Test overrides: SAMPLETIDY_AUTOIMPORT_{DB,INPUT,REPORT,RSCRIPT,LOG,CODE,OFF,NOTIFY,STALE_HOURS}.
-# R-22.H (Robin 2026-10-25): an atomic mkdir lock, and a run-health record
+# Test overrides: SAMPLETIDY_AUTOIMPORT_{DB,INPUT,REPORT,RSCRIPT,LOG,CODE,OFF,NOTIFY,STALE_HOURS},
+# SAMPLETIDY_{INPUT_DIR,REPORT_DIR,TIMEZONE} and R_ENVIRON_USER (the environ file read).
+# R-22.H (2026-10-25): an atomic mkdir lock, and a run-health record
 # ($REPORT/.imports.health) that drives retry-after-failure, one notification per
-# failed run, a once-per-Sydney-day "no success for N hours" notification, and the
+# failed run, a once-per-local-day (SAMPLETIDY_TIMEZONE) "no success for N hours" notification, and the
 # SAMPLETIDY_AUTOIMPORT_PREV_FAILURE text that appears in status.json problems.
-export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"   # Obsidian's PATH lacks Rscript
+export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"   # a GUI or launchd PATH may lack Rscript
 HERE="$(cd "$(dirname "$0")" && pwd)"
+# renviron_get KEY: the last `KEY=value` line of R's user environ file
+# ($R_ENVIRON_USER, else ~/.Renviron), with one pair of surrounding ' or " removed.
+# No ${VAR} or ~ expansion (the deployment writes absolute paths).
+renviron_get() {
+  local v
+  v="$(sed -n "s/^$1=//p" "${R_ENVIRON_USER:-$HOME/.Renviron}" 2>/dev/null | tail -1)"
+  case "$v" in \'*\') v="${v#\'}"; v="${v%\'}";; \"*\") v="${v#\"}"; v="${v%\"}";; esac
+  printf '%s' "$v"
+}
+
+# Deployment values, resolved with no side effects: the SAMPLETIDY_AUTOIMPORT_* test
+# override, then the process environment, then R's user environ file, then a default.
 DB="${SAMPLETIDY_AUTOIMPORT_DB:-$HOME/Library/Application Support/org.R-project.R/R/sampleTidy/monitoring.duckdb}"
+if [ -n "${SAMPLETIDY_AUTOIMPORT_INPUT:-}" ]; then INPUT="$SAMPLETIDY_AUTOIMPORT_INPUT"; else
+  INPUT="${SAMPLETIDY_INPUT_DIR:-}"
+  [ -n "$INPUT" ] || INPUT="$(renviron_get SAMPLETIDY_INPUT_DIR)"
+  # batches arrive beside a folder named input, so watch its parent
+  [ "$(basename "$INPUT")" = input ] && INPUT="$(dirname "$INPUT")"
+fi
+REPORT="${SAMPLETIDY_AUTOIMPORT_REPORT:-${SAMPLETIDY_REPORT_DIR:-}}"
+[ -n "$REPORT" ] || REPORT="$(renviron_get SAMPLETIDY_REPORT_DIR)"
+[ -n "$REPORT" ] || REPORT="$HOME/Library/Application Support/org.R-project.R/R/sampleTidy/reports"
+ZONE="${SAMPLETIDY_TIMEZONE:-}"
+[ -n "$ZONE" ] || ZONE="$(renviron_get SAMPLETIDY_TIMEZONE)"
+[ -n "$ZONE" ] || ZONE=UTC
+LOG="${SAMPLETIDY_AUTOIMPORT_LOG:-$HOME/Library/Logs/sampletidy-autoimport.log}"
+local_day() { TZ="$ZONE" date +%F; }
+if [ "${1:-}" = --print-config ]; then
+  printf 'DB=%s\nINPUT=%s\nREPORT=%s\nTIMEZONE=%s\nLOG=%s\n' "$DB" "$INPUT" "$REPORT" "$ZONE" "$LOG"
+  exit 0
+fi
+
 [ -f "$DB" ] || exit 0                                  # not the writer machine
 # Off switch: touch this file to pause auto-import; remove it to resume.
 [ -f "${SAMPLETIDY_AUTOIMPORT_OFF:-$HOME/.sampletidy-autoimport-off}" ] && exit 0
 
-if [ -n "${SAMPLETIDY_AUTOIMPORT_INPUT:-}" ]; then INPUT="$SAMPLETIDY_AUTOIMPORT_INPUT"; else
-  INPUT="$(sed -n 's/^SAMPLETIDY_INPUT_DIR=//p' "$HOME/.Renviron" 2>/dev/null | tail -1)"
-  [ "$(basename "$INPUT")" = input ] && INPUT="$(dirname "$INPUT")"
-fi
-LOG="${SAMPLETIDY_AUTOIMPORT_LOG:-$HOME/Library/Logs/sampletidy-autoimport.log}"
 mkdir -p "$(dirname "$LOG")"
 logline() { echo "=== $(date '+%Y-%m-%d %H:%M:%S') $*" >>"$LOG"; }
 if [ ! -d "$INPUT" ]; then logline "input folder not found: $INPUT"; exit 0; fi
-REPORT="${SAMPLETIDY_AUTOIMPORT_REPORT:-${PKM_VAULT:-$HOME/pkm}/0 Misc/00 Misc/00.09 Import triage}"
 RSCRIPT="${SAMPLETIDY_AUTOIMPORT_RSCRIPT:-Rscript}"
 STATE="$REPORT/.imports.state"; GATE="$REPORT/.imports.gate"
 LOCK="$REPORT/.imports.lock"; HEALTH="$REPORT/.imports.health"; NOTIFIED="$REPORT/.imports.notified"
@@ -80,12 +106,12 @@ elif [ "$p_state" = done ] && [ -n "$p_rc" ] && [ "$p_rc" != null ] && [ "$p_rc"
   SAMPLETIDY_AUTOIMPORT_PREV_FAILURE="The import started $p_start failed (rc $p_rc)"; RETRY=1
 fi
 [ -n "$RETRY" ] && notify_once "fail:$p_start" "sampleTidy import failed" "$SAMPLETIDY_AUTOIMPORT_PREV_FAILURE; retrying"
-# Staleness: no success for STALE_HOURS, once per Sydney day, even if the gate skips.
+# Staleness: no success for STALE_HOURS, once per local day (SAMPLETIDY_TIMEZONE), even if the gate skips.
 if [ -n "$p_succ" ] && ep="$(utc_epoch "$p_succ")" && [ $(( $(date +%s) - ep )) -gt $(( STALE_HOURS * 3600 )) ]; then
-  notify_once "stale:$(TZ=Australia/Sydney date +%F)" "sampleTidy import stale" "No successful import since $p_succ (over $STALE_HOURS hours)"
+  notify_once "stale:$(local_day)" "sampleTidy import stale" "No successful import since $p_succ (over $STALE_HOURS hours)"
 fi
 
-# The Sydney date is hashed too (ruling R14): the first tick of each Sydney day
+# The local date (SAMPLETIDY_TIMEZONE) is hashed too (ruling R14): the first tick of each local day
 # passes the gate, so R can refresh the status note's dates.
 # snapshot prints the hash; it returns 1 if the input cannot be listed (find's
 # exit status or any stderr), leaving the listing and error in $LOCK/{list,err}.
@@ -95,13 +121,13 @@ snapshot() {
   if [ $frc -ne 0 ] || [ -s "$LOCK/err" ]; then return 1; fi
   { LC_ALL=C sort "$LOCK/list"
     stat -f 'DB|%z|%m' "$DB"
-    TZ=Australia/Sydney date +%F; } | shasum -a 256 | cut -d' ' -f1
+    local_day; } | shasum -a 256 | cut -d' ' -f1
 }
 
 : >"$LOCK/started"   # ctime marker: anything newer arrived (or changed) during the run
 if ! NOW="$(snapshot)"; then
   logline "cannot list $INPUT: $(head -1 "$LOCK/err")"
-  notify_once "listfail:$(TZ=Australia/Sydney date +%F)" "sampleTidy import cannot read its input" \
+  notify_once "listfail:$(local_day)" "sampleTidy import cannot read its input" \
     "The input folder cannot be listed ($INPUT). launchd's bash may need Full Disk Access."
   exit 3
 fi
@@ -134,8 +160,8 @@ rc=$?
 ENDED="$(date -u +%Y-%m-%dT%H:%M:%SZ)"; SUCC="$p_succ"; [ $rc -eq 0 ] && SUCC="$ENDED"
 write_health done $$ "$STARTED" "$ENDED" "$rc" "$SUCC"
 if [ $rc -eq 0 ]; then
-  # Post-run gate: only if the listing works and nothing changed (by ctime; OneDrive
-  # keeps server mtimes) since the marker. Otherwise leave it stale so the next tick runs.
+  # Post-run gate: only if the listing works and nothing changed (by ctime; a cloud-synced
+  # folder may keep server mtimes) since the marker. Otherwise leave it stale so the next tick runs.
   if POST="$(snapshot)" && [ -z "$(find "$INPUT" -mindepth 1 -maxdepth 2 ! -name .DS_Store -cnewer "$LOCK/started" 2>/dev/null)" ]; then
     mkdir -p "$REPORT" && echo "$POST" >"$GATE.tmp.$$" && mv "$GATE.tmp.$$" "$GATE"
   else

@@ -1,5 +1,5 @@
 # PLAN-20 phase 1 (P20.2): session-scoped hooks that inbox_run() fires.
-# Spec: dev/plans/PLAN-20-phase1-spec.md.
+# Spec: PLAN-20 phase 1.
 
 .hook_events <- c("after_run", "after_status", "work_complete")
 

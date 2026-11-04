@@ -51,7 +51,7 @@ lock-wait and fail.
 returned report reflects what the run \emph{would} do), but skips
 \code{commit_event()} and the snapshot entirely - the only two core-table/
 snapshot writers - so a dry run makes zero core-table writes and
-produces no snapshot file. T1.2 (Robin's ruling, 2026-07-26): a dry run
+produces no snapshot file. T1.2 (ruling, 2026-07-26): a dry run
 ALSO makes zero \code{ingest_file} STATE writes - parsing/assembly/reconcile
 still run in memory to build the preview, but none of it is persisted, so
 a following run (dry or real) re-discovers the same files at the same

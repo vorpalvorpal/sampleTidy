@@ -1,5 +1,5 @@
 # Auto-import phase 2: the deterministic checks behind the status note's Flags
-# section (dev/plans/PLAN-18-auto-import.md section 4, contract in 4.5).
+# section (PLAN-18 section 4, contract in 4.5).
 #
 # Read-only on the DB: one read-only connection pulls the sample/result image
 # into R (the live DB is ~20k samples, ~100k results), and every check works on
@@ -1006,7 +1006,8 @@
 #' @return a data.frame, one row per flag, columns `check, site, feature,
 #'   analyte, date, value, unit, threshold, detail, key, source, action`,
 #'   ordered by check then date (newest first). `action` (PLAN-19 R-19.22) is
-#'   one of `resample`, `reanalyse`, `ask_acirl`, `ask_lab` (ask the lab or
+#'   one of `resample`, `reanalyse`, `ask_<org>` (the stream table's field
+#'   organisation, or `ask_sampler`), `ask_lab` (ask the lab or
 #'   supplier), `chase`, `qualify` for a QC flag, and for `missing_result`
 #'   `ask_<org>` (the sample's field organisation in the `streams` table) or
 #'   `ask_lab`; `NA` otherwise.

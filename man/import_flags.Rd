@@ -43,7 +43,8 @@ whose name matches apply only at gas-grid points) and \code{detail_suffix}
 \value{
 a data.frame, one row per flag, columns \verb{check, site, feature, analyte, date, value, unit, threshold, detail, key, source, action},
 ordered by check then date (newest first). \code{action} (PLAN-19 R-19.22) is
-one of \code{resample}, \code{reanalyse}, \code{ask_acirl}, \code{ask_lab} (ask the lab or
+one of \code{resample}, \code{reanalyse}, \verb{ask_<org>} (the stream table's field
+organisation, or \code{ask_sampler}), \code{ask_lab} (ask the lab or
 supplier), \code{chase}, \code{qualify} for a QC flag, and for \code{missing_result}
 \verb{ask_<org>} (the sample's field organisation in the \code{streams} table) or
 \code{ask_lab}; \code{NA} otherwise.

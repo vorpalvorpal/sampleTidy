@@ -1,5 +1,5 @@
 # PLAN-20 phase 1 (P20.4): completed_work(). Spec:
-# dev/plans/PLAN-20-phase1-spec.md section P20.4.
+# PLAN-20 phase 1, P20.4.
 
 .cw_asset_cols <- c("uuid", "path", "filename", "hash", "file_format", "type")
 

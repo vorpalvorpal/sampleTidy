@@ -1,19 +1,19 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-  The auto-import trigger (dev/auto-import.sh), run by launchd rather than by Obsidian's Shell
-  commands plugin, so imports no longer stop while Obsidian is closed (they did, 22-25 Oct 2026).
+  The auto-import trigger (dev/auto-import.sh), run by launchd so imports do not depend on any
+  desktop application being open.
   WatchPaths fires when a new delivery folder appears in the input directory. A folder is only
-  imported once nothing in it has changed for settle_minutes (10), and a delivery often arrives
+  imported once it has settled (the deployment's settle time), and a delivery often arrives
   over several minutes, so StartInterval re-checks every 10 minutes until it settles. Each tick
   is cheap: auto-import.sh hashes stat() metadata and exits when nothing changed, and R holds a
-  lock, so overlapping triggers (this one, Obsidian's) cannot run two imports at once.
+  lock, so overlapping triggers cannot run two imports at once.
   The job runs a small launcher app (dev/launchd/helper) rather than /bin/bash: under launchd
-  macOS refuses /bin/bash access to the OneDrive folder, and granting that to bash would grant
-  it to every bash script. The launcher spawns dev/auto-import.sh as a child, so only the
-  launcher app needs Full Disk Access.
-  A template: dev/launchd/install.sh fills in @HELPER@, @REPO@, @INPUT@ and @HOME@ and installs
-  it to ~/Library/LaunchAgents. Do not load this file directly.
+  macOS refuses /bin/bash access to some protected folders (e.g. a File Provider / cloud-synced
+  folder), and granting that to bash would grant it to every bash script. The launcher spawns
+  dev/auto-import.sh as a child, so only the launcher app needs Full Disk Access.
+  A template: dev/launchd/install.sh fills in @HELPER@, @REPO@, @INPUT@, @HOME@ and @LOCALE@
+  and installs it to ~/Library/LaunchAgents. Do not load this file directly.
 -->
 <plist version="1.0">
 <dict>
@@ -33,7 +33,7 @@
   <true/>
   <key>ThrottleInterval</key>
   <integer>60</integer>
-  <!-- Imports are not time-critical (Robin, 2026-10-25): run as a background job so they never
+  <!-- Imports are not time-critical (2026-10-25): run as a background job so they never
        compete with foreground work. Background lets macOS throttle CPU and disk I/O and defer
        the job under load; Nice and LowPriorityIO cover the CPU and disk explicitly. -->
   <key>ProcessType</key>
@@ -51,9 +51,9 @@
     <!-- launchd starts jobs in the C locale, where R cannot read the package's UTF-8
          source (units such as °C and µg/L): "unable to translate ... to native encoding". -->
     <key>LANG</key>
-    <string>en_AU.UTF-8</string>
+    <string>@LOCALE@</string>
     <key>LC_ALL</key>
-    <string>en_AU.UTF-8</string>
+    <string>@LOCALE@</string>
   </dict>
   <key>StandardOutPath</key>
   <string>@HOME@/Library/Logs/sampletidy-autoimport-launchd.log</string>

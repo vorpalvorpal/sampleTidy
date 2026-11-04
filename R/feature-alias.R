@@ -35,7 +35,7 @@
 # purpose-built FK-constrained DuckDBs, twice in Phase 4 and again here for
 # the `sample`/`feature_alias` shape). Migration 002 hit this first and
 # documents it at `.mig002_detach_reason`; `.mig002_torn_guard()`
-# (dev/migrations/002-registry-remediation.R:119) exists precisely BECAUSE
+# (migration 002, registry remediation) exists precisely BECAUSE
 # the workaround cannot be atomic.
 #
 # So three paths here run their FK-sensitive statements as SEPARATELY
@@ -88,8 +88,8 @@
 
 # The two `change_log.reason` suffixes the detach/reattach workaround
 # appends. These are BYTE-IDENTICAL to `.mig002_detach_reason` /
-# `.mig002_reattach_reason` (dev/migrations/002-registry-remediation.R:94-95)
-# ON PURPOSE, and must stay so: dev/migrations/ is not part of the package,
+# `.mig002_reattach_reason` (migration 002, registry remediation)
+# ON PURPOSE, and must stay so: the migration scripts are not part of the package,
 # so the constants cannot be shared by reference, but a single shared audit
 # vocabulary means `.mig002_torn_guard()` still detects a run torn by THIS
 # code and `.fa_torn_guard()` still detects one torn by 002. Changing either
@@ -151,7 +151,7 @@
   # sequence (`:374-389`/`:1041-1069`). A crash between
   # `.fa_repoint_samples()` committing (every sample already moved off the
   # redundant arm) and the following `db_delete()` leaves a `feature_alias`
-  # row Robin's ruling at `:361-373` calls UNRECLAIMABLE: `uuid_feature IS
+  # row the ruling at `:361-373` calls UNRECLAIMABLE: `uuid_feature IS
   # NULL`, zero samples, invisible to `.fa_identity_duplicates()` (which
   # requires `uuid_feature` to join on) and to every exported reader. There
   # is no "reattach" step to be missing here - the DELETE itself is the
@@ -489,7 +489,7 @@ confirm_feature_aliases <- function(uuid_alias, uuid_feature = NULL, confirmed_b
       # D5 collision analysis inside the transaction still sees the samples
       # exactly where they were.
       #
-      # RULED BY ROBIN 2026-07-25 (Phase-7b item 2): the redundant arm left
+      # RULED 2026-07-25 (Phase-7b item 2): the redundant arm left
       # behind by this branch (`uuid_feature IS NULL`) is UNRECLAIMABLE -
       # `.fa_identity_duplicates()` joins `d.uuid_feature = s.uuid_feature`,
       # so a dangling redundant arm can never match it, the item never leaves
@@ -873,7 +873,7 @@ confirm_feature_aliases <- function(uuid_alias, uuid_feature = NULL, confirmed_b
     params = list(uuid_alias)
   )$n[[1]]
 
-  # Phase-7b item 3 (D5, RULED BY ROBIN 2026-07-25): `.fa_find_collisions()`
+  # Phase-7b item 3 (D5, RULED 2026-07-25): `.fa_find_collisions()`
   # below requires `fa2.uuid_feature = ?` for the OTHER sample, so it is
   # blind to a second sample reached through THIS SAME dangling alias - that
   # sample's `uuid_feature` is still NULL (the alias is not yet confirmed),
@@ -1022,7 +1022,7 @@ confirm_feature_aliases <- function(uuid_alias, uuid_feature = NULL, confirmed_b
       changes$kind <- kind
     } else if (identical(alias$kind[[1]], "pending")) {
       # A non-identity confirmation with no explicit `kind` defaults to
-      # `transcription_error`. RULED BY ROBIN 2026-07-26, overriding the
+      # `transcription_error`. RULED 2026-07-26, overriding the
       # non-identity half of PCR-5 (F.19, 2026-07-24), which had said this
       # must abort with no default.
       #
@@ -1075,7 +1075,7 @@ confirm_feature_aliases <- function(uuid_alias, uuid_feature = NULL, confirmed_b
   # 170 lines earlier (`kind = "sample_collision"`, `:602-612` above) shares
   # this EXACT `uuid_target = uuid_alias`. Without `kind`, this close swept
   # that row too, so a confirmation that "does NOT abort ... opens a review
-  # item" (Robin's item-3 ruling) silently resolved the review item it had
+  # item" (the item-3 ruling) silently resolved the review item it had
   # just opened, in the same transaction, before anyone could see it.
   # `kind = "unknown_feature"` is not a guess: the only OTHER writer of
   # `uuid_target = <a feature_alias uuid>` is `.ct_rewrite_review_payloads()`
@@ -1132,7 +1132,7 @@ confirm_feature_aliases <- function(uuid_alias, uuid_feature = NULL, confirmed_b
 }
 
 #' Find same-date collisions AMONG samples reached through `uuid_alias`
-#' itself (Phase-7b item 3, RULED BY ROBIN 2026-07-25). `.fa_find_collisions()`
+#' itself (Phase-7b item 3, RULED 2026-07-25). `.fa_find_collisions()`
 #' cannot see this shape: it requires the OTHER sample's alias to already
 #' carry `uuid_feature` (i.e. already confirmed), but a second sample on this
 #' SAME dangling alias has `uuid_feature IS NULL` until this very call
@@ -1298,7 +1298,7 @@ confirm_feature_aliases <- function(uuid_alias, uuid_feature = NULL, confirmed_b
         # (round-2 FD4: the text side of a tri-state measurement is carried
         # too, or a text-vs-text conflict is unadjudicable - two nulls).
         #
-        # ROBIN'S RULING 2 (Phase-7b round-2 item 5, 2026-07-26): PLAN-11
+        # RULING 2 (Phase-7b round-2 item 5, 2026-07-26): PLAN-11
         # R-11.10 pins that this item names BOTH analysis uuids, and the
         # plan wins over the code comment that used to sit here. The prior
         # text argued "la has no uuid to name", which is factually false for

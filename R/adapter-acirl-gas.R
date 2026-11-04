@@ -129,15 +129,23 @@ acirl_gas_xlsx_adapter <- function() {
   d
 }
 
-# ACIRL template slots: rows the ACIRL gas template prints (CH4 0) at a site
-# that has no such probe. Robin, migrations 032 and 034 (dev/MIGRATIONS.md rows
-# 1032/1034): "Are they existing features in the database with known
-# locations? If not, we don't want them." Site-qualified, because the same
-# NUMBERS are real probes at the other site (M.G201; N.G365/N.G366 on the 2023
-# Northvale grid). A numeric reading at a slot is skipped as `template_slot`; a
-# text-coded slot cell keeps its text reason (e.g. `does not exist` ->
-# point_absent).
-.st_gas_template_slots <- c("N.G201", "M.G365", "M.G366")
+# A deployment can name template slots: feature names the lab's gas template
+# prints at a site that has no such probe. A numeric reading at one is skipped
+# as `template_slot`, and a text-coded slot cell keeps its text reason.
+# `st_config("gas_template_slots")`, validated: NULL (-> none), or a character
+# vector with no NA and no "".
+.st_gas_template_slots <- function() {
+  sl <- st_config("gas_template_slots")
+  if (is.null(sl)) return(character(0))
+  if (!is.character(sl) || anyNA(sl) || !all(nzchar(sl))) {
+    cli::cli_abort(
+      "{.code st_config(\"gas_template_slots\")} must be NULL or a character vector of
+       feature names (no NA, no empty strings).",
+      class = "sampletidy_error"
+    )
+  }
+  sl
+}
 
 # `st_config("site_keywords")`, validated: NULL, or a named list mapping a site
 # code to a character vector of keywords. Returns a list (empty = no inference).
@@ -434,6 +442,7 @@ acirl_gas_xlsx_adapter <- function() {
   # Cross-sheet uniqueness for building names (A84 refuses repeats).
   feats <- vapply(readings, function(r) r$feature, character(1))
 
+  template_slots <- .st_gas_template_slots()
   res_rows <- list(); smp_rows <- list(); skipped <- list()
   flag_kind <- character(0); flag_payload <- list()
   comments <- if (nr$amended) "Amended" else NA_character_
@@ -450,7 +459,7 @@ acirl_gas_xlsx_adapter <- function() {
       }
       next
     }
-    if (r$feature %in% .st_gas_template_slots) {
+    if (r$feature %in% template_slots) {
       skipped[[length(skipped) + 1L]] <- tibble::tibble(source_ref = ref, reason = "template_slot")
       next
     }

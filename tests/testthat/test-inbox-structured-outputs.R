@@ -24,12 +24,12 @@ so_lines <- function(p) {
 so_setup <- function(env = parent.frame()) {
   s <- inbox_setup(env)
   s$now <- sydney_midday()
-  make_inbox_folder(s$input_dir, "input2026-10-18 0900 a", inbox_proj_a_files(), now = s$now)
+  make_inbox_folder(s$input_dir, "batch-2026-10-18 0900 a", inbox_proj_a_files(), now = s$now)
   s
 }
 
 # A hand-written run-log line for an import of `wo`, started at `when` (POSIXct).
-so_log_line <- function(wo, when, errors = character(0), folder = "input2026-10-17 0900 legacy") {
+so_log_line <- function(wo, when, errors = character(0), folder = "batch-2026-10-17 0900 legacy") {
   w <- list(name = wo, kind = "ALS lab", site = "Northvale", date_start = "2026-10-10",
             date_end = "2026-10-10", samples = 2L, analyses = 7L)
   folders <- list()
@@ -166,7 +166,7 @@ test_that("P20.1: a full run appends the same line to events.jsonl and .imports.
   expect_true(so_same_bytes(so_path(s, "events.jsonl"), so_path(s, ".imports.log")))
 
   # a second full run appends a second line to both
-  make_inbox_folder(s$input_dir, "input2026-10-18 1000 b", inbox_proj_a_files(), now = s$now)
+  make_inbox_folder(s$input_dir, "batch-2026-10-18 1000 b", inbox_proj_a_files(), now = s$now)
   run_inbox(s, now = s$now)
   expect_length(so_lines(so_path(s, "events.jsonl")), 2)
   expect_length(so_lines(so_path(s, ".imports.log")), 2)
@@ -317,7 +317,7 @@ test_that("P20.1 readers: after a full run status.json, the log and the day dige
   expect_true(any(grepl("simulated folder failure",
                         unlist(read_status_json(s$report_dir)$problems), fixed = TRUE)))
   expect_true(any(grepl("simulated folder failure",
-                        read_inbox_log(s$report_dir)[[1]]$folders[["input2026-10-18 0900 a"]]$error,
+                        read_inbox_log(s$report_dir)[[1]]$folders[["batch-2026-10-18 0900 a"]]$error,
                         fixed = TRUE)))
   expect_length(rec$calls, 1)
   expect_true(any(grepl("simulated folder failure",

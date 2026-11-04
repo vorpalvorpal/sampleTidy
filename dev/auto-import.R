@@ -14,16 +14,16 @@ hooks_problem <- load_hooks_file()
 nz <- function(x) if (nzchar(x)) x else NULL
 db <- nz(Sys.getenv("SAMPLETIDY_AUTOIMPORT_DB")) %||% st_config("live_db")
 
-# st_config("input_dir") is the bare `.../assets/input` folder; the flow writes
-# `.../assets/input<date> <subject>/` beside it, so scan its parent.
+# When st_config("input_dir") is a folder named `input`, batches arrive beside
+# it, so scan its parent.
 input_dir <- nz(Sys.getenv("SAMPLETIDY_AUTOIMPORT_INPUT")) %||% {
   d <- st_config("input_dir")
   if (basename(d) == "input") dirname(d) else d
 }
 
-vault <- nz(Sys.getenv("PKM_VAULT")) %||% file.path(path.expand("~"), "pkm")
-report_dir <- nz(Sys.getenv("SAMPLETIDY_AUTOIMPORT_REPORT")) %||%
-  file.path(vault, "0 Misc", "00 Misc", "00.09 Import triage")
+# SAMPLETIDY_AUTOIMPORT_REPORT is what auto-import.sh passes; run by hand, the
+# configured report_dir (SAMPLETIDY_REPORT_DIR, written by the deployment).
+report_dir <- nz(Sys.getenv("SAMPLETIDY_AUTOIMPORT_REPORT")) %||% st_config("report_dir")
 
 # Phase 2 (PLAN-18 section 4): the status note's Flags. The check inputs (the
 # schedule, licence and QC tables, streams, invoices) belong to the deployment:

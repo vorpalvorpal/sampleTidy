@@ -39,8 +39,8 @@
 }
 
 #' Normalise an ALS lab sample number to `<WO>-<nnn>` (R-19.6). The corpus
-#' spells it `ES2626883001` (ENMRG/XTAB), `ES2650943-001` (QC.pdf) and
-#' `ES2670630--001` (QCI). Anything else (an ACIRL synthetic id, a QC lot,
+#' spells it `ES9100073001` (ENMRG/XTAB), `ES9100031-001` (QC.pdf) and
+#' `ES9100038--001` (QCI). Anything else (an ACIRL synthetic id, a QC lot,
 #' `----`, blank) is NA.
 #' @keywords internal
 #' @noRd
@@ -221,11 +221,23 @@
   a[!duplicated(paste(a$uuid_analyte, a$mcode, sep = "\r")), , drop = FALSE]
 }
 
+# The field organisation of the stream table, as spelled there: the one
+# distinct spelling among kind == "field" evidence rows, else NA.
+.qc_sampler <- function(img) {
+  ev <- img$stream_table$ev
+  ev <- ev[ev$kind %in% "field", , drop = FALSE]
+  if (length(unique(toupper(ev$org))) != 1L) return(NA_character_)
+  ev$spelling[[1]]
+}
+
 .qc_needs_parent <- c("duplicate", "field_blank", "rinsate_blank")
 
 # ---- R-19.24 qc_dup_rpd ------------------------------------------------------------
 
 .flags_qc_dup_rpd <- function(img, checks, today) {
+  s <- .qc_sampler(img)
+  who <- if (is.na(s)) "the sampler" else s
+  act <- if (is.na(s)) "ask_sampler" else paste0("ask_", tolower(s))
   inp <- .qc_inputs(checks)
   if (is.null(inp) || nrow(img$qc_features) == 0) return(NULL)
   cr <- inp$criteria
@@ -266,12 +278,12 @@
     parent <- q$parent_name
     round <- .qc_round_label(req, q$site, q$ym)
     if (sum(fail) * 2 > nrow(x)) {
-      action <- "ask_acirl"
+      action <- act
       detail <- sprintf(paste0("%s (parent %s): duplicate does not resemble its parent: check the ",
-                               "label with ACIRL before treating as a QC failure (%d of %d ",
-                               "analytes fail: %s) — %s → ask ACIRL whether %s was sampled at %s"),
-                        q$feature, parent, sum(fail), nrow(x), .flags_first_n(txt, 15), round,
-                        q$feature, parent)
+                               "label with %s before treating as a QC failure (%d of %d ",
+                               "analytes fail: %s) — %s → ask %s whether %s was sampled at %s"),
+                        q$feature, parent, who, sum(fail), nrow(x), .flags_first_n(txt, 15), round,
+                        who, q$feature, parent)
     } else {
       action <- "qualify"
       detail <- sprintf("duplicate %s: %s — %s → qualify these results at %s for the event",
@@ -342,7 +354,7 @@
                      assoc$value < f * det$value[[i]], , drop = FALSE]
       if (nrow(hit)) {
         qual[[length(qual) + 1]] <- hit
-        # R-19.32: "field blank B.JFxx Ammonia as N 0.05 mg/L".
+        # R-19.32: "field blank Q.FB01 Ammonia as N 0.05 mg/L".
         quals[[length(quals) + 1]] <- data.frame(
           feature = hit$feature, analyte = hit$analyte, date = hit$date,
           reason = sprintf("%s %s %s %s%s", .qc_type_label(q$qc_type), q$feature, det$analyte[[i]],
@@ -394,6 +406,8 @@
 .qc_total_metals_re <- "^EG[0-9]{3}[A-Z]*T$"
 
 .flags_qc_missing <- function(img, checks, today) {
+  s <- .qc_sampler(img)
+  who <- if (is.na(s)) "the sampler" else s
   inp <- .qc_inputs(checks)
   if (is.null(inp) || !isTRUE(img$qc_tables)) return(NULL)
   cr <- inp$criteria
@@ -453,10 +467,10 @@
     lbl <- .qc_type_label(short)
     miss <- ifelse(need[short] > 1, sprintf("fewer than %d %ss", need[short], lbl), paste("no", lbl))
     round <- .qc_round_label(req, site, m)
-    detail <- sprintf("%s: %s%s (need %s) → chase ACIRL for the missing QC samples",
+    detail <- sprintf("%s: %s%s (need %s) → chase %s for the missing QC samples",
                       round, paste(miss, collapse = ", "),
                       if (length(notes)) paste0("; ", paste(notes, collapse = "; ")) else "",
-                      paste(.qc_type_label(intersect(.qc_types, names(need))), collapse = ", "))
+                      paste(.qc_type_label(intersect(.qc_types, names(need))), collapse = ", "), who)
     out[[length(out) + 1]] <- .flags_rows(
       "qc_missing", key = sprintf("qc_missing|%s|%s", site, format(.flags_ym_start(m), "%Y-%m")),
       site = site, date = .flags_ym_start(m),
@@ -469,6 +483,9 @@
 # ---- R-19.28 qc_unresolved -------------------------------------------------------------
 
 .flags_qc_unresolved <- function(img, checks, today) {
+  s <- .qc_sampler(img)
+  who <- if (is.na(s)) "the sampler" else s
+  act <- if (is.na(s)) "ask_sampler" else paste0("ask_", tolower(s))
   inp <- .qc_inputs(checks, need_criteria = FALSE)
   if (is.null(inp) || nrow(img$qc_features) == 0) return(NULL)
   req <- inp$requirements
@@ -494,8 +511,8 @@
     out[[length(out) + 1]] <- .flags_rows(
       "qc_unresolved", key = sprintf("qc_unresolved|%s|%s", q$feature, format(q$date)),
       site = q$site, date = q$date, feature = q$feature,
-      detail = sprintf("%s — %s → ask ACIRL which point and QC type %s is", why, round, q$feature),
-      action = "ask_acirl")
+      detail = sprintf("%s — %s → ask %s which point and QC type %s is", why, round, who, q$feature),
+      action = act)
   }
   .flags_dedupe(do.call(rbind, out))
 }
@@ -503,6 +520,7 @@
 # ---- R-19.31 lab_qc_missing -------------------------------------------------------------
 
 .flags_lab_qc_missing <- function(img, checks, today) {
+  s <- .qc_sampler(img)
   rep <- img$lab_qc_report
   if (is.null(rep)) return(NULL)
   ss <- img$streams
@@ -521,7 +539,8 @@
     } else if (wo %in% img$qci_asset_wo) {
       "QCI archived but not parsed yet: run lab_qc_backfill()"
     } else {
-      paste0("no ALS QC Interpretive report (QCI) received: ask ACIRL/ALS for the QC report and ",
+      paste0("no ALS QC Interpretive report (QCI) received: ask ", if (is.na(s)) "" else paste0(s, "/"),
+             "ALS for the QC report and ",
              "QA/QC compliance assessment")
     }
     out[[length(out) + 1]] <- .flags_rows(

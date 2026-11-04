@@ -1,4 +1,4 @@
-# R-22.E - the delivering email's identity (Robin 2026-10-25).
+# R-22.E - the delivering email's identity (2026-10-25).
 #
 # A delivery folder holds the attachments plus `_email.eml`, the whole message
 # (often 10-25 MB, attachments inlined). The email is not attached as an asset;

@@ -62,12 +62,12 @@
 # ==== THE ACIRL WORK-ORDER TRAP, which this guard must survive BOTH WAYS ====
 # A `2400-*` ACIRL work-order number CANNOT be recovered from a filename.
 # Trying produces BOTH failure modes, each of which has one criterion here:
-#   * FALSE MERGE - a filename regex matching work order A ("2400-9538-02")
-#     inside work order B's filename ("2400-9538-02-01_ALS_Chemistry.CSV")
+#   * FALSE MERGE - a filename regex matching work order A ("2400-9006-02")
+#     inside work order B's filename ("2400-9006-02-01_ALS_Chemistry.CSV")
 #     collapses two genuinely different work orders into one, and B (a
 #     first-time load) gets blocked as a re-download of A. Real data damage.
 #   * FALSE SPLIT - a hyphen-only regex truncates the true work order
-#     "2400-9538 01-01" at the space down to "2400-9538", a string that was
+#     "2400-9006 01-01" at the space down to "2400-9006", a string that was
 #     never loaded, so a real re-download sails straight past the guard.
 # The single implementation that survives both: **key on the RECORDED work
 # order and compare it by exact string equality, never parse one.** Every
@@ -101,7 +101,7 @@
 # `ingest_file`-state check): at least one `asset` row under that work order's
 # project whose hash is not one of this event's own files.
 #
-# WHAT THIS DELIBERATELY NO LONGER REQUIRES (RULED BY ROBIN 2026-07-26).
+# WHAT THIS DELIBERATELY NO LONGER REQUIRES (RULED 2026-07-26).
 # The first cut also required the `project` row to have been registered by
 # THIS pipeline (a `change_log` insert from `.ct_ensure_project()`). That is
 # the stricter reading of "wholly ours", but measured read-only against the
@@ -185,7 +185,7 @@
 
 #' Hashes of files previously INGESTED (archived) against this work order.
 #'
-#' Rule (Robin 2026-10-18): an asset whose `ingest_file` row is archived with
+#' Rule (2026-10-18): an asset whose `ingest_file` row is archived with
 #' `state_reason = 'retained_sibling'` is NOT prior-ingestion evidence - it was
 #' kept alongside the committed file, never ingested itself. Everything else
 #' counts: legacy assets with NO `ingest_file` row (hence the LEFT JOIN, never
@@ -321,7 +321,7 @@
     if (n_samples == 0) next           # first-time work order: never blocked
     # NB: no `.ct_wo_project_pipeline_registered()` condition here - see the
     # step-0b header. Requiring it left the legacy corpus unguarded.
-    # Robin 2026-10-18: retained_sibling assets are not prior-ingest evidence
+    # 2026-10-18: retained_sibling assets are not prior-ingest evidence
     # (see `.ct_wo_prior_asset_hashes()`); the dry-run preview shares this.
     prior <- .ct_wo_prior_asset_hashes(con, wo, own_hashes)
     if (length(prior) == 0) next       # no prior ingest, so not a RE-ingest
@@ -445,7 +445,7 @@
   dplyr::bind_rows(rows)
 }
 
-#' R-22.N (Robin 2026-10-25): which guard rows already have an OPEN
+#' R-22.N (2026-10-25): which guard rows already have an OPEN
 #' work_order_reingest row. Dedupe key = (kind, work_order, source_hash,
 #' open): a RETRY of the same blocked file adds nothing, but a LATER blocked
 #' delivery of the work order (a different file hash) gets its own row, so
@@ -580,8 +580,8 @@
 # belonged to as the GRANDPARENT:
 #
 #   campaign "EPL quarterly"   uuid_parent = NULL          (root)
-#     +- 2400-9400-06-01       uuid_parent = campaign      (the ACIRL report)
-#          +- ES2452025        uuid_parent = ACIRL report  (the ALS work order)
+#     +- 2400-9007-06-01       uuid_parent = campaign      (the ACIRL report)
+#          +- ES9100010        uuid_parent = ACIRL report  (the ALS work order)
 #
 # The grandparent level is not decoration. MEASURED before implementing: 116 of
 # the 129 ALS work orders our ACIRL workbooks cite ALREADY have a `uuid_parent`,
@@ -589,10 +589,9 @@
 # incidents` 27, `EPL quarterly` 24, ...) - human-curated and recoverable from
 # nothing else we hold. A row has ONE parent, so re-pointing it at the ACIRL
 # report without inserting a level would have overwritten the record of WHY the
-# sampling happened. Robin's ruling (2026-08-02): insert, do not displace.
+# sampling happened. the ruling (2026-08-02): insert, do not displace.
 #
-# Two more measurements shaped the code (`scratchpad/a80_cardinality_probe.R`,
-# `a80_tree_probe.R`, both read-only over all 154 claimed workbooks):
+# Two more measurements shaped the code (read-only probes over all 154 claimed workbooks):
 #
 #   * 5 workbooks cite TWO distinct ALS work orders (347 of 6,208 result rows).
 #     One event resolves to ONE `uuid_project`, and the per-row ALS citation is
@@ -601,7 +600,7 @@
 #     `.ct_ensure_project_tree()`'s return value. Honest, not clever: we know
 #     the report, we do not know which lab job a given row belongs to.
 #   * 4 ALS work orders are cited by TWO DIFFERENT report numbers (e.g.
-#     `ES2254579` by both `2400-9222-12-01` and `2400-9222-12-04`). A row has
+#     `ES9100017` by both `2400-9008-12-01` and `2400-9008-12-04`). A row has
 #     one parent, so the second report to commit CANNOT also adopt it. It does
 #     not steal it and it does not silently skip: the existing parent stands and
 #     a `project_parent_conflict` review item is raised.
@@ -720,13 +719,13 @@
 
 # ---- C8 / TRIAGE D14: report projects keyed by (report number, year) ---------
 #
-# ACIRL reuses report numbers across years (measured: 2400-9399-04 Apr 2024 /
-# Apr 2026, 2400-9430-01 May 2024 / May 2025, 2400-9453-03 Mar 2025 / Mar 2026,
-# gas 2400-9453-03-01 Mar 2025 / Mar 2026). With `project.name = report_no` as
+# ACIRL reuses report numbers across years (measured: 2400-9009-04 Apr 2024 /
+# Apr 2026, 2400-9004-01 May 2024 / May 2025, 2400-9010-03 Mar 2025 / Mar 2026,
+# gas 2400-9010-03-01 Mar 2025 / Mar 2026). With `project.name = report_no` as
 # the only key, the second year merged into the first year's report (one
 # report spanning two years and two lab jobs, flagged `duplicate_report_number`)
 # or, when its ALS order sat under another campaign, could not be adopted at
-# all (`project_parent_conflict`). Robin, 2026-10-20: key by year instead.
+# all (`project_parent_conflict`). 2026-10-20: key by year instead.
 #
 #   * The year already holding the bare name keeps it. A new year gets
 #     "<report_no> (<yyyy>)", yyyy = the MIN of the event's years. An existing
@@ -736,7 +735,7 @@
 #     report carrying January samples is one report, not two.
 #   * Inside one year nothing changes: a second ALS order under a year-matched
 #     report still raises `duplicate_report_number/acirl` (measured same-year
-#     numbering slips 2400-9222-12-05 and 2400-9286-01-03), and a gas report
+#     numbering slips 2400-9008-12-05 and 2400-9001-01-03), and a gas report
 #     with no shared day still raises `/acirl_gas`.
 
 .ct_report_project_types <- c("ACIRL report", "Monthly gas monitoring")
@@ -912,7 +911,7 @@
 #' `years`) - C8/D14: a report number reused in a new year gets its own
 #' `"<report_no> (<yyyy>)"` row rather than merging into the earlier year's.
 #'
-#' **Matched by name AND type** (Robin, 2026-11-03, superseding the 2026-08-02
+#' **Matched by name AND type** (2026-11-03, superseding the 2026-08-02
 #' "collisions merge" ruling): water/ACIRL events match only `ACIRL report`
 #' rows and gas events only `Monthly gas monitoring` rows. With no row of the
 #' right type one is created, even if a same-named row of the other type
@@ -930,7 +929,7 @@
 #'
 #' The grandparent is the campaign the cited work orders already sit under, and
 #' only when they AGREE. Zero cited orders (a dust-only workbook) or two
-#' campaigns (measured: exactly one workbook, `2400-9286-03`, whose two orders
+#' campaigns (measured: exactly one workbook, `2400-9001-03`, whose two orders
 #' sit under `EPL annual` and `2022 March pollution incidents`) leave the report
 #' a root rather than asserting a campaign membership we cannot justify.
 #'
@@ -1618,7 +1617,7 @@
     # PLAN-15 F.15 D2: `uuid_target` is set from the SAME `au` this function
     # already resolved for `uuid_alias` - this IS the moment (and the only
     # moment) `amap`'s freshly-created feature_alias.uuid is available, per
-    # the ruling's correction above (reconcile-time it does not exist yet;
+    # The ruling's correction above (reconcile-time it does not exist yet;
     # commit-time it does). `uuid_alias` keeps being written too (unchanged,
     # per D2/D2's own note): it is the only linkage pre-migration-5 rows will
     # ever carry, so dropping it would strand them.
@@ -1754,7 +1753,7 @@
 #' The candidate queries carry an explicit `ORDER BY uuid` - the PLAN-7b
 #' round-2 D6 convention, applied here on 2026-08-03 after an audit found this
 #' function was the SIBLING that never got it. Measured on the live database
-#' (scratchpad/m6a_sample_pick.R): 68 (feature, date) groups hold more than
+#' (measured on the live DB): 68 (feature, date) groups hold more than
 #' one sample; the datetime narrowing cannot separate 13 of them; and in 8 of
 #' those 13 the unordered SELECT's first row is NOT the lowest uuid, so the
 #' choice was being made by storage order.
@@ -1776,12 +1775,12 @@
   # The `ORDER BY uuid` (PLAN-7b D6) made that pick STABLE, which is worth
   # having, but stable is not the same as right: every row of the incoming batch
   # then attaches to whichever of several real samples sorted first. Measured on
-  # the live database (scratchpad/r008_*.R), re-ingesting one date-only N.L01
+  # the live database (probe r008), re-ingesting one date-only N.L01
   # XTAB would have collapsed 13 distinct samples - 13 separate ALS work orders,
   # pH 7.95-8.20, BOD 192-583 - onto one, with 179 conflicting analyses landing
   # on top of each other.
   #
-  # Robin's ruling (2026-08-08): "there should never be two samples at the same
+  # The ruling (2026-08-08): "there should never be two samples at the same
   # feature at the same datetime ... quarantine any incoming data where this is
   # true." A91 (2026-10-17) moved the quarantine to reconcile: those rows are
   # withheld as `sample_ambiguous` and the rest of the file commits. So this
@@ -1948,7 +1947,7 @@
 # feature and date, two matrices" as two samples. It is rare enough to leave
 # alone (multi-section crosstabs are legacy; current exports are single-matrix),
 # but if it does recur do NOT silently pick one matrix over the other - see the
-# known-limitation note in dev/HANDOVER.md, and revisit matrix-in-the-key
+# the handover's known-limitation note, and revisit matrix-in-the-key
 # whenever the datetime convention is next reworked.
 .ct_find_or_create_sample <- function(con, pending, match_feature, alias_uuid,
                                        sample_date, sample_datetime,
@@ -2048,12 +2047,12 @@
 #' only 36 rows use this pipeline's convention. Measured by calling
 #' `.ct_existing_sample_uuid()` on 400 real samples at their own AEST calendar
 #' day: it found 0 of them, and found 400 of 400 when asked with the day
-#' `CAST(date AS DATE)` reads back (scratchpad/m6c_schema_reach.R). So a
+#' `CAST(date AS DATE)` reads back (measured on the live DB). So a
 #' re-ingest of legacy data reaches this branch every time.
 #'
 #' Translating rather than fixing is deliberate. Correcting the `date`
 #' convention is a larger, separate change that needs its own ruling - see the
-#' header of dev/migrations/009-sample-identity-index.R. Until then the index
+#' header of migration 009 (sample identity index). Until then the index
 #' turns silent duplication into a refusal, and this function makes the refusal
 #' legible. The wording deliberately mirrors the ruling-9 ambiguity abort in
 #' `.ct_existing_sample_uuid()`: same "refused rather than ..." framing, same
@@ -2605,7 +2604,7 @@
     if (nrow(row) == 0 || !(row$state[[1]] %in% non_terminal)) {
       next
     }
-    # R-22.N (Robin 2026-10-25): record the event's work order on the file, so
+    # R-22.N (2026-10-25): record the event's work order on the file, so
     # settling (.st_settle_resolved_files()) and the db_check can tell which
     # review items cover it. Nothing wrote ingest_file.work_order before.
     if (!is.na(work_order)) {

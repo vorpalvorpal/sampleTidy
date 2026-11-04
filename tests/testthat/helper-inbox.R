@@ -31,6 +31,20 @@ inbox_corrupt_file <- function() {
   inbox_fixture("esdat", "CORRUPT.ESDAT_XX0000000_0.Chemistry2e.CSV")
 }
 
+#' The inbox recogniser the older suites were written against: folders named
+#' `batch-<something>`, 10 minutes to settle, leftovers filed under `filed-mail`.
+#' The setup file no longer pins it globally: inbox_setup() sets it for the
+#' calling test, and a test of the generic defaults clears it again (bt_setup()).
+test_batches <- function() {
+  inbox_batches("^batch-.+", settle_minutes = 10, leftovers = "filed-mail")
+}
+
+#' Set the option to test_batches() for the rest of the calling test.
+local_test_batches <- function(env = parent.frame()) {
+  withr::local_options(list(sampletidy.inbox_batches = test_batches()), .local_envir = env)
+  invisible(NULL)
+}
+
 #' A seeded DB, archive/snapshot dirs, an empty inbox, backup and report dirs.
 #' Seeded features with site 'T' are re-sited to 'B' (Northvale) so that the
 #' XX1234567 fixture's samples land on Northvale features.
@@ -55,6 +69,7 @@ inbox_setup <- function(env = parent.frame()) {
     "sampletidy.live_db" = db_path,
     "sampletidy.input_dir" = input_dir
   ), .local_envir = env)
+  local_test_batches(env)
   list(db = db_path, archive_dir = archive_dir, snapshot_dir = snapshot_dir,
        input_dir = input_dir, backup_dir = backup_dir, report_dir = report_dir)
 }
@@ -166,7 +181,7 @@ record_hook <- function(event, renderer = FALSE, env = parent.frame()) {
 }
 
 # ---- stage 2 helpers: the generic inbox (test-inbox-batches.R and friends) ---------
-# The setup file pins the legacy recogniser (input*, 10 minutes, _emails) for the
+# inbox_setup() sets test_batches() (batch-*, 10 minutes, filed-mail) for the
 # older suites. The stage 2 tests clear it, so they run on the package defaults
 # (every non-hidden subfolder, settled at once, leftovers left in place) unless
 # they pass `batch` themselves. Synthetic folders: batch-1, batch-2, misc.
