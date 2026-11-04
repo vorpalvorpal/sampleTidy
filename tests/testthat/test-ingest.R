@@ -2,7 +2,7 @@
 # and the `remove_ingested` switch (R-9.6, A13).
 #
 # Assumes the built-in adapters (esdat/als_xtab/als_enmrg/acirl_field_xlsx)
-# self-register on package load (see dev/plans/PLAN-CHANGE-REQUESTS.md).
+# self-register on package load (see PLAN-CHANGE-REQUESTS.md).
 # `ingest_report`'s exact field names aren't pinned by CONTRACT beyond "files
 # by terminal state, events committed, rows new/already_present/superseded/
 # skipped-by-reason, review items opened" (DESIGN §1), so these tests verify
@@ -205,7 +205,7 @@ expect_dry_run_writes_nothing_but_routing <- function(db_path, run) {
 # the full e2e corpus grows no base table except the routing ops tables") used
 # to be two tests, each dry-running the full e2e corpus. Merged (PLAN-22 B4):
 # one dry run, every assertion of both. It keeps R-9.5's name because
-# dev/plans/COVERAGE-MAP.md quotes it (test-coverage-map-lint.R).
+# COVERAGE-MAP.md quotes it (test-coverage-map-lint.R).
 test_that("R-9.5: dry_run = TRUE produces a report with zero core-table DB writes and no snapshot", {
   setup <- ingest_test_setup()
   input_dir <- build_e2e_input_dir()
@@ -377,7 +377,7 @@ test_that("R-9.5: an adapter crash on one file is recorded as failed and the run
 # test-e2e-pipeline.R R-10.3 asserts a strict superset of this test (its
 # all_table_counts() covers every table here plus ingest_file and
 # ingest_sighting), so PLAN-22 B4 meant to drop it. It stays because
-# dev/plans/COVERAGE-MAP.md quotes its name, but its FIRST run now comes from
+# COVERAGE-MAP.md quotes its name, but its FIRST run now comes from
 # the B1 cache: it starts from a private copy of the post-ingest state and
 # only the second run - the one under test - happens here, on that copy.
 test_that("R-9.5: a second run over the same directory is a no-op (idempotent at the orchestration level)", {

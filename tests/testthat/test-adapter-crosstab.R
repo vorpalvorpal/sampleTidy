@@ -7,8 +7,8 @@
 # `ES2570540_0_ENMRG.CSV` (ENMRG). All expected counts/names/values below
 # were derived by actually parsing those files with the corrected adapter
 # and reading off the results (see PR discussion / dev notes) - never
-# hand-guessed. See dev/plans/PLAN-05-adapters-crosstab.md (A34 block),
-# dev/plans/CONTRACT.md (A29, A34, A37), tests/testthat/fixtures/
+# hand-guessed. See PLAN-05-adapters-crosstab.md (A34 block),
+# CONTRACT.md (A29, A34, A37), tests/testthat/fixtures/
 # REAL-FIXTURES.md, and tests/testthat/fixtures/crosstab/README.md.
 #
 # A small set of synthetic fixtures (generate.R) cover the three criteria
@@ -20,7 +20,7 @@
 # `.ST_CROSSTAB_ANY_MARKER_RE` comment).
 #
 # Adapter accessor: as in the other adapter test files, we use the registry
-# route pending adjudication (dev/plans/PLAN-CHANGE-REQUESTS.md).
+# route pending adjudication (PLAN-CHANGE-REQUESTS.md).
 
 xtab_adapter  <- function() sampleTidy:::adapter_registry()[["als_xtab"]]
 enmrg_adapter <- function() sampleTidy:::adapter_registry()[["als_enmrg"]]

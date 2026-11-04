@@ -1,7 +1,7 @@
 # tests/testthat/test-sample-stream-matching.R
 #
 # A91 - a sample is matched within its contractor STREAM; an ambiguous match is
-# reviewed, not refused (dev/plans/OPERATING-RULES.md A91, amending A84's import
+# reviewed, not refused (OPERATING-RULES.md A91, amending A84's import
 # half). Design: scratchpad/2026-10-17-acirlmatch/DESIGN.md, rule R2 (section 3)
 # and its test list (section 5). Robin's rulings, 2026-10-17:
 #   D1  gas readings get their own samples (stream `gas`) and never share the

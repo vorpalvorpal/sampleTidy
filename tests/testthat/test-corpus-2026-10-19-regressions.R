@@ -1,5 +1,5 @@
 # Regressions from the 2026-10-19 corpus rehearsal
-# (scratchpad/2026-10-19-corpus/; diagnosis in dev/plans/PLAN-15 B.4 and
+# (scratchpad/2026-10-19-corpus/; diagnosis in PLAN-15 B.4 and
 # PLAN-09 R-9.14, both marked "2026-10-19 corpus finding").
 #
 # C  Non-idempotent re-ingest across the pending/resolved boundary. A raw

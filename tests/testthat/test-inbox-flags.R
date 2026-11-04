@@ -1,5 +1,5 @@
 # Phase 2 of auto-import: import_flags() and the Flags section of the standing
-# status note (dev/plans/PLAN-18-auto-import.md section 4, contract in 4.5).
+# status note (PLAN-18-auto-import.md section 4, contract in 4.5).
 # Every test builds a small synthetic DB with helper-flags.R; nothing touches
 # the live DB, dev/ or the vault. "now" is fixed at 2026-10-19 13:00 Sydney
 # (fl_now()), so "today" is 2026-10-19 and the overdue window is Oct 2025 -

@@ -1,5 +1,5 @@
 # PLAN-16 Phase-7b round-3, Robin's RULING 2 (2026-07-25, "Scope added
-# 2026-07-25" in dev/plans/PLAN-16-review-queue-structured-payload.md):
+# 2026-07-25" in PLAN-16-review-queue-structured-payload.md):
 # `review_queue_candidate` had neither a producer nor a reader in production
 # (Slice G proved it by mutation - zeroing `.rq_row()`'s child rows killed 6
 # constructor-level unit tests and left every end-to-end file green). This

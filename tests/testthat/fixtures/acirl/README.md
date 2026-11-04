@@ -46,7 +46,7 @@ that must be pivoted to long/tidy form:
   (`lab_data_dropped`) - none of these labels match the terminator regex, so
   they can't be mistaken for the end of the field block.
 
-## Files pinned by `dev/plans/FIXTURES.md`
+## Files pinned by `FIXTURES.md`
 
 `2400-9999-01_Test_WMF.xlsx` - the one pinned workbook, exactly 5
 sheets:

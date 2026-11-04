@@ -1,6 +1,6 @@
 # PLAN-20 phase 1, P20.1: status.json and events.jsonl, written beside the legacy
 # .import-status.json and .imports.log (kept for one release). Spec:
-# dev/plans/PLAN-20-phase1-spec.md.
+# PLAN-20-phase1-spec.md.
 #
 # ingest_dir() is mocked to a no-op (the namespace binding is mockable, see
 # test-inbox.R): these tests are about the files inbox_run() writes, not about

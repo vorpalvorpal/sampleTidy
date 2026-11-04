@@ -1,6 +1,6 @@
 # Seed database helpers for the sampleTidy test suite.
 #
-# Defines seed_db() and seed_con() exactly per dev/plans/FIXTURES.md
+# Defines seed_db() and seed_con() exactly per FIXTURES.md
 # "Seed DB" section. This file only DEFINES functions - no top-level calls -
 # so it can be sourced even before any production R/ functions exist.
 #
@@ -255,7 +255,7 @@
 #'
 #' Creates a DuckDB file in `dir`, runs `ensure_schema()` (the plan-01 ops
 #' migrations), creates the CONTRACT core tables, and inserts exactly the
-#' rows pinned in dev/plans/FIXTURES.md. Returns the (closed) db path.
+#' rows pinned in FIXTURES.md. Returns the (closed) db path.
 #'
 #' @param dir directory to hold the DB file (defaults to a fresh withr temp
 #'   dir scoped to the calling test)
@@ -287,7 +287,7 @@ seed_db <- function(dir = NULL) {
   # CREATE INDEX time with a duckdb error naming one duplicate; created before,
   # the offending INSERT itself fails and points at the row that is wrong.
   #
-  # See dev/migrations/009-sample-identity-index.R for why the key is
+  # See migrations/009-sample-identity-index.R for why the key is
   # (uuid_feature_alias, datetime, uuid_project) rather than the
   # (uuid_feature, datetime, lab_reference) that was first proposed.
   for (ddl in .st_test_core_indexes) DBI::dbExecute(con, ddl)

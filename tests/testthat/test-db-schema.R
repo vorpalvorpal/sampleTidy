@@ -106,7 +106,7 @@ test_that("R-1.5: ensure_schema() never drops or narrows existing core-table col
 # `path`, stored into `path_first_seen` only on the row's first insert (the
 # column name says "first seen" - subsequent upserts with a different path
 # must not overwrite it, only add an ingest_sighting row). See
-# dev/plans/PLAN-CHANGE-REQUESTS.md.
+# PLAN-CHANGE-REQUESTS.md.
 
 test_that("R-1.6: a legal state path walks end to end", {
   dir <- withr::local_tempdir()

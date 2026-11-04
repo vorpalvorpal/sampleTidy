@@ -1,5 +1,5 @@
 # PLAN-20 phase 1, P20.4: completed_work(db, since). Spec:
-# dev/plans/PLAN-20-phase1-spec.md section P20.4.
+# PLAN-20-phase1-spec.md section P20.4.
 #
 # Every test builds its projects with DISTINCTIVE uuids/names ("cwp-NNN" /
 # "WON-NNN") inside a seed_db() database and asserts on those uuids only:

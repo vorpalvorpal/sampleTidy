@@ -1,5 +1,5 @@
 # PLAN-20 phase 1, P20.2: hooks (register_hook / clear_hooks / hooks) and their
-# firing inside inbox_run(). Spec: dev/plans/PLAN-20-phase1-spec.md.
+# firing inside inbox_run(). Spec: PLAN-20-phase1-spec.md.
 #
 # Hooks are SESSION state, so every test that touches them clears them on entry
 # and on exit (hk_clean()).

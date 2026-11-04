@@ -1,4 +1,4 @@
-# Flag check `missing_result` (dev/plans/SPEC-flag-missing-result.md): a unit-bearing
+# Flag check `missing_result` (SPEC-flag-missing-result.md): a unit-bearing
 # analyte (a number is expected) with analysis.value NULL, on a recent-delivery sample.
 
 mr_txt <- function(con) {

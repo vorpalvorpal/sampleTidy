@@ -1,8 +1,8 @@
 # Deterministic generator for tests/testthat/fixtures/esdat/*
 #
 # Reproduces the ESdat (EScIS) delivery fixtures pinned in
-# dev/plans/FIXTURES.md ("ESdat (plan 04, fixtures/esdat/)") and
-# dev/plans/PLAN-04-adapter-esdat.md. Re-run with:
+# FIXTURES.md ("ESdat (plan 04, fixtures/esdat/)") and
+# PLAN-04-adapter-esdat.md. Re-run with:
 #   Rscript tests/testthat/fixtures/esdat/generate.R
 # from the package root (or any working directory - paths are relative to
 # this script's own location).
@@ -188,7 +188,7 @@ writeLines(random_csv, file.path(here, "random.csv"), sep = "\r\n")
 # "26 May 2025" date, so R-4.5's "an unparseable date lands in warnings ...
 # the row still emitted with analysed_date NA" criterion has no data to hit
 # in the pinned fixture. This is a documented addition (see
-# dev/plans/PLAN-CHANGE-REQUESTS.md) - a minimal extra delivery, same header,
+# PLAN-CHANGE-REQUESTS.md) - a minimal extra delivery, same header,
 # one row with a garbled Analysed_Date.
 baddate_rows <- list(
   c("XX5555555001", "", "pH Value", "", "6.90", "pH Unit", "T", "Numeric",

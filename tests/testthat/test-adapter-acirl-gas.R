@@ -1,7 +1,7 @@
 # tests/testthat/test-adapter-acirl-gas.R
 #
 # TDD "red" tests for the ACIRL monthly-gas adapter `acirl_gas_xlsx`
-# (dev/plans/PLAN-17-adapter-acirl-gas.md, "Tests first" 1-10 and 15, plus the
+# (PLAN-17-adapter-acirl-gas.md, "Tests first" 1-10 and 15, plus the
 # naming/semantics rulings settled 2026-10-16). End-to-end tests (9, 11-14 and
 # the review half of 6/7) live in test-acirl-gas-e2e.R.
 #
@@ -809,7 +809,7 @@ test_that("15 (gated): REPORT NO is read from the cell for every real workbook",
 # 16 - ACIRL template slots N.G201 / M.G365 / M.G366 are never emitted
 # ==============================================================================
 #
-# Robin, migrations 032 and 034 (dev/MIGRATIONS.md rows 1032/1034): "Are they
+# Robin, migrations 032 and 034 (MIGRATIONS.md rows 1032/1034): "Are they
 # existing features in the database with known locations? If not, we don't
 # want them." No probe at the REPORTING site carries those numbers - they are
 # rows the ACIRL template prints (CH4 0) at a site that has no such probe. The

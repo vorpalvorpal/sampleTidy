@@ -7,7 +7,7 @@
 # pinned shape (R-7.5) rather than by routing real files through adapters -
 # this keeps these tests independent of plans 04-07's implementation status.
 # The DB is the throwaway `seed_db()` (tests/testthat/helper-db.R), seeded
-# with exactly the rows pinned in dev/plans/FIXTURES.md.
+# with exactly the rows pinned in FIXTURES.md.
 
 # ---- local helpers ------------------------------------------------------
 
@@ -1385,7 +1385,7 @@ test_that("R-8.6: a tied rl_low keeps the higher value", {
   withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   # Supplement the seed with a second ALS Fluoride method tied on rl_low
   # (FIXTURES.md only pins one duplicate-method pair, which isn't tied - see
-  # dev/plans/PLAN-CHANGE-REQUESTS.md for context on why this is added here
+  # PLAN-CHANGE-REQUESTS.md for context on why this is added here
   # rather than in helper-db.R).
   DBI::dbExecute(con, "INSERT INTO lab_method (uuid, uuid_analyte, name, method, organisation, rl_low) VALUES
     ('lm-0002b', 'a-0002', 'Fluoride', 'EK040P: Fluoride by PC Titrator (tie)', 'ALS', 0.1)")
@@ -4779,61 +4779,7 @@ test_that("PLAN-15 E.2 shape: a contradictory alias bound (date_start > date_end
 # chain against its immediate neighbour.
 # =============================================================================
 
-# ---- local helper: sys.source the REAL migration-001 normaliser -----------
-# Same pattern as test-migration-001.R:42/.mig001_load() (each test FILE is
-# sourced into its own env by testthat, so redefining this name per file is
-# the established convention here, not a collision).
-
-.mig001_load <- function() {
-  env <- new.env(parent = globalenv())
-  path <- testthat::test_path("..", "..", "dev", "migrations", "001-alias-indirection.R")
-  skip_if_not(file.exists(path), "dev/migrations not in built package (run via devtools::test)")
-  sys.source(path, envir = env)
-  env
-}
-
-# ---- F.3: the migration-parity oracle, respecified (R-15.22/R-15.23) ------
-
-test_that("R-15.22: .rc_feature_key reproduces the REAL sys.sourced .mig001_normalize over the stored alias_key domain (idempotence on migration-001's own output) and on the ASCII discriminating inputs the two functions genuinely agree on - NOT a locally re-declared oracle", {
-  mig <- .mig001_load()
-  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
-  fa <- DBI::dbGetQuery(con, "SELECT name, alias_key FROM feature_alias")
-  expect_true(nrow(fa) > 0)
-
-  # Sanity tie: the seeded `alias_key` domain IS what the REAL migration-001
-  # normaliser produces from the raw `name` - ties "the stored domain" to
-  # "real .mig001_normalize output", never to an independently-typed fixture
-  # literal.
-  expect_identical(mig$.mig001_normalize(fa$name), fa$alias_key)
-
-  # THE property that matters (F.3, cold audit finding 4): re-normalising
-  # migration-001's own stored output through `.rc_feature_key` must
-  # reproduce it exactly, for EVERY key actually stored - a key reconcile
-  # computes at runtime must find the row migration 001 wrote. Not a
-  # tautology: nothing here re-implements the normaliser; the oracle is the
-  # real DB domain plus the real sys.sourced function above.
-  expect_identical(.rc_feature_key(fa$alias_key), fa$alias_key)
-
-  # ASCII discriminating inputs (kept from the original F.3 list, minus the
-  # NBSP case - R-15.23's explicit divergence instead): a double internal
-  # space and a trailing tab, on which `.rc_feature_key` and the REAL
-  # `.mig001_normalize` genuinely agree.
-  ascii_inputs <- c("B.  S01", "N.S01\t")
-  expect_identical(.rc_feature_key(ascii_inputs), mig$.mig001_normalize(ascii_inputs))
-})
-
-test_that("R-15.23: .rc_feature_key and the REAL .mig001_normalize DIVERGE on a leading-NBSP input - .rc_feature_key (F.2's Unicode-aware trim) folds it to the clean key, .mig001_normalize's base trimws() leaves the NBSP in place (locks F.2 against a silent revert)", {
-  mig <- .mig001_load()
-  nbsp_input <- " N.S01"   # LEADING U+00A0 NBSP (bytes c2 a0) - not a plain space
-  clean_key <- "n.s01"
-
-  rc_out <- .rc_feature_key(nbsp_input)
-  mig_out <- mig$.mig001_normalize(nbsp_input)
-
-  expect_identical(rc_out, clean_key)            # F.2: folds the NBSP away
-  expect_false(identical(mig_out, clean_key))    # base trimws() does not strip NBSP
-  expect_false(identical(rc_out, mig_out))       # EXPLICIT divergence, not silently absorbed
-})
+# F.3 (R-15.22/R-15.23, parity with migration 001's normaliser) is tested with the migrations, in the deployment repo.
 
 # ---- F.5: review payload order-independence (R-15.26) ---------------------
 

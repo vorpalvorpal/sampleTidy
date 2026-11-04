@@ -5,6 +5,11 @@
 decisions from the empirical review of the live `input/` corpus (July 2026).
 Decisions are settled unless marked _Open_.
 
+Comments in `R/` and `tests/` cite design plans (`PLAN-NN-*.md`, `CONTRACT.md`,
+`OPERATING-RULES.md`), migration scripts and their register (`MIGRATIONS.md`)
+and `HANDOVER.md` by file name; those records are kept with the deployment, not
+in this repository.
+
 ---
 
 ## 1. Purpose, audiences & scope

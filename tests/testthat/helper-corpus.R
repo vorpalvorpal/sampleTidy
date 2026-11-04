@@ -166,7 +166,7 @@ build_e2e_input_dir <- function(dest = NULL) {
 #' provenance rows, commit_event()'s archival step) needs a real `asset`
 #' table to write into. This helper adds it, idempotently, matching the
 #' CONTRACT column list exactly, so plan 09/10 tests aren't blocked on that
-#' gap. Logged to dev/plans/PLAN-CHANGE-REQUESTS.md; safe to delete once
+#' gap. Logged to PLAN-CHANGE-REQUESTS.md; safe to delete once
 #' helper-db.R grows an empty `asset` table itself.
 #'
 #' @param con an open DBI connection to a `seed_db()`-created database

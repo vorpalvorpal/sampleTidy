@@ -1877,7 +1877,7 @@ test_that("R-15.18 (E.4): confirm_feature_aliases() with BOTH date_start and dat
 # duckdb 1.4.1 refuses an UPDATE of a chained-FK table's own outgoing-FK
 # column - lab_method.uuid_analyte - while any analysis row still
 # references it; see .mig002_detach_reason's own comment in
-# dev/migrations/002-registry-remediation.R for the reference detach ->
+# migrations/002-registry-remediation.R for the reference detach ->
 # repoint -> reattach pattern the fix is expected to reuse).
 #
 # NOTE: helper-db.R's shared `seed_db()`/`fa_setup()` DDL declares NO
@@ -1887,7 +1887,7 @@ test_that("R-15.18 (E.4): confirm_feature_aliases() with BOTH date_start and dat
 # instead builds its own minimal, self-contained FK-constrained DB (the
 # smallest two-hop chain that reproduces it: analyte <- lab_method <-
 # analysis, mirroring the live shape at
-# dev/migrations/001-alias-indirection.R:456-499), reusing `ensure_schema()`
+# migrations/001-alias-indirection.R:456-499), reusing `ensure_schema()`
 # for the ops tables rather than re-deriving them. Empirically verified
 # (scratch repro) that duckdb 1.4.1 raises "Constraint Error: ... still
 # referenced by a foreign key in a different table" on this exact shape,
