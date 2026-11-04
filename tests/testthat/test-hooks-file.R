@@ -291,6 +291,42 @@ test_that("hooks file: dev/auto-import.R calls load_hooks_file() after loading t
   expect_true(any(grepl("SAMPLETIDY_HOOKS_FILE", src, fixed = TRUE)))
 })
 
+# Stage 1 of the layer move: the live entry point carries no deployment data.
+# The schedule, QC tables, licence tables and the contractor-work ledger are the
+# deployment's, so auto-import.R only hands inbox_run() whatever the hooks file
+# put in st_config("checks") (NULL when none did).
+test_that("hooks file: dev/auto-import.R passes st_config(\"checks\") to its single inbox_run() and names no deployment data", {
+  skip_if_not(dir.exists(hf_dev_file()), "no dev/ (installed package)")
+  src <- readLines(hf_dev_file("auto-import.R"), warn = FALSE)
+  code <- sub("#.*$", "", src)                     # ignore comments
+  txt <- paste(code, collapse = "\n")
+  expect_match(txt, "st_config\\(\"checks\"\\)")
+  expect_length(grep("inbox_run\\(", code), 1)
+  # it is the argument of inbox_run(), not a variable built beforehand
+  call_txt <- sub("^.*inbox_run\\(", "", txt)
+  expect_match(call_txt, "checks\\s*=\\s*st_config\\(\"checks\"\\)")
+  for (gone in c("expected_schedule", "qc_criteria", "qc_requirements", "sampling_rounds",
+                 "contractor-work", "LICENCE_DIR")) {
+    expect_false(grepl(gone, txt, fixed = TRUE), info = gone)
+  }
+  expect_false(grepl("checks\\s*<-", txt))
+  expect_false(grepl("\\b(dev_dir|ledger|invoices|licence_dir)\\b", txt))
+  # the rest of the entry point is unchanged
+  expect_true(any(grepl("load_all\\(", code)))
+  expect_true(any(grepl("load_hooks_file\\(", code)))
+  expect_true(any(grepl("SAMPLETIDY_AUTOIMPORT_DB", code, fixed = TRUE)))
+  expect_true(any(grepl("SAMPLETIDY_AUTOIMPORT_INPUT", code, fixed = TRUE)))
+  expect_true(any(grepl("report_dir", code, fixed = TRUE)))
+  expect_true(any(grepl("SAMPLETIDY_HOOKS_FILE", src, fixed = TRUE)))
+})
+
+test_that("hooks file: the deployment's check tables are no longer shipped in dev/", {
+  skip_if_not(dir.exists(hf_dev_file()), "no dev/ (installed package)")
+  for (f in c("expected_schedule.csv", "qc_criteria.csv", "qc_requirements.csv")) {
+    expect_false(file.exists(hf_dev_file(f)), info = f)
+  }
+})
+
 # End to end: run dev/auto-import.R under Rscript against a scratch DB, inbox and
 # report dir, with SAMPLETIDY_HOOKS_FILE set.
 hf_run_auto_import <- function(s, hooks_file, extra_env = character(0), env = parent.frame()) {

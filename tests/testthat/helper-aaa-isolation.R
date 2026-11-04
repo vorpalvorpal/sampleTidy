@@ -23,4 +23,15 @@ if (identical(Sys.getenv("TESTTHAT"), "true")) local({
       do.call(Sys.setenv, stats::setNames(list(dest), var))
     }
   }
+
+  # Deployment settings (stage 1 of the layer move): the zone, the date
+  # overrides file and the gas site keywords come from the environment of the
+  # machine that runs the suite (Robin's .Renviron sets the first two). Unset
+  # them so the suite sees the package defaults, then pin the options the
+  # existing suites were written against. A test of the defaults clears the
+  # options itself, with withr::local_options(sampletidy.timezone = NULL).
+  Sys.unsetenv(c("SAMPLETIDY_TIMEZONE", "SAMPLETIDY_DATE_OVERRIDES",
+                 "SAMPLETIDY_SITE_KEYWORDS"))
+  options(sampletidy.timezone = "Australia/Sydney",
+          sampletidy.site_keywords = list(B = "northvale", K = "millbrook"))
 })

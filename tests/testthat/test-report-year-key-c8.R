@@ -724,7 +724,7 @@ c8_gas_sample_project <- function(con, uuid_feature, day) {
     "SELECT DISTINCT s.uuid_project FROM \"sample\" s
        JOIN feature_alias fa ON fa.uuid = s.uuid_feature_alias
       WHERE fa.uuid_feature = ? AND CAST(%s AS VARCHAR) = ?",
-    .ct_sydney_day_sql("s.date")), params = list(uuid_feature, day))$uuid_project
+    .ct_local_day_sql("s.date")), params = list(uuid_feature, day))$uuid_project
 }
 
 test_that("C8 gas e2e: Mar 2025 then Mar 2026 workbooks under one report number -> two Monthly gas monitoring rows, no flag", {
