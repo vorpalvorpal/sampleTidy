@@ -3,9 +3,9 @@
 # (a field QC code commits as a normal sample on its own QC feature) and
 # R-19.6 (`sample_lab_id` written at commit, crosstab/ESdat only).
 #
-# FIXTURE fixtures/qc/secondary/ES2570540_0_ENMRG.CSV is DERIVED from the
-# anonymised real fixtures/crosstab/ES2570540_0_ENMRG.CSV (REAL-FIXTURES.md):
-# only the two client-ID rows were edited, every ALS value is untouched.
+# FIXTURE fixtures/qc/secondary/ES2570540_0_ENMRG.CSV is the same report
+# as fixtures/crosstab/ES2570540_0_ENMRG.CSV (both written by
+# fixtures/crosstab/generate.R) except for the two client-ID rows.
 # [invented: the plan's A.8 names ES2652688's ENMRG as the Secondary-ID
 #  fixture; an edited copy of the committed one covers the same layout
 #  without pulling another real file.] Columns, in order:
