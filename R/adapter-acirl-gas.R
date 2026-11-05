@@ -1,12 +1,14 @@
 # PLAN-17 - the `acirl_gas_xlsx` adapter: ACIRL "Monthly Gas Monitoring"
 # workbooks (`2400-*... Gas Monitoring ... .xls`). One front page plus
 # `Gas Landfil #n` / `Gas Building(s)` sheets (and at some sites a
-# `Biofliter and Bores` sheet) holding CH4 readings in % v/v.
+# `Biofliter and Bores` sheet) holding CH4 readings in % v/v, and, where the
+# lab prints them beside the CH4 column, O2 and CO2 readings in % v/v.
 #
 # Geometry is found by HEADER TEXT, never by position (the files come in three
 # families whose header row is 6, 7 or 11 and whose first column is 1 or 2):
 # each `CH4 Reading` header cell pairs with the `Location` cell to its left,
-# with an optional `Reference` column between them.
+# with an optional `Reference` column between them. The O2 and CO2 columns, if
+# any, are the headers that follow the CH4 column directly.
 #
 # The site code (the feature-name prefix) comes from the workbook's own text,
 # never the filename - probe numbers are not site-unique (PLAN-17). Which
@@ -81,6 +83,34 @@ acirl_gas_xlsx_adapter <- function() {
   hit <- matrix(grepl("^ch4\\s*reading", .st_gas_clean(mat), ignore.case = TRUE),
                 nrow = nrow(mat))
   which(hit, arr.ind = TRUE)
+}
+
+# The gas columns that may follow a CH4 column, in emit order. `re` matches the
+# cleaned header (the lab sometimes prints a digit zero for the letter O).
+.st_gas_extra_gases <- list(
+  list(gas = "O2", re = "^(o2|02)\\s*reading"),
+  list(gas = "CO2", re = "^(co2|c02)\\s*reading")
+)
+
+# The extra gas columns directly right of the CH4 column (H, cc): contiguous
+# headers, each gas once, stopping at the first header that is neither.
+# Returns a named integer vector (gas -> column), in header order.
+.st_gas_extra_cols <- function(cell, H, cc, n_col) {
+  out <- integer(0)
+  j <- cc + 1L
+  while (j <= n_col) {
+    h <- cell(H, j)
+    g <- NA_character_
+    if (!is.na(h)) {
+      for (x in .st_gas_extra_gases) {
+        if (grepl(x$re, h, ignore.case = TRUE)) { g <- x$gas; break }
+      }
+    }
+    if (is.na(g) || g %in% names(out)) break
+    out[[g]] <- j
+    j <- j + 1L
+  }
+  out
 }
 
 # --- match() -------------------------------------------------------------------
@@ -200,7 +230,7 @@ acirl_gas_xlsx_adapter <- function() {
 }
 
 # All data blocks on one sheet. Returns a list of raw readings:
-# list(row, col, feature, raw, bio).
+# list(row, col, feature, raw, bio, gas); `gas` is "CH4", "O2" or "CO2".
 .st_gas_sheet_readings <- function(mat, sheet, site, is_bio) {
   n_row <- nrow(mat); n_col <- ncol(mat)
   if (n_row == 0) return(list())
@@ -230,10 +260,12 @@ acirl_gas_xlsx_adapter <- function() {
     later <- which(is_term_row & seq_len(n_row) > H)
     E <- if (length(later)) min(later) - 1L else n_row
     building <- !is.na(rc)
+    # The block's gas columns: CH4 first, then O2 and CO2 in that order.
+    extra <- .st_gas_extra_cols(cell, H, cc, n_col)
+    gas_cols <- c(CH4 = unname(cc), extra[intersect(c("O2", "CO2"), names(extra))])
     cur_loc <- NA_character_
     for (r in seq_len(max(E - H, 0L)) + H) {
       loc <- cell(r, lc); ref <- if (building) cell(r, rc) else NA_character_
-      val <- cell(r, cc)
       if (building) {
         if (!is.na(loc)) cur_loc <- loc else loc <- cur_loc
         if (is.na(ref)) next
@@ -261,10 +293,15 @@ acirl_gas_xlsx_adapter <- function() {
         paste0(.st_gas_prefix(site), loc)
       }
       seen <- c(seen, feature)
-      if (is.na(val)) next
-      out[[length(out) + 1L]] <- list(
-        row = r, col = cc, feature = feature, raw = val, bio = is_bio
-      )
+      # One feature per row, shared by every gas cell on it.
+      for (g in names(gas_cols)) {
+        val <- cell(r, gas_cols[[g]])
+        if (is.na(val)) next
+        out[[length(out) + 1L]] <- list(
+          row = r, col = gas_cols[[g]], feature = feature, raw = val, bio = is_bio,
+          gas = g
+        )
+      }
     }
   }
   out
@@ -448,14 +485,15 @@ acirl_gas_xlsx_adapter <- function() {
   comments <- if (nr$amended) "Amended" else NA_character_
   for (i in seq_along(readings)) {
     r <- readings[[i]]
+    gas <- if (is.null(r$gas)) "CH4" else r$gas
     ref <- sprintf("%s!%s%d", trimws(r$sheet), .st_gas_col_letters(r$col), r$row)
     num <- suppressWarnings(as.numeric(r$raw))
     if (is.na(num)) {
       reason <- .st_gas_text_reason(r$raw)
       skipped[[length(skipped) + 1L]] <- tibble::tibble(source_ref = ref, reason = reason)
       if (reason == "unrecognised_text") {
-        warnings_vec <- c(warnings_vec, sprintf("%s: unrecognised CH4 cell text %s at %s; skipped.",
-                                                fm$filename, dQuote(r$raw, FALSE), ref))
+        warnings_vec <- c(warnings_vec, sprintf("%s: unrecognised %s cell text %s at %s; skipped.",
+                                                fm$filename, gas, dQuote(r$raw, FALSE), ref))
       }
       next
     }
@@ -476,7 +514,7 @@ acirl_gas_xlsx_adapter <- function() {
       source_hash = fm$hash, source_ref = ref, work_order = header$report_no,
       revision = 0L, org = "ACIRL", adapter = adapter_tag,
       lab_sample_id = r$feature, sample_type = "Normal", feature_raw = r$feature,
-      analyte_raw = "CH4 Reading % v/v", cas_number = NA_character_,
+      analyte_raw = paste(gas, "Reading % v/v"), cas_number = NA_character_,
       method_raw = NA_character_, total_or_filtered = NA_character_,
       units_raw = "%", value_raw = value_raw, value_num = value_num,
       value_chr = NA_character_, below_detection = isTRUE(value_num == 0),
