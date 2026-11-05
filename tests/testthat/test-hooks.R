@@ -5,8 +5,8 @@
 # and on exit (hk_clean()).
 #
 # inbox_run() is driven with ingest_dir() mocked (the namespace binding is
-# mockable, see test-inbox.R). The real fixtures cannot be used for the
-# "became complete" cases: every real fixture import opens review items that
+# mockable, see test-inbox.R). The lab-shaped fixtures cannot be used for the
+# "became complete" cases: every such fixture import opens review items that
 # reference its own work order, so it never completes. The mock inserts a
 # distinctively-named project (and sample) straight into the DB instead, which
 # is exactly "a project that became complete during this run".

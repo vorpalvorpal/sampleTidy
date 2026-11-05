@@ -45,9 +45,11 @@ test_that("the shipped text names no deployment: sites, organisation, people, va
   ps_skip()
   files <- ps_files("R/*.R", "man/*.Rd", "README.md", "dev/DESIGN.md")
   expect_gt(length(files), 50)
-  deny <- paste0("northvale|millbrook|\\bbwmf\\b|\\bkwmf\\b|\\bbmcc\\b|blue mountains|\\bcouncil\\b|",
-                 "\\blawson\\b|\\bwmf\\b|\\bblx\\b|\\brobin\\b|australia/sydney|cloudstorage|",
-                 "\\bpkm\\b|import triage|obsidian")
+  # Place names are written with one bracketed character so this file does
+  # not itself spell them out.
+  deny <- paste0("bla[x]land|kat[o]omba|\\bbw[m]f\\b|\\bkw[m]f\\b|\\bbm[c]c\\b|blue mo[u]ntains|\\bcouncil\\b|",
+                 "\\bla[w]son\\b|\\bwmf\\b|\\bblx\\b|\\brobin\\b|australia/sydney|cloudstorage|",
+                 "\\bpkm\\b|import triage|obsidian|lith[g]ow|lith[o]gw")
   ps_scan(files, deny, ignore_case = TRUE, what = "the deployment deny-list")
 })
 

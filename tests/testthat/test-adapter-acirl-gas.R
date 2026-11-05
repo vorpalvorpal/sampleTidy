@@ -220,10 +220,10 @@ test_that("2: Millbrook (header row 6, one column in, `CH4 Reading     % v/v`) y
 
 test_that("2: Northvale 2021 (header row 11) yields its 40 readings", {
   out <- gas_parse_fx("b2021")
-  expected <- c(paste0("B.G", c(1:3, 26:28, 51:53, 76:78)),
-                paste0("B.G", c(101:106, 126:131, 151:156, 176:181)),
-                "B.Toilets - Right Side", "B.Toilets - Left Side",
-                "B.Lunch Room - Centre", "B.Main Office - Centre")
+  expected <- c(paste0("N.G", c(1:3, 26:28, 51:53, 76:78)),
+                paste0("N.G", c(101:106, 126:131, 151:156, 176:181)),
+                "N.Toilets - Right Side", "N.Toilets - Left Side",
+                "N.Lunch Room - Centre", "N.Main Office - Centre")
   expect_setequal(out$results$feature_raw, expected)
   expect_equal(nrow(out$results), 40)
 })
@@ -231,7 +231,7 @@ test_that("2: Northvale 2021 (header row 11) yields its 40 readings", {
 test_that("2: Northvale 2024 landfill (row 7) + `Gas Buildings ` (row 8) yield 31 readings", {
   out <- gas_parse_fx("b2024")
   expect_equal(nrow(out$results), 31)
-  expect_equal(sum(grepl("^B\\.G[0-9]+$", out$results$feature_raw)), 23)
+  expect_equal(sum(grepl("^N\\.G[0-9]+$", out$results$feature_raw)), 23)
   expect_equal(sum(grepl(" - ", out$results$feature_raw)), 8)
 })
 
@@ -247,7 +247,7 @@ test_that("2: a `#3` sheet of only 3 rows yields exactly N.G382-N.G384", {
 test_that("2: a wholly blank row INSIDE the grid does not end the block (Mar-2026 #2 row 27)", {
   r <- gas_parse_fx("b2025")$results
   # rows 14-15 of `Gas Landfil #2`, below the blank row 13, in every pair
-  for (f in paste0("B.G", c(288, 289, 313, 314, 338, 339, 374, 375))) {
+  for (f in paste0("N.G", c(288, 289, 313, 314, 338, 339, 374, 375))) {
     expect_true(f %in% r$feature_raw, info = f)
   }
   expect_equal(gas_value_of(list(results = r), "N.G288"), 0.02)
@@ -303,21 +303,21 @@ test_that("3: the 2021 `Additional Gas Point Coordinates` table yields nothing",
 
 test_that("4: building Location fills down over blank cells", {
   f <- gas_parse_fx("b2024")$results$feature_raw
-  expect_true("B.Toilets - Right Side" %in% f)
-  expect_true("B.Toilets - Left Side" %in% f)          # Location blank on this row
-  expect_true("B.Weigh Bridge Building - Toilet" %in% f)
-  expect_true("B.Storage Shed re used - Back Wall" %in% f)
-  expect_true("B.Out side - Reused shed" %in% f)
-  expect_false(any(grepl("^B\\. - |^B\\.NA - ", f)))
+  expect_true("N.Toilets - Right Side" %in% f)
+  expect_true("N.Toilets - Left Side" %in% f)          # Location blank on this row
+  expect_true("N.Weigh Bridge Building - Toilet" %in% f)
+  expect_true("N.Storage Shed re used - Back Wall" %in% f)
+  expect_true("N.Out side - Reused shed" %in% f)
+  expect_false(any(grepl("^N\\. - |^N\\.NA - ", f)))
 })
 
 test_that("4: a reference repeated within ONE building gets `#2`", {
   f <- gas_parse_fx("b2024")$results$feature_raw
-  expect_equal(sum(f == "B.Storage Shed re used - Right Wall"), 1)
-  expect_equal(sum(f == "B.Storage Shed re used - Right Wall #2"), 1)
+  expect_equal(sum(f == "N.Storage Shed re used - Right Wall"), 1)
+  expect_equal(sum(f == "N.Storage Shed re used - Right Wall #2"), 1)
   k <- gas_parse_fx("kat")
-  expect_equal(sum(k$results$feature_raw == "K.Re-use Center - Power point back wall #2"), 1)
-  expect_equal(sum(k$results$feature_raw == "K.Meeting Room - Window wall 2 #2"), 1)
+  expect_equal(sum(k$results$feature_raw == "M.Re-use Center - Power point back wall #2"), 1)
+  expect_equal(sum(k$results$feature_raw == "M.Meeting Room - Window wall 2 #2"), 1)
 })
 
 # A small Northvale-2024-shaped workbook whose `Gas Buildings ` sheet holds
@@ -340,7 +340,7 @@ gas_suffix_parse <- function(entries) {
 }
 gas_suffix_bldg <- function(out) {
   f <- out$results$feature_raw
-  f[grepl("^B\\.Shed - ", f)]
+  f[grepl("^N\\.Shed - ", f)]
 }
 
 test_that("4: suffix is positional - a BLANK first occurrence still leaves the second as `#2`", {
@@ -350,8 +350,8 @@ test_that("4: suffix is positional - a BLANK first occurrence still leaves the s
     list(NA, "Door", 0)
   ))
   f <- gas_suffix_bldg(out)
-  expect_setequal(f, c("B.Shed - Wall #2", "B.Shed - Door"))
-  expect_equal(gas_value_of(out, "B.Shed - Wall #2"), 0.01)
+  expect_setequal(f, c("N.Shed - Wall #2", "N.Shed - Door"))
+  expect_equal(gas_value_of(out, "N.Shed - Wall #2"), 0.01)
 })
 
 test_that("4: suffix is positional - an `NS` first occurrence still leaves the second as `#2`", {
@@ -359,8 +359,8 @@ test_that("4: suffix is positional - an `NS` first occurrence still leaves the s
     list("Shed", "Wall", "NS"),
     list(NA, "Wall", 0.01)
   ))
-  expect_setequal(gas_suffix_bldg(out), "B.Shed - Wall #2")
-  expect_equal(gas_value_of(out, "B.Shed - Wall #2"), 0.01)
+  expect_setequal(gas_suffix_bldg(out), "N.Shed - Wall #2")
+  expect_equal(gas_value_of(out, "N.Shed - Wall #2"), 0.01)
 })
 
 test_that("4: suffix is positional - NR and other skipped text in an earlier occurrence count too", {
@@ -369,7 +369,7 @@ test_that("4: suffix is positional - NR and other skipped text in an earlier occ
     list(NA, "Wall", "No Access"),
     list(NA, "Wall", 0.02)
   ))
-  expect_setequal(gas_suffix_bldg(out), "B.Shed - Wall #3")
+  expect_setequal(gas_suffix_bldg(out), "N.Shed - Wall #3")
 })
 
 test_that("4: three occurrences with the MIDDLE one blank give no suffix, then `#3`", {
@@ -378,9 +378,9 @@ test_that("4: three occurrences with the MIDDLE one blank give no suffix, then `
     list(NA, "Wall", NA_real_),
     list(NA, "Wall", 0.03)
   ))
-  expect_setequal(gas_suffix_bldg(out), c("B.Shed - Wall", "B.Shed - Wall #3"))
-  expect_equal(gas_value_of(out, "B.Shed - Wall"), 0.01)
-  expect_equal(gas_value_of(out, "B.Shed - Wall #3"), 0.03)
+  expect_setequal(gas_suffix_bldg(out), c("N.Shed - Wall", "N.Shed - Wall #3"))
+  expect_equal(gas_value_of(out, "N.Shed - Wall"), 0.01)
+  expect_equal(gas_value_of(out, "N.Shed - Wall #3"), 0.03)
 })
 
 test_that("4: regression - fully populated repeats are still unsuffixed / `#2` / `#3`", {
@@ -390,16 +390,16 @@ test_that("4: regression - fully populated repeats are still unsuffixed / `#2` /
     list(NA, "Wall", 0.03),
     list("Other", "Wall", 0.04)
   ))
-  expect_setequal(c(gas_suffix_bldg(out), grep("^B\\.Other", out$results$feature_raw, value = TRUE)),
-                  c("B.Shed - Wall", "B.Shed - Wall #2", "B.Shed - Wall #3", "B.Other - Wall"))
-  expect_equal(gas_value_of(out, "B.Shed - Wall #2"), 0.02)
-  expect_equal(gas_value_of(out, "B.Shed - Wall #3"), 0.03)
+  expect_setequal(c(gas_suffix_bldg(out), grep("^N\\.Other", out$results$feature_raw, value = TRUE)),
+                  c("N.Shed - Wall", "N.Shed - Wall #2", "N.Shed - Wall #3", "N.Other - Wall"))
+  expect_equal(gas_value_of(out, "N.Shed - Wall #2"), 0.02)
+  expect_equal(gas_value_of(out, "N.Shed - Wall #3"), 0.03)
 })
 
 test_that("4: the same reference in two DIFFERENT buildings is not suffixed", {
   f <- gas_parse_fx("kat")$results$feature_raw
-  expect_true("K.Office - Air conditioner" %in% f)
-  expect_true("K.Meal Room - Air conditioner" %in% f)
+  expect_true("M.Office - Air conditioner" %in% f)
+  expect_true("M.Meal Room - Air conditioner" %in% f)
   expect_false(any(grepl("Air conditioner #", f)))
 })
 
@@ -412,7 +412,7 @@ test_that("4: feature_raw is unique within every file (A84 refuses repeats)", {
 
 test_that("4: runs of whitespace inside a building Location are squished", {
   f <- gas_parse_fx("kat")$results$feature_raw
-  expect_true("K.Main Recycle area (Drop Off) - Power point near hose reel" %in% f)
+  expect_true("M.Main Recycle area (Drop Off) - Power point near hose reel" %in% f)
   expect_false(any(grepl("  ", f)))
 })
 
@@ -428,19 +428,19 @@ test_that("5: probes are site-qualified from content - N.G182 at Northvale, M.G1
 test_that("5: B and K never cross - every feature in a file carries that file's site", {
   for (nm in c("b2025", "b2026", "weekly", "b2024", "b2021")) {
     out <- gas_parse_fx(nm)
-    expect_true(all(startsWith(c(out$results$feature_raw, out$samples$feature_raw), "B.")), info = nm)
+    expect_true(all(startsWith(c(out$results$feature_raw, out$samples$feature_raw), "N.")), info = nm)
   }
   out <- gas_parse_fx("kat")
-  expect_true(all(startsWith(c(out$results$feature_raw, out$samples$feature_raw), "K.")))
+  expect_true(all(startsWith(c(out$results$feature_raw, out$samples$feature_raw), "M.")))
 })
 
 test_that("5: Millbrook content in a file NAMED Northvale is Millbrook (and the reverse)", {
   dir <- withr::local_tempdir()
   k <- gas_parse(build_gas_millbrook(dir, filename = "2400-9903-12-01 December 2025 Gas Monitoring Northvale WMF.xlsx"))
-  expect_true(all(startsWith(k$results$feature_raw, "K.")))
+  expect_true(all(startsWith(k$results$feature_raw, "M.")))
   expect_true("M.G186" %in% k$results$feature_raw)
   b <- gas_parse(build_gas_northvale_2025(dir, filename = "2400-9901-07-01 July 2025 Gas Monitoring Millbrook WMF.xlsx"))
-  expect_true(all(startsWith(b$results$feature_raw, "B.")))
+  expect_true(all(startsWith(b$results$feature_raw, "N.")))
   # and a filename naming no site at all changes nothing
   n <- gas_parse(build_gas_millbrook(dir, filename = "gas.xlsx"))
   expect_setequal(n$results$feature_raw, gas_expected_millbrook())
@@ -476,36 +476,36 @@ test_that("5: G179-G181 emit N.G179-N.G181 (the registry aliases them to N.TG179
   expect_false(any(grepl("TG", f)))
 })
 
-test_that("5: Millbrook bores emit K.MP_1..K.MP_4 (the registry's MP_n alias form), not a building name", {
+test_that("5: Millbrook bores emit M.MP_1..K.MP_4 (the registry's MP_n alias form), not a building name", {
   out <- gas_parse_fx("kat")
   f <- out$results$feature_raw
-  expect_true(all(paste0("K.MP_", 1:4) %in% f))
+  expect_true(all(paste0("M.MP_", 1:4) %in% f))
   expect_false(any(grepl("Gas Bore", f)))
-  expect_equal(gas_value_of(out, "K.MP_3"), 0.01)
+  expect_equal(gas_value_of(out, "M.MP_3"), 0.01)
 })
 
-test_that("5: Northvale weekly points 1-21 emit `B.Weekly 1` ... `B.Weekly 21`", {
+test_that("5: Northvale weekly points 1-21 emit `N.Weekly 1` ... `N.Weekly 21`", {
   out <- gas_parse_fx("weekly")
   f <- out$results$feature_raw
-  expect_true(all(paste("B.Weekly", 1:21) %in% f))
-  expect_false(any(f %in% paste0("B.", 1:21)))
-  expect_false(any(f %in% paste0("B.G", 1:21)))
-  expect_equal(gas_value_of(out, "B.Weekly 1"), 0.07)
-  expect_equal(gas_value_of(out, "B.Weekly 11"), 0.18)
-  expect_equal(gas_value_of(out, "B.Weekly 15"), 0.22)
+  expect_true(all(paste("N.Weekly", 1:21) %in% f))
+  expect_false(any(f %in% paste0("N.", 1:21)))
+  expect_false(any(f %in% paste0("N.G", 1:21)))
+  expect_equal(gas_value_of(out, "N.Weekly 1"), 0.07)
+  expect_equal(gas_value_of(out, "N.Weekly 11"), 0.18)
+  expect_equal(gas_value_of(out, "N.Weekly 15"), 0.22)
   expect_equal(nrow(out$results), 63)
 })
 
 test_that("5: Millbrook biofilter grids emit labelled R<r>C<c> names, row-major as laid out", {
   out <- gas_parse_fx("kat")
-  g <- out$results[grepl("^K\\.(Biofilter North Corner|Front of Buildings) R[12]C[123]$",
+  g <- out$results[grepl("^M\\.(Biofilter North Corner|Front of Buildings) R[12]C[123]$",
                          out$results$feature_raw), ]
   expect_equal(nrow(g), 12)
-  expect_equal(gas_value_of(out, "K.Biofilter North Corner R1C2"), 0.01)
-  expect_equal(gas_value_of(out, "K.Biofilter North Corner R2C3"), 0.02)
-  expect_equal(gas_value_of(out, "K.Front of Buildings R2C1"), 0.03)
-  zeros <- setdiff(g$feature_raw, c("K.Biofilter North Corner R1C2", "K.Biofilter North Corner R2C3",
-                                    "K.Front of Buildings R2C1"))
+  expect_equal(gas_value_of(out, "M.Biofilter North Corner R1C2"), 0.01)
+  expect_equal(gas_value_of(out, "M.Biofilter North Corner R2C3"), 0.02)
+  expect_equal(gas_value_of(out, "M.Front of Buildings R2C1"), 0.03)
+  zeros <- setdiff(g$feature_raw, c("M.Biofilter North Corner R1C2", "M.Biofilter North Corner R2C3",
+                                    "M.Front of Buildings R2C1"))
   expect_true(all(g$value_num[g$feature_raw %in% zeros] == 0))
 })
 
@@ -513,8 +513,8 @@ test_that("5: UNLABELLED grids default to North Corner first, Front of Buildings
   dir <- withr::local_tempdir()
   out <- gas_parse(build_gas_millbrook(dir, grid_labels = FALSE))
   expect_setequal(out$results$feature_raw, gas_expected_millbrook())
-  expect_equal(gas_value_of(out, "K.Biofilter North Corner R1C2"), 0.01)
-  expect_equal(gas_value_of(out, "K.Front of Buildings R2C1"), 0.03)
+  expect_equal(gas_value_of(out, "M.Biofilter North Corner R1C2"), 0.01)
+  expect_equal(gas_value_of(out, "M.Front of Buildings R2C1"), 0.03)
 })
 
 # ==============================================================================
@@ -580,7 +580,7 @@ test_that("7: binary-noise readings round to 2 dp - `0.0299999999999999` -> 0.03
   expect_identical(r$value_num, 0.03)
   expect_identical(r$value_raw, "0.03")
   b <- gas_parse_fx("b2024")
-  expect_identical(gas_value_of(b, "B.Out side - Reused shed"), 0.03)
+  expect_identical(gas_value_of(b, "N.Out side - Reused shed"), 0.03)
 })
 
 test_that("7: every emitted value_raw carries at most 2 decimals and parses to value_num", {
@@ -625,7 +625,7 @@ test_that("8: each text code is skipped with its reason", {
 
 test_that("8: a text-coded point creates no result and no sample", {
   out <- gas_parse_fx("b2025")
-  coded <- paste0("B.G", c(200, 201, 224, 308, 369, 371))
+  coded <- paste0("N.G", c(200, 201, 224, 308, 369, 371))
   expect_false(any(coded %in% out$results$feature_raw))
   expect_false(any(coded %in% out$samples$feature_raw))
   expect_false(any(grepl("NS|NR|Access|exist|map", out$results$value_raw)))
@@ -686,7 +686,7 @@ test_that("10: the Millbrook `Biofilter and Bores sampled 5/1/26` note re-dates 
   out <- gas_parse(build_gas_millbrook(dir, sample_date = "2025-12-10",
                                       note = "Biofilter and Bores sampled 5/1/26"))
   s <- out$samples
-  bio <- grepl("^K\\.(Biofilter North Corner|Front of Buildings) R|^K\\.MP_", s$feature_raw)
+  bio <- grepl("^M\\.(Biofilter North Corner|Front of Buildings) R|^M\\.MP_", s$feature_raw)
   expect_equal(sum(bio), 16)
   expect_true(all(s$sample_datetime_raw[bio] == "05/01/2026"))
   expect_true(all(s$sample_datetime_raw[!bio] == "10/12/2025"))
@@ -695,114 +695,6 @@ test_that("10: the Millbrook `Biofilter and Bores sampled 5/1/26` note re-dates 
 test_that("10: with no note, the biofilter and bores carry the front-page date", {
   out <- gas_parse_fx("kat")                      # sample_date 2025-12-10, no note
   expect_true(all(out$samples$sample_datetime_raw == "10/12/2025"))
-})
-
-# ==============================================================================
-# 15 - gated real-corpus census (A3: real data is never committed)
-# ==============================================================================
-#
-# Opt-in: SAMPLETIDY_GAS_CORPUS = a directory holding the 16 real
-# "... Gas Monitoring ... .xls" workbooks (searched recursively), e.g.
-# `.../waste_data - Environmental monitoring/assets/unprocessed`. A separate
-# variable from SAMPLETIDY_CORPUS because the gas workbooks sit in the
-# Sharepoint `unprocessed` tree, not the input corpus.
-#
-# Expected counts measured 2026-10-16 (read-only census, scratchpad
-# gastw/census3.R): numeric CH4 readings per file, and text-coded cells per
-# file. Totals 3,293 readings; 329 text cells = NS 262, NR 31, No Access 24,
-# `does/Does not exist` 10, `Not on the map` 2.
-#
-# Re-measured 2026-10-21 for the 032/034 template slots: 9 of those readings
-# are numeric CH4 at a slot (N.G201 = 0 in 2400-9399-08-01; M.G365 = M.G366 = 0
-# in each Millbrook file). They move from n_results to n_skipped
-# (`template_slot`); every other count is unchanged.
-
-gas_corpus_census <- tibble::tribble(
-  ~file,                                                                    ~n_results, ~n_skipped,
-  "2400-9127-05 May 2021 Monthly Gas Monitoring Northvale WMF.XLS",               196,  0,
-  "2400-9399-08-01 August 2024 Monthly Gas Monitoring Northvale WMF.xls",         201,  2,
-  "2400-9453-03-01 Mar 2026 Gas Monitoring Northvale WMF.xls",                    120, 83,
-  "2400-9453-05-01 May 2025 Monthly Gas Monitoring Northvale WMF.xls",            202,  1,
-  "2400-9453-07-01 July 2025 Monthly Gas Monitoring Northvale WMF.xls",           202,  1,
-  "2400-9453-10-01 October 2025 Monthly Gas Monitoring Northvale WMF.xls",        202,  1,
-  "2400-9453-11 November 2025 Monthly Gas Monitoring Northvale WMF.xls",          202,  1,
-  "2400-9454-06-01 June 2025 Gas Monitoring Millbrook WMF.xls",                   289,  2,
-  "2400-9454-09-01 September 2025 Gas Monitoring Millbrook WMF.xls",              289,  2,
-  "2400-9454-12-01 December 2025 Gas Monitoring Millbrook WMF.xls",               289,  2,
-  "2400-9538-02-01 Monthly Gas Monitoring Northvale WMF.xls",                     164, 26,
-  "2400-9538-04-01 Monthly Gas Monitoring Northvale WMF.xls",                      84, 119,
-  "2400-9538-05 Monthly Gas Monitoring Northvale WMF.xls",                        141, 62,
-  "2400-9538-05-01 Weekly Gas Monitoring Northvale WMF.xls",                      205, 19,
-  "2400-9538-05-03 Weekly Gas Monitoring Northvale WMF.xls",                      209, 15,
-  "2400-9593-03-01 March 2026 Gas Monitoring Millbrook WMF.xls",                  289,  2
-)
-
-skip_if_no_gas_corpus <- function() {
-  path <- Sys.getenv("SAMPLETIDY_GAS_CORPUS", unset = "")
-  if (identical(path, "") || !dir.exists(path)) {
-    testthat::skip("SAMPLETIDY_GAS_CORPUS not set to an existing directory (A3) - real gas-corpus test skipped")
-  }
-  path
-}
-
-gas_corpus_files <- function(root) {
-  fs <- list.files(root, pattern = "(?i)gas monitoring.*\\.xls$", recursive = TRUE, full.names = TRUE)
-  fs[basename(fs) %in% gas_corpus_census$file]
-}
-
-test_that("15 (gated): every real gas workbook is claimed by the gas adapter alone, at `format`", {
-  root <- skip_if_no_gas_corpus()
-  use_builtin_adapters()
-  paths <- gas_corpus_files(root)
-  expect_setequal(basename(paths), gas_corpus_census$file)
-  gas_adapter()
-  reg <- sampleTidy:::adapter_registry()
-  for (p in paths) {
-    fm <- sampleTidy:::file_meta(p)
-    tiers <- vapply(reg, function(a) a$match(fm), character(1))
-    expect_identical(tiers[["acirl_gas_xlsx"]], "format", info = basename(p))
-    expect_true(all(tiers[names(tiers) != "acirl_gas_xlsx"] == "no"), info = basename(p))
-  }
-})
-
-test_that("15 (gated): per-file result and skip counts match the measured census", {
-  root <- skip_if_no_gas_corpus()
-  paths <- gas_corpus_files(root)
-  expect_equal(length(paths), nrow(gas_corpus_census))
-  all_reasons <- character(0)
-  for (p in paths) {
-    want <- gas_corpus_census[gas_corpus_census$file == basename(p), ]
-    out <- gas_parse(p)
-    expect_no_error(sampleTidy:::ir_validate(out$results, "results"))
-    expect_equal(nrow(out$results), want$n_results, info = basename(p))
-    expect_equal(nrow(out$samples), want$n_results, info = basename(p))
-    expect_equal(length(gas_reasons(out)), want$n_skipped, info = basename(p))
-    f <- out$results$feature_raw
-    expect_false(anyDuplicated(f) > 0, info = basename(p))
-    site <- if (grepl("Millbrook", basename(p))) "K." else "B."
-    expect_true(all(startsWith(f, site)), info = basename(p))
-    expect_true(all(grepl("^[0-9]+(\\.[0-9]{1,2})?$", out$results$value_raw)), info = basename(p))
-    all_reasons <- c(all_reasons, gas_reasons(out))
-  }
-  tab <- table(all_reasons)
-  expect_equal(as.integer(tab[["no_sample"]]), 262)
-  expect_equal(as.integer(tab[["not_requested"]]), 31)
-  expect_equal(as.integer(tab[["no_access"]]), 24)
-  expect_equal(as.integer(tab[["point_absent"]]), 10)
-  expect_equal(as.integer(tab[["not_on_map"]]), 2)
-  # N.G201's `does not exist` cells (May 2025 on) stay point_absent above.
-  expect_equal(as.integer(tab[["template_slot"]]), 9)
-})
-
-test_that("15 (gated): REPORT NO is read from the cell for every real workbook", {
-  root <- skip_if_no_gas_corpus()
-  paths <- gas_corpus_files(root)
-  rn <- vapply(paths, function(p) gas_parse(p)$report$header$report_no, character(1))
-  names(rn) <- basename(paths)
-  expect_identical(rn[["2400-9127-05 May 2021 Monthly Gas Monitoring Northvale WMF.XLS"]], "24009127-05")
-  # the filename says 2400-9538-05, the cell says -01
-  expect_identical(rn[["2400-9538-05 Monthly Gas Monitoring Northvale WMF.xls"]], "2400-9538-05-01")
-  expect_identical(rn[["2400-9453-11 November 2025 Monthly Gas Monitoring Northvale WMF.xls"]], "2400-9453-11")
 })
 
 # ==============================================================================

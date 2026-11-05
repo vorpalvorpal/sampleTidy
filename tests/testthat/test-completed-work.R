@@ -24,7 +24,7 @@ cw_exec <- function(con, sql, ...) DBI::dbExecute(con, sql, params = list(...))
 cw_project <- function(con, id, name = paste0("WON-", sub("^cwp-", "", id)), samples = 1L,
                        date_start = "2026-10-10 00:00:00", date_end = "2026-10-11 00:00:00",
                        uuid_parent = NA_character_, uuid_root = NA_character_,
-                       type = "Work order", site = "B", extras = TRUE) {
+                       type = "Work order", site = "N", extras = TRUE) {
   ds <- if (is.na(date_start)) "NULL" else sprintf("TIMESTAMP '%s'", date_start)
   de <- if (is.na(date_end)) "NULL" else sprintf("TIMESTAMP '%s'", date_end)
   DBI::dbExecute(con, sprintf(
@@ -316,7 +316,7 @@ test_that("P20.4: the result is a tibble with the pinned columns, in order, with
   row <- cw[cw$uuid == "cwp-001", ]
   expect_identical(row$name, "WON-001")
   expect_identical(row$type, "Work order")
-  expect_identical(row$site, "B")
+  expect_identical(row$site, "N")
   expect_equal(as.numeric(row$date_start), as.numeric(as.POSIXct("2026-10-10 00:00:00", tz = "UTC")))
   expect_equal(as.numeric(row$date_end), as.numeric(as.POSIXct("2026-10-11 00:00:00", tz = "UTC")))
 })

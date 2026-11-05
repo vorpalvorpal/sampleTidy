@@ -103,7 +103,7 @@ test_that("P20.1: import_status() called directly (deprecated, no renderer) warn
 
 test_that("P20.1: import_status() with `checks` also keeps the two json files byte-identical", {
   s <- fl_status_setup()
-  chk <- fl_checks(schedule = fl_schedule(list(site = "K", months = "7;8")))
+  chk <- fl_checks(schedule = fl_schedule(list(site = "M", months = "7;8")))
   fl_status(s, checks = chk)
   expect_true(file.exists(file.path(s$report_dir, "status.json")))
   expect_true(so_same_bytes(file.path(s$report_dir, "status.json"),
@@ -336,7 +336,7 @@ so_edit_first_seen <- function(path, value) {
 
 test_that("P20.1 readers: the flags first_seen carry-over reads status.json when it exists", {
   s <- fl_status_setup()
-  chk <- fl_checks(schedule = fl_schedule(list(site = "K", months = "7;8")))
+  chk <- fl_checks(schedule = fl_schedule(list(site = "M", months = "7;8")))
   t1 <- fl_now()
   fl_status(s, checks = chk, now = t1)
   n <- so_edit_first_seen(file.path(s$report_dir, "status.json"), "2020-01-01T00:00:00Z")
@@ -352,7 +352,7 @@ test_that("P20.1 readers: the flags first_seen carry-over reads status.json when
 
 test_that("P20.1 readers: with no status.json the flags first_seen carry-over falls back to .import-status.json", {
   s <- fl_status_setup()
-  chk <- fl_checks(schedule = fl_schedule(list(site = "K", months = "7;8")))
+  chk <- fl_checks(schedule = fl_schedule(list(site = "M", months = "7;8")))
   t1 <- fl_now()
   fl_status(s, checks = chk, now = t1)
   n <- so_edit_first_seen(file.path(s$report_dir, ".import-status.json"), "2019-06-01T00:00:00Z")

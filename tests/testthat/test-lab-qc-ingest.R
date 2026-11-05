@@ -47,7 +47,7 @@ test_that("R-19.16/R-19.8: lab_qc_ingest stores one parsed lab_qc_report row for
   expect_identical(rep$kind, "QCI")
   expect_identical(rep$status, "parsed")
   expect_identical(rep$work_order, "ES2670640")
-  expect_equal(as.Date(rep$issue_date), as.Date("2026-03-30"))
+  expect_equal(as.Date(rep$issue_date), as.Date("2026-03-14"))
   expect_equal(as.integer(rep$n_received), 1L)
   expect_equal(as.integer(rep$n_analysed), 1L)
   expect_true(!is.na(rep$parser_version) && nzchar(rep$parser_version))
@@ -76,7 +76,7 @@ test_that("R-19.9: the report's outlier rows are stored with uuid_report, work_o
   expect_true(all(is.na(o$uuid_sample)))      # nothing in this DB to link to
 })
 
-test_that("R-19.16: a 0-byte QCI (the real ES2650738 archived copy) is stored 'unreadable', never an error", {
+test_that("R-19.16: a 0-byte QCI (a stand-in for an archived ES2650738 copy) is stored 'unreadable', never an error", {
   s <- lq_setup()
   file.copy(qci_fixture("ES2650738_0_QCI.pdf"), file.path(s$dir, "ES2650738_0_QCI.pdf"))
   ua <- qci_asset(s$con, "ES2650738_0_QCI.pdf", "ES2650738")
@@ -164,9 +164,9 @@ lq_link_setup <- function(env = parent.frame()) {
   DBI::dbExecute(con, "INSERT INTO feature_alias (uuid, uuid_feature, name, alias_key, kind, auto_assign)
                        VALUES (?, ?, 'Ridgely Road Seep', ?, 'descriptive', TRUE)",
                  params = list(fl_uuid(), u, .rc_feature_key("Ridgely Road Seep")))
-  s$s39 <- fl_sample(con, "Q.S39", "ES2070250", "2020-08-14",
+  s$s39 <- fl_sample(con, "Q.S39", "ES2070250", "2020-08-23",
                      results = list(qci_lab("Nitrite as N", 0.1, "EK057G: Nitrite as N by Discrete Analyser")))
-  s$s40 <- fl_sample(con, "Q.S40", "ES2070250", "2020-08-14",
+  s$s40 <- fl_sample(con, "Q.S40", "ES2070250", "2020-08-23",
                      results = list(qci_lab("Ammonia as N", 0.3, "EK055G: Ammonia as N by Discrete Analyser")))
   s
 }
@@ -200,7 +200,7 @@ test_that("R-19.21 route 2: (work order, client ID) links when the alias resolve
 
 test_that("R-19.21 route 2: several matching samples in the work order leave the row unlinked", {
   s <- lq_link_setup()
-  fl_sample(s$con, "Q.S39", "ES2070250", "2020-08-14 05:00:00",
+  fl_sample(s$con, "Q.S39", "ES2070250", "2020-08-23 05:00:00",
             results = list(qci_lab("Nitrite as N", 0.2, "EK057G: Nitrite as N by Discrete Analyser")))
   r <- lq_ingest(s, "ES2070250_0_QCI.pdf", "ES2070250_0_QCI.txt")
   ht <- r$outliers[r$outliers$kind == "holding_time", , drop = FALSE]
@@ -209,7 +209,7 @@ test_that("R-19.21 route 2: several matching samples in the work order leave the
 
 test_that("R-19.21: an Anonymous row is never linked, even when its lab ID is in sample_lab_id", {
   s <- lq_setup()
-  other <- fl_sample(s$con, "Q.S41", "ES2670630", "2026-03-19",
+  other <- fl_sample(s$con, "Q.S41", "ES2670630", "2026-03-03",
                      results = list(qci_lab("Ammonia as N", 0.3, "EK055G: Ammonia as N by Discrete Analyser")))
   DBI::dbExecute(s$con, "INSERT INTO sample_lab_id (uuid_sample, work_order, lab_id, client_id, source_hash)
                          VALUES (?, 'ES2670630', 'ES2670630-001', 'Q.S41', 'abc')",

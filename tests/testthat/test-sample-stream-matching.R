@@ -137,7 +137,7 @@ ss_row <- function(...) {
   defaults <- list(
     source_hash = "hash-x", source_ref = "r1", work_order = "ES2552771",
     revision = 0L, org = "ALS", adapter = "esdat/1",
-    lab_sample_id = "ES2527711001", sample_type = "Normal",
+    lab_sample_id = "ES2552771001", sample_type = "Normal",
     feature_raw = "T.MW01", analyte_raw = "pH Value", cas_number = NA_character_,
     method_raw = "EA005P: pH by PC Titrator", total_or_filtered = "T",
     units_raw = "pH Unit", value_raw = "7.20", value_num = 7.20,
@@ -1231,7 +1231,7 @@ test_that("[C1.13] idempotent: re-running the C1.11 event adds no rows and no sa
 # ================================================================================
 
 c1_three_rows <- function(order = c("09:00", "11:00", "13:00")) {
-  ids <- c("09:00" = "ES2527711001", "11:00" = "ES2527711002", "13:00" = "ES2527711003")
+  ids <- c("09:00" = "ES2552771001", "11:00" = "ES2552771002", "13:00" = "ES2552771003")
   rows <- lapply(order, function(hm) {
     r <- ss_als("pH", 7.2, when = paste("04 Sep 2025", hm), ref = paste0("als-", hm))
     r$lab_sample_id <- ids[[hm]]

@@ -716,7 +716,7 @@ test_that("R-9.6: a subsequent run over the emptied directory is a clean no-op",
 # NOTE (PLAN-12 sequencing): reconcile.R still queries the dropped
 # `sample.uuid_feature` column (owned by P11-reconcile, not this unit), so
 # ANY real event with clean rows currently aborts the instant the real
-# `reconcile_event()`/`commit_event()` run over real fixture data - entirely
+# `reconcile_event()`/`commit_event()` run over the fixture data - entirely
 # independently of whether R-12.2's own containment logic exists yet. To
 # isolate the criterion actually under test here (does `ingest_dir()`
 # contain a per-event reconcile/commit failure, and does a 100%-failure run
@@ -725,7 +725,7 @@ test_that("R-9.6: a subsequent run over the emptied directory is a clean no-op",
 # the same fault-injection idiom already used for `snapshot_db()` in the
 # R-9.6 tests above - rather than depending on the currently-broken real
 # reconcile/commit path. `route_files()`/parse/`assemble_events()` before
-# that point are real (real fixtures, real `event$files`).
+# that point are real (the committed fixtures, real `event$files`).
 
 test_that("R-12.2: a per-event reconcile failure is contained - the poisoned event's kept files are marked failed with events_failed counted and a cli_warn names it, while sibling events still reach committed/archived terminal states", {
   setup <- ingest_test_setup()

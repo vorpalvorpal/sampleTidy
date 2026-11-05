@@ -9,7 +9,7 @@
 # count exactly as before, and so do legacy assets with no `ingest_file` row
 # at all (the ruling excludes retained siblings only, nothing else).
 #
-# Real case: work order ES2652335 had only ACIRL field samples plus a
+# Modelled on a corpus case: work order ES2652335 had only ACIRL field samples plus a
 # retained ALS COA PDF; its ALS XTAB (once parseable) was blocked as
 # work_order_reingest/blocked although all 171 of its rows were new.
 #

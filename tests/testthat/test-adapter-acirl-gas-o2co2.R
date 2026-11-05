@@ -60,14 +60,14 @@ test_that("building block with Reference + O2 + CO2: feature shared; repeated na
   b <- out$results[grepl("Gas Buildings", out$results$source_ref), ]
   expect_equal(nrow(b), 15)
   tab <- table(b$feature_raw)
-  expect_setequal(names(tab), c("B.Toilets - Right Side", "B.Toilets - Left Side",
-                                "B.Storage Shed - Right Wall", "B.Storage Shed - Back Wall",
-                                "B.Storage Shed - Right Wall #2"))
+  expect_setequal(names(tab), c("N.Toilets - Right Side", "N.Toilets - Left Side",
+                                "N.Storage Shed - Right Wall", "N.Storage Shed - Back Wall",
+                                "N.Storage Shed - Right Wall #2"))
   expect_true(all(tab == 3))
   expect_identical(b$analyte_raw, rep(c(CH4, O2, CO2), 5))
-  expect_identical(b$source_ref[b$feature_raw == "B.Storage Shed - Right Wall #2"],
+  expect_identical(b$source_ref[b$feature_raw == "N.Storage Shed - Right Wall #2"],
                    paste0("Gas Buildings!", c("C", "D", "E"), 13))
-  expect_equal(o2_val(out, "B.Storage Shed - Right Wall #2", O2), 18.5)
+  expect_equal(o2_val(out, "N.Storage Shed - Right Wall #2", O2), 18.5)
 })
 
 test_that("digit-zero headers `02 Reading` / `C02 Reading` are read as O2 / CO2", {
@@ -130,7 +130,7 @@ test_that("a fully blank gas row still takes its place in the #n sequence", {
   out <- gas_parse(build_gas_o2co2(withr::local_tempdir(), bld = bld))
   b <- out$results[grepl("Gas Buildings", out$results$source_ref), ]
   expect_equal(nrow(b), 3)
-  expect_true(all(b$feature_raw == "B.Storage Shed - Right Wall #2"))
+  expect_true(all(b$feature_raw == "N.Storage Shed - Right Wall #2"))
 })
 
 test_that("text codes in O2 / CO2 cells are skipped with reasons; CH4 in the row is kept", {

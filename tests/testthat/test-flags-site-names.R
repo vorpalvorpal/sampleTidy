@@ -2,13 +2,13 @@
 # named character vector, code -> name), not from a hard-coded label. Stage 2:
 # the core renders nothing, so the map travels in status.json as `site_names`
 # and the flags keep the raw code. Synthetic: sites N (mapped), M (unmapped)
-# and B (which the old hard-coded label used to turn into a name).
+# and P (which an old hard-coded label would have turned into a name).
 
 sn_chk <- function(site_names) {
   sx_checks(site_names = site_names,
             schedule = fl_schedule(list(site = "N", stream = "field", months = "8"),
                                    list(site = "M", stream = "field", months = "8"),
-                                   list(site = "B", stream = "field", months = "8")))
+                                   list(site = "P", stream = "field", months = "8")))
 }
 
 test_that("site names: status.json carries the map as `site_names`; the flags keep the raw codes (never a label)", {
@@ -16,8 +16,8 @@ test_that("site names: status.json carries the map as `site_names`; the flags ke
   fl_status(s, checks = sn_chk(c(N = "Northvale")))
   js <- fl_status_json(s)
   expect_identical(js$site_names, list(N = "Northvale"))
-  expect_setequal(vapply(js$flags, function(x) x$site, ""), c("N", "M", "B"))
-  expect_false(grepl("Northvale", paste(readLines(file.path(s$report_dir, "status.json")), collapse = "\n"),
+  expect_setequal(vapply(js$flags, function(x) x$site, ""), c("N", "M", "P"))
+  expect_false(grepl("Pinecrest", paste(readLines(file.path(s$report_dir, "status.json")), collapse = "\n"),
                      fixed = TRUE))
 })
 
@@ -34,7 +34,7 @@ test_that("site names: status.json keeps the raw code whatever the map says", {
   fl_status(s, checks = sn_chk(c(N = "Northvale")))
   js <- fl_status_json(s)
   sites <- vapply(js$flags, function(x) x$site, "")
-  expect_setequal(sites, c("N", "M", "B"))
+  expect_setequal(sites, c("N", "M", "P"))
 })
 
 test_that("site names: the map is carried into the status build (fs$site_names)", {

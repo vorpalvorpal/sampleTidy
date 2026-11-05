@@ -13,7 +13,7 @@
 # damaged read; the fallback re-reads it as latin-1, and the parse of the
 # latin-1 file equals the parse of its UTF-8 twin.
 #
-# Fixtures (anonymized real, byte-level ASCII only - REAL-FIXTURES.md):
+# Fixtures (synthetic, written by fixtures/crosstab/generate.R):
 #   corpus-2026-10-19/latin1/ES2470410_0_XTAB.csv     the latin-1 export (b0 b5 b1 b0)
 #   corpus-2026-10-19/utf8-twin/ES2470410_0_XTAB.csv  the archived UTF-8 copy of the
 #     same report (c2b0 c2b5 c2b1 c2b0); `iconv -f latin1` of the first is

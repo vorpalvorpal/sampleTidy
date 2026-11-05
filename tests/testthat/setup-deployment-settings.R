@@ -28,7 +28,7 @@ local({
   withr::defer(unlink(empty_environ), testthat::teardown_env())
 })
 options(sampletidy.timezone = "Australia/Sydney",
-        sampletidy.site_keywords = list(B = "northvale", K = "millbrook"),
+        sampletidy.site_keywords = list(N = "northvale", M = "millbrook"),
         sampletidy.gas_template_slots = c("N.G201", "M.G365", "M.G366"),
         sampletidy.acirl_job_prefix = "2400",
         sampletidy.field_analytes = c(

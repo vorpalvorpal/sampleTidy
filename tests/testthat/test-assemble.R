@@ -479,7 +479,7 @@ test_that("R-7.3: XTAB date-only sorted FIRST, ESdat timed second, same day -> r
   expect_equal(nrow(event$results), 1)
   expect_identical(event$results$sample_datetime_raw[[1]], "11 Feb 2025 15:00")
   expect_false(isTRUE(event$results$needs_review[[1]]))
-  # the real ES2151022 Sample2e renders its clock "dd-Mon-yy HH:MM"
+  # an ESdat Sample2e (e.g. ES2151022) renders its clock "dd-Mon-yy HH:MM"
   event2 <- dt_event(c("xtab", "esdat"), esdat_when = "11-Feb-25 15:00")
   expect_identical(event2$results$sample_datetime_raw[[1]], "11-Feb-25 15:00")
   expect_false(isTRUE(event2$results$needs_review[[1]]))
@@ -867,11 +867,11 @@ test_that("R-7.3a: an event with results but no sample metadata AND no feature_r
     "h-chem" = mk_parsed_entry(
       results = mk_result(
         source_hash = "h-chem", work_order = "ES2451393",
-        lab_sample_id = "ES2413933001", feature_raw = NA_character_
+        lab_sample_id = "ES2451393001", feature_raw = NA_character_
       ),
       samples = mk_sample(
         source_hash = "h-chem", source_ref = "srow1", work_order = "ES2451393",
-        lab_sample_id = "ES2413933001", feature_raw = "N.S01",
+        lab_sample_id = "ES2451393001", feature_raw = "N.S01",
         sample_datetime_raw = "2024-05-07 11:30", sample_type = "Normal"
       ),
       meta = list(work_order_guess = "ES2451393")

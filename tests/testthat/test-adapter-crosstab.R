@@ -1,20 +1,19 @@
 # tests/testthat/test-adapter-crosstab.R
 #
 # Tests for R/adapter-crosstab.R (plan 05: shared parser + `als_xtab` +
-# `als_enmrg`). CONTRACT A34 (2026-07-15): retargeted to the REAL
-# (anonymized, committed) ALS crosstab exports as the primary fixtures for
+# `als_enmrg`). CONTRACT A34 (2026-07-15): retargeted to full-shape
+# ALS crosstab exports (synthetic values, generate.R) as the primary fixtures for
 # every core parsing criterion - `ES2670610_0_XTAB.csv` (XTAB) and
 # `ES2570540_0_ENMRG.CSV` (ENMRG). All expected counts/names/values below
 # were derived by actually parsing those files with the corrected adapter
 # and reading off the results (see PR discussion / dev notes) - never
 # hand-guessed. See PLAN-05-adapters-crosstab.md (A34 block),
-# CONTRACT.md (A29, A34, A37), tests/testthat/fixtures/
-# REAL-FIXTURES.md, and tests/testthat/fixtures/crosstab/README.md.
+# CONTRACT.md (A29, A34, A37) and tests/testthat/fixtures/crosstab/README.md.
 #
 # A small set of synthetic fixtures (generate.R) cover the three criteria
-# the two real files do not: a two-section (WATER+SOIL) fixture, a
+# the two lab-shaped files do not: a two-section (WATER+SOIL) fixture, a
 # Workgroup/filename mismatch fixture, and an ENMRG fixture with QC sample
-# columns (the real ENMRG file's only usable section is all-REG - its QC
+# columns (the lab-shaped ENMRG file's only usable section is all-REG - its QC
 # data lives in a trailing "QC - Matrix:" block the adapter deliberately
 # does not parse; see README.md and the adapter's
 # `.ST_CROSSTAB_ANY_MARKER_RE` comment).
@@ -25,12 +24,12 @@
 xtab_adapter  <- function() sampleTidy:::adapter_registry()[["als_xtab"]]
 enmrg_adapter <- function() sampleTidy:::adapter_registry()[["als_enmrg"]]
 
-# Real fixtures (primary).
+# Lab-shaped synthetic fixtures (primary).
 xtab_real_path  <- test_path("fixtures", "crosstab", "ES2670610_0_XTAB.csv")
 xtab_xls_path   <- test_path("fixtures", "crosstab", "ES2670610_0_XTAB.XLS")
 enmrg_real_path <- test_path("fixtures", "crosstab", "ES2570540_0_ENMRG.CSV")
 
-# Synthetic fixtures (minimal, cover only what the real files don't).
+# Synthetic fixtures (minimal, cover only what the lab-shaped files don't).
 two_section_path <- test_path("fixtures", "crosstab", "XX1234567_0_XTAB.csv")
 enmrg_qc_path     <- test_path("fixtures", "crosstab", "XX1234567_0_ENMRG.CSV")
 mismatch_path     <- test_path("fixtures", "crosstab", "ZZ9999999_0_XTAB.csv")
@@ -41,19 +40,19 @@ random_csv_path  <- test_path("fixtures", "esdat", "random.csv")
 
 # ---- R-5.2 match() -----------------------------------------------------------
 
-test_that("R-5.2: real XTAB fixture claimed only by als_xtab (format tier)", {
+test_that("R-5.2: lab-shaped XTAB fixture claimed only by als_xtab (format tier)", {
   meta <- sampleTidy:::file_meta(xtab_real_path)
   expect_identical(xtab_adapter()$match(meta), "format")
   expect_identical(enmrg_adapter()$match(meta), "no")
 })
 
-test_that("R-5.2: real ENMRG fixture claimed only by als_enmrg (format tier)", {
+test_that("R-5.2: lab-shaped ENMRG fixture claimed only by als_enmrg (format tier)", {
   meta <- sampleTidy:::file_meta(enmrg_real_path)
   expect_identical(enmrg_adapter()$match(meta), "format")
   expect_identical(xtab_adapter()$match(meta), "no")
 })
 
-test_that("A37 (un-parked 2026-10-18): real XTAB '.XLS' (SpreadsheetML) is claimed by als_xtab only", {
+test_that("A37 (un-parked 2026-10-18): lab-shaped XTAB '.XLS' (SpreadsheetML) is claimed by als_xtab only", {
   # Was `match() == "no"` while SpreadsheetML parsing was parked post-MVP.
   # Full coverage (twin equality, ss:Index, encoding, malformed files) lives
   # in test-adapter-crosstab-spreadsheetml.R.
@@ -80,23 +79,23 @@ test_that("R-5.2: synthetic two-section/mismatch XTAB and QC ENMRG fixtures matc
   expect_identical(enmrg_adapter()$match(sampleTidy:::file_meta(enmrg_qc_path)), "format")
 })
 
-# ---- R-5.1 shared parser: real XTAB (ES2670610_0_XTAB.csv) -------------------
+# ---- R-5.1 shared parser: lab-shaped XTAB (ES2670610_0_XTAB.csv) -------------------
 #
-# One `Matrix: WATER` section, 3 REG samples (ES2600185001-003), 26 distinct
+# One `Matrix: WATER` section, 3 REG samples (ES2670610001-003), 26 distinct
 # analytes (some method groups cover several analytes, e.g. "ED037P:
 # Alkalinity by PC Titrator" -> 4 analyte rows, "ED093F: Dissolved Major
 # Cations" -> 4 analyte rows). 26 analytes x 3 samples = 78 cells; every
 # cell is either a value or a literal "----" (no truly blank cells in this
 # file's 3 sample columns) - 24 are "----" (not_computable), 54 are values.
 
-test_that("R-5.1 (real XTAB): results count = analytes x samples minus '----' skips", {
+test_that("R-5.1 (lab-shaped XTAB): results count = analytes x samples minus '----' skips", {
   meta <- sampleTidy:::file_meta(xtab_real_path)
   out <- xtab_adapter()$parse(xtab_real_path, meta)
   expect_equal(length(unique(out$results$analyte_raw)), 26)
   expect_equal(nrow(out$results), 54)
 })
 
-test_that("R-5.1 (real XTAB): '----' cells land in report$skipped as not_computable with correct source_ref", {
+test_that("R-5.1 (lab-shaped XTAB): '----' cells land in report$skipped as not_computable with correct source_ref", {
   meta <- sampleTidy:::file_meta(xtab_real_path)
   out <- xtab_adapter()$parse(xtab_real_path, meta)
   skipped <- out$report$skipped
@@ -105,7 +104,7 @@ test_that("R-5.1 (real XTAB): '----' cells land in report$skipped as not_computa
   expect_true(all(grepl("^r[0-9]+c[0-9]+$", skipped$source_ref)))
 })
 
-test_that("R-5.1 (real XTAB): method-group rows produce zero result rows and set method_raw", {
+test_that("R-5.1 (lab-shaped XTAB): method-group rows produce zero result rows and set method_raw", {
   meta <- sampleTidy:::file_meta(xtab_real_path)
   out <- xtab_adapter()$parse(xtab_real_path, meta)
   # the method-group label text itself never appears as an analyte
@@ -129,32 +128,32 @@ test_that("R-5.1 (real XTAB): method-group rows produce zero result rows and set
   expect_false(any(chloride_rows$method_raw == "ED037P: Alkalinity by PC Titrator"))
 })
 
-test_that("R-5.1 (real XTAB): samples - one row per sample column, feature/date/matrix/type correct", {
+test_that("R-5.1 (lab-shaped XTAB): samples - one row per sample column, feature/date/matrix/type correct", {
   meta <- sampleTidy:::file_meta(xtab_real_path)
   out <- xtab_adapter()$parse(xtab_real_path, meta)
   expect_equal(nrow(out$samples), 3)
-  expect_setequal(out$samples$lab_sample_id, c("ES2600185001", "ES2600185002", "ES2600185003"))
+  expect_setequal(out$samples$lab_sample_id, c("ES2670610001", "ES2670610002", "ES2670610003"))
   expect_setequal(out$samples$feature_raw, c("P.S03", "P.S07", "P.S09"))
   expect_true(all(out$samples$matrix_raw == "WATER"))
-  expect_true(all(out$samples$sample_datetime_raw == "05/01/2026"))
+  expect_true(all(out$samples$sample_datetime_raw == "07/01/2026"))
   expect_true(all(out$samples$sample_type == "Normal")) # all REG
   expect_true(all(out$samples$work_order == "ES2670610"))
 })
 
-test_that("R-5.1 (real XTAB): CAS number, units and Fluoride below-detection value are read correctly", {
+test_that("R-5.1 (lab-shaped XTAB): CAS number, units and Fluoride below-detection value are read correctly", {
   meta <- sampleTidy:::file_meta(xtab_real_path)
   out <- xtab_adapter()$parse(xtab_real_path, meta)
   fl <- out$results[out$results$analyte_raw == "Fluoride", ]
   # sample 001's Fluoride cell is "----" (skipped); 002/003 are both "<0.1".
   expect_equal(nrow(fl), 2)
-  expect_setequal(fl$lab_sample_id, c("ES2600185002", "ES2600185003"))
+  expect_setequal(fl$lab_sample_id, c("ES2670610002", "ES2670610003"))
   expect_true(all(fl$cas_number == "16984-48-8"))
   expect_true(all(fl$units_raw == "mg/L"))
   expect_true(all(fl$value_raw == "<0.1"))
   expect_true(all(fl$below_detection))
 })
 
-test_that("R-5.4 (real XTAB): degree/micro mojibake is repaired to proper UTF-8 (UTF-8 read + normalise_lab_text)", {
+test_that("R-5.4 (lab-shaped XTAB): degree/micro mojibake is repaired to proper UTF-8 (UTF-8 read + normalise_lab_text)", {
   # Root-caused 2026-07-22: XTAB.csv is valid UTF-8 whose only non-ASCII bytes
   # here are `EF BF BD` (valid UTF-8 for a single U+FFFD). The dialect now
   # reads UTF-8 (was wrongly latin-1, which SHATTERED the one U+FFFD into the
@@ -172,27 +171,27 @@ test_that("R-5.4 (real XTAB): degree/micro mojibake is repaired to proper UTF-8 
   expect_false(any(grepl("\ufffd|\u00ef\u00bf\u00bd", ec_rows$units_raw)))
 })
 
-test_that("R-5.1 (real XTAB): ir_validate() passes", {
+test_that("R-5.1 (lab-shaped XTAB): ir_validate() passes", {
   meta <- sampleTidy:::file_meta(xtab_real_path)
   out <- xtab_adapter()$parse(xtab_real_path, meta)
   expect_silent(sampleTidy:::ir_validate(out$results, kind = "results"))
   expect_silent(sampleTidy:::ir_validate(out$samples, kind = "samples"))
 })
 
-# ---- R-5.1 shared parser: real ENMRG (ES2570540_0_ENMRG.CSV) -----------------
+# ---- R-5.1 shared parser: lab-shaped ENMRG (ES2570540_0_ENMRG.CSV) -----------------
 #
-# One `Client - Matrix: WATER` section, 7 REG samples (ES2537534001-007), 27
+# One `Client - Matrix: WATER` section, 7 REG samples (ES2570540001-007), 27
 # distinct analytes (27 x 7 = 189 cells; 19 are "----", 170 are values). The
 # file also carries a trailing "QC - Matrix:" reconciliation block (its own
 # ALS-Sample-number row reuses the SAME 7 columns for unrelated QC/other-
 # work-order samples, plus dozens more) that this adapter deliberately does
 # not parse (see README.md) - so this fixture is, from the adapter's
-# perspective, "no QC column", matching REAL-FIXTURES.md's description.
+# perspective, "no QC column", matching README.md's description.
 # Because ENMRG is genuinely UTF-8 (unlike XTAB's legacy bytes), its own
 # degree-sign/micro-sign characters are already correct - no mojibake fix
 # needed.
 
-test_that("R-5.1 (real ENMRG): results count = analytes x samples minus '----' skips, no QC rows", {
+test_that("R-5.1 (lab-shaped ENMRG): results count = analytes x samples minus '----' skips, no QC rows", {
   meta <- sampleTidy:::file_meta(enmrg_real_path)
   out <- enmrg_adapter()$parse(enmrg_real_path, meta)
   expect_equal(length(unique(out$results$analyte_raw)), 27)
@@ -203,7 +202,7 @@ test_that("R-5.1 (real ENMRG): results count = analytes x samples minus '----' s
   expect_equal(unname(out$report$n_by_sample_type[["Normal"]]), 170)
 })
 
-test_that("R-5.1 (real ENMRG): samples - 7 rows, correct feature codes, matrix, REG type", {
+test_that("R-5.1 (lab-shaped ENMRG): samples - 7 rows, correct feature codes, matrix, REG type", {
   meta <- sampleTidy:::file_meta(enmrg_real_path)
   out <- enmrg_adapter()$parse(enmrg_real_path, meta)
   expect_equal(nrow(out$samples), 7)
@@ -212,12 +211,12 @@ test_that("R-5.1 (real ENMRG): samples - 7 rows, correct feature codes, matrix, 
     c("Q.MW02", "Q.MW08", "Q.MW09", "Q.S01", "Q.S03", "Q.S05", "Q.S06")
   )
   expect_true(all(out$samples$matrix_raw == "WATER"))
-  expect_true(all(out$samples$sample_datetime_raw == "26/11/2025"))
+  expect_true(all(out$samples$sample_datetime_raw == "18/11/2025"))
   expect_true(all(out$samples$sample_type == "Normal"))
   expect_true(all(out$samples$work_order == "ES2570540"))
 })
 
-test_that("R-5.1 (real ENMRG): 'Units'/'LOR' header spellings read correctly, no mojibake (genuine UTF-8)", {
+test_that("R-5.1 (lab-shaped ENMRG): 'Units'/'LOR' header spellings read correctly, no mojibake (genuine UTF-8)", {
   meta <- sampleTidy:::file_meta(enmrg_real_path)
   out <- enmrg_adapter()$parse(enmrg_real_path, meta)
   ec_rows <- out$results[grepl("Conductivity", out$results$analyte_raw), ]
@@ -227,7 +226,7 @@ test_that("R-5.1 (real ENMRG): 'Units'/'LOR' header spellings read correctly, no
   expect_true(all(!is.na(ec_rows$rl) & ec_rows$rl == 1))
 })
 
-test_that("R-5.1 (real ENMRG): ir_validate() passes", {
+test_that("R-5.1 (lab-shaped ENMRG): ir_validate() passes", {
   meta <- sampleTidy:::file_meta(enmrg_real_path)
   out <- enmrg_adapter()$parse(enmrg_real_path, meta)
   expect_silent(sampleTidy:::ir_validate(out$results, kind = "results"))

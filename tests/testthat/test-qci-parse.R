@@ -1,10 +1,10 @@
 # PLAN-19 phase 1b: the ALS QCI parser `.qci_parse(lines)` (R-19.18-R-19.20).
 #
 # Pure function of a character vector of lines -> list(header, summary,
-# outliers, warnings). Fixtures are anonymised `pdftotext -layout` extracts of
-# real QCIs (fixtures/qci/, REAL-FIXTURES.md); each was chosen for a layout in
-# PLAN-19 Appendix A.8. Every expected value below was read off the fixture
-# text by hand, not produced by any parser.
+# outliers, warnings). Fixtures are synthetic texts in the shape of
+# `pdftotext -layout` QCI extracts (fixtures/qci/, built by generate.R); each
+# reproduces a layout in PLAN-19 Appendix A.8. Every expected value below was
+# read off the fixture text by hand, not produced by any parser.
 #
 # Choices the plan leaves open, taken as the simplest reading:
 #   [invented: header] `res$header` has fields work_order, issue_date (Date),
@@ -28,13 +28,13 @@ na_chr <- NA_character_
 test_that("R-19.19: header fields come from page 1's two-column key : value grid", {
   res <- qci_parse("ES2670640")
   expect_identical(qci_header(res, "work_order"), "ES2670640")
-  expect_equal(as.Date(qci_header(res, "issue_date")), as.Date("2026-03-30"))
+  expect_equal(as.Date(qci_header(res, "issue_date")), as.Date("2026-03-14"))
   expect_equal(as.integer(qci_header(res, "n_received")), 1L)
   expect_equal(as.integer(qci_header(res, "n_analysed")), 1L)
 
   res <- qci_parse("ES2570530")
   expect_identical(qci_header(res, "work_order"), "ES2570530")
-  expect_equal(as.Date(qci_header(res, "issue_date")), as.Date("2025-07-02"))
+  expect_equal(as.Date(qci_header(res, "issue_date")), as.Date("2025-06-17"))
   expect_equal(as.integer(qci_header(res, "n_received")), 3L)
   expect_equal(as.integer(qci_header(res, "n_analysed")), 3L)
 })
@@ -121,14 +121,14 @@ test_that("R-19.20: five numeric MS failures, lab IDs on their own line and one 
   num <- num[order(num$analyte_raw), , drop = FALSE]
   expect_identical(num$analyte_raw, c("Beryllium", "Copper", "Lead", "Nitrite + Nitrate as N",
                                       "Vanadium"))
-  expect_equal(num$value_pct, c(69.7, 39.6, 67.5, 10.1, 56.4))
+  expect_equal(num$value_pct, c(68.2, 44.1, 61.9, 12.6, 58.7))
   expect_equal(num$limit_low, rep(70, 5))
   expect_equal(num$limit_high, rep(130, 5))
   expect_identical(unique(num$comment), "Recovery less than lower data quality objective")
   expect_identical(num$lab_id, c("ES2570520-010", "ES2570520-010", "ES2570520-010",
                                  "ES2570510-011", "ES2570520-010"))
   expect_identical(num$method, c("EG020F", "EG020F", "EG020F", "EK059G", "EG020F"))
-  expect_identical(num$data_raw[[1]], "69.7 %")
+  expect_identical(num$data_raw[[1]], "68.2 %")
 
   # Not-determined rows: Cl (ED lab), Mn, the second NOx (EN lab), Reactive P.
   nd <- ms[is.na(ms$value_pct), , drop = FALSE]
@@ -137,7 +137,7 @@ test_that("R-19.20: five numeric MS failures, lab IDs on their own line and one 
                     "EG020F ES2570520-010 Manganese",
                     "EK059G EN2570560-001 Nitrite + Nitrate as N",
                     "EK071G ED2570550-001 Reactive Phosphorus as P"))
-  # "...by discrete analyserED2500936--001": x-positions, not whitespace, split cells.
+  # "...by discrete analyserED2570550--001": x-positions, not whitespace, split cells.
   rp <- ms[ms$method %in% "EK071G", , drop = FALSE]
   expect_identical(rp$method_name, "Reactive Phosphorus as P by discrete analyser")
   expect_identical(rp$cas, "14265-44-2")
@@ -151,12 +151,12 @@ test_that("R-19.20: an LCS row has a QC lot, no lab ID, a wrapped analyte and pa
   expect_equal(nrow(lcs), 1)
   expect_identical(lcs$method, "EA010P")
   expect_identical(lcs$method_name, "Conductivity by PC Titrator")
-  expect_identical(lcs$qc_lot, "QC-MRG2-3190228002")
+  expect_identical(lcs$qc_lot, "QC-MRG2-1000404002")
   expect_true(is.na(lcs$lab_id))
   expect_identical(lcs$analyte_raw, "Electrical Conductivity @ 25°C")
-  expect_equal(lcs$value_pct, 90.1)
-  expect_equal(lcs$limit_low, 95)
-  expect_equal(lcs$limit_high, 113)
+  expect_equal(lcs$value_pct, 91.6)
+  expect_equal(lcs$limit_low, 94)
+  expect_equal(lcs$limit_high, 115)
   expect_identical(lcs$comment, "Recovery less than lower control limit")
 })
 
@@ -166,13 +166,13 @@ test_that("R-19.20: two LCS rows (EC low, TKN high) - the second's data on the l
   expect_equal(nrow(lcs), 2)
   lcs <- lcs[order(lcs$method), , drop = FALSE]
   expect_identical(lcs$method, c("EA010P", "EK061G"))
-  expect_identical(lcs$qc_lot, c("QC-2947377-002", "QC-MRG2-2949300002"))
+  expect_identical(lcs$qc_lot, c("QC-1000101-002", "QC-MRG2-1000303002"))
   expect_true(all(is.na(lcs$lab_id)))
   expect_identical(lcs$analyte_raw, c("Electrical Conductivity @ 25°C",
                                       "Total Kjeldahl Nitrogen as N"))
-  expect_equal(lcs$value_pct, c(89.8, 102))
-  expect_equal(lcs$limit_low, c(95, 69))
-  expect_equal(lcs$limit_high, c(113, 101))
+  expect_equal(lcs$value_pct, c(88.4, 106))
+  expect_equal(lcs$limit_low, c(94, 72))
+  expect_equal(lcs$limit_high, c(115, 104))
   # The comment wraps ("... upper control" / "limit") and is joined with one space.
   expect_identical(lcs$comment, c("Recovery less than lower control limit",
                                   "Recovery greater than upper control limit"))
@@ -223,8 +223,8 @@ test_that("R-19.20: holding-time rows, one per (method, client ID), dates from t
   expect_identical(ht$method, c("EA005P", "EP030"))
   expect_identical(ht$method_name, c("pH by PC Titrator", "Biochemical Oxygen Demand (BOD)"))
   expect_identical(ht$client_id, rep("Discharge Point - Hamlet STP", 2))
-  expect_equal(as.Date(ht$date_analysed), as.Date(c("2026-03-25", "2026-03-25")))
-  expect_equal(as.Date(ht$due_analysis), as.Date(c("2026-03-20", "2026-03-22")))
+  expect_equal(as.Date(ht$date_analysed), as.Date(c("2026-03-09", "2026-03-09")))
+  expect_equal(as.Date(ht$due_analysis), as.Date(c("2026-03-04", "2026-03-06")))
   expect_equal(as.integer(ht$days_overdue), c(5L, 3L))
   expect_true(all(is.na(ht$date_extracted)) && all(is.na(ht$due_extraction)))
   expect_true(all(is.na(ht$lab_id)))
@@ -240,9 +240,9 @@ test_that("R-19.20: comma-continued client-ID lists, two per line over 4 lines, 
     expect_setequal(x$client_id, ids)
     expect_equal(nrow(x), 8, info = m)
   }
-  expect_true(all(as.Date(ht$date_analysed) == as.Date("2020-08-19")))
+  expect_true(all(as.Date(ht$date_analysed) == as.Date("2020-08-07")))
   expect_true(all(as.integer(ht$days_overdue[ht$method == "EA005P"]) == 6L))
-  expect_true(all(as.Date(ht$due_analysis[ht$method == "EA005P"]) == as.Date("2020-08-13")))
+  expect_true(all(as.Date(ht$due_analysis[ht$method == "EA005P"]) == as.Date("2020-08-01")))
   expect_true(all(as.integer(ht$days_overdue[ht$method != "EA005P"]) == 4L))
   # No trailing comma survives in a client ID.
   expect_false(any(grepl(",", ht$client_id)))
@@ -309,7 +309,7 @@ test_that("R-19.20: frequency outliers are one row per QC type x method, stored 
   f <- qci_of(qci_parse("ES2070220"), "frequency")
   expect_equal(nrow(f), 1)
   expect_identical(f$method_name, "Total Kjeldahl Nitrogen as N By Discrete Analyser")
-  expect_equal(f$value_pct, 10.53)
+  expect_equal(f$value_pct, 11.76)
   expect_equal(f$limit_low, 15)
 
   # ES2070260: DUP x3 and MS x3; this older layout has no method-code column.
@@ -325,7 +325,7 @@ test_that("R-19.20: a QCI with frequency outliers only (ES2370310) has exactly t
   expect_equal(nrow(o), 2)
   expect_true(all(o$kind == "frequency"))
   expect_true(all(o$method_name == "Ammonia as N by Discrete analyser"))
-  expect_equal(sort(o$value_pct), c(0, 6.25))
+  expect_equal(sort(o$value_pct), c(0, 5))
 })
 
 test_that("R-19.20: per-fixture outlier counts by kind (calibration of the whole parse)", {
@@ -349,9 +349,9 @@ test_that("R-19.20: the ES2070240 holding-time row and the one-LCS ES2070260 row
   expect_identical(ht$method, "EA005P")
   expect_identical(ht$client_id, "Discharge to Hamlet STP")
   expect_equal(as.integer(ht$days_overdue), 2L)
-  expect_equal(as.Date(ht$due_analysis), as.Date("2020-08-08"))
+  expect_equal(as.Date(ht$due_analysis), as.Date("2020-08-25"))
 
   lcs <- qci_of(qci_parse("ES2070260"), "lcs")
-  expect_identical(lcs$qc_lot, "QC-3208392-002")
-  expect_equal(lcs$value_pct, 92.8)
+  expect_identical(lcs$qc_lot, "QC-1000202-002")
+  expect_equal(lcs$value_pct, 90.7)
 })

@@ -47,13 +47,13 @@ test_that("overdue: a month with no delivery is flagged once its due date has pa
                 results = list(pH = 7))
     }
   })
-  f <- fl_run(db, fl_checks(schedule = fl_schedule(list(site = "B", stream = "acirl_water",
+  f <- fl_run(db, fl_checks(schedule = fl_schedule(list(site = "N", stream = "acirl_water",
                                                         months = "all", due_days = 30))))
   od <- fl_of(f, "overdue")
   # Aug 2026: due 2026-09-30, passed. Sep 2026: due 2026-10-30, not yet.
   # Sep 2025 (13 months back) is outside the window although it had no sample.
   expect_identical(od$date, "2026-08-01")
-  expect_identical(od$site, "B")
+  expect_identical(od$site, "N")
   expect_match(od$detail, "acirl_water", fixed = TRUE)
   expect_match(od$threshold, "Aug 2026", fixed = TRUE)
   expect_match(od$threshold, "2026-09-30", fixed = TRUE)
@@ -64,10 +64,10 @@ test_that("overdue: a due date of today is not yet overdue; yesterday is", {
   db <- fl_db()
   # end of Aug + 49 days = 2026-10-19 (today); + 48 = 2026-10-18.
   f <- fl_run(db, fl_checks(schedule = fl_schedule(
-    list(site = "B", months = "8", due_days = 49),
-    list(site = "K", months = "8", due_days = 48))))
+    list(site = "N", months = "8", due_days = 49),
+    list(site = "M", months = "8", due_days = 48))))
   od <- fl_of(f, "overdue")
-  expect_identical(od$site, "K")
+  expect_identical(od$site, "M")
   expect_identical(od$date, "2026-08-01")
 })
 
@@ -81,12 +81,12 @@ test_that("overdue: months parse as 'all' or a ;-list with whitespace; another s
     }
   })
   f <- fl_run(db, fl_checks(schedule = fl_schedule(
-    list(site = "B", stream = "acirl_water", months = " 1; 4 ;7;10"))))
+    list(site = "N", stream = "acirl_water", months = " 1; 4 ;7;10"))))
   expect_identical(fl_of(f, "overdue")$date,
                    c("2026-07-01", "2026-04-01", "2026-01-01", "2025-10-01"))
 
   f2 <- fl_run(db, fl_checks(schedule = fl_schedule(
-    list(site = "B", stream = "acirl_water", months = "all"))))
+    list(site = "N", stream = "acirl_water", months = "all"))))
   # Oct 2025 .. Aug 2026 (Sep 2026 not yet due), newest first.
   expect_identical(fl_of(f2, "overdue")$date,
                    rev(paste0(months_seq("2025-10", 11), "-01")))
@@ -95,12 +95,12 @@ test_that("overdue: months parse as 'all' or a ;-list with whitespace; another s
 test_that("overdue: a schedule row counts only in months it overlaps (from/to); empty `to` is open-ended", {
   db <- fl_db()
   f <- fl_run(db, fl_checks(schedule = fl_schedule(
-    list(site = "B", months = "all", from = "2026-03-15", to = "2026-06-10"),
-    list(site = "K", months = "all", from = "2026-08-01", to = ""))))
+    list(site = "N", months = "all", from = "2026-03-15", to = "2026-06-10"),
+    list(site = "M", months = "all", from = "2026-08-01", to = ""))))
   od <- fl_of(f, "overdue")
-  expect_identical(od$date[od$site == "B"],
+  expect_identical(od$date[od$site == "N"],
                    c("2026-06-01", "2026-05-01", "2026-04-01", "2026-03-01"))
-  expect_identical(od$date[od$site == "K"], "2026-08-01")
+  expect_identical(od$date[od$site == "M"], "2026-08-01")
 })
 
 test_that("overdue: a malformed schedule (unknown stream, month 13) is an error of the schedule checks, not a crash", {
@@ -139,7 +139,7 @@ test_that("stream of a sample: gas by project type, dust by gauge name, ALS/ACIR
                        list(stream = "als_lab", months = "8"))
   od <- fl_of(fl_run(db, fl_checks(schedule = sched)), "overdue")
   expect_equal(nrow(od), 1)
-  expect_identical(od$site, "B")
+  expect_identical(od$site, "N")
   expect_match(od$detail, "acirl_water", fixed = TRUE)
 })
 
@@ -162,12 +162,12 @@ test_that("invoiced_not_received: due_days from the schedule (default 30); a sam
     fl_sample(con, "N.S02", "ES2600010", "2026-08-22", org = "ALS", results = list(pH = 7))
   })
   inv <- data.frame(
-    site = c("B", "B", "B", "K", "K"),
+    site = c("N", "N", "N", "M", "M"),
     stream = c("acirl_water", "als_lab", "acirl_water", "acirl_gas", "acirl_gas"),
     sampled_on = as.Date(c("2026-08-19", "2026-08-19", "2026-09-25", "2026-09-10", "2026-09-20")),
     ref = c("AC109001", "INV-2", "AC101500", "AC101600", "AC101700"),
     stringsAsFactors = FALSE)
-  sched <- fl_schedule(list(site = "B", stream = "acirl_water", months = "8;9", due_days = 30))
+  sched <- fl_schedule(list(site = "N", stream = "acirl_water", months = "8;9", due_days = 30))
   inr <- fl_of(fl_run(db, fl_checks(schedule = sched, invoices = inv)), "invoiced_not_received")
   # B acirl_water 08-19: the nearest ACIRL sample is 4 days later -> flagged.
   # B als_lab 08-19: ALS sample 3 days later -> cleared.
@@ -175,7 +175,7 @@ test_that("invoiced_not_received: due_days from the schedule (default 30); a sam
   # K acirl_gas 09-10: no schedule row, default 30 -> due 10-10 -> flagged.
   # K acirl_gas 09-20: due 10-20 -> not yet.
   expect_identical(inr$date, c("2026-09-10", "2026-08-19"))
-  expect_identical(inr$site, c("K", "B"))
+  expect_identical(inr$site, c("M", "N"))
   expect_match(inr$detail[[2]], "AC109001", fixed = TRUE)
   expect_match(inr$detail[[1]], "AC101600", fixed = TRUE)
 })
@@ -204,13 +204,13 @@ test_that("missing_point: ONE flag per (site, month, stream) counting the unsamp
     fl_sample(con, "M.S01", "ES2600023", "2026-09-15", results = list(pH = 7))
   })
   sched <- fl_schedule(
-    list(site = "B", stream = "als_lab", features = "N.S01;N.S02; N.E01"),
-    list(site = "B", stream = "acirl_gas", features = "N.G01"),
-    list(site = "K", stream = "als_lab", months = "1;4;7;10", features = "M.S01;M.S02"))
+    list(site = "N", stream = "als_lab", features = "N.S01;N.S02; N.E01"),
+    list(site = "N", stream = "acirl_gas", features = "N.G01"),
+    list(site = "M", stream = "als_lab", months = "1;4;7;10", features = "M.S01;M.S02"))
   mp <- fl_of(fl_run(db, fl_checks(schedule = sched)), "missing_point")
   expect_equal(nrow(mp), 1)
   expect_true(is.na(mp$feature))
-  expect_identical(mp$site, "B")
+  expect_identical(mp$site, "N")
   expect_identical(mp$date, "2026-09-14")
   expect_match(mp$detail, "1 of 3 expected points not sampled: N.S02", fixed = TRUE)
   expect_match(mp$detail, "als_lab", fixed = TRUE)
@@ -223,7 +223,7 @@ test_that("missing_point: a feature sampled that month in another work order, or
     fl_sample(con, "N.S02", "ES2600031", "2026-09-20", results = list(pH = 7), ingested = NULL)
     fl_sample(con, "N.E01", "ES2600030", "2026-09-14", org = "ACIRL", results = list(pH = 7))
   })
-  sched <- fl_schedule(list(site = "B", stream = "als_lab", features = "N.S01;N.S02;N.E01"))
+  sched <- fl_schedule(list(site = "N", stream = "als_lab", features = "N.S01;N.S02;N.E01"))
   expect_equal(nrow(fl_of(fl_run(db, fl_checks(schedule = sched)), "missing_point")), 0)
 })
 
@@ -234,16 +234,16 @@ test_that("missing_point: first 10 names then '+m more'; one flag per stream wit
     fl_sample(con, "N.E01", "ES2600032", "2026-09-14", org = "ACIRL",
               results = list(list(analyte = "pH", value = 7, lab_org = "ACIRL")))
   })
-  many <- sprintf("B.S%02d", 0:12)   # N.S00 sampled; N.S01..B.S12 not
-  sched <- fl_schedule(list(site = "B", stream = "als_lab", features = paste(many, collapse = ";")),
-                       list(site = "B", stream = "acirl_water", features = "N.E01;N.E02"))
+  many <- sprintf("N.S%02d", 0:12)   # N.S00 sampled; N.S01..N.S12 not
+  sched <- fl_schedule(list(site = "N", stream = "als_lab", features = paste(many, collapse = ";")),
+                       list(site = "N", stream = "acirl_water", features = "N.E01;N.E02"))
   mp <- fl_of(fl_run(db, fl_checks(schedule = sched)), "missing_point")
   expect_equal(nrow(mp), 2)
   expect_false(anyDuplicated(mp$key) > 0)
   als <- mp$detail[grepl("als_lab", mp$detail, fixed = TRUE)]
   expect_length(als, 1)
   expect_match(als, paste0("12 of 13 expected points not sampled: ",
-                           paste(sprintf("B.S%02d", 1:10), collapse = ", "), ", +2 more"),
+                           paste(sprintf("N.S%02d", 1:10), collapse = ", "), ", +2 more"),
                fixed = TRUE)
   acw <- mp$detail[grepl("acirl_water", mp$detail, fixed = TRUE)]
   expect_match(acw, "1 of 2 expected points not sampled: N.E02", fixed = TRUE)
@@ -264,8 +264,8 @@ test_that("missing_point: gas rounds count a point sampled in the month either s
     fl_sample(con, "N.S01", "ES2600033", "2026-09-14", results = list(pH = 7))
     fl_sample(con, "N.S02", "ES2550003", "2026-08-30", results = list(pH = 7), ingested = NULL)
   })
-  sched <- fl_schedule(list(site = "B", stream = "acirl_gas", features = "N.G01;N.G02;N.G03;N.G04"),
-                       list(site = "B", stream = "als_lab", features = "N.S01;N.S02"))
+  sched <- fl_schedule(list(site = "N", stream = "acirl_gas", features = "N.G01;N.G02;N.G03;N.G04"),
+                       list(site = "N", stream = "als_lab", features = "N.S01;N.S02"))
   mp <- fl_of(fl_run(db, fl_checks(schedule = sched)), "missing_point")
   expect_equal(nrow(mp), 2)
   expect_match(mp$detail[grepl("acirl_gas", mp$detail, fixed = TRUE)],
@@ -286,8 +286,8 @@ ma_inputs <- function() {
       list(epa_point = "20", pollutant = "pH", frequency = "Monthly"),
       list(epa_point = "20", pollutant = "Ammonia (as N)", frequency = "Monthly"),
       list(epa_point = "27", pollutant = "pH", frequency = "Monthly")),
-    points = fl_points(list("B", "18", "surface_water"), list("B", "20", "surface_water"),
-                       list("B", "27", "weather")))
+    points = fl_points(list("N", "18", "surface_water"), list("N", "20", "surface_water"),
+                       list("N", "27", "weather")))
 }
 
 ma_seed <- function(con) {
@@ -323,7 +323,7 @@ test_that("missing_analytes: ONE flag per (site, month) listing each missing pol
   })
   ma <- ma_run(db)
   expect_equal(nrow(ma), 1)
-  expect_identical(ma$site, "B")
+  expect_identical(ma$site, "N")
   expect_true(is.na(ma$feature))
   expect_identical(substr(ma$date, 1, 7), "2026-09")
   expect_match(ma$detail, "Ammonia (as N): N.S01, N.S02 (field only)", fixed = TRUE)
@@ -369,7 +369,7 @@ test_that("missing_analytes: at most 15 pollutants in the detail, then '+m more'
     fl_sample(con, "N.S01", "ES2600045", "2026-09-14", results = list(pH = 7))
   })
   req <- do.call(fl_requirements, lapply(pols, function(p) list(epa_point = "18", pollutant = p)))
-  ma <- ma_run(db, list(requirements = req, points = fl_points(list("B", "18", "surface_water"))))
+  ma <- ma_run(db, list(requirements = req, points = fl_points(list("N", "18", "surface_water"))))
   expect_equal(nrow(ma), 1)
   shown <- vapply(pols, function(p) grepl(paste0(p, ": N.S01"), ma$detail, fixed = TRUE), logical(1))
   expect_equal(sum(shown), 15)
@@ -390,7 +390,7 @@ test_that("missing_analytes: group line items map by their expanded `pollutant`,
   req <- fl_requirements(ocp("Aldrin"), ocp("Dieldrin"),
                          # the same (point, pollutant) under a second condition
                          c(ocp("Dieldrin"), list(condition = "M2.2")))
-  ma <- ma_run(db, list(requirements = req, points = fl_points(list("B", "12", "groundwater"))))
+  ma <- ma_run(db, list(requirements = req, points = fl_points(list("N", "12", "groundwater"))))
   expect_equal(nrow(ma), 1)
   expect_match(ma$detail, "Dieldrin: N.MW01", fixed = TRUE)
   expect_false(grepl("Aldrin", ma$detail, fixed = TRUE))
@@ -435,13 +435,13 @@ test_that("stream per result (R2): an ACIRL-sampled sample with ALS lab results 
               results = list(list(analyte = "NH3-N", value = 0.1, lab_org = "ALS"),
                              list(analyte = "pH", value = 7, lab_org = "ACIRL")))
   })
-  sched <- fl_schedule(list(site = "B", stream = "acirl_water", months = "8"),
-                       list(site = "B", stream = "als_lab", months = "8"),
-                       list(site = "K", stream = "acirl_water", months = "8"),
-                       list(site = "K", stream = "als_lab", months = "8"))
+  sched <- fl_schedule(list(site = "N", stream = "acirl_water", months = "8"),
+                       list(site = "N", stream = "als_lab", months = "8"),
+                       list(site = "M", stream = "acirl_water", months = "8"),
+                       list(site = "M", stream = "als_lab", months = "8"))
   od <- fl_of(fl_run(db, fl_checks(schedule = sched)), "overdue")
   expect_equal(nrow(od), 1)
-  expect_identical(od$site, "B")
+  expect_identical(od$site, "N")
   expect_match(od$detail, "acirl_water", fixed = TRUE)
 })
 
@@ -489,9 +489,9 @@ test_that("licence_limit: value x factor beyond max is flagged; exactly at the l
               type = "Monthly gas monitoring", ts_col = "date", results = list(CH4 = 0.0125))
   })
   lim <- fl_limits(
-    list(site = "B", feature_pattern = "^N\\.E01$", analyte = "NH3-N", max = "0.9",
+    list(site = "N", feature_pattern = "^N\\.E01$", analyte = "NH3-N", max = "0.9",
          unit = "mg/L", factor = "1", condition = "L2.4"),
-    list(site = "B", feature_pattern = "^B\\.G", analyte = "CH4", max = "1.25",
+    list(site = "N", feature_pattern = "^N\\.G", analyte = "CH4", max = "1.25",
          unit = "%v/v", factor = "100", condition = "R2.3"))
   ll <- fl_of(fl_run(db, fl_checks(limits = lim)), "licence_limit")
   expect_identical(ll$feature, c("N.G01", "N.E01"))      # newest first
@@ -552,7 +552,7 @@ test_that("gas_criterion: LEL and EPA guideline rows, highest level per family, 
   })
   # R9: the solid-waste trigger needs the R2.3 grid rows of the limits table
   gc <- fl_of(fl_run(db, fl_checks(limits = fl_limits(list(
-    site = "B", feature_pattern = "^B\\.G[0-9]", analyte = "CH4", max = "1.25",
+    site = "N", feature_pattern = "^N\\.G[0-9]", analyte = "CH4", max = "1.25",
     unit = "%v/v", factor = "100", condition = "R2.3")))), "gas_criterion")
   expect_equal(nrow(gc), 5)
   lel <- grepl("lower explosive", gc$threshold)
@@ -665,7 +665,7 @@ test_that("unit_change: the reporting unit (lab_method.units, else analyte.units
 # ---- round-2 rulings (2026-10-19 R9-R13) ---------------------------------------------------
 
 gas_grid_limits <- function() {
-  fl_limits(list(site = "B", feature_pattern = "^B\\.G[0-9]", analyte = "CH4", max = "1.25",
+  fl_limits(list(site = "N", feature_pattern = "^N\\.G[0-9]", analyte = "CH4", max = "1.25",
                  unit = "%v/v", factor = "100", condition = "R2.3"))
 }
 
@@ -710,7 +710,7 @@ test_that("missing_point (R10): a gas-round reading at a water point does not ma
               type = "Monthly gas monitoring", ts_col = "date",
               results = list(list(analyte = "CH4", value = 0.0001, lab_org = "ACIRL")))
   })
-  sched <- fl_schedule(list(site = "K", stream = "als_lab", features = "M.S01;M.MW01"))
+  sched <- fl_schedule(list(site = "M", stream = "als_lab", features = "M.S01;M.MW01"))
   mp <- fl_of(fl_run(db, fl_checks(schedule = sched)), "missing_point")
   expect_equal(nrow(mp), 1)
   expect_match(mp$detail, "1 of 2 expected points not sampled: M.MW01", fixed = TRUE)
@@ -735,11 +735,11 @@ test_that("missing_analytes (R10): a gas-round reading is not 'field' evidence; 
               results = list(list(analyte = "CH4", value = 0.0001, lab_org = "ACIRL")))
   })
   req <- fl_requirements(
-    list(site = "K", licence = "99001", epa_point = "4", pollutant = "pH"),
-    list(site = "K", licence = "99001", epa_point = "4", pollutant = "Ammonia (as N)"),
-    list(site = "K", licence = "99001", epa_point = "11", pollutant = "pH"),
-    list(site = "K", licence = "99001", epa_point = "11", pollutant = "Ammonia (as N)"))
-  pts <- fl_points(list("K", "4", "surface_water"), list("K", "11", "groundwater"))
+    list(site = "M", licence = "99001", epa_point = "4", pollutant = "pH"),
+    list(site = "M", licence = "99001", epa_point = "4", pollutant = "Ammonia (as N)"),
+    list(site = "M", licence = "99001", epa_point = "11", pollutant = "pH"),
+    list(site = "M", licence = "99001", epa_point = "11", pollutant = "Ammonia (as N)"))
+  pts <- fl_points(list("M", "4", "surface_water"), list("M", "11", "groundwater"))
   ma <- ma_run(db, list(requirements = req, points = pts))
   expect_equal(nrow(ma), 1)
   expect_match(ma$detail, "Ammonia (as N): M.MW01 (lab only)", fixed = TRUE)
@@ -759,7 +759,7 @@ test_that("missing_analytes (R11): a licence group missing in full at one featur
     fl_sample(con, "N.MW01", "ES2600330", "2026-09-14", results = list(pH = 7))
   })
   req <- fl_requirements(ocp_req("Aldrin"), ocp_req("Dieldrin"), ocp_req("Endrin"))
-  ma <- ma_run(db, list(requirements = req, points = fl_points(list("B", "12", "groundwater"))))
+  ma <- ma_run(db, list(requirements = req, points = fl_points(list("N", "12", "groundwater"))))
   expect_equal(nrow(ma), 1)
   expect_match(ma$detail, "Organochlorine pesticides (3 analytes): N.MW01", fixed = TRUE)
   for (a in c("Aldrin", "Dieldrin", "Endrin")) expect_false(grepl(a, ma$detail, fixed = TRUE), info = a)
@@ -776,7 +776,7 @@ test_that("missing_analytes (R11): a group missing at DIFFERENT feature sets is 
   })
   req <- fl_requirements(ocp_req("Aldrin"), ocp_req("Dieldrin"),
                          ocp_req("Aldrin", "14"), ocp_req("Dieldrin", "14"))
-  pts <- fl_points(list("B", "12", "groundwater"), list("B", "14", "groundwater"))
+  pts <- fl_points(list("N", "12", "groundwater"), list("N", "14", "groundwater"))
   ma <- ma_run(db, list(requirements = req, points = pts))
   expect_equal(nrow(ma), 1)
   expect_match(ma$detail, "Aldrin: N.MW01", fixed = TRUE)
@@ -787,7 +787,7 @@ test_that("missing_analytes (R11): a group missing at DIFFERENT feature sets is 
 test_that("overdue (R12): short detail 'no <stream> sample dated in <Mon YYYY>'; the schedule source is its own column", {
   db <- fl_db()
   f <- fl_run(db, fl_checks(schedule = fl_schedule(
-    list(site = "B", months = "8", source = "ACIRL revised schedule Aug 2026"))))
+    list(site = "N", months = "8", source = "ACIRL revised schedule Aug 2026"))))
   od <- fl_of(f, "overdue")
   expect_identical(od$detail, "no acirl_water sample dated in Aug 2026")
   expect_identical(od$source, "ACIRL revised schedule Aug 2026")
@@ -796,10 +796,10 @@ test_that("overdue (R12): short detail 'no <stream> sample dated in <Mon YYYY>';
 
 test_that("overdue (R12): suppressed when an invoiced_not_received flag covers the same site, stream and month", {
   db <- fl_db()
-  inv <- data.frame(site = c("B", "B"), stream = c("acirl_water", "als_lab"),
+  inv <- data.frame(site = c("N", "N"), stream = c("acirl_water", "als_lab"),
                     sampled_on = as.Date(c("2026-08-19", "2026-07-10")),
                     ref = c("AC109003", "AC101700"), stringsAsFactors = FALSE)
-  f <- fl_run(db, fl_checks(schedule = fl_schedule(list(site = "B", months = "7;8")),
+  f <- fl_run(db, fl_checks(schedule = fl_schedule(list(site = "N", months = "7;8")),
                             invoices = inv))
   expect_identical(fl_of(f, "overdue")$date, "2026-07-01")        # Aug acirl_water suppressed
   expect_setequal(fl_of(f, "invoiced_not_received")$date, c("2026-08-19", "2026-07-10"))
@@ -808,7 +808,7 @@ test_that("overdue (R12): suppressed when an invoiced_not_received flag covers t
 test_that("status.json (R12): the overdue detail omits the source; the JSON flag carries it", {
   s <- fl_status_setup()
   fl_status(s, checks = fl_checks(schedule = fl_schedule(
-    list(site = "K", months = "8", source = "ACIRL revised schedule Aug 2026"))))
+    list(site = "M", months = "8", source = "ACIRL revised schedule Aug 2026"))))
   fl <- fl_status_json(s)$flags[[1]]
   expect_identical(fl$date, "2026-08-01")
   expect_match(fl$detail, "no acirl_water sample dated in Aug 2026", fixed = TRUE)
@@ -838,7 +838,7 @@ keyed_db <- function(env = parent.frame()) {
   db
 }
 keyed_checks <- function() {
-  fl_checks(schedule = fl_schedule(list(site = "K", months = "7;8")),
+  fl_checks(schedule = fl_schedule(list(site = "M", months = "7;8")),
             limits = fl_limits(list(max = "0.9")))
 }
 
@@ -897,7 +897,7 @@ test_that("import_status(checks): `flags` is present and empty when none, with f
 
 test_that(".import-status.json: flags carry first_seen, kept by key across runs; new flags get now; gone flags drop", {
   s <- fl_status_setup()
-  chk <- fl_checks(schedule = fl_schedule(list(site = "K", months = "7;8")),
+  chk <- fl_checks(schedule = fl_schedule(list(site = "M", months = "7;8")),
                    limits = fl_limits(list(max = "0.9")))
   fl_with(s$db, function(con) {
     fl_sample(con, "N.E01", "ES2600120", "2026-09-11", results = list(`NH3-N` = 2))
@@ -936,7 +936,7 @@ test_that(".import-status.json: flags carry first_seen, kept by key across runs;
 test_that("status.json (R6): keeps every flag, 22 here; the 15-line cap belongs to a renderer", {
   s <- fl_status_setup()
   # no samples: B and K each overdue Oct 2025 .. Aug 2026 = 22 flags
-  chk <- fl_checks(schedule = fl_schedule(list(site = "B"), list(site = "K")))
+  chk <- fl_checks(schedule = fl_schedule(list(site = "N"), list(site = "M")))
   fl_status(s, checks = chk)
   js <- fl_status_json(s)
   expect_length(js$flags, 22)
@@ -945,7 +945,7 @@ test_that("status.json (R6): keeps every flag, 22 here; the 15-line cap belongs 
 
 test_that("a failing check does not break the status: it is a flag_errors entry; other checks still listed", {
   s <- fl_status_setup()
-  chk <- fl_checks(schedule = fl_schedule(list(site = "K", months = "8")),
+  chk <- fl_checks(schedule = fl_schedule(list(site = "M", months = "8")),
                    limits = file.path(s$report_dir, "no-such-limits.csv"))
   expect_no_error(fl_status(s, checks = chk))
   js <- fl_status_json(s)
@@ -957,7 +957,7 @@ test_that("a failing check does not break the status: it is a flag_errors entry;
 
 test_that("inbox_run(checks = ...) passes checks to status.json on a run and on a status refresh", {
   s <- fl_status_setup()
-  chk <- fl_checks(schedule = fl_schedule(list(site = "K", months = "8")))
+  chk <- fl_checks(schedule = fl_schedule(list(site = "M", months = "8")))
   run <- function(now) quiet_run(inbox_run(input_dir = s$input_dir, db = s$db,
                                            backup_dir = s$backup_dir, report_dir = s$report_dir,
                                            now = now, checks = fl_with_defaults(chk)))

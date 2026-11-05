@@ -236,7 +236,7 @@ test_that("existing-row preference: an ALS event prefers the candidate filed und
   erp_sample(con, "s-la", "p-wa", "an-la", 7.1, lab = "lm-0001", hm = "09:25", org = "ALS")
 
   row <- mk_row(
-    source_ref = "als-pH", work_order = "ES2253232", lab_sample_id = "ES2232317001",
+    source_ref = "als-pH", work_order = "ES2253232", lab_sample_id = "ES2253232001",
     feature_raw = "T.MW01", analyte_raw = "pH Value", cas_number = NA_character_,
     method_raw = "EA005P: pH by PC Titrator", units_raw = "pH Unit",
     value_raw = "5.00", value_num = 5.0, below_detection = FALSE, rl = NA_real_,

@@ -29,7 +29,7 @@ test_that("missing_result: recent ACIRL field sample, numeric analyte with '_' -
   expect_identical(mr$action, "ask_acirl")
   expect_identical(mr$analyte, "Standing water level")
   expect_identical(mr$feature, "N.L02")
-  expect_identical(mr$site, "B")
+  expect_identical(mr$site, "N")
   expect_identical(as.character(mr$date), "2026-09-09")
   expect_identical(mr$threshold, "1 blank result")
   expect_match(mr$detail, 'Standing water level "_"', fixed = TRUE)

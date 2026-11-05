@@ -189,7 +189,7 @@ fl_guideline <- function(con, analyte, guideline, level, level_name, value) {
 fl_schedule <- function(...) {
   rows <- list(...)
   df <- do.call(rbind, lapply(rows, function(r) {
-    d <- list(site = "B", stream = "acirl_water", months = "all", features = "",
+    d <- list(site = "N", stream = "acirl_water", months = "all", features = "",
               due_days = "30", from = "2020-01-01", to = "", source = "test")
     d[names(r)] <- lapply(r, as.character)
     as.data.frame(d, stringsAsFactors = FALSE)
@@ -203,7 +203,7 @@ fl_schedule <- function(...) {
 fl_limits_plain <- function(...) {
   rows <- list(...)
   df <- do.call(rbind, lapply(rows, function(r) {
-    d <- list(site = "B", feature_pattern = "^N\\.E01$", analyte = "NH3-N", min = "",
+    d <- list(site = "N", feature_pattern = "^N\\.E01$", analyte = "NH3-N", min = "",
               max = "", unit = "mg/L", factor = "1", condition = "L2.4", note = "")
     d[names(r)] <- lapply(r, as.character)
     as.data.frame(d, stringsAsFactors = FALSE)
@@ -230,7 +230,7 @@ fl_limits <- function(...) {
 fl_requirements <- function(...) {
   rows <- list(...)
   df <- do.call(rbind, lapply(rows, function(r) {
-    d <- list(site = "B", licence = "99002", epa_point = "18", pollutant = "pH",
+    d <- list(site = "N", licence = "99002", epa_point = "18", pollutant = "pH",
               licence_pollutant = "pH", frequency = "Monthly", required = "12",
               condition = "M2.3", group_item = "")
     d[names(r)] <- lapply(r, as.character)
@@ -274,7 +274,7 @@ fl_with_defaults <- function(checks) {
   if (!is.list(checks)) return(checks)
   if (!"streams" %in% names(checks)) checks["streams"] <- list(fl_test_streams())
   if (!"site_names" %in% names(checks)) {
-    checks["site_names"] <- list(c(B = "Northvale", K = "Millbrook"))
+    checks["site_names"] <- list(c(N = "Northvale", M = "Millbrook"))
   }
   checks
 }

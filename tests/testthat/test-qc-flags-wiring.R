@@ -27,7 +27,7 @@ test_that("R-19.22: `action` is a character column right after `source`; NA for 
   fl_with(db, function(con) {
     fl_sample(con, "N.E01", "ES2600500", "2026-09-11", results = list(`NH3-N` = 2))
   })
-  f <- fl_run(db, fl_checks(schedule = fl_schedule(list(site = "K", months = "8")),
+  f <- fl_run(db, fl_checks(schedule = fl_schedule(list(site = "M", months = "8")),
                             limits = fl_limits(list(max = "0.9"))))
   expect_identical(names(f), fl_flag_cols)
   expect_identical(names(f)[[match("source", names(f)) + 1L]], "action")

@@ -232,13 +232,13 @@ test_that("R-10.2: QC rows are skipped with the fixture's known counts and revie
   reviews <- DBI::dbGetQuery(con, "SELECT * FROM review_queue")
   # R-12.15 T-1 sweep (5th instance): the plan's "review_queue contains
   # exactly the engineered unknowns (typo feature, unknown unit) and nothing
-  # else" no longer matches the CONTRACT A34 real-fixture rework - the input
-  # dir now also carries the real anonymized ES2570540/ES2670610/ES2664217
+  # else" no longer matches the CONTRACT A34 lab-shaped fixture rework - the input
+  # dir now also carries the synthetic lab-shaped ES2570540/ES2670610/ES2664217
   # corpora, whose feature codes (P.S03, Q.MW02, ...) are naturally unknown
   # to the seeded registry, not a single deliberately-engineered typo. Direct
   # replay of reconcile_event()'s R-8.1-8.4 stages (`.rc_qc_filter()`,
-  # `.rc_resolve_features()`) against the real fixtures confirms
-  # review_queue is dominated by real `unknown_feature` groups, not a small
+  # `.rc_resolve_features()`) against these fixtures confirms
+  # review_queue is dominated by genuine `unknown_feature` groups, not a small
   # fixed engineered set - see the plan-change note filed for this finding.
   # Assert what IS specific and derivable: the table is non-empty, holds at
   # least one unknown_feature item (the dominant, empirically-confirmed
