@@ -267,7 +267,7 @@ di_db_setup <- function() {
     i <- i + 1
     nm <- di_features[[u]]
     DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix, date_end, lon, lat)
-                         VALUES (?, ?, 'B', NULL, 'air', NULL, ?, ?)",
+                         VALUES (?, ?, 'N', NULL, 'air', NULL, ?, ?)",
                    params = list(u, nm, 150.6 + i / 1000, -33.7 - i / 1000))
     DBI::dbExecute(con, "INSERT INTO feature_alias
       (uuid, uuid_feature, name, alias_key, kind, n_seen, auto_assign, first_seen, last_seen, confirmed_by)

@@ -667,7 +667,7 @@ test_that("inbox_run(): a work order's site and counts are in the log, the retur
   b <- wo_of("batch-2026-10-18 0930 rain", "ES2664217")
   expect_false(is.null(a))
   expect_false(is.null(b))
-  expect_identical(a$site, "B")                      # the code, not a label
+  expect_identical(a$site, "N")                      # the code, not a label
   expect_true(is.na(b$site))                         # dangling aliases: no site
   expect_match(a$kind, "ALS")
   expect_gt(a$samples, 0)
@@ -677,7 +677,7 @@ test_that("inbox_run(): a work order's site and counts are in the log, the retur
   # the log and status.json carry the same, a missing site as JSON null
   recent <- read_status_json(s$report_dir)$recent_imports
   by_wo <- stats::setNames(recent, vapply(recent, function(r) r$work_order, character(1)))
-  expect_identical(by_wo[["XX1234567"]]$site, "B")
+  expect_identical(by_wo[["XX1234567"]]$site, "N")
   expect_null(by_wo[["ES2664217"]]$site)
   expect_identical(by_wo[["XX1234567"]]$date, sydney_date(now))
   expect_length(report_md_files(s$report_dir), 0)

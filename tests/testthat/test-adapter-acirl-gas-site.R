@@ -44,7 +44,7 @@ gs_keywords <- function(kw, env = parent.frame()) {
 }
 
 gs_millbrook_names <- function() {
-  sub("^K\\.", "", gas_expected_millbrook())
+  sub("^M\\.", "", gas_expected_millbrook())
 }
 
 # ---- 30. no keywords --------------------------------------------------------------------------

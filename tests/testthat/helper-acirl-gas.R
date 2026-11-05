@@ -454,26 +454,26 @@ build_gas_millbrook <- function(dir, report_no = "2400-9903-12-01",
 # ---- expected feature names, hard-coded from the DEFAULT content above ----------
 
 gas_expected_b2025_monthly <- function() {
-  c(paste0("B.G", c(197, 198, 199, 222, 223, 225, 226, 247:251, 272:276)),
-    paste0("B.G", c(282:286, 288, 289, 307, 309:311, 313, 314, 332:336, 338, 339,
+  c(paste0("N.G", c(197, 198, 199, 222, 223, 225, 226, 247:251, 272:276)),
+    paste0("N.G", c(282:286, 288, 289, 307, 309:311, 313, 314, 332:336, 338, 339,
                     368, 370, 372, 374, 375)),
-    paste0("B.G", 382:384))
+    paste0("N.G", 382:384))
 }
 
 gas_expected_millbrook <- function() {
-  c(paste0("K.G", c(186:188, 211:213, 236:238, 261, 262)),
-    paste0("K.G", c(287:289, 312:314, 337:339, 362)),   # G365/G366: template slots, skipped
-    "K.Office - Window near desk", "K.Office - Air conditioner",
-    "K.Meal Room - Air conditioner", "K.Meal Room - Power point (Sink)",
-    "K.Main Recycle area (Drop Off) - Power point near hose reel",
-    "K.Main Recycle area (Drop Off) - Shower drain below stairs",
-    "K.Re-use Center - Power point back wall", "K.Re-use Center - Office window",
-    "K.Re-use Center - Power point back wall #2",
-    "K.Meeting Room - Door wall 1", "K.Meeting Room - Window wall 2",
-    "K.Meeting Room - Window wall 2 #2", "K.Kitchen - Sink",
-    as.vector(outer(c("K.Biofilter North Corner", "K.Front of Buildings"),
+  c(paste0("M.G", c(186:188, 211:213, 236:238, 261, 262)),
+    paste0("M.G", c(287:289, 312:314, 337:339, 362)),   # G365/G366: template slots, skipped
+    "M.Office - Window near desk", "M.Office - Air conditioner",
+    "M.Meal Room - Air conditioner", "M.Meal Room - Power point (Sink)",
+    "M.Main Recycle area (Drop Off) - Power point near hose reel",
+    "M.Main Recycle area (Drop Off) - Shower drain below stairs",
+    "M.Re-use Center - Power point back wall", "M.Re-use Center - Office window",
+    "M.Re-use Center - Power point back wall #2",
+    "M.Meeting Room - Door wall 1", "M.Meeting Room - Window wall 2",
+    "M.Meeting Room - Window wall 2 #2", "M.Kitchen - Sink",
+    as.vector(outer(c("M.Biofilter North Corner", "M.Front of Buildings"),
                     paste0("R", rep(1:2, each = 3), "C", rep(1:3, 2)), paste)),
-    paste0("K.MP_", 1:4))
+    paste0("M.MP_", 1:4))
 }
 
 # ---- adapter accessors ------------------------------------------------------------

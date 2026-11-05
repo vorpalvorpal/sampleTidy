@@ -10,7 +10,7 @@
 #    the key away from Layer 2 for EVERY date, so re-ingesting the first
 #    workbook made the row feature-pending; `.rc_find_existing()` then looked
 #    only on the pending alias's samples, found nothing, and the same
-#    measurement committed a second time (99 B.G* rows of
+#    measurement committed a second time (99 N.G* rows of
 #    `2400-9127-05 May 2021 Monthly Gas Monitoring Northvale WMF.XLS`).
 #    Gas has no work-order re-ingest guard, so this row-level lookup is the
 #    only thing standing between a re-issued gas workbook and duplicates.

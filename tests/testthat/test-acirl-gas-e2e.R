@@ -53,7 +53,7 @@ gas_db_setup <- function(env = parent.frame()) {
     i <- i + 1
     nm <- gas_features[[u]]
     DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix, date_end, lon, lat)
-                         VALUES (?, ?, 'B', NULL, 'air', NULL, ?, ?)",
+                         VALUES (?, ?, 'N', NULL, 'air', NULL, ?, ?)",
                    params = list(u, nm, 150.6 + i / 1000, -33.7 - i / 1000))
     DBI::dbExecute(con, "INSERT INTO feature_alias
       (uuid, uuid_feature, name, alias_key, kind, n_seen, auto_assign, first_seen, last_seen, confirmed_by)
@@ -394,7 +394,7 @@ test_that("16: a Northvale workbook carrying a numeric N.G201 commits exactly wh
 })
 
 test_that("16: a Millbrook workbook mints no pending alias or sample for M.G365 / M.G366, while its genuinely unregistered probes still go pending", {
-  db <- gas_db_setup()          # registers Northvale probes only: every K. label is unknown here
+  db <- gas_db_setup()          # registers Northvale probes only: every M. label is unknown here
   gas_adapter()
   input <- withr::local_tempdir()
   build_gas_millbrook(input)

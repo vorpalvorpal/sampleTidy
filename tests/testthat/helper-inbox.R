@@ -46,15 +46,15 @@ local_test_batches <- function(env = parent.frame()) {
 }
 
 #' A seeded DB, archive/snapshot dirs, an empty inbox, backup and report dirs.
-#' Seeded features with site 'T' are re-sited to 'B' (Northvale) so that the
+#' Seeded features with site 'T' are re-sited to 'N' (Northvale) so that the
 #' XX1234567 fixture's samples land on Northvale features.
 inbox_setup <- function(env = parent.frame()) {
   db_dir <- withr::local_tempdir(.local_envir = env)
   db_path <- seed_db(dir = db_dir)
   con <- seed_con(db_path)
   ensure_test_asset_table(con)
-  DBI::dbExecute(con, "UPDATE feature SET site = 'B' WHERE site = 'T'")
-  DBI::dbExecute(con, "UPDATE feature SET site = 'K' WHERE site = 'TH'")
+  DBI::dbExecute(con, "UPDATE feature SET site = 'N' WHERE site = 'T'")
+  DBI::dbExecute(con, "UPDATE feature SET site = 'M' WHERE site = 'TH'")
   DBI::dbDisconnect(con, shutdown = TRUE)
 
   archive_dir <- withr::local_tempdir(.local_envir = env)

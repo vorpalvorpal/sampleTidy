@@ -117,7 +117,7 @@ test_that("R-19.29: a batch-level LCS failure flags once and names every point w
   f <- qci_flags(d$db, check = "lab_qc_outlier")
   expect_equal(nrow(f), 1)
   expect_identical(f$key, sprintf("lab_qc_outlier|ES2690001|lcs|EA010P|%s|QC-MRG2-1000404002", .ec))
-  expect_identical(f$site, "B")
+  expect_identical(f$site, "N")
   expect_match(f$detail, "ALS QCI ES2690001", fixed = TRUE)
   expect_match(f$detail, "EA010P", fixed = TRUE)
   expect_match(f$detail, "LCS 90.1%", fixed = TRUE)
@@ -169,7 +169,7 @@ test_that("R-19.30: one flag per (work order, method), listing linked points, da
   f <- qci_flags(d$db, check = "holding_time")
   expect_setequal(f$key, c("holding_time|ES2690002|EP030", "holding_time|ES2690002|EA005P"))
   bod <- f[f$key == "holding_time|ES2690002|EP030", , drop = FALSE]
-  expect_identical(bod$site, "B")
+  expect_identical(bod$site, "N")
   expect_match(bod$detail, "ES2690002", fixed = TRUE)
   expect_match(bod$detail, "EP030", fixed = TRUE)
   expect_match(bod$detail, "N.L01", fixed = TRUE)
@@ -200,10 +200,10 @@ test_that("R-19.30: action is resample when a licence-required pollutant at a li
   d <- lf_ht_db(licence = TRUE)
   fl_with(d$db, function(con) qci_put_report(con, "ES2690002", lf_ht_rows(d)))
   checks <- fl_checks(
-    requirements = fl_requirements(list(site = "B", epa_point = "20",
+    requirements = fl_requirements(list(site = "N", epa_point = "20",
                                         pollutant = "Biochemical oxygen demand",
                                         licence_pollutant = "BOD", frequency = "Yearly")),
-    points = fl_points(list("B", "20", "discharge")))
+    points = fl_points(list("N", "20", "discharge")))
   f <- qci_flags(d$db, checks, check = "holding_time")
   bod <- f[f$key == "holding_time|ES2690002|EP030", , drop = FALSE]
   expect_identical(bod$action, "resample")
@@ -217,7 +217,7 @@ test_that("R-19.30: action is resample when a licence-required pollutant at a li
 test_that("R-19.32: a licence_limit flag on a result with a linked holding-time breach carries '; QC qualified:', key unchanged", {
   d <- lf_ht_db()
   fl_with(d$db, function(con) qci_put_report(con, "ES2690002", lf_ht_rows(d)))
-  checks <- fl_checks(limits = fl_limits(list(site = "B", feature_pattern = "^N\\.L0[13]$",
+  checks <- fl_checks(limits = fl_limits(list(site = "N", feature_pattern = "^N\\.L0[13]$",
                                               analyte = "BOD", max = "20", unit = "mg/L",
                                               condition = "L2.4")))
   f <- qci_flags(d$db, checks, check = "licence_limit")
@@ -233,7 +233,7 @@ test_that("R-19.32: a licence_limit flag on a result with a linked holding-time 
 test_that("R-19.32: an LCS failure qualifies the licence_limit flag of every result it applies to", {
   d <- lf_lcs_db()
   fl_with(d$db, function(con) qci_put_report(con, "ES2690001", list(lf_lcs_row)))
-  checks <- fl_checks(limits = fl_limits(list(site = "B", feature_pattern = "^N\\.S01$",
+  checks <- fl_checks(limits = fl_limits(list(site = "N", feature_pattern = "^N\\.S01$",
                                               analyte = .ec, max = "600", unit = "µS/cm")))
   f <- qci_flags(d$db, checks, check = "licence_limit")
   expect_equal(nrow(f), 1)
