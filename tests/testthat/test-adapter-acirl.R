@@ -823,6 +823,41 @@ acirl_fe_labels <- function(ws) {
     vapply(ws$als_candidates, function(x) x$analyte_raw, character(1)))
 }
 
+test_that("default field_analytes allowlist lands O2/CO2/CH4 gas readings in results", {
+  skip_if_not_installed("openxlsx")
+  withr::local_options(list("sampletidy.field_analytes" = NULL))
+  withr::local_envvar(c(SAMPLETIDY_FIELD_ANALYTES = NA))
+  path <- withr::local_tempfile(fileext = ".xlsx")
+  wb <- openxlsx::createWorkbook()
+  openxlsx::addWorksheet(wb, "Groundwater Sites 2")
+  put <- function(r, c, v) {
+    openxlsx::writeData(wb, "Groundwater Sites 2", x = v, startRow = r,
+                        startCol = c, colNames = FALSE, rowNames = FALSE)
+  }
+  put(6L, 3L, "Units")
+  put(9L, 2L, "Date of Sample"); put(9L, 4L, 45802)
+  put(10L, 2L, "Site Name");     put(10L, 4L, "P.MW06")
+  gas <- c("CH4 Reading % v/v", "O2 Reading % v/v", "CO2 Reading % v/v")
+  for (k in seq_along(gas)) {
+    put(10L + k, 2L, gas[[k]])
+    put(10L + k, 3L, "% v/v")
+    put(10L + k, 4L, k * 1.5)
+  }
+  openxlsx::saveWorkbook(wb, path, overwrite = TRUE)
+
+  ws <- sampleTidy:::.st_acirl_parse_water_sheet(
+    path, "Groundwater Sites 2",
+    field_analytes = st_config("field_analytes"),
+    transcription_labels = character(0)
+  )
+  res <- vapply(ws$results, function(x) x$analyte_raw, character(1))
+  cand <- vapply(ws$als_candidates, function(x) x$analyte_raw, character(1))
+  for (lab in gas) {
+    expect_true(lab %in% res, info = lab)
+    expect_false(lab %in% cand, info = lab)
+  }
+})
+
 test_that("RULING 2026-08-08: the stale-template Fe labels emit no row at all", {
   # Not "no result" - NO ROW. The als_candidate path is the one that would have
   # carried these values forward into the transcription population, so it is

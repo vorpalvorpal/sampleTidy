@@ -51,8 +51,11 @@
       "Water Height", "Water Depth",
       # Registered ACIRL `field` methods with ZERO occurrences in the
       # 2026-08-01 corpus. Allowlisted so a future sheet is imported rather
-      # than routed to review; they cost nothing while absent.
+      # than routed to review; they cost nothing while absent. The gas
+      # readings are registered ACIRL field gas methods (% v/v) with
+      # analytes CH4, H2S, O2 and CO2.
       "DO", "ORP", "CH4 Reading % v/v", "H2S Reading % v/v",
+      "O2 Reading % v/v", "CO2 Reading % v/v",
       # A76 ruled turbidity in. It has no analyte, no lab_method and zero
       # corpus occurrences - until the `Turbidity` analyte is created it will
       # resolve to `analyte_pending` and surface in review, which is the
