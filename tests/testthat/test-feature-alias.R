@@ -1290,6 +1290,22 @@ test_that("Phase-7b round-2 M4 coverage gap: re-confirming a row that IS ALREADY
   expect_identical(after$kind[[1]], "self")
 })
 
+# Empty-but-present registry tables: `.rc_load_registry()` does an unconditional
+# `SELECT * FROM` all six of feature/feature_alias/feature_mask/analyte/
+# lab_method/project, so a seam test through the real resolver needs all six to
+# EXIST (zero rows is fine). These are the four this file does not create itself.
+.fa_empty_registry_ddl <- list(
+  feature_mask = "CREATE TABLE feature_mask (uuid_feature VARCHAR, variant VARCHAR, name VARCHAR)",
+  analyte = "CREATE TABLE analyte (uuid VARCHAR PRIMARY KEY, name VARCHAR, units VARCHAR,
+    conversion_constant DOUBLE, type VARCHAR, CAS VARCHAR)",
+  lab_method = "CREATE TABLE lab_method (uuid VARCHAR PRIMARY KEY, uuid_analyte VARCHAR,
+    name VARCHAR, method VARCHAR, organisation VARCHAR, rl_low DOUBLE, rl_high DOUBLE,
+    reported_as VARCHAR, api VARCHAR, uuid_project VARCHAR, uuid_feature VARCHAR,
+    comments VARCHAR, units VARCHAR, conversion_constant DOUBLE)",
+  project = "CREATE TABLE project (uuid VARCHAR PRIMARY KEY, uuid_parent VARCHAR,
+    uuid_root VARCHAR, name VARCHAR, type VARCHAR)"
+)
+
 test_that("Phase-7b round-3 A11: an open sample_collision row on a redundant identity arm is re-keyed onto the surviving self arm before the F.19 post-pass deletes it, not left orphaned", {
   setup <- fa_setup()
   con <- setup$con
@@ -1399,10 +1415,9 @@ fa_e8_setup <- function() {
     # does an unconditional `SELECT * FROM` all SIX of feature/feature_alias/
     # feature_mask/analyte/lab_method/project - the (c) assertion below goes
     # through the REAL resolver, so all six must EXIST (empty is fine; none
-    # of this unit's assertions touch these four). Reuses
-    # helper-migration-003-db.R's own `.st_mig003_empty_ddl` idiom rather
-    # than inventing a new one.
-    for (ddl in .st_mig003_empty_ddl) DBI::dbExecute(con, ddl)
+    # of this unit's assertions touch these four). `.fa_empty_registry_ddl`
+    # (top of this section) creates them.
+    for (ddl in .fa_empty_registry_ddl) DBI::dbExecute(con, ddl)
 
     DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, lon, lat) VALUES
       ('f-e8-01', 'Z.E8DUP01', 'Z', 150.8801, -33.8801)")
@@ -1628,7 +1643,7 @@ fa_e8_dup_loser_setup <- function() {
       uuid VARCHAR PRIMARY KEY,
       uuid_sample VARCHAR REFERENCES \"sample\"(uuid),
       value DOUBLE)")
-    for (ddl in .st_mig003_empty_ddl) DBI::dbExecute(con, ddl)
+    for (ddl in .fa_empty_registry_ddl) DBI::dbExecute(con, ddl)
 
     DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, lon, lat) VALUES
       ('f-dup-01', 'Z.DUPLOSER01', 'Z', 150.9101, -33.9101)")
