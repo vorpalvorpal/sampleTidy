@@ -4,8 +4,8 @@
 # CONFIDENTIALITY (PLAN-19 R-19.10, R-19.13): every QC code and parent here is
 # INVENTED, at the invented site `Q`. Parents use the invented point type `X`
 # (Q.X01, Q.X02, ...), which is not a real point type at any site, so an
-# invented code->parent pairing can never coincide with a real one under the
-# REAL-FIXTURES.md B->Q anonymisation map. Never write a real B.J code here.
+# invented code->parent pairing can never coincide with a real one under any
+# remap of real codes to the invented site. Never write a real B.J code here.
 #
 # qc_db() is fl_db() (helper-flags.R) plus the PLAN-19 section-2 tables as the
 # plan specifies them (migration 048's shape), so the flag checks can be tested
