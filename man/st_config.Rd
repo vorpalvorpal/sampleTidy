@@ -59,4 +59,11 @@ env var.
 digits, the job prefix that makes a filename ACIRL-shaped (\verb{<prefix>-NNNN}).
 With no prefix configured no name is ACIRL-shaped. It may come from the
 env var \code{SAMPLETIDY_ACIRL_JOB_PREFIX}; any other value aborts where it is used.
+
+\code{field_analytes} is a character vector (default \code{character(0)}) of the
+field-sheet labels that are field readings: the ACIRL field adapter imports
+a water-sheet row as a result only if its label, after squishing white
+space and upper-casing, matches an entry. With the default no field reading
+is imported. It is list-valued, so it cannot come from an env var, and a
+value that is not a character vector without \code{NA} aborts where it is used.
 }
