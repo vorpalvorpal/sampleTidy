@@ -18,54 +18,15 @@
   live_db = function() {
     file.path(tools::R_user_dir("sampleTidy", "data"), "monitoring.duckdb")
   },
-  # A76 (2026-08-01): the field set is MAXIMAL. Every entry below is
-  # matched exactly (after `str_squish()` + upper-case) against an ACIRL water
-  # sheet's parameter label. The list is grounded in two measurements, not in
-  # the analyte names of the ruling:
-  #
-  #   (a) a label census over the real corpus (156 workbooks, 13768 label rows,
-  #       296 distinct labels - measured on the corpus), and
-  #   (b) the 32 `lab_method` rows already carrying `method = 'field'`, whose
-  #       `name` column IS the ACIRL sheet label ("Electrical Conductivity",
-  #       "Water Depth", "Flow observation", ...).
-  #
-  # Deliberately NOT here:
-  #   * "Electrical Conductivity @ 25<degC>" - that is the ALS value transcribed
-  #     into the sheet, not a field reading. ACIRL used to own a `field`
-  #     lab_method under the MOJIBAKE spelling of that label with zero analyses;
-  #     it was deleted from the live database on 2026-08-01 (change_log
-  #     uuid_row 9f59b10a). The clean-named row is correct and untouched: org
-  #     ALS, method "EA010P: Conductivity by PC Titrator". Either way the label
-  #     must never be allowlisted.
-  #   * the TSS pair - see `acirl_transcription_labels` below.
-  # Observation labels are not here either: they take the qualitative
-  # Stage/Appearance path in the ACIRL adapter, not the allowlist.
+  # `field_analytes` (character vector, default none): the ACIRL water-sheet
+  # parameter labels that are field readings. The ACIRL field adapter matches
+  # each entry exactly, after `str_squish()` + upper-case; a labelled row with
+  # a value whose label is not listed goes to `report$als_candidates` and is
+  # skipped as `lab_data_dropped`. Observation labels do not need listing:
+  # they take the qualitative Stage/Appearance path. A deployment sets it, so
+  # an unconfigured install imports no field readings from a water sheet.
   field_analytes = function() {
-    c(
-      # Present in the corpus AND registered as ACIRL `field` lab_methods.
-      "pH", "Temperature", "Electrical Conductivity",
-      # The six standing-water-level name variants, preserved as received
-      # (A76): each is its own registered lab_method against the single
-      # `Standing water level` analyte.
-      "Standing Water Level", "Standing Water Height", "Standing water level",
-      "Water Height", "Water Depth",
-      # Registered ACIRL `field` methods with ZERO occurrences in the
-      # 2026-08-01 corpus. Allowlisted so a future sheet is imported rather
-      # than routed to review; they cost nothing while absent. The gas
-      # readings are registered ACIRL field gas methods (% v/v) with
-      # analytes CH4, H2S, O2 and CO2.
-      "DO", "ORP", "CH4 Reading % v/v", "H2S Reading % v/v",
-      "O2 Reading % v/v", "CO2 Reading % v/v",
-      # A76 ruled turbidity in. It has no analyte, no lab_method and zero
-      # corpus occurrences - until the `Turbidity` analyte is created it will
-      # resolve to `analyte_pending` and surface in review, which is the
-      # correct failure mode.
-      "Turbidity",
-      # Retained from the original pinned default. Neither occurs as a
-      # standalone label in the real corpus; both are registered `field`
-      # methods for the `legacy`/`Internal` organisations.
-      "Conductivity", "EC"
-    )
+    character(0)
   },
   # Labels that share their name with the ALS analyte, so the allowlist alone
   # cannot tell an ACIRL reading from a transcribed ALS result. They are NEVER
@@ -222,6 +183,13 @@
 #' With no prefix configured no name is ACIRL-shaped. It may come from the
 #' env var `SAMPLETIDY_ACIRL_JOB_PREFIX`; any other value aborts where it is used.
 #'
+#' `field_analytes` is a character vector (default `character(0)`) of the
+#' field-sheet labels that are field readings: the ACIRL field adapter imports
+#' a water-sheet row as a result only if its label, after squishing white
+#' space and upper-casing, matches an entry. With the default no field reading
+#' is imported. It is list-valued, so it cannot come from an env var, and a
+#' value that is not a character vector without `NA` aborts where it is used.
+#'
 #' @param key configuration key, e.g. `"live_db"`, `"input_dir"`.
 #' @param value if supplied, the value to set for `key`.
 #' @return the resolved value (get), or `value` invisibly (set).
@@ -280,7 +248,7 @@ st_config <- function(key, value) {
 st_capabilities <- function() {
   c("timezone", "checks_option", "checks_streams", "site_names",
     "site_keywords", "date_overrides_env", "inbox_batches", "renderer_hooks",
-    "report_dir", "gas_template_slots", "acirl_job_prefix")
+    "report_dir", "gas_template_slots", "acirl_job_prefix", "field_analytes")
 }
 
 # Validated zones, memoised per value (OlsonNames() is slow-ish).

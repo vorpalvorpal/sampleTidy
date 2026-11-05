@@ -35,30 +35,15 @@ test_that("R-1.1: live_db default lives under R_user_dir, never a cloud-sync pat
   expect_true(grepl(tools::R_user_dir("sampleTidy", "data"), default_db, fixed = TRUE))
 })
 
-# WIDENED 2026-08-01 (A76, Robin): the field set is maximal. The old four-entry
-# default matched labels EXACTLY, so it silently dropped `Electrical
-# Conductivity` (192 real sheets) and every `Standing Water Level` variant (87)
-# - while `Conductivity` and `EC` never appear as standalone labels in the real
-# corpus at all. Every entry below is either measured in the corpus or a
-# registered ACIRL `field` lab_method name; see R/config.R for why the EC-@-25
-# and TSS labels are deliberately absent.
-test_that("R-1.1: field_analytes default is the pinned vector", {
+# The generic core ships no lab labels: the default is empty and a deployment
+# supplies its own (setup-deployment-settings.R pins a test list).
+test_that("R-1.1: field_analytes default is empty (a deployment supplies its labels)", {
   withr::local_options(list("sampletidy.field_analytes" = NULL))
   withr::local_envvar(c(SAMPLETIDY_FIELD_ANALYTES = NA))
-  expect_equal(
-    st_config("field_analytes"),
-    c("pH", "Temperature", "Electrical Conductivity",
-      "Standing Water Level", "Standing Water Height", "Standing water level",
-      "Water Height", "Water Depth",
-      "DO", "ORP", "CH4 Reading % v/v", "H2S Reading % v/v",
-      "O2 Reading % v/v", "CO2 Reading % v/v",
-      "Turbidity", "Conductivity", "EC")
-  )
+  expect_identical(st_config("field_analytes"), character(0))
 })
 
-test_that("R-1.1: the ALS-transcribed labels are NOT on the field allowlist", {
-  withr::local_options(list("sampletidy.field_analytes" = NULL))
-  withr::local_envvar(c(SAMPLETIDY_FIELD_ANALYTES = NA))
+test_that("R-1.1: the ALS-transcribed labels are NOT on the (pinned) field allowlist", {
   allow <- st_config("field_analytes")
   # `Electrical Conductivity @ 25<degC>` is the ALS value transcribed into the
   # ACIRL sheet, never a field reading. ACIRL used to own a `field` lab_method
@@ -167,7 +152,7 @@ test_that("stage 1: `checks` set in code may be a function and round-trips", {
   expect_identical(st_config("checks"), f)
 })
 
-test_that("st_capabilities() is exported and names the eleven features (six from stage 1, two each from stages 2 and 3, then acirl_job_prefix), in order", {
+test_that("st_capabilities() is exported and names the twelve features (six from stage 1, two each from stages 2 and 3, then acirl_job_prefix and field_analytes), in order", {
   expect_true("st_capabilities" %in% getNamespaceExports("sampleTidy"))
   caps <- st_capabilities()
   expect_type(caps, "character")
@@ -175,8 +160,8 @@ test_that("st_capabilities() is exported and names the eleven features (six from
                     "site_keywords", "date_overrides_env",
                     "inbox_batches", "renderer_hooks",
                     "report_dir", "gas_template_slots",
-                    "acirl_job_prefix") %in% caps))
-  expect_length(caps, 11)
+                    "acirl_job_prefix", "field_analytes") %in% caps))
+  expect_length(caps, 12)
   expect_identical(caps[9:11], c("report_dir", "gas_template_slots", "acirl_job_prefix"))
 })
 
