@@ -66,7 +66,7 @@ test_that("building block with Reference + O2 + CO2: feature shared; repeated na
   expect_true(all(tab == 3))
   expect_identical(b$analyte_raw, rep(c(CH4, O2, CO2), 5))
   expect_identical(b$source_ref[b$feature_raw == "B.Storage Shed - Right Wall #2"],
-                   paste0("Gas Buildings !", c("C", "D", "E"), 13))
+                   paste0("Gas Buildings!", c("C", "D", "E"), 13))
   expect_equal(o2_val(out, "B.Storage Shed - Right Wall #2", O2), 18.5)
 })
 
