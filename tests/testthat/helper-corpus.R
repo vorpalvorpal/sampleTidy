@@ -184,7 +184,9 @@ ensure_test_asset_table <- function(con) {
     uuid_feature VARCHAR,
     filename VARCHAR,
     hash VARCHAR,
-    comments VARCHAR
+    comments VARCHAR,
+    content_hash VARCHAR,
+    content_hash_alg VARCHAR
   )")
   invisible(con)
 }
