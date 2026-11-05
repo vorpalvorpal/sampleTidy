@@ -487,6 +487,10 @@ test_that("R-10.6: NAMESPACE exports equal the CONTRACT-pinned public API exactl
     # same change: re-records the hash of archived files that the file store
     # rewrites after archiving. Operator-callable; ingest_dir() also runs it.
     "archive_settle",
+    # Content hash (2026-11-05, test-content-fingerprint.R): a structural
+    # fingerprint of an OLE/CFB file that ignores the parts a file store
+    # rewrites; archive_file() and archive_settle() use it.
+    "content_fingerprint",
     # Stage 1 of the layer move: what a deployment's hooks file feature-detects
     # before it sets the zone, the checks and the site keywords.
     "st_capabilities",

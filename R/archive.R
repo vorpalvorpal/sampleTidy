@@ -17,6 +17,13 @@
 # a retry copies the file again under a new uuid. Commit keeps it; the
 # dedupe-reuse path creates nothing so a rollback never touches an existing
 # directory; cleanup errors are swallowed so the original error propagates.
+#
+# Content dedupe: when the `asset` table has the `content_hash` /
+# `content_hash_alg` columns (an operator migration adds them; see
+# `.ar_has_content_cols()`), a file the byte hash does not match is also
+# looked up by `content_fingerprint()` (R/content-fingerprint.R), so a legacy
+# Office file that a file store rewrote after archiving dedupes against the
+# stored copy. A table without the columns behaves exactly as before.
 
 # Seam for tests: the single place the file copy happens.
 #' @keywords internal
@@ -41,7 +48,9 @@
 #' instead. Both paths record the link in `ingest_file.uuid_asset` (when an
 #' `ingest_file` row exists for `hash`), since `asset.hash` is the stored
 #' copy's settled hash and may stop matching the as-received one
-#' ([archive_settle()]). If the per-asset directory cannot be created or the copy fails,
+#' ([archive_settle()]). When the `asset` table has the `content_hash` columns,
+#' a file whose [content_fingerprint()] matches an existing asset's is reused
+#' the same way, and a new row records its fingerprint. If the per-asset directory cannot be created or the copy fails,
 #' aborts `sampletidy_error` (R-12.4) before inserting the `asset` row.
 #'
 #' `con` is passed straight through to `db_append()` so this participates in
@@ -88,6 +97,27 @@ archive_file <- function(con, path, hash, event, type = "Chemical analysis") {
   if (nrow(existing) > 0) {
     ingest_file_set_uuid_asset(con, hash, existing$uuid[[1]], size = .ar_file_size(path))
     return(existing$uuid[[1]])
+  }
+
+  # Then the content fingerprint: the same content under different bytes (a
+  # store rewrite of an archived copy) is the same asset. Reused exactly like
+  # a byte-hash hit. Only when the migrated columns exist.
+  fp <- list(content_hash = NA_character_, content_hash_alg = NA_character_)
+  has_cols <- .ar_has_content_cols(con)
+  if (has_cols) {
+    fp <- content_fingerprint(path)
+    if (!is.na(fp$content_hash)) {
+      same <- DBI::dbGetQuery(
+        con,
+        "SELECT uuid FROM asset WHERE content_hash = ? AND content_hash_alg = ?
+          ORDER BY uuid LIMIT 1",
+        params = list(fp$content_hash, fp$content_hash_alg)
+      )
+      if (nrow(same) > 0) {
+        ingest_file_set_uuid_asset(con, hash, same$uuid[[1]], size = .ar_file_size(path))
+        return(same$uuid[[1]])
+      }
+    }
   }
 
   # `.ct_ensure_project()` (R/commit.R) is the ONE place that resolves a
@@ -174,6 +204,10 @@ archive_file <- function(con, path, hash, event, type = "Chemical analysis") {
     hash = hash,
     comments = NA_character_
   )
+  if (has_cols) {
+    row$content_hash <- fp$content_hash
+    row$content_hash_alg <- fp$content_hash_alg
+  }
 
   db_append(con, "asset", row, actor = "ingest", reason = "archive source file", source_hash = hash)
   ingest_file_set_uuid_asset(con, hash, new_uuid, size = .ar_file_size(path))
@@ -197,8 +231,14 @@ archive_file <- function(con, path, hash, event, type = "Chemical analysis") {
 #     a rewritten hash is not a content identity (a later rewrite changes it
 #     again).
 #   * `archive_settle()` re-hashes recently archived copies of configured
-#     extensions and accepts a same-size rewrite into `asset.hash`, with a
-#     `change_log` row keeping the old hash.
+#     extensions and accepts a rewrite into `asset.hash`, with a
+#     `change_log` row keeping the old hash. Two ways to qualify:
+#       - content path: the asset has a `content_hash` and the stored copy's
+#         `content_fingerprint()` is unchanged - accepted whatever the size
+#         (the store may ADD a `MsoDataStore` storage, which grows the file);
+#       - byte path: no `content_hash` (or the columns are not migrated yet) -
+#         the stored copy must have the as-received size.
+#     `asset.content_hash` itself is never changed by settling.
 #   * The inbox source of a configured extension is kept for `hold_secs`
 #     after archiving, so a rewrite has time to land before the source goes.
 
@@ -271,6 +311,18 @@ archive_file <- function(con, path, hash, event, type = "Chemical analysis") {
 #' @noRd
 .ar_settle_ext_match <- function(filename, cfg) {
   !is.null(cfg) & !is.na(filename) & tolower(tools::file_ext(filename)) %in% cfg$ext
+}
+
+#' Does the `asset` table have the `content_hash` and `content_hash_alg` columns?
+#'
+#' They are added to the business table by an operator migration, not by
+#' `ensure_schema()`, so every use is guarded: without them the content path
+#' is skipped and behaviour is as before the columns existed.
+#' @keywords internal
+#' @noRd
+.ar_has_content_cols <- function(con) {
+  DBI::dbExistsTable(con, "asset") &&
+    all(c("content_hash", "content_hash_alg") %in% DBI::dbListFields(con, "asset"))
 }
 
 #' Size of a file in bytes, `NA` when it cannot be read
@@ -370,15 +422,23 @@ archive_file <- function(con, path, hash, event, type = "Chemical analysis") {
 #' (the archive time is the asset's `insert` row in `change_log`). It
 #' re-hashes each stored copy, and when the hash differs from `asset.hash`:
 #'
-#' * the size must equal the as-received size (`ingest_file.size`);
+#' * if the `asset` table has the `content_hash` columns and this asset has a
+#'   `content_hash` (an OLE/CFB file; see [content_fingerprint()]), the stored
+#'   copy's content fingerprint must be unchanged. The size and the
+#'   as-received size do not matter: a store that adds its own storage grows
+#'   the file. A changed or unreadable fingerprint is warned about and not
+#'   accepted;
+#' * otherwise (no columns, or no `content_hash`) the size must equal the
+#'   as-received size (`ingest_file.size`);
 #' * `accept(path, old_hash, asset)`, when configured, must return `TRUE`.
 #'
 #' A rewrite that passes is settled: `asset.hash` is updated through
 #' [db_update()], with a `change_log` row that keeps the old hash and the
-#' reason "storage rewrite". Each asset is its own transaction, so a failure
-#' part-way through keeps the settles already made. A size change, an
-#' unknown as-received size or an `accept` veto is warned about, naming the
-#' file, and not accepted. `ingest_file.hash`, the as-received record, is
+#' reason "storage rewrite". `asset.content_hash` is not changed. Each asset
+#' is its own transaction, so a failure part-way through keeps the settles
+#' already made. A size change, an unknown as-received size, a changed
+#' fingerprint or an `accept` veto is warned about, naming the file, and not
+#' accepted. `ingest_file.hash`, the as-received record, is
 #' never changed; de-duplication stays on it.
 #'
 #' [ingest_dir()] runs this at the start of every write phase, so it rarely
@@ -429,14 +489,16 @@ archive_settle <- function(db = st_config("live_db"), now = Sys.time()) {
   if (!DBI::dbExistsTable(con, "asset") || !DBI::dbExistsTable(con, "change_log")) {
     return(empty)
   }
+  has_cols <- .ar_has_content_cols(con)
   cand <- DBI::dbGetQuery(
     con,
-    "SELECT a.uuid, a.filename, a.hash, c.at AS archived_at
+    paste0("SELECT a.uuid, a.filename, a.hash, c.at AS archived_at",
+           if (has_cols) ", a.content_hash, a.content_hash_alg" else "", "
        FROM asset a
        JOIN (SELECT uuid_row, min(\"at\") AS at FROM change_log
               WHERE tbl = 'asset' AND action = 'insert' GROUP BY uuid_row) c
          ON c.uuid_row = a.uuid
-      WHERE a.filename IS NOT NULL AND a.hash IS NOT NULL"
+      WHERE a.filename IS NOT NULL AND a.hash IS NOT NULL")
   )
   if (nrow(cand) == 0) {
     return(empty)
@@ -464,33 +526,51 @@ archive_settle <- function(db = st_config("live_db"), now = Sys.time()) {
       next
     }
 
-    sizes <- if (DBI::dbExistsTable(con, "ingest_file")) {
-      DBI::dbGetQuery(
-        con,
-        "SELECT DISTINCT size FROM ingest_file
-          WHERE size IS NOT NULL AND (uuid_asset = ? OR (uuid_asset IS NULL AND hash = ?))",
-        params = list(uuid, old_hash)
-      )$size
+    # Content path: the asset has a content fingerprint, so the rewrite is
+    # judged on content, not size. Byte path: the same-size gate.
+    by_content <- has_cols && !is.na(cand$content_hash[[i]])
+    if (by_content) {
+      fp <- content_fingerprint(path)
+      if (is.na(fp$content_hash) ||
+          !identical(fp$content_hash_alg, cand$content_hash_alg[[i]]) ||
+          !identical(fp$content_hash, cand$content_hash[[i]])) {
+        cli::cli_warn(
+          "archive_settle(): the archived copy of {.file {fn}} ({.path {path}})
+           changed after archiving and its content fingerprint no longer
+           matches, so the change is not accepted as a storage rewrite;
+           {.field asset.hash} is unchanged."
+        )
+        next
+      }
     } else {
-      numeric(0)
-    }
-    stored_size <- .ar_file_size(path)
-    if (length(sizes) == 0) {
-      cli::cli_warn(
-        "archive_settle(): the archived copy of {.file {fn}} ({.path {path}}) no
-         longer matches its recorded hash, and its as-received size is unknown,
-         so the change is not accepted; {.field asset.hash} is unchanged."
-      )
-      next
-    }
-    if (is.na(stored_size) || !all(as.numeric(sizes) == stored_size)) {
-      cli::cli_warn(
-        "archive_settle(): the archived copy of {.file {fn}} ({.path {path}})
-         changed size ({sizes[[1]]} -> {stored_size} bytes) after archiving, so
-         the change is not accepted as a storage rewrite; {.field asset.hash} is
-         unchanged."
-      )
-      next
+      sizes <- if (DBI::dbExistsTable(con, "ingest_file")) {
+        DBI::dbGetQuery(
+          con,
+          "SELECT DISTINCT size FROM ingest_file
+            WHERE size IS NOT NULL AND (uuid_asset = ? OR (uuid_asset IS NULL AND hash = ?))",
+          params = list(uuid, old_hash)
+        )$size
+      } else {
+        numeric(0)
+      }
+      stored_size <- .ar_file_size(path)
+      if (length(sizes) == 0) {
+        cli::cli_warn(
+          "archive_settle(): the archived copy of {.file {fn}} ({.path {path}}) no
+           longer matches its recorded hash, and its as-received size is unknown,
+           so the change is not accepted; {.field asset.hash} is unchanged."
+        )
+        next
+      }
+      if (is.na(stored_size) || !all(as.numeric(sizes) == stored_size)) {
+        cli::cli_warn(
+          "archive_settle(): the archived copy of {.file {fn}} ({.path {path}})
+           changed size ({sizes[[1]]} -> {stored_size} bytes) after archiving, so
+           the change is not accepted as a storage rewrite; {.field asset.hash} is
+           unchanged."
+        )
+        next
+      }
     }
 
     if (is.function(cfg$accept)) {
@@ -517,7 +597,11 @@ archive_settle <- function(db = st_config("live_db"), now = Sys.time()) {
         db_transaction(con, function(con) {
           db_update(con, table = "asset", uuid = uuid,
                     changes = list(hash = new_hash), actor = "archive_settle",
-                    reason = "storage rewrite: the file store rewrote the archived copy (same size)",
+                    reason = if (by_content) {
+                      "storage rewrite: the file store rewrote the archived copy (content unchanged)"
+                    } else {
+                      "storage rewrite: the file store rewrote the archived copy (same size)"
+                    },
                     source_hash = old_hash)
         })
         TRUE
