@@ -504,3 +504,25 @@ test_that("content-hash 6e: the settle hold still comes first - a held .xls sour
   expect_false(file.exists(f$path))
   expect_length(released$warnings, 0L)
 })
+
+test_that("content-hash 6f: WITHOUT the content columns a grown, unsettled store rewrite keeps its source with a warning; WITH them the same source is removed", {
+  old <- ch_con_setup(columns = FALSE)
+  f_old <- ch_archive(old, ch_xls(old$src_dir, "ZZ7700001_a.xls", ch_base()))
+  ch_overwrite(f_old, c(ch_base(), ch_mso()), version = 4L)       # grown; cannot be settled on the old schema
+  expect_false(any(c("content_hash", "content_hash_alg") %in% ch_cols(old$con)))
+
+  res_old <- ch_remove(old, list(f_old))
+
+  expect_length(res_old$value, 0L)
+  expect_true(file.exists(f_old$path))
+  expect_true(ch_warned_about(res_old$warnings, f_old$name))
+
+  new <- ch_con_setup(columns = TRUE)
+  f_new <- ch_archive(new, ch_xls(new$src_dir, "ZZ7700001_a.xls", ch_base()))
+  ch_overwrite(f_new, c(ch_base(), ch_mso()), version = 4L)
+
+  res_new <- ch_remove(new, list(f_new))
+
+  expect_length(res_new$warnings, 0L)
+  expect_false(file.exists(f_new$path))
+})

@@ -353,3 +353,51 @@ cfb_parse_check <- function(bytes) {
   out
 }
 u32d <- function(e, off) sum(as.numeric(e[off + 0:3]) * 256^(0:3))
+
+# ---- byte-level patching of built files (for the malformed-file tests) ------
+#
+# These edit a file built UNSHUFFLED (so the directory chain, and the FAT
+# sector named by header DIFAT entry k, are where the plain layout puts them).
+# Offsets are 0-based, as in the MS-CFB spec; header: nfat 44, directory start
+# 48, mini cutoff 56, MiniFAT start 60, DIFAT start 68, DIFAT count 72, DIFAT
+# entries from 76. Directory entry: name length 64, type 66, start sector 116,
+# size 120.
+
+cfb_rd32 <- function(b, off) sum(as.numeric(b[off + 1:4]) * 256^(0:3))
+cfb_wr32 <- function(b, off, v) { b[off + 1:4] <- .cfb_u32(v); b }
+cfb_ss <- function(b) if (cfb_rd32(b, 24) %/% 65536 == 3 || sum(as.numeric(b[27:28]) * c(1, 256)) == 3) 512 else 4096
+cfb_dir_off <- function(b, i) cfb_ss(b) * (cfb_rd32(b, 48) + 1) + 128 * i
+# Names (ASCII only) of the first `n` directory entries.
+cfb_entry_names <- function(b, n) {
+  vapply(seq_len(n) - 1, function(i) {
+    o <- cfb_dir_off(b, i)
+    if (o + 128 > length(b)) return(NA_character_)
+    nl <- sum(as.numeric(b[o + 64 + 1:2]) * c(1, 256))
+    if (nl < 2 || nl > 64) return("")
+    x <- b[o + seq(1, nl - 2, by = 2)]
+    x[x == as.raw(0)] <- as.raw(1)                  # entries past the directory are junk
+    rawToChar(x)
+  }, character(1))
+}
+cfb_entry_index <- function(b, name, n = 64L) which(cfb_entry_names(b, n) == name)[[1]] - 1
+cfb_set_entry <- function(b, i, start = NULL, size = NULL) {
+  o <- cfb_dir_off(b, i)
+  if (!is.null(start)) b <- cfb_wr32(b, o + 116, start)
+  if (!is.null(size)) b <- cfb_wr32(b, o + 120, size)
+  b
+}
+cfb_get_entry <- function(b, i) {
+  o <- cfb_dir_off(b, i)
+  list(start = cfb_rd32(b, o + 116), size = cfb_rd32(b, o + 120))
+}
+# Byte offset of the FAT slot for sector `s`.
+cfb_fat_slot <- function(b, s) {
+  ss <- cfb_ss(b); per <- ss / 4
+  fatsec <- cfb_rd32(b, 76 + 4 * (s %/% per))
+  ss * (fatsec + 1) + 4 * (s %% per)
+}
+cfb_fat_chain <- function(b, start) {
+  out <- numeric(0); cur <- start
+  while (cur < .cfb$DIFSECT) { out <- c(out, cur); cur <- cfb_rd32(b, cfb_fat_slot(b, cur)) }
+  out
+}
