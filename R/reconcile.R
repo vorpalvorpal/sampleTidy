@@ -2011,8 +2011,8 @@
 #'
 #' Deliberately NOT folded into `.rc_load_registry()`: that function's
 #' contract is the small CORE REGISTRY tables, and it is called against
-#' databases that have no `analysis` table at all (the migration-003 fixture,
-#' `tests/testthat/helper-migration-003-db.R`, is one). Taking `con` here
+#' databases that have no `analysis` table at all (a deployment's migration
+#' test fixture is one). Taking `con` here
 #' instead follows `.rc_three_way()`, the existing precedent in this file for
 #' a stage that needs the DB rather than the registry snapshot.
 #'

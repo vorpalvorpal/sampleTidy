@@ -165,7 +165,7 @@ test_that("qc_unresolved: a duplicate, field blank or rinsate blank whose parent
 })
 
 test_that("qc_unresolved: codes tied to no point (transport, source, type-only field blank) need no parent", {
-  # [invented: a field blank with uuid_parent NULL (R19-6's type-only QC_CODE
+  # [invented: a field blank with uuid_parent NULL (R19-6's type-only Q.JF00
   #  analogue) is not unresolved - only a code WITH a parent needs its sample.]
   db <- qc_db()
   fl_with(db, function(con) {

@@ -1836,7 +1836,7 @@ test_that("R-8.7/R-8.8: reconcile_event() is pure - DB row counts are unchanged 
 # ---- R-11.3: .rc_method_key() normalisation (fold safety) -------------------------
 
 test_that("R-11.3: .rc_method_key folds punctuation/case variants of the same code to one key", {
-  keys <- .rc_method_key(c("N.S01", "B S01", "BS01", "n.s01", "B..S01"))
+  keys <- .rc_method_key(c("N.S01", "N S01", "NS01", "n.s01", "N..S01"))
   expect_equal(length(unique(keys)), 1)
   expect_false(is.na(keys[[1]]))
 })
@@ -2070,10 +2070,10 @@ test_that("PLAN-15 A: an all-auto_assign=FALSE ambiguous key (T.DUAL) does NOT a
 
 test_that("PLAN-15 A: the committed alias_key on a pending row is punctuation-preserving (matches migration format)", {
   path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
-  event <- mk_event(mk_row(source_ref = "r1", feature_raw = "B.NEW-POINT7"))
+  event <- mk_event(mk_row(source_ref = "r1", feature_raw = "N.NEW-POINT7"))
   out <- reconcile_event(event, con)
   row <- out$clean[out$clean$source_ref == "r1", ]
-  expect_identical(row$alias_key, "b.new-point7")   # NOT 'bnewpoint7'
+  expect_identical(row$alias_key, "n.new-point7")   # NOT 'nnewpoint7'
 })
 
 # ---- R-11.5: commit-everything conveyor (features) -------------------------
@@ -5576,7 +5576,7 @@ test_that("PLAN-7b item 2 (kills M5): when several ARMS resolve to the SAME feat
 # ---- item 3 (kills M1): C.2's cross-site-merge guard, a DIRECT-boundary ----
 # same-key re-siting the shared C.2 fixture's dotted/spaced raws cannot reach -
 
-test_that("PLAN-7b item 3 (kills M1): Layer 3 never retries a row Layer 2 already recognised SOME site for through a DIRECT (separator-less) boundary, even when that recognition did not itself produce a hit - without the guard, the WHOLE canonicalised raw is reinterpreted as a point of the work order's single site and silently merges onto an unrelated feature (the live B.K01/L.B01 shape)", {
+test_that("PLAN-7b item 3 (kills M1): Layer 3 never retries a row Layer 2 already recognised SOME site for through a DIRECT (separator-less) boundary, even when that recognition did not itself produce a hit - without the guard, the WHOLE canonicalised raw is reinterpreted as a point of the work order's single site and silently merges onto an unrelated feature (the live N.K01/P.B01 shape)", {
   path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix, lon, lat) VALUES
