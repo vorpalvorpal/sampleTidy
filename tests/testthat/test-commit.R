@@ -3034,7 +3034,7 @@ test_that("A80: a workbook citing TWO orders makes both children, attaches its s
 test_that("A80: two cited orders under DIFFERENT campaigns leave both campaigns intact and flag both", {
   s <- a80_setup()
   con <- s$con
-  # The one real workbook with this shape: 2400-9286-03 cites ES2350884 (under
+  # The one corpus workbook with this shape (ids synthetic here): 2400-9286-03 cites ES2350884 (under
   # `EPL annual`) and ES2350876 (under `2022 March pollution incidents`).
   # There is no single campaign to promote, so nothing is displaced.
   c1 <- a80_seed_project(con, "EPL annual", type = NA_character_)

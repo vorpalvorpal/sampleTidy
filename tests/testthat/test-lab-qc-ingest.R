@@ -76,7 +76,7 @@ test_that("R-19.9: the report's outlier rows are stored with uuid_report, work_o
   expect_true(all(is.na(o$uuid_sample)))      # nothing in this DB to link to
 })
 
-test_that("R-19.16: a 0-byte QCI (the real ES2650738 archived copy) is stored 'unreadable', never an error", {
+test_that("R-19.16: a 0-byte QCI (a stand-in for an archived ES2650738 copy) is stored 'unreadable', never an error", {
   s <- lq_setup()
   file.copy(qci_fixture("ES2650738_0_QCI.pdf"), file.path(s$dir, "ES2650738_0_QCI.pdf"))
   ua <- qci_asset(s$con, "ES2650738_0_QCI.pdf", "ES2650738")

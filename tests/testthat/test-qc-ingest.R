@@ -82,7 +82,7 @@ test_that("R-19.14: the crosstab adapter captures the Secondary-ID row per colum
   expect_silent(sampleTidy:::ir_validate(out$samples, kind = "samples"))
 })
 
-test_that("R-19.14: empty Secondary/2nd rows give NA in the real ENMRG and XTAB fixtures", {
+test_that("R-19.14: empty Secondary/2nd rows give NA in the lab-shaped ENMRG and XTAB fixtures", {
   for (p in c(real_enmrg, real_xtab)) {
     meta <- sampleTidy:::file_meta(p)
     ad <- if (grepl("ENMRG", p)) enmrg() else xtab()
