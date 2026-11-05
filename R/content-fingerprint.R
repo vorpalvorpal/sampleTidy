@@ -73,49 +73,101 @@
   if (nfat < 1 || nfat > nsect || n_mf > nsect || n_difat > nsect) {
     bad("sector counts out of range")
   }
+  if (cutoff != 4096) {
+    bad("the mini stream cutoff is not 4096")
+  }
 
-  sector_bytes <- function(ids) {
+  # Sector ownership: every regular sector (FAT, DIFAT, directory, MiniFAT,
+  # mini stream, regular streams) and every mini sector belongs to at most one
+  # chain, so the bytes returned can never exceed the file's size.
+  owner <- logical(nsect)
+  claim <- function(ids) {
     if (length(ids) == 0) {
-      return(raw(0))
+      return(invisible())
     }
     if (any(ids < 0 | ids >= nsect)) {
       bad("sector index out of range")
     }
-    bytes[rep(ss * (ids + 1), each = ss) + seq_len(ss)]
+    if (anyDuplicated(ids) > 0 || any(owner[ids + 1])) {
+      bad("a sector is used by more than one chain")
+    }
+    owner[ids + 1] <<- TRUE
+    invisible()
   }
-  # Follow a chain through `tbl` (FAT or MiniFAT) to its end marker.
-  walk <- function(start, tbl, limit) {
-    out <- numeric(0)
-    cur <- start
-    while (cur != .cf_end) {
-      if (cur >= length(tbl) || cur >= limit || length(out) >= limit) {
-        bad("sector chain out of range or cyclic")
+  # `len` bytes from consecutive-unit runs of `ids` (0-based units of `unit`
+  # bytes from `src`, the first unit at `shift` units in), copied run by run.
+  gather <- function(src, ids, unit, shift, len = length(ids) * unit) {
+    if (len == 0 || length(ids) == 0) {
+      return(raw(len))
+    }
+    brk <- which(diff(ids) != 1)
+    if (length(brk) == 0) {
+      from <- unit * (ids[[1]] + shift) + 1
+      return(src[from:(from + len - 1)])
+    }
+    out <- raw(len)
+    r_from <- c(1L, brk + 1L)
+    r_to <- c(brk, length(ids))
+    pos <- 0
+    for (k in seq_along(r_from)) {
+      from <- unit * (ids[[r_from[[k]]]] + shift) + 1
+      cnt <- min(unit * (r_to[[k]] - r_from[[k]] + 1), len - pos)
+      out[(pos + 1):(pos + cnt)] <- src[from:(from + cnt - 1)]
+      pos <- pos + cnt
+      if (pos >= len) {
+        break
       }
-      out[[length(out) + 1L]] <- cur
-      cur <- tbl[[cur + 1]]
     }
     out
   }
+  sector_bytes <- function(ids) gather(bytes, ids, ss, 1)
+  # Follow a chain through `tbl` (FAT or MiniFAT) to its end marker, marking
+  # each sector in `own` (a logical vector) as it goes; a sector met twice,
+  # in this chain or another, aborts.
+  walk <- function(start, tbl, limit, own = "owner") {
+    out <- numeric(0)
+    cur <- start
+    n_out <- 0
+    flags <- get(own, inherits = TRUE)
+    while (cur != .cf_end) {
+      if (cur >= length(tbl) || cur >= limit || flags[[cur + 1]]) {
+        bad("sector chain out of range, cyclic or shared with another chain")
+      }
+      flags[[cur + 1]] <- TRUE
+      n_out <- n_out + 1
+      if (n_out > length(out)) {
+        out <- c(out, numeric(max(16, length(out))))
+      }
+      out[[n_out]] <- cur
+      cur <- tbl[[cur + 1]]
+    }
+    assign(own, flags, envir = environment(walk))
+    out[seq_len(n_out)]
+  }
 
-  # DIFAT: 109 header entries, then a chain of DIFAT sectors.
+  # DIFAT: 109 header entries, then exactly `n_difat` DIFAT sectors. The last
+  # one's next pointer may be ENDOFCHAIN or FREESECT, and is not followed.
   fat_ids <- u32(bytes, 76, 109)
   d <- difat_start
-  seen <- 0
-  while (d != .cf_end && n_difat > 0) {
-    seen <- seen + 1
-    if (seen > n_difat || d >= nsect) {
+  difat_ids <- numeric(0)
+  for (k in seq_len(n_difat)) {
+    if (d >= nsect || d %in% difat_ids) {
       bad("DIFAT chain out of range or cyclic")
     }
-    s <- sector_bytes(d)
-    v <- u32(s, 0, per)
+    difat_ids <- c(difat_ids, d)
+    v <- u32(sector_bytes(d), 0, per)
     fat_ids <- c(fat_ids, v[-per])
     d <- v[[per]]
   }
-  fat_ids <- fat_ids[fat_ids < nsect]
   if (length(fat_ids) < nfat) {
     bad("FAT sectors missing")
   }
   fat_ids <- fat_ids[seq_len(nfat)]
+  if (any(fat_ids >= nsect)) {
+    bad("a FAT sector index is invalid")
+  }
+  claim(difat_ids)
+  claim(fat_ids)
   fat <- u32(sector_bytes(fat_ids), 0, nfat * per)
 
   # Directory.
@@ -126,6 +178,7 @@
     bad("empty directory")
   }
   ent <- matrix(dirb, nrow = 128)
+  rm(dirb)
   ent_u32 <- function(off) {
     v <- as.numeric(readBin(as.vector(ent[off + 1:4, ]), "integer", n = n_ent, size = 4L,
                             endian = "little"))
@@ -155,9 +208,10 @@
     if (length(root_chain) * ss < e_size[[1]]) {
       bad("the mini stream extends past its sector chain")
     }
-    mini <- sector_bytes(root_chain)[seq_len(e_size[[1]])]
+    mini <- gather(bytes, root_chain, ss, 1, e_size[[1]])
   }
   nmini <- floor(length(mini) / 64)
+  mini_owner <- logical(nmini)
 
   stream_bytes <- function(i) {
     len <- e_size[[i]]
@@ -165,27 +219,27 @@
       return(raw(0))
     }
     if (len < cutoff) {
-      ch <- walk(e_start[[i]], minifat, nmini)
+      ch <- walk(e_start[[i]], minifat, nmini, "mini_owner")
       if (length(ch) * 64 < len) {
         bad("a stream extends past its mini sector chain")
       }
-      mini[rep(64 * ch, each = 64) + seq_len(64)][seq_len(len)]
+      gather(mini, ch, 64, 0, len)
     } else {
       ch <- walk(e_start[[i]], fat, nsect)
       if (length(ch) * ss < len) {
         bad("a stream extends past its sector chain")
       }
-      sector_bytes(ch)[seq_len(len)]
+      gather(bytes, ch, ss, 1, len)
     }
   }
   entry_name <- function(i) {
     nl <- as.numeric(ent[65, i]) + 256 * as.numeric(ent[66, i])
-    if (nl < 2 || nl > 64 || nl %% 2 != 0) {
+    if (nl < 4 || nl > 64 || nl %% 2 != 0) {
       bad("a directory entry has an invalid name length")
     }
     nm <- iconv(list(as.raw(ent[seq_len(nl - 2), i])), "UTF-16LE", "UTF-8")
-    if (is.na(nm)) {
-      bad("a directory entry name is not valid UTF-16")
+    if (is.na(nm) || !nzchar(nm)) {
+      bad("a directory entry name is empty or not valid UTF-16")
     }
     nm
   }

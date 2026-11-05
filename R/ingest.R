@@ -1207,6 +1207,9 @@
 
   archive_dir <- st_config("archive_dir")
   settle_cfg <- .ar_settle_config()
+  # The content-equality removal needs the migrated `asset` columns; without
+  # them removal is as before the columns existed. Checked once per call.
+  has_cols <- .ar_has_content_cols(con)
   removed <- character(0)
 
   for (i in seq_len(nrow(routed))) {
@@ -1263,7 +1266,7 @@
     copy_hash <- tryCatch(hash_file(copy_path), error = function(e) NA_character_)
     accepted <- unique(c(hash, asset_row$hash[[1]]))
     verified <- !is.na(copy_hash) && copy_hash %in% accepted[!is.na(accepted)]
-    if (!verified && !is.na(copy_hash)) {
+    if (has_cols && !verified && !is.na(copy_hash)) {
       verified <- .ig_same_content(path, copy_path)
     }
     if (!verified) {
