@@ -2,7 +2,8 @@
 # overrides file, the gas site keywords, the report and input directories come
 # from the environment of the machine that runs the suite (a writer machine's
 # .Renviron sets several). Unset them so the suite sees the package defaults,
-# then pin the options the existing suites were written against. A test of the
+# then pin the options the existing suites were written against (the gas
+# slots, the ACIRL job prefix, the field-analytes allowlist). A test of the
 # defaults clears the options itself, with withr::local_options(sampletidy.timezone = NULL).
 #
 # Isolation (mandatory): R reads R_ENVIRON_USER (else ~/.Renviron) at start-up
@@ -29,4 +30,11 @@ local({
 options(sampletidy.timezone = "Australia/Sydney",
         sampletidy.site_keywords = list(B = "northvale", K = "millbrook"),
         sampletidy.gas_template_slots = c("N.G201", "M.G365", "M.G366"),
-        sampletidy.acirl_job_prefix = "2400")
+        sampletidy.acirl_job_prefix = "2400",
+        sampletidy.field_analytes = c(
+          "pH", "Temperature", "Electrical Conductivity",
+          "Standing Water Level", "Standing Water Height", "Standing water level",
+          "Water Height", "Water Depth",
+          "DO", "ORP", "CH4 Reading % v/v", "H2S Reading % v/v",
+          "O2 Reading % v/v", "CO2 Reading % v/v",
+          "Turbidity", "Conductivity", "EC"))

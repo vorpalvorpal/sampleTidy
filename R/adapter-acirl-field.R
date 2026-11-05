@@ -110,6 +110,9 @@ acirl_field_xlsx_adapter <- function() {
 # --- parse() dispatch + crash containment -------------------------------
 
 .st_acirl_parse <- function(path, fm, version) {
+  # Validated here, outside the wrapper below, so a bad setting surfaces as
+  # a `sampletidy_error` rather than a per-file parse failure.
+  .st_check_field_analytes(st_config("field_analytes"))
   tryCatch(
     .st_acirl_parse_impl(path, fm, version),
     error = function(e) {
@@ -123,6 +126,16 @@ acirl_field_xlsx_adapter <- function() {
       )
     }
   )
+}
+
+.st_check_field_analytes <- function(x) {
+  if (!is.character(x) || anyNA(x)) {
+    cli::cli_abort(
+      "{.code st_config(\"field_analytes\")} must be a character vector with no {.code NA}.",
+      class = "sampletidy_error"
+    )
+  }
+  invisible(x)
 }
 
 .st_acirl_parse_impl <- function(path, fm, version) {
