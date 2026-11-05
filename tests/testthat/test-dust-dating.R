@@ -19,9 +19,10 @@
 #   S3  A77 cross-check also works for a TEXT `Month` ("July", "Jul", "July 2024")
 #   S4  identity matching compares the Australia/Sydney calendar date (A44)
 #
-# Values are the real N.D07/N.D08 June and July 2024 readings. The August
-# block's VALUES are synthetic (its dates mirror the real legacy row); only
-# its dates matter to the tests that use it.
+# All values are synthetic (June, July and August alike). The June and July
+# values differ from each other at every measurand, so a mis-dated July sample
+# would raise value conflicts against June's; only the August block's dates
+# matter to the tests that use it.
 #
 # Every workbook is built at test time in a tempdir, reproducing the real
 # dust geometry of fixtures/acirl/generate-real-geometry.R (header row 10 on
@@ -120,14 +121,14 @@ build_dust_workbook <- function(dir, report_no, blocks, observations = TRUE,
   path
 }
 
-# Real July-2024 readings (the block that raised the 6 false conflicts).
+# Synthetic July-2024 readings (the block that raised the 6 false conflicts).
 july_gauges <- function() list(
-  list(gauge = "N.D07", insoluble = 0.97, combustible = 0.37, incombustible = 0.6,
+  list(gauge = "N.D07", insoluble = 0.93, combustible = 0.34, incombustible = 0.5,
        observation = "Clear, insects, organic matter."),
-  list(gauge = "N.D08", insoluble = 1.09, combustible = 0.39, incombustible = 0.7,
+  list(gauge = "N.D08", insoluble = 1.04, combustible = 0.41, incombustible = 0.8,
        observation = "Clear, organic matter.")
 )
-# Synthetic August values (dates are the real legacy row's).
+# Synthetic August values.
 aug_gauges <- function() list(
   list(gauge = "N.D07", insoluble = 0.85, combustible = 0.31, incombustible = 0.54,
        observation = "Clear, organic matter."),
@@ -386,12 +387,12 @@ dust_db_setup <- function(legacy = TRUE) {
       ('s-aug-d08', 'fa-d08', 'p-dust', TIMESTAMP '2024-08-31 14:00:00', TIMESTAMP '2024-07-31 14:00:00', NULL, 'ACIRL')")
     DBI::dbExecute(con, "INSERT INTO analysis
       (uuid, uuid_sample, uuid_lab, value, quantified, rl_low) VALUES
-      ('an-jun-d07-ins', 's-jun-d07', 'lm-dins', 1.53, TRUE, NULL),
-      ('an-jun-d07-com', 's-jun-d07', 'lm-dcom', 0.33, TRUE, NULL),
-      ('an-jun-d07-inc', 's-jun-d07', 'lm-dinc', 1.2,  TRUE, NULL),
-      ('an-jun-d08-ins', 's-jun-d08', 'lm-dins', 0.57, TRUE, NULL),
-      ('an-jun-d08-com', 's-jun-d08', 'lm-dcom', 0.27, TRUE, NULL),
-      ('an-jun-d08-inc', 's-jun-d08', 'lm-dinc', 0.30, TRUE, NULL),
+      ('an-jun-d07-ins', 's-jun-d07', 'lm-dins', 1.48, TRUE, NULL),
+      ('an-jun-d07-com', 's-jun-d07', 'lm-dcom', 0.36, TRUE, NULL),
+      ('an-jun-d07-inc', 's-jun-d07', 'lm-dinc', 1.3,  TRUE, NULL),
+      ('an-jun-d08-ins', 's-jun-d08', 'lm-dins', 0.61, TRUE, NULL),
+      ('an-jun-d08-com', 's-jun-d08', 'lm-dcom', 0.24, TRUE, NULL),
+      ('an-jun-d08-inc', 's-jun-d08', 'lm-dinc', 0.34, TRUE, NULL),
       ('an-aug-d07-ins', 's-aug-d07', 'lm-dins', 0.85, TRUE, NULL),
       ('an-aug-d07-com', 's-aug-d07', 'lm-dcom', 0.31, TRUE, NULL),
       ('an-aug-d07-inc', 's-aug-d07', 'lm-dinc', 0.54, TRUE, NULL),
@@ -552,15 +553,15 @@ test_that("S4: the July block does NOT match the legacy June sample - no false v
   expect_equal(nrow(dust_value_conflicts(con)), 0)
   # Legacy June values untouched.
   jun <- DBI::dbGetQuery(con, "SELECT uuid, value FROM analysis WHERE uuid LIKE 'an-jun-%' ORDER BY uuid")
-  expect_equal(jun$value, c(0.33, 1.2, 1.53, 0.27, 0.30, 0.57))
+  expect_equal(jun$value, c(0.36, 1.3, 1.48, 0.24, 0.34, 0.61))
 })
 
-test_that("S4: the July block lands on NEW samples - neither June's nor August's - carrying July's real values", {
+test_that("S4: the July block lands on NEW samples - neither June's nor August's - carrying July's values", {
   db_path <- dust_db_setup()
   ingest_workbook(db_path, "2400-9401-07", list(july_block()))
 
   con <- ro_con(db_path)
-  expected <- list(`fa-d07` = c(0.97, 0.37, 0.6), `fa-d08` = c(1.09, 0.39, 0.7))
+  expected <- list(`fa-d07` = c(0.93, 0.34, 0.5), `fa-d08` = c(1.04, 0.41, 0.8))
   for (alias in names(expected)) {
     s <- gauge_samples(con, alias)
     new <- s[!grepl("^s-(jun|aug)-", s$uuid), ]
