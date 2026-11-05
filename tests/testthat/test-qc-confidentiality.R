@@ -65,7 +65,7 @@ test_that("R-19.12: .gitignore backstops the codes CSV and migration 049's backu
   gi <- file.path(repo_root(), ".gitignore")
   skip_if_not(file.exists(gi), "no .gitignore (installed package)")
   lines <- trimws(readLines(gi, warn = FALSE))
-  for (pat in c("qc-codes*.csv", "**/qc-codes*.csv", "dev/migrations/049-*-BACKUP-*.csv")) {
+  for (pat in c("qc-codes*.csv", "**/qc-codes*.csv", "dev/migrations/")) {
     expect_true(pat %in% lines, label = pat)
   }
 })

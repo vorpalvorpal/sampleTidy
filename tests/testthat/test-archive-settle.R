@@ -63,7 +63,7 @@
 #   * Warnings about a rejected mismatch name the file (its filename appears
 #     in the warning text).
 #
-# NOT TESTED HERE - the backfill migration (a separate dev/migrations script
+# NOT TESTED HERE - the backfill migration (a separate migrations script
 # with its own rehearsal). What it must do:
 #   * From the 055 and 087 BACKUP old -> new hashes, plus every row where
 #     `ingest_file.hash = asset.hash`, set `ingest_file.uuid_asset`.

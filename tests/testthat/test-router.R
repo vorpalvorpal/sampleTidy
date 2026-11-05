@@ -5,7 +5,7 @@
 # PLAN-03 (CONTRACT's bare-call example shows only `route_files(paths)`, but
 # R-3.5 says it "persists to ingest_file via plan-01 helpers", which require
 # a connection). We assume `route_files(paths, con)`. See
-# dev/plans/PLAN-CHANGE-REQUESTS.md.
+# PLAN-CHANGE-REQUESTS.md.
 
 # --- R-3.4 ignore rules ----------------------------------------------------
 

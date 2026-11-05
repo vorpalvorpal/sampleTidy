@@ -73,7 +73,7 @@ test_that("R-3.1: the zero-row prototypes round-trip ir_validate()", {
 # NOTE: the exact argument-passing convention for ir_results(...)/ir_samples(...)
 # beyond the zero-arg prototype is not pinned in PLAN-03; we assume named
 # arguments matching column names (vectorised, tibble-constructor style).
-# See dev/plans/PLAN-CHANGE-REQUESTS.md.
+# See PLAN-CHANGE-REQUESTS.md.
 test_that("R-3.1: ir_results(...) constructs a validated single-row tibble from named column args", {
   row <- ir_results(
     source_hash = "hash1", source_ref = "Sheet1!B14", work_order = "XX1234567",

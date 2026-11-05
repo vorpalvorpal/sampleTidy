@@ -10,7 +10,7 @@
 # via `ir_results()`/`ir_samples()`, not by routing the real esdat/crosstab/
 # acirl fixture files through the router/adapters. That keeps this file
 # independent of plans 04-06's landing order and implementation status; see
-# dev/plans/PLAN-CHANGE-REQUESTS.md ("assembly `parsed` inputs built directly").
+# PLAN-CHANGE-REQUESTS.md ("assembly `parsed` inputs built directly").
 
 # ---- local helpers ----------------------------------------------------
 
@@ -749,7 +749,7 @@ test_that("R-7.3/R-7.4: a foreign-work-order row with a sample_datetime conflict
 # via ir_results()/ir_samples() so it stays independent of plans 04-06's
 # landing order - see the file header), R-11.15's own criteria are pinned
 # against the REAL two-visit ACIRL fixture routed through the REAL adapter
-# (dev/plans/PLAN-11-feature-alias.md block B-11.15: "after assemble_events()
+# (PLAN-11-feature-alias.md block B-11.15: "after assemble_events()
 # on the two-visit ACIRL fixture ..."). This is a genuine producer(adapter)
 # -> consumer(assemble) seam per phase4-test-authoring.md's seam-test
 # mandate, so this one test intentionally breaks the file's usual

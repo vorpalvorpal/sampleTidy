@@ -5,7 +5,7 @@
 # R-8.8 shape: list(clean, review, skipped, counts)) are built directly here
 # rather than by running real assemble_events()/reconcile_event(), keeping
 # this file independent of plans 07/08's implementation status. See
-# dev/plans/PLAN-CHANGE-REQUESTS.md for the `asset`-table gap this file
+# PLAN-CHANGE-REQUESTS.md for the `asset`-table gap this file
 # works around (`ensure_test_asset_table()`, from helper-corpus.R) and the
 # `existing_uuid` skipped-column-name assumption used below.
 
@@ -320,7 +320,7 @@ test_that("R-9.2: already_present rows get no new analysis but a provenance chan
   # NOTE: assumes the skipped tibble carries the existing analysis uuid in an
   # `existing_uuid` column for reason == 'already_present' rows (R-8.7's
   # payload isn't pinned to an exact column name - see
-  # dev/plans/PLAN-CHANGE-REQUESTS.md).
+  # PLAN-CHANGE-REQUESTS.md).
   setup <- commit_test_setup()
   con <- setup$con
   withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))

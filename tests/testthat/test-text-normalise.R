@@ -1,7 +1,7 @@
 # Plan 02 - R-2.1 normalise_lab_text(): port of
 # WEM.data/R/new/data/normalise_lab_text.R with its `.lab_text_mojibake_fixes`
 # table verbatim, plus entries for the MacRoman degree byte and the classic
-# cp1252 pairs from old unify_value(). See dev/plans/PLAN-02-primitives.md.
+# cp1252 pairs from old unify_value(). See PLAN-02-primitives.md.
 
 # Unicode literals below are the real UTF-8 glyphs (package Encoding: UTF-8),
 # named so intent is unambiguous at each call site.

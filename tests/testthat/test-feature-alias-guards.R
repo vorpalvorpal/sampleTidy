@@ -5,7 +5,7 @@
 #
 # Every test's break/restore non-vacuity evidence (disable the guard, confirm
 # the test fails; restore, confirm it passes) is logged in
-# dev/tdd-run/p7b-guards-report.md, run against a private scratch copy of the
+# tdd-run/p7b-guards-report.md, run against a private scratch copy of the
 # package - never against R/feature-alias.R in this repo, which another
 # worker is editing concurrently.
 #

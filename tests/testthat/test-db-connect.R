@@ -10,7 +10,7 @@
 # also any "is the connection really closed?" check (a same-process re-open
 # would trivially succeed even if with_db_write() leaked its connection). All
 # such checks below spawn a genuine second OS process via processx. See
-# dev/plans/PLAN-CHANGE-REQUESTS.md.
+# PLAN-CHANGE-REQUESTS.md.
 
 #' Returns TRUE iff a fresh OS process can immediately open `path` read-write
 #' and disconnect cleanly (i.e. no OS-level lock is held on it by us).

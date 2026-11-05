@@ -1,6 +1,6 @@
 # PLAN-20 phase 1, P20.5: external filing records - the asset_filing table
 # (ensure_schema ops-schema version 10), register_filing() and filed_assets().
-# Spec: dev/plans/PLAN-20-phase1-spec.md section P20.5.
+# Spec: PLAN-20-phase1-spec.md section P20.5.
 
 af_cols <- c("uuid_asset", "system", "external_id", "external_uri", "container",
              "filed_at", "title", "comments")

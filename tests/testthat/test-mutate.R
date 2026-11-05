@@ -13,7 +13,7 @@
 # functions used by pipeline and humans alike" - humans calling these
 # interactively won't have an open `con` lying around). Tests point
 # `st_config("live_db")` at the throwaway seeded DB via
-# `withr::local_options()`. See dev/plans/PLAN-CHANGE-REQUESTS.md.
+# `withr::local_options()`. See PLAN-CHANGE-REQUESTS.md.
 
 count_change_log <- function(con) {
   DBI::dbGetQuery(con, "SELECT count(*) AS n FROM change_log")$n

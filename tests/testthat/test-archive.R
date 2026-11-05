@@ -5,7 +5,7 @@
 # the uuid) when an asset with the same hash already exists.
 #
 # GAP: seed_db() doesn't create an `asset` table (see
-# dev/plans/PLAN-CHANGE-REQUESTS.md) - `ensure_test_asset_table()` (from
+# PLAN-CHANGE-REQUESTS.md) - `ensure_test_asset_table()` (from
 # helper-corpus.R) adds it locally for these tests.
 #
 # `event` here is treated minimally as `list(work_order = ...)`, matching

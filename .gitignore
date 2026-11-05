@@ -9,42 +9,29 @@
 _problems
 testthat-problems.rds
 
-# tdd-plan build scratch. `dev/tdd-run/*` rather than `dev/tdd-run/` because git
-# cannot re-include a file whose parent DIRECTORY is excluded - with the trailing
-# slash the negation below is silently dead.
-dev/tdd-run/*
-# ...except the criterion bijection lint, which is a project tool that happens to
-# live here, not run scratch. Phase 9's sign-off gate calls it, so a checkout
-# without it cannot reproduce the coverage result.
-!dev/tdd-run/criterion-lint.py
-
 # PLAN-19 R-19.12: the QC code -> point table is confidential, never in git.
 qc-codes*.csv
 **/qc-codes*.csv
-dev/migrations/049-*-BACKUP-*.csv
 !tests/testthat/fixtures/qc/qc-codes-FAKE.csv
-
-# Lab documents backed up during the 2026-07-23 asset swap: real data, never commit
-dev/asset-swap-backup-2026-07-23/
-
-# Migration run-time outputs (row dumps from the live DB): kept on disk, never committed
-dev/migrations/*-BACKUP*.csv
-dev/migrations/*-INSERTED*.csv
-dev/migrations/*-SKIPPED*.csv
-dev/migrations/*-DISCREPANCIES*.csv
-# Source files and records-system numbers of the history imports: never in this public repo
-dev/migrations/*-TRIM.csv
-dev/migrations/*-FILES/
-dev/migrations/*-OLDFILES/
-dev/migrations/*-ORIGINALS/
-# Real-data migration inputs (from migration 100 on): never in this public repo.
-# INPUT CSVs tracked before this rule stay tracked; new ones are kept on disk only.
-dev/migrations/*-INPUT*.csv
 
 # EPA licences and EPA monitoring-data workbooks: real documents, never committed
 dev/*.pdf
 dev/epa_monitoring_data_K_*.xlsx
 dev/~$*
 
-# Operational state notes: deployment-specific, kept on disk only
+# Deployment records live in the deployment's own repository. Keep ignoring them
+# here so that a stray local copy is never committed to this public repo.
+dev/migrations/
+dev/plans/
+dev/tdd-run/
+dev/cutover/
+dev/corpus-import/
+dev/asset-*
 dev/STATE.md
+dev/MIGRATIONS.md
+dev/HANDOVER.md
+dev/processed-dedupe.R
+dev/EDA-*
+dev/CODE-REVIEW-*
+dev/vibe-binding.toml
+/scratchpad/

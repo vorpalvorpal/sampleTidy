@@ -2,15 +2,15 @@
 #
 # TDD "red" tests for R/adapter-esdat.R (plan 04). R/adapter-esdat.R does not
 # exist yet, so every test below is expected to fail (missing function/object)
-# until plan 04 lands. See dev/plans/PLAN-04-adapter-esdat.md and
-# dev/plans/FIXTURES.md for the pinned contract encoded here, and
-# dev/plans/CONTRACT.md for the IR/registry seams referenced.
+# until plan 04 lands. See PLAN-04-adapter-esdat.md and
+# FIXTURES.md for the pinned contract encoded here, and
+# CONTRACT.md for the IR/registry seams referenced.
 #
 # Adapter accessor: CONTRACT.md pins the *registry* functions
 # (`register_adapter()` / `adapter_registry()` / `clear_adapters()`) but does
 # not pin a literal object name for a per-format adapter. Per orchestrator
 # instruction we default to the registry route; see
-# dev/plans/PLAN-CHANGE-REQUESTS.md "R-4.x -- adapter accessor".
+# PLAN-CHANGE-REQUESTS.md "R-4.x -- adapter accessor".
 
 esdat_adapter <- function() {
   reg <- sampleTidy:::adapter_registry()

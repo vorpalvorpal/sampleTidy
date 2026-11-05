@@ -4,7 +4,7 @@
 # `SAMPLETIDY_CORPUS_DB` (a second, narrower opt-in for an even more
 # sensitive artifact - a real monitoring.duckdb copy); that second skip is
 # logged as a deliberate, narrowly-scoped extension of the same A3 allowance
-# rather than a new kind of skip (see dev/plans/PLAN-CHANGE-REQUESTS.md).
+# rather than a new kind of skip (see PLAN-CHANGE-REQUESTS.md).
 
 tier_rank <- c(exact = 1L, format = 2L, fallback = 3L, no = 99L)
 
@@ -258,7 +258,7 @@ test_that("R-10.5: a dry run against a copy of the real DB completes, finds alre
   expect_equal(unname(after[["change_log"]]), 0)
   expect_equal(unname(after[["review_queue"]]), 0)
 
-  # Hash bookkeeping IS persisted by a dry run (see dev/HANDOVER.md - this is
+  # Hash bookkeeping IS persisted by a dry run (see HANDOVER.md - this is
   # a known, deliberate-for-now wart: a dry run followed by a real run over
   # the same directory finds the files already past `seen`). Pinned here so
   # the behaviour is a visible decision rather than an accident.

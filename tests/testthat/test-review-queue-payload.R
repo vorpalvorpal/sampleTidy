@@ -138,7 +138,7 @@ mk_resolved <- function(clean = tibble::tibble(), review = tibble::tibble(),
 # hostile bytes round-trips byte-for-byte through EVERY content-producing
 # review_queue producer, not just one or two of them. Round 3 found this
 # verified on only 2 of the 14 producers inventoried in
-# `dev/tdd-run/p16-payload-prod-inventory.md` Section 1b - the coverage gap
+# `tdd-run/p16-payload-prod-inventory.md` Section 1b - the coverage gap
 # that let slice I's mutant F5 hand-roll an unescaped `sprintf()` payload
 # inside `.rc_feature_review()`'s `structural` branch and emit INVALID JSON
 # for a quoted `feature_raw` against a fully green suite. Every producer

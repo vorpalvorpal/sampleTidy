@@ -1,4 +1,4 @@
-# A88 (dev/plans/OPERATING-RULES.md): adapters may attach optional review
+# A88 (OPERATING-RULES.md): adapters may attach optional review
 # columns to `results` ONLY when a row is flagged. ir_validate() must accept
 # them (needs_review logical, review_kind character, review_payload LIST,
 # review_withhold logical) yet still reject unknown extras / wrong types.

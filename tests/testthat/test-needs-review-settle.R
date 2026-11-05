@@ -1,8 +1,8 @@
 # R-22.N (Robin 2026-10-25, "fix"): files parked on needs_review are settled
 # when their review items are.
 #
-# Found by migration 081 (dev/migrations/081-settle-needs-review-files.R,
-# dev/MIGRATIONS.md row 1081). commit_event() parks a delivery's kept files on
+# Found by migration 081 (migrations/081-settle-needs-review-files.R,
+# MIGRATIONS.md row 1081). commit_event() parks a delivery's kept files on
 # `needs_review` when its rows were all withheld (review items and no clean
 # row) or the F.10 work_order_reingest guard blocked it. Nothing moved them on
 # afterwards: resolve_review(), review_queue_close() and release_review()

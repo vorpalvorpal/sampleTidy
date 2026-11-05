@@ -1,9 +1,9 @@
 # Deterministic generator for tests/testthat/fixtures/acirl/*
 #
 # Reproduces the ACIRL monthly-workbook fixtures pinned in
-# dev/plans/FIXTURES.md and dev/plans/PLAN-06-adapter-acirl-field.md, plus
+# FIXTURES.md and PLAN-06-adapter-acirl-field.md, plus
 # auxiliary fixtures needed to cover every R-6.x criterion (documented in
-# README.md and dev/plans/PLAN-CHANGE-REQUESTS.md). Re-run with:
+# README.md and PLAN-CHANGE-REQUESTS.md). Re-run with:
 #   Rscript tests/testthat/fixtures/acirl/generate.R
 #
 # Water-sheet layout (transposed field block; rows = parameters, columns =

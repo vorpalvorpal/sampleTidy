@@ -3,12 +3,12 @@
 # TDD "red" tests for R/adapter-acirl-field.R (plan 06: `acirl_field_xlsx`).
 # R/adapter-acirl-field.R does not exist yet, so every test below is expected
 # to fail (missing function/object) until plan 06 lands. See
-# dev/plans/PLAN-06-adapter-acirl-field.md and dev/plans/FIXTURES.md for the
+# PLAN-06-adapter-acirl-field.md and FIXTURES.md for the
 # pinned contract, and tests/testthat/fixtures/acirl/README.md for the
 # fixture layout decisions (transposed block, column positions, edge cases).
 #
 # Adapter accessor: as in the other adapter test files, we use the registry
-# route pending adjudication (dev/plans/PLAN-CHANGE-REQUESTS.md).
+# route pending adjudication (PLAN-CHANGE-REQUESTS.md).
 
 acirl_adapter <- function() sampleTidy:::adapter_registry()[["acirl_field_xlsx"]]
 
@@ -398,7 +398,7 @@ test_that("R-6.4: a DUST-ONLY workbook yields dust rows and needs no water sheet
 # `lab_sample_id` (`"<sheet>!c<col>"`) on BOTH the results rows and the
 # samples rows derived from that column, so the join in assemble.R can use
 # the exact-match branch instead of a feature-name-only fallback. See
-# dev/plans/PLAN-11-feature-alias.md block B-11.15.
+# PLAN-11-feature-alias.md block B-11.15.
 
 test_that("R-11.15: results and samples lab_sample_id is non-NA and matches the '<sheet>!c<col>' format", {
   meta <- sampleTidy:::file_meta(main_path)

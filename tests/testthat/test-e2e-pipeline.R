@@ -7,7 +7,7 @@
 # over the plan-04/05/06 fixture families via `build_e2e_input_dir()`
 # (helper-corpus.R) - by design, unlike test-assemble.R/test-reconcile.R/
 # test-commit.R, which build their inputs directly (see
-# dev/plans/PLAN-CHANGE-REQUESTS.md).
+# PLAN-CHANGE-REQUESTS.md).
 
 count_rows <- function(db_path, table) {
   con <- DBI::dbConnect(duckdb::duckdb(), db_path, read_only = TRUE)
@@ -95,7 +95,7 @@ test_that("R-10.1: router_matrix() claims every fixture at exactly one winning t
   # exact-matching Chemistry2e header (verified by inspection) and PLAN-04
   # R-4.1's match() rule is header-only - so it should claim `exact` like
   # any other Chemistry2e file. Logged as a plan-text conflict in
-  # dev/plans/PLAN-CHANGE-REQUESTS.md; this test follows the concrete,
+  # PLAN-CHANGE-REQUESTS.md; this test follows the concrete,
   # testable match() rule over the PLAN-10 prose.
   # Also unclaimed by design: random.xlsx is a structureless workbook no
   # adapter claims, like random.csv/NOT_ESDAT.xml. (ES2670610_0_XTAB.XLS, a
@@ -157,7 +157,7 @@ test_that("R-10.2: the uS/cm to mS/cm EC row lands converted on a new analysis",
 
 test_that("R-10.2: every new analysis joins cleanly to a sample and a feature (no orphan uuids)", {
   # substitutes for v_measurement, which the throwaway test schema doesn't
-  # create - see dev/plans/PLAN-CHANGE-REQUESTS.md
+  # create - see PLAN-CHANGE-REQUESTS.md
   ingested <- e2e_ingested()
   db_path <- ingested$db_path
 
@@ -362,7 +362,7 @@ test_that("R-10.4: ingesting a _1_ revision XTAB after the _0_ updates the chang
   v1_path <- file.path(crosstab_dir, "XX1234567_1_XTAB.csv")
   # NOTE: the _1_ revision variant is a plan-10-only supplementary fixture
   # per FIXTURES.md's "Supersede e2e" cross-plan expectation - it is not in
-  # plan 05's own "Fixtures" list. See dev/plans/PLAN-CHANGE-REQUESTS.md.
+  # plan 05's own "Fixtures" list. See PLAN-CHANGE-REQUESTS.md.
   expect_true(file.exists(v0_path), info = "XX1234567_0_XTAB.csv must exist (plan 05)")
   expect_true(file.exists(v1_path), info = "XX1234567_1_XTAB.csv must exist (plan 10 supplementary fixture)")
 
@@ -470,7 +470,7 @@ test_that("R-10.6: NAMESPACE exports equal the CONTRACT-pinned public API exactl
     # list in the same change: operator-run backfill of ALS QC reports from
     # retained assets (migration 052 calls it).
     "lab_qc_backfill",
-    # PLAN-20 phase 1 (dev/plans/PLAN-20-phase1-spec.md), added 2026-10-20 and
+    # PLAN-20 phase 1 (PLAN-20-phase1-spec.md), added 2026-10-20 and
     # added to CONTRACT.md's public-API list in the same change: session hooks
     # for inbox_run() (register_hook/clear_hooks/hooks), the completed-work
     # reader (completed_work) and the external filing records

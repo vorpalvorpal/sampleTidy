@@ -3,8 +3,8 @@
 # Migration 013's rule, applied by the ACIRL dust adapter at import time
 # (2026-10-21 review, FIXES.md item D; value-conflict slice G09).
 #
-# Robin, 2026-10-16 (dev/migrations/013-dust-incombustible-upper-bound.R,
-# dev/MIGRATIONS.md row 1013): ACIRL reports INSOLUBLE SOLIDS (dust-total),
+# Robin, 2026-10-16 (migrations/013-dust-incombustible-upper-bound.R,
+# MIGRATIONS.md row 1013): ACIRL reports INSOLUBLE SOLIDS (dust-total),
 # *COMBUSTIBLE MATTER and INCOMBUSTIBLE MATTER per gauge. Where combustible is a
 # non-detect (`<0.1`) the lab computed incombustible = total - combustible with
 # the combustible taken as its limit or as zero, so the printed figure is
