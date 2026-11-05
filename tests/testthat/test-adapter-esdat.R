@@ -40,11 +40,10 @@ corrupt_path     <- test_path("fixtures", "esdat", "CORRUPT.ESDAT_XX0000000_0.Ch
 xtab_csv_path    <- test_path("fixtures", "crosstab", "XX1234567_0_XTAB.csv")
 enmrg_csv_path   <- test_path("fixtures", "crosstab", "XX1234567_0_ENMRG.CSV")
 
-# Real anonymized ALS delivery (A35/REAL-FIXTURES.md): the underlying
-# monitoring data is public-by-EPA-requirement; only sampling-point IDs and
-# place/person names were anonymized (byte-level, ASCII-only substrings) -
-# analytes, values, units, dates, work-order/QC codes and file encodings
-# (latin-1) are byte-for-byte the original.
+# Lab-shaped synthetic ALS delivery (fixtures/esdat/generate-sitea-rain.R,
+# fixtures/README.md): invented ids and values in the exact shape of a real
+# ESdat export - latin-1 bytes, CRLF, the trailing-comma Sample2e rows, every
+# QC sample type, other clients' NCP rows batched in.
 real_chem_path   <- test_path(
   "fixtures", "esdat",
   "SITEA_Rain.ESDAT_ES2664217_0.Chemistry2e.CSV"
@@ -71,16 +70,16 @@ test_that("R-4.1: Sample2e fixture matches exact", {
 })
 
 test_that("R-4.1: a real-shaped filename containing SPACES matches exact and parses (A47)", {
-  # EVERY real ESdat file has spaces in its name ("NWMF Apirl 2024 - Rain
-  # Event.ESDAT_ES2664217_0.Chemistry2e.CSV"), but no fixture can carry one:
+  # EVERY real ESdat file has spaces in its name ("<project title with
+  # spaces>.ESDAT_<work order>_0.Chemistry2e.CSV"), but no fixture can carry one:
   # `R CMD check`'s "portable file names" gate rejects any space, so the
   # committed fixtures use underscores (A47). The space is therefore
   # reintroduced HERE, at run time, in a temp dir - the bytes are the pinned
-  # real fixture's, only the name differs. Without this, the space-in-name
+  # SITEA_Rain fixture's, only the name differs. Without this, the space-in-name
   # shape is only ever exercised by the SAMPLETIDY_CORPUS-gated corpus tests,
   # which never run in CI or a fresh checkout.
   dir <- withr::local_tempdir()
-  spaced <- file.path(dir, "SITEA Apirl 2024 - Rain Event.ESDAT_ES2664217_0.Chemistry2e.CSV")
+  spaced <- file.path(dir, "SITEA Rain Event - Example.ESDAT_ES2664217_0.Chemistry2e.CSV")
   file.copy(real_chem_path, spaced)
 
   meta <- sampleTidy:::file_meta(spaced)
@@ -88,7 +87,7 @@ test_that("R-4.1: a real-shaped filename containing SPACES matches exact and par
 
   out <- esdat_adapter()$parse(spaced, meta)
   expect_true(nrow(out$results) > 0)
-  # (this real file spans several work orders - assemble.R partitions them;
+  # (this file spans several work orders - assemble.R partitions them;
   # here we only care that the spaced name parsed to the same content)
   expect_true("ES2664217" %in% out$results$work_order)
   expect_identical(nrow(out$results), nrow(esdat_adapter()$parse(real_chem_path, sampleTidy:::file_meta(real_chem_path))$results))
@@ -325,23 +324,23 @@ test_that("R-4.5: an unparseable Analysed_Date lands in warnings; row still emit
   expect_true(any(grepl("row1", out$report$warnings, fixed = TRUE)))
 })
 
-# ---- Real ES2664217 fixture (A35/REAL-FIXTURES.md) --------------------------
+# ---- Lab-shaped ES2664217 fixture (A35/fixtures/README.md) ---------------
 #
-# The plan-04 synthetic fixtures are structurally exact but hand-written;
-# these tests run the adapter against the actual anonymized real ALS
-# delivery to prove the latin-1 fix (A35) works on real bytes, not just a
-# fixture built to already carry them. Every expected value below is DERIVED
+# The plan-04 fixtures are structurally exact but minimal; these tests run the
+# adapter against a full-size delivery generated in the exact byte shape of a
+# real ALS export (latin-1, CRLF, every QC type, batched NCP rows) to prove the
+# latin-1 fix (A35) works on that shape. Every expected value below is DERIVED
 # by reading the fixture itself (raw CSV columns, independently of the
-# adapter under test) - none are hard-coded guesses at what the real data
+# adapter under test) - none are hard-coded guesses at what the data
 # contains.
 
-test_that("R-4.1: real ES2664217 Chemistry2e/Sample2e/Header.XML all match exact", {
+test_that("R-4.1: lab-shaped ES2664217 Chemistry2e/Sample2e/Header.XML all match exact", {
   expect_identical(esdat_adapter()$match(sampleTidy:::file_meta(real_chem_path)), "exact")
   expect_identical(esdat_adapter()$match(sampleTidy:::file_meta(real_sample_path)), "exact")
   expect_identical(esdat_adapter()$match(sampleTidy:::file_meta(real_header_path)), "exact")
 })
 
-test_that("R-4.2: real ES2664217 Chemistry2e parses to a valid ir_results with the fixture's own real analyte names", {
+test_that("R-4.2: lab-shaped ES2664217 Chemistry2e parses to a valid ir_results with the fixture's own analyte names", {
   # Derive the expected analyte vocabulary directly from the raw file,
   # independently of the adapter under test.
   raw <- readr::read_csv(
@@ -359,10 +358,10 @@ test_that("R-4.2: real ES2664217 Chemistry2e parses to a valid ir_results with t
   expect_equal(out$report$n_rows, nrow(raw))
   expect_silent(sampleTidy:::ir_validate(out$results, kind = "results"))
   expect_setequal(unique(out$results$analyte_raw), expected_analytes)
-  expect_true(length(expected_analytes) > 1) # sanity: the derivation actually found real names
+  expect_true(length(expected_analytes) > 1) # sanity: the derivation actually found names
 })
 
-test_that("R-4.2: real ES2664217 Chemistry2e decodes the raw latin-1 °/µ bytes", {
+test_that("R-4.2: lab-shaped ES2664217 Chemistry2e decodes the raw latin-1 °/µ bytes", {
   meta <- sampleTidy:::file_meta(real_chem_path)
   out <- esdat_adapter()$parse(real_chem_path, meta)
   ec <- out$results[grepl("Electrical Conductivity", out$results$analyte_raw, fixed = TRUE), ]
@@ -371,7 +370,7 @@ test_that("R-4.2: real ES2664217 Chemistry2e decodes the raw latin-1 °/µ bytes
   expect_true("µS/cm" %in% ec$units_raw)
 })
 
-test_that("R-4.3: real ES2664217 Sample2e reproduces all five real QC types + Normal verbatim, with the fixture's own per-type counts", {
+test_that("R-4.3: lab-shaped ES2664217 Sample2e reproduces all five QC types + Normal verbatim, with the fixture's own per-type counts", {
   # Derive the expected per-Sample_Type counts directly from the raw file.
   raw <- suppressWarnings(readr::read_csv(
     real_sample_path,
@@ -393,14 +392,14 @@ test_that("R-4.3: real ES2664217 Sample2e reproduces all five real QC types + No
   }
 })
 
-test_that("R-4.4: real ES2664217 Header.XML yields the pinned report metadata", {
+test_that("R-4.4: lab-shaped ES2664217 Header.XML yields the pinned report metadata", {
   meta <- sampleTidy:::file_meta(real_header_path)
   out <- esdat_adapter()$parse(real_header_path, meta)
   expect_equal(nrow(out$results), 0)
   expect_equal(nrow(out$samples), 0)
   h <- out$report$header
   expect_identical(h$work_order, "ES2664217")
-  expect_identical(h$project_id, "SITEA Apirl 2024 - Rain Event")
+  expect_identical(h$project_id, "SITEA Rain Event - Example")
   expect_identical(h$lab_name, "ALSE-Sydney")
 })
 
