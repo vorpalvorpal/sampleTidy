@@ -1,0 +1,161 @@
+SampleCode,ChemCode,OriginalChemName,Prefix,Result,Result_Unit,Total_or_Filtered,Result_Type,Method_Type,Method_Name,Extraction_Date,Analysed_Date,EQL,EQL_Units,Comments,Lab_Qualifier,UCL,LCL
+ES2664217001,"pH_Lab","pH Value",,6.29,pH Unit,T,REG,"pH by Auto Titrator","EA005-P - EA005P: pH by PC Titrator",28 May 2026,28 May 2026,0.01,pH Unit,,,,
+ES2664217001,"ALK_HYDROXIDE_CaCO3","Hydroxide Alkalinity as CaCO3",<,1,mg/L,T,REG,"Alkalinity by Auto Titrator","ED037-P - ED037P: Alkalinity by PC Titrator",28 May 2026,28 May 2026,1,mg/L,,,,
+ES2664217001,"ALK_CARBONATE_CaCO3","Carbonate Alkalinity as CaCO3",<,1,mg/L,T,REG,"Alkalinity by Auto Titrator","ED037-P - ED037P: Alkalinity by PC Titrator",28 May 2026,28 May 2026,1,mg/L,,,,
+ES2664217001,"ALK_BICARB_CaCO3","Bicarbonate Alkalinity as CaCO3",,66,mg/L,T,REG,"Alkalinity by Auto Titrator","ED037-P - ED037P: Alkalinity by PC Titrator",28 May 2026,28 May 2026,1,mg/L,,,,
+ES2664217001,"ALK_CACO3","Total Alkalinity as CaCO3",,66,mg/L,T,REG,"Alkalinity by Auto Titrator","ED037-P - ED037P: Alkalinity by PC Titrator",28 May 2026,28 May 2026,1,mg/L,,,,
+ES2664217001,"TDS_Calc","Total Dissolved Solids (Calc.)",,689,mg/L,T,REG,"Calculated TDS (from Electrical Conductivity)","EA016 - EA016: Calculated TDS (from Electrical Conductivity)",,01 Jun 2026,1,mg/L,,,,
+ES2664217001,"EC_Lab","Electrical Conductivity @ 25°C",,1060,µS/cm,T,REG,"Conductivity by Auto Titrator","EA010-P - EA010P: Conductivity by PC Titrator",28 May 2026,28 May 2026,1,µS/cm,,,,
+ES2664217001,"16984-48-8","Fluoride",<,0.1,mg/L,T,REG,"Fluoride by Auto Titrator","EK040P - EK040P: Fluoride by PC Titrator",28 May 2026,28 May 2026,0.1,mg/L,,,,
+ES2664217001,"16887-00-6","Chloride",,42,mg/L,T,REG,"Chloride by Discrete Analyser","ED045G - ED045G: Chloride by Discrete Analyser",29 May 2026,29 May 2026,1,mg/L,,,,
+ES2664217001,"14808-79-8_Turb","Sulfate as SO4 - Turbidimetric",,70,mg/L,F,REG,"Sulfate (Turbidimetric) as SO4 2- by Discrete Anal","ED041G - ED041G: Sulfate (Turbidimetric) as SO4 2- by DA",29 May 2026,29 May 2026,1,mg/L,,,,
+ES2664217001,"7723-14-0_Reac_AsP","Reactive Phosphorus as P",<,0.01,mg/L,F,REG,"Reactive Phosphorus as P-By Discrete Analyser","EK071G - EK071G: Reactive Phosphorus as P by discrete analyser",29 May 2026,29 May 2026,0.01,mg/L,,,,
+ES2664217001,"7664-41-7 (as N)","Ammonia as N",,2.18,mg/L,T,REG,"Ammonia as N by Discrete analyser","EK055G - EK055G: Ammonia as N by Discrete Analyser",03 Jun 2026,03 Jun 2026,0.01,mg/L,,,,
+ES2664217001,"TOTALANIONS","Total Anions",,3.96,meq/L,T,REG,"Ionic Balance by PCT DA and Turbi SO4 DA","EN055 - PG - EN055: Ionic Balance",,02 Jun 2026,0.01,meq/L,,,,
+ES2664217001,"TOTALCATIONS","Total Cations",,7.78,meq/L,T,REG,"Ionic Balance by PCT DA and Turbi SO4 DA","EN055 - PG - EN055: Ionic Balance",,02 Jun 2026,0.01,meq/L,,,,
+ES2664217001,"14797-55-8(as N)","Nitrate as N",,0.10,mg/L,T,REG,"Nitrate as N by Discrete Analyser","EK058G - EK058G:  Nitrate as N by Discrete Analyser",,03 Jun 2026,0.01,mg/L,,,,
+ES2664217001,"14797-65-0(as N)","Nitrite as N",<,0.01,mg/L,T,REG,"Nitrite as N by Discrete Analyser","EK057G - EK057G:  Nitrite as N by Discrete Analyser",29 May 2026,29 May 2026,0.01,mg/L,,,,
+ES2664217001,"NO3+NO2 (as N)","Nitrite + Nitrate as N",,0.10,mg/L,T,REG,"Nitrite and Nitrate as N (NOx) by Discrete Analyse","EK059G - EK059G:  Nitrite plus Nitrate as N (NOx)  by Discrete Analyse",03 Jun 2026,03 Jun 2026,0.01,mg/L,,,,
+ES2664217001,"7440-70-2","Calcium",,50,mg/L,F,REG,"Major Cations - Dissolved","ED093F - ED093F: Dissolved Major Cations",01 Jun 2026,01 Jun 2026,1,mg/L,,,,
+ES2664217001,"7439-95-4","Magnesium",,26,mg/L,F,REG,"Major Cations - Dissolved","ED093F - ED093F: Dissolved Major Cations",01 Jun 2026,01 Jun 2026,1,mg/L,,,,
+ES2664217001,"7440-23-5","Sodium",,67,mg/L,F,REG,"Major Cations - Dissolved","ED093F - ED093F: Dissolved Major Cations",01 Jun 2026,01 Jun 2026,1,mg/L,,,,
+ES2664217001,"7440-09-7","Potassium",,9,mg/L,F,REG,"Major Cations - Dissolved","ED093F - ED093F: Dissolved Major Cations",01 Jun 2026,01 Jun 2026,1,mg/L,,,,
+ES2664217001,"Hardness_as_CaCO3","Total Hardness as CaCO3",,232,mg/L,F,REG,"Major Cations - Dissolved","ED093F - EA065: Total Hardness as CaCO3",01 Jun 2026,01 Jun 2026,1,mg/L,,,,
+ES2664217001,"TOC","Total Organic Carbon",,6,mg/L,T,REG,"Total Organic Carbon","EP005 - EP005: Total Organic Carbon (TOC)",,01 Jun 2026,1,mg/L,,,,
+ES2664217001,"TSS","Suspended Solids (SS)",<,5,mg/L,T,REG,"Suspended Solids (High Level)","EA025H - EA025: Total Suspended Solids dried at 104 ± 2°C",03 Jun 2026,03 Jun 2026,5,mg/L,,,,
+ES2664106001_ES2664217,"14797-65-0(as N)","Nitrite as N",,0.11,mg/L,T,REG,"Nitrite as N by Discrete Analyser","EK057G - EK057G:  Nitrite as N by Discrete Analyser",,29 May 2026,0.01,mg/L,,,,
+ES2664152001_ES2664217,"TSS","Suspended Solids (SS)",,15,mg/L,T,REG,"Suspended Solids (High Level)","EA025H - EA025: Total Suspended Solids dried at 104 ± 2°C",,03 Jun 2026,5,mg/L,,,,
+ES2664153001_ES2664217,"NO3+NO2 (as N)","Nitrite + Nitrate as N",<,0.01,mg/L,T,REG,"Nitrite and Nitrate as N (NOx) by Discrete Analyse","EK059G - EK059G:  Nitrite plus Nitrate as N (NOx)  by Discrete Analyse",,03 Jun 2026,0.01,mg/L,,,,
+ES2664158001_ES2664217,"pH_Lab","pH Value",,7.91,pH Unit,T,REG,"pH by Auto Titrator","EA005-P - EA005P: pH by PC Titrator",,01 Jun 2026,0.01,pH Unit,,,,
+ES2664158001_ES2664217,"EC_Lab","Electrical Conductivity @ 25°C",,279,µS/cm,T,REG,"Conductivity by Auto Titrator","EA010-P - EA010P: Conductivity by PC Titrator",,28 May 2026,1,µS/cm,,,,
+ES2664158001_ES2664217,"7664-41-7 (as N)","Ammonia as N",,1.70,mg/L,T,REG,"Ammonia as N by Discrete analyser","EK055G - EK055G: Ammonia as N by Discrete Analyser",,03 Jun 2026,0.01,mg/L,,,,
+ES2664158010_ES2664217,"pH_Lab","pH Value",,7.47,pH Unit,T,REG,"pH by Auto Titrator","EA005-P - EA005P: pH by PC Titrator",,28 May 2026,0.01,pH Unit,,,,
+ES2664158010_ES2664217,"EC_Lab","Electrical Conductivity @ 25°C",,160,µS/cm,T,REG,"Conductivity by Auto Titrator","EA010-P - EA010P: Conductivity by PC Titrator",,28 May 2026,1,µS/cm,,,,
+ES2664164005_ES2664217,"7440-70-2","Calcium",,49,mg/L,F,REG,"Major Cations - Dissolved","ED093F - ED093F: Dissolved Major Cations",,01 Jun 2026,1,mg/L,,,,
+ES2664164005_ES2664217,"7439-95-4","Magnesium",,66,mg/L,F,REG,"Major Cations - Dissolved","ED093F - ED093F: Dissolved Major Cations",,01 Jun 2026,1,mg/L,,,,
+ES2664164005_ES2664217,"7440-23-5","Sodium",,42,mg/L,F,REG,"Major Cations - Dissolved","ED093F - ED093F: Dissolved Major Cations",,01 Jun 2026,1,mg/L,,,,
+ES2664164005_ES2664217,"7440-09-7","Potassium",,6,mg/L,F,REG,"Major Cations - Dissolved","ED093F - ED093F: Dissolved Major Cations",,01 Jun 2026,1,mg/L,,,,
+ES2664164011_ES2664217,"16887-00-6","Chloride",,53,mg/L,T,REG,"Chloride by Discrete Analyser","ED045G - ED045G: Chloride by Discrete Analyser",,29 May 2026,1,mg/L,,,,
+ES2664164011_ES2664217,"14808-79-8_Turb","Sulfate as SO4 - Turbidimetric",,178,mg/L,F,REG,"Sulfate (Turbidimetric) as SO4 2- by Discrete Anal","ED041G - ED041G: Sulfate (Turbidimetric) as SO4 2- by DA",,29 May 2026,1,mg/L,,,,
+ES2664164011_ES2664217,"7723-14-0_Reac_AsP","Reactive Phosphorus as P",<,0.01,mg/L,F,REG,"Reactive Phosphorus as P-By Discrete Analyser","EK071G - EK071G: Reactive Phosphorus as P by discrete analyser",,29 May 2026,0.01,mg/L,,,,
+ES2664187002_ES2664217,"TOC","Total Organic Carbon",,4,mg/L,T,REG,"Total Organic Carbon","EP005 - EP005: Total Organic Carbon (TOC)",,01 Jun 2026,1,mg/L,,,,
+ES2664187003_ES2664217,"TOC","Total Organic Carbon",<,1,mg/L,T,REG,"Total Organic Carbon","EP005 - EP005: Total Organic Carbon (TOC)",,01 Jun 2026,1,mg/L,,,,
+ES2664218003_ES2664217,"7440-70-2","Calcium",,36,mg/L,F,REG,"Major Cations - Dissolved","ED093F - ED093F: Dissolved Major Cations",,01 Jun 2026,1,mg/L,,,,
+ES2664218003_ES2664217,"7439-95-4","Magnesium",,36,mg/L,F,REG,"Major Cations - Dissolved","ED093F - ED093F: Dissolved Major Cations",,01 Jun 2026,1,mg/L,,,,
+ES2664218003_ES2664217,"7440-23-5","Sodium",,40,mg/L,F,REG,"Major Cations - Dissolved","ED093F - ED093F: Dissolved Major Cations",,01 Jun 2026,1,mg/L,,,,
+ES2664218003_ES2664217,"7440-09-7","Potassium",<,1,mg/L,F,REG,"Major Cations - Dissolved","ED093F - ED093F: Dissolved Major Cations",,01 Jun 2026,1,mg/L,,,,
+ES2664218003_ES2664217,"TOC","Total Organic Carbon",,5,mg/L,T,REG,"Total Organic Carbon","EP005 - EP005: Total Organic Carbon (TOC)",,01 Jun 2026,1,mg/L,,,,
+ES2664218006_ES2664217,"7664-41-7 (as N)","Ammonia as N",,0.42,mg/L,T,REG,"Ammonia as N by Discrete analyser","EK055G - EK055G: Ammonia as N by Discrete Analyser",,03 Jun 2026,0.01,mg/L,,,,
+ES2664218006_ES2664217,"NO3+NO2 (as N)","Nitrite + Nitrate as N",,1.13,mg/L,T,REG,"Nitrite and Nitrate as N (NOx) by Discrete Analyse","EK059G - EK059G:  Nitrite plus Nitrate as N (NOx)  by Discrete Analyse",,03 Jun 2026,0.01,mg/L,,,,
+ES2664220002_ES2664217,"ALK_HYDROXIDE_CaCO3","Hydroxide Alkalinity as CaCO3",<,1,mg/L,T,REG,"Alkalinity by Auto Titrator","ED037-P - ED037P: Alkalinity by PC Titrator",,28 May 2026,1,mg/L,,,,
+ES2664220002_ES2664217,"ALK_CARBONATE_CaCO3","Carbonate Alkalinity as CaCO3",<,1,mg/L,T,REG,"Alkalinity by Auto Titrator","ED037-P - ED037P: Alkalinity by PC Titrator",,28 May 2026,1,mg/L,,,,
+ES2664220002_ES2664217,"ALK_BICARB_CaCO3","Bicarbonate Alkalinity as CaCO3",,94,mg/L,T,REG,"Alkalinity by Auto Titrator","ED037-P - ED037P: Alkalinity by PC Titrator",,28 May 2026,1,mg/L,,,,
+ES2664220002_ES2664217,"ALK_CACO3","Total Alkalinity as CaCO3",,94,mg/L,T,REG,"Alkalinity by Auto Titrator","ED037-P - ED037P: Alkalinity by PC Titrator",,28 May 2026,1,mg/L,,,,
+ES2664220002_ES2664217,"16984-48-8","Fluoride",,1.2,mg/L,T,REG,"Fluoride by Auto Titrator","EK040P - EK040P: Fluoride by PC Titrator",,28 May 2026,0.1,mg/L,,,,
+ES2664220002_ES2664217,"EC_Lab","Electrical Conductivity @ 25°C",,134,µS/cm,T,REG,"Conductivity by Auto Titrator","EA010-P - EA010P: Conductivity by PC Titrator",,28 May 2026,1,µS/cm,,,,
+ES2664220011_ES2664217,"ALK_HYDROXIDE_CaCO3","Hydroxide Alkalinity as CaCO3",<,1,mg/L,T,REG,"Alkalinity by Auto Titrator","ED037-P - ED037P: Alkalinity by PC Titrator",,28 May 2026,1,mg/L,,,,
+ES2664220011_ES2664217,"ALK_CARBONATE_CaCO3","Carbonate Alkalinity as CaCO3",<,1,mg/L,T,REG,"Alkalinity by Auto Titrator","ED037-P - ED037P: Alkalinity by PC Titrator",,28 May 2026,1,mg/L,,,,
+ES2664220011_ES2664217,"ALK_BICARB_CaCO3","Bicarbonate Alkalinity as CaCO3",,71,mg/L,T,REG,"Alkalinity by Auto Titrator","ED037-P - ED037P: Alkalinity by PC Titrator",,28 May 2026,1,mg/L,,,,
+ES2664220011_ES2664217,"ALK_CACO3","Total Alkalinity as CaCO3",,71,mg/L,T,REG,"Alkalinity by Auto Titrator","ED037-P - ED037P: Alkalinity by PC Titrator",,28 May 2026,1,mg/L,,,,
+ES2664220011_ES2664217,"16984-48-8","Fluoride",,0.4,mg/L,T,REG,"Fluoride by Auto Titrator","EK040P - EK040P: Fluoride by PC Titrator",,28 May 2026,0.1,mg/L,,,,
+ES2664220011_ES2664217,"EC_Lab","Electrical Conductivity @ 25°C",,555,µS/cm,T,REG,"Conductivity by Auto Titrator","EA010-P - EA010P: Conductivity by PC Titrator",,28 May 2026,1,µS/cm,,,,
+ES2664221001_ES2664217,"EC_Lab","Electrical Conductivity @ 25°C",,317,µS/cm,T,REG,"Conductivity by Auto Titrator","EA010-P - EA010P: Conductivity by PC Titrator",,28 May 2026,1,µS/cm,,,,
+ES2664288005_ES2664217,"14797-65-0(as N)","Nitrite as N",,0.75,mg/L,T,REG,"Nitrite as N by Discrete Analyser","EK057G - EK057G:  Nitrite as N by Discrete Analyser",,29 May 2026,0.01,mg/L,,,,
+ES2664288007_ES2664217,"7723-14-0_Reac_AsP","Reactive Phosphorus as P",,0.05,mg/L,F,REG,"Reactive Phosphorus as P-By Discrete Analyser","EK071G - EK071G: Reactive Phosphorus as P by discrete analyser",,29 May 2026,0.01,mg/L,,,,
+ES2664778003_ES2664217,"TSS","Suspended Solids (SS)",,34,mg/L,T,REG,"Suspended Solids (High Level)","EA025H - EA025: Total Suspended Solids dried at 104 ± 2°C",,03 Jun 2026,5,mg/L,,,,
+ME2660785001_ES2664217,"16887-00-6","Chloride",,32,mg/L,T,REG,"Chloride by Discrete Analyser","ED045G - ED045G: Chloride by Discrete Analyser",,29 May 2026,1,mg/L,,,,
+ME2660785001_ES2664217,"14808-79-8_Turb","Sulfate as SO4 - Turbidimetric",,6,mg/L,F,REG,"Sulfate (Turbidimetric) as SO4 2- by Discrete Anal","ED041G - ED041G: Sulfate (Turbidimetric) as SO4 2- by DA",,29 May 2026,1,mg/L,,,,
+QC-3610101-001_ES2664217,"pH_Lab","pH Value",,108,%,T,REG,"pH by Auto Titrator","EA005-P - EA005P: pH by PC Titrator",28 May 2026,28 May 2026,0.01,%,,,123,84.0
+QC-3610101-002_ES2664217,"pH_Lab","pH Value",,93.4,%,T,REG,"pH by Auto Titrator","EA005-P - EA005P: pH by PC Titrator",28 May 2026,28 May 2026,0.01,%,,,112,80.6
+QC-3610102-002_ES2664217,"EC_Lab","Electrical Conductivity @ 25°C",,98.1,%,T,REG,"Conductivity by Auto Titrator","EA010-P - EA010P: Conductivity by PC Titrator",28 May 2026,28 May 2026,1,%,,,110,87.1
+QC-3610102-025_ES2664217,"EC_Lab","Electrical Conductivity @ 25°C",<,1,µS/cm,T,REG,"Conductivity by Auto Titrator","EA010-P - EA010P: Conductivity by PC Titrator",28 May 2026,28 May 2026,1,µS/cm,,,,
+QC-3610102-026_ES2664217,"EC_Lab","Electrical Conductivity @ 25°C",,106,%,T,REG,"Conductivity by Auto Titrator","EA010-P - EA010P: Conductivity by PC Titrator",28 May 2026,28 May 2026,1,%,,,122,86.1
+QC-3610102-050_ES2664217,"EC_Lab","Electrical Conductivity @ 25°C",<,1,µS/cm,T,REG,"Conductivity by Auto Titrator","EA010-P - EA010P: Conductivity by PC Titrator",28 May 2026,28 May 2026,1,µS/cm,,,,
+QC-3610102-051_ES2664217,"EC_Lab","Electrical Conductivity @ 25°C",,107,%,T,REG,"Conductivity by Auto Titrator","EA010-P - EA010P: Conductivity by PC Titrator",28 May 2026,28 May 2026,1,%,,,126,90.5
+QC-3610103-001_ES2664217,"ALK_CACO3","Total Alkalinity as CaCO3",,113,%,T,REG,"Alkalinity by Auto Titrator","ED037-P - ED037P: Alkalinity by PC Titrator",28 May 2026,28 May 2026,1,%,,,128,85.2
+QC-3610103-002_ES2664217,"ALK_CACO3","Total Alkalinity as CaCO3",,95.3,%,T,REG,"Alkalinity by Auto Titrator","ED037-P - ED037P: Alkalinity by PC Titrator",28 May 2026,28 May 2026,1,%,,,117,80.9
+QC-3610104-005_ES2664217,"16984-48-8","Fluoride",,111,%,T,REG,"Fluoride by Auto Titrator","EK040P - EK040P: Fluoride by PC Titrator",28 May 2026,28 May 2026,0.1,%,,,130,70.0
+QC-3611017-001_ES2664217,"TOC","Total Organic Carbon",<,1,mg/L,T,REG,"Total Organic Carbon","EP005 - EP005: Total Organic Carbon (TOC)",,01 Jun 2026,1,mg/L,,,,
+QC-3611017-002_ES2664217,"TOC","Total Organic Carbon",,104,%,T,REG,"Total Organic Carbon","EP005 - EP005: Total Organic Carbon (TOC)",,01 Jun 2026,1,%,,,116,91.6
+QC-3611017-004_ES2664217,"TOC","Total Organic Carbon",,4,mg/L,T,REG,"Total Organic Carbon","EP005 - EP005: Total Organic Carbon (TOC)",,01 Jun 2026,1,mg/L,,,,
+QC-3611017-005_ES2664217,"TOC","Total Organic Carbon",,104,%,T,REG,"Total Organic Carbon","EP005 - EP005: Total Organic Carbon (TOC)",,01 Jun 2026,1,%,,,130,70.0
+QC-3611017-016_ES2664217,"TOC","Total Organic Carbon",,5,mg/L,T,REG,"Total Organic Carbon","EP005 - EP005: Total Organic Carbon (TOC)",,01 Jun 2026,1,mg/L,,,,
+QC-3612586-004_ES2664217,"14797-65-0(as N)","Nitrite as N",,0.11,mg/L,T,REG,"Nitrite as N by Discrete Analyser","EK057G - EK057G:  Nitrite as N by Discrete Analyser",29 May 2026,29 May 2026,0.01,mg/L,,,,
+QC-3612586-005_ES2664217,"14797-65-0(as N)","Nitrite as N",,93.6,%,T,REG,"Nitrite as N by Discrete Analyser","EK057G - EK057G:  Nitrite as N by Discrete Analyser",29 May 2026,29 May 2026,0.01,%,,,130,70.0
+QC-3612586-015_ES2664217,"14797-65-0(as N)","Nitrite as N",,0.79,mg/L,T,REG,"Nitrite as N by Discrete Analyser","EK057G - EK057G:  Nitrite as N by Discrete Analyser",29 May 2026,29 May 2026,0.01,mg/L,,,,
+QC-3612589-015_ES2664217,"7723-14-0_Reac_AsP","Reactive Phosphorus as P",,0.05,mg/L,F,REG,"Reactive Phosphorus as P-By Discrete Analyser","EK071G - EK071G: Reactive Phosphorus as P by discrete analyser",29 May 2026,29 May 2026,0.01,mg/L,,,,
+QC-3615720-004_ES2664217,"7440-70-2","Calcium",,47,mg/L,F,REG,"Major Cations - Dissolved","ED093F - ED093F: Dissolved Major Cations",01 Jun 2026,01 Jun 2026,1,mg/L,,,,
+QC-3615720-004_ES2664217,"7439-95-4","Magnesium",,67,mg/L,F,REG,"Major Cations - Dissolved","ED093F - ED093F: Dissolved Major Cations",01 Jun 2026,01 Jun 2026,1,mg/L,,,,
+QC-3615720-004_ES2664217,"7440-23-5","Sodium",,40,mg/L,F,REG,"Major Cations - Dissolved","ED093F - ED093F: Dissolved Major Cations",01 Jun 2026,01 Jun 2026,1,mg/L,,,,
+QC-3615720-004_ES2664217,"7440-09-7","Potassium",,6,mg/L,F,REG,"Major Cations - Dissolved","ED093F - ED093F: Dissolved Major Cations",01 Jun 2026,01 Jun 2026,1,mg/L,,,,
+QC-3619454-004_ES2664217,"NO3+NO2 (as N)","Nitrite + Nitrate as N",<,0.01,mg/L,T,REG,"Nitrite and Nitrate as N (NOx) by Discrete Analyse","EK059G - EK059G:  Nitrite plus Nitrate as N (NOx)  by Discrete Analyse",03 Jun 2026,03 Jun 2026,0.01,mg/L,,,,
+QC-3619454-005_ES2664217,"NO3+NO2 (as N)","Nitrite + Nitrate as N",,93.3,%,T,REG,"Nitrite and Nitrate as N (NOx) by Discrete Analyse","EK059G - EK059G:  Nitrite plus Nitrate as N (NOx)  by Discrete Analyse",03 Jun 2026,03 Jun 2026,0.01,%,,,130,70.0
+QC-3619455-004_ES2664217,"7664-41-7 (as N)","Ammonia as N",,1.71,mg/L,T,REG,"Ammonia as N by Discrete analyser","EK055G - EK055G: Ammonia as N by Discrete Analyser",03 Jun 2026,03 Jun 2026,0.01,mg/L,,,,
+QC-3619455-005_ES2664217,"7664-41-7 (as N)","Ammonia as N",,101,%,T,REG,"Ammonia as N by Discrete analyser","EK055G - EK055G: Ammonia as N by Discrete Analyser",03 Jun 2026,03 Jun 2026,0.01,%,,,130,70.0
+QC-3620290-002_ES2664217,"TSS","Suspended Solids (SS)",,102,%,T,REG,"Suspended Solids (High Level)","EA025H - EA025: Total Suspended Solids dried at 104 ± 2°C",03 Jun 2026,03 Jun 2026,5,%,,,111,84.2
+QC-3620290-003_ES2664217,"TSS","Suspended Solids (SS)",,103,%,T,REG,"Suspended Solids (High Level)","EA025H - EA025: Total Suspended Solids dried at 104 ± 2°C",03 Jun 2026,03 Jun 2026,5,%,,,120,91.2
+QC-3620290-004_ES2664217,"TSS","Suspended Solids (SS)",,108,%,T,REG,"Suspended Solids (High Level)","EA025H - EA025: Total Suspended Solids dried at 104 ± 2°C",03 Jun 2026,03 Jun 2026,5,%,,,123,87.5
+QC-3620290-006_ES2664217,"TSS","Suspended Solids (SS)",,15,mg/L,T,REG,"Suspended Solids (High Level)","EA025H - EA025: Total Suspended Solids dried at 104 ± 2°C",03 Jun 2026,03 Jun 2026,5,mg/L,,,,
+QC-3620290-017_ES2664217,"TSS","Suspended Solids (SS)",<,5,mg/L,T,REG,"Suspended Solids (High Level)","EA025H - EA025: Total Suspended Solids dried at 104 ± 2°C",03 Jun 2026,03 Jun 2026,5,mg/L,,,,
+QC-3620290-027_ES2664217,"TSS","Suspended Solids (SS)",<,5,mg/L,T,REG,"Suspended Solids (High Level)","EA025H - EA025: Total Suspended Solids dried at 104 ± 2°C",03 Jun 2026,03 Jun 2026,5,mg/L,,,,
+QC-3620290-028_ES2664217,"TSS","Suspended Solids (SS)",,105,%,T,REG,"Suspended Solids (High Level)","EA025H - EA025: Total Suspended Solids dried at 104 ± 2°C",03 Jun 2026,03 Jun 2026,5,%,,,121,88.0
+QC-3620290-029_ES2664217,"TSS","Suspended Solids (SS)",,103,%,T,REG,"Suspended Solids (High Level)","EA025H - EA025: Total Suspended Solids dried at 104 ± 2°C",03 Jun 2026,03 Jun 2026,5,%,,,111,90.2
+QC-3620290-031_ES2664217,"TSS","Suspended Solids (SS)",,34,mg/L,T,REG,"Suspended Solids (High Level)","EA025H - EA025: Total Suspended Solids dried at 104 ± 2°C",03 Jun 2026,03 Jun 2026,5,mg/L,,,,
+QC-MRG2-3610101004_ES2664217,"pH_Lab","pH Value",,8.09,pH Unit,T,REG,"pH by Auto Titrator","EA005-P - EA005P: pH by PC Titrator",28 May 2026,01 Jun 2026,0.01,pH Unit,,,,
+QC-MRG2-3610101004_ES2664217,"EC_Lab","Electrical Conductivity @ 25°C",,272,µS/cm,T,REG,"Conductivity by Auto Titrator","EA010-P - EA010P: Conductivity by PC Titrator",28 May 2026,28 May 2026,1,µS/cm,,,,
+QC-MRG2-3610101014_ES2664217,"pH_Lab","pH Value",,7.03,pH Unit,T,REG,"pH by Auto Titrator","EA005-P - EA005P: pH by PC Titrator",28 May 2026,28 May 2026,0.01,pH Unit,,,,
+QC-MRG2-3610101014_ES2664217,"EC_Lab","Electrical Conductivity @ 25°C",,153,µS/cm,T,REG,"Conductivity by Auto Titrator","EA010-P - EA010P: Conductivity by PC Titrator",28 May 2026,28 May 2026,1,µS/cm,,,,
+QC-MRG2-3610102001_ES2664217,"EC_Lab","Electrical Conductivity @ 25°C",<,1,µS/cm,T,REG,"Conductivity by Auto Titrator","EA010-P - EA010P: Conductivity by PC Titrator",28 May 2026,28 May 2026,1,µS/cm,,,,
+QC-MRG2-3610102001_ES2664217,"16984-48-8","Fluoride",<,0.1,mg/L,T,REG,"Fluoride by Auto Titrator","EK040P - EK040P: Fluoride by PC Titrator",28 May 2026,28 May 2026,0.1,mg/L,,,,
+QC-MRG2-3610102003_ES2664217,"EC_Lab","Electrical Conductivity @ 25°C",,94.9,%,T,REG,"Conductivity by Auto Titrator","EA010-P - EA010P: Conductivity by PC Titrator",28 May 2026,28 May 2026,1,%,,,117,81.6
+QC-MRG2-3610102003_ES2664217,"16984-48-8","Fluoride",,102,%,T,REG,"Fluoride by Auto Titrator","EK040P - EK040P: Fluoride by PC Titrator",28 May 2026,28 May 2026,0.1,%,,,113,80.9
+QC-MRG2-3612587003_ES2664217,"16887-00-6","Chloride",,93.4,%,T,REG,"Chloride by Discrete Analyser","ED045G - ED045G: Chloride by Discrete Analyser",29 May 2026,29 May 2026,1,%,,,123,80.6
+QC-MRG2-3612587003_ES2664217,"14808-79-8_Turb","Sulfate as SO4 - Turbidimetric",,95.4,%,F,REG,"Sulfate (Turbidimetric) as SO4 2- by Discrete Anal","ED041G - ED041G: Sulfate (Turbidimetric) as SO4 2- by DA",29 May 2026,29 May 2026,1,%,,,109,86.0
+QC-MRG2-3612587016_ES2664217,"14808-79-8_Turb","Sulfate as SO4 - Turbidimetric",,6,mg/L,F,REG,"Sulfate (Turbidimetric) as SO4 2- by Discrete Anal","ED041G - ED041G: Sulfate (Turbidimetric) as SO4 2- by DA",29 May 2026,29 May 2026,1,mg/L,,,,
+QC-MRG2-3612587016_ES2664217,"16887-00-6","Chloride",,34,mg/L,T,REG,"Chloride by Discrete Analyser","ED045G - ED045G: Chloride by Discrete Analyser",29 May 2026,29 May 2026,1,mg/L,,,,
+QC-MRG2-3615720015_ES2664217,"7440-70-2","Calcium",,37,mg/L,F,REG,"Major Cations - Dissolved","ED093F - ED093F: Dissolved Major Cations",01 Jun 2026,01 Jun 2026,1,mg/L,,,,
+QC-MRG2-3615720015_ES2664217,"7439-95-4","Magnesium",,36,mg/L,F,REG,"Major Cations - Dissolved","ED093F - ED093F: Dissolved Major Cations",01 Jun 2026,01 Jun 2026,1,mg/L,,,,
+QC-MRG2-3615720015_ES2664217,"7440-23-5","Sodium",,40,mg/L,F,REG,"Major Cations - Dissolved","ED093F - ED093F: Dissolved Major Cations",01 Jun 2026,01 Jun 2026,1,mg/L,,,,
+QC-MRG2-3615720015_ES2664217,"7440-09-7","Potassium",<,1,mg/L,F,REG,"Major Cations - Dissolved","ED093F - ED093F: Dissolved Major Cations",01 Jun 2026,01 Jun 2026,1,mg/L,,,,
+QC-MRG2-3615721002_ES2664217,"7440-70-2","Calcium",<,1,mg/L,F,REG,"Major Cations - Dissolved","ED093F - ED093F: Dissolved Major Cations",01 Jun 2026,01 Jun 2026,1,mg/L,,,,
+QC-MRG2-3615721002_ES2664217,"7439-95-4","Magnesium",<,1,mg/L,F,REG,"Major Cations - Dissolved","ED093F - ED093F: Dissolved Major Cations",01 Jun 2026,01 Jun 2026,1,mg/L,,,,
+QC-MRG2-3615721002_ES2664217,"7440-23-5","Sodium",<,1,mg/L,F,REG,"Major Cations - Dissolved","ED093F - ED093F: Dissolved Major Cations",01 Jun 2026,01 Jun 2026,1,mg/L,,,,
+QC-MRG2-3615721002_ES2664217,"7440-09-7","Potassium",<,1,mg/L,F,REG,"Major Cations - Dissolved","ED093F - ED093F: Dissolved Major Cations",01 Jun 2026,01 Jun 2026,1,mg/L,,,,
+QC-MRG2-3615721003_ES2664217,"7440-70-2","Calcium",,99.5,%,F,REG,"Major Cations - Dissolved","ED093F - ED093F: Dissolved Major Cations",01 Jun 2026,01 Jun 2026,1,%,,,116,81.5
+QC-MRG2-3615721003_ES2664217,"7439-95-4","Magnesium",,115,%,F,REG,"Major Cations - Dissolved","ED093F - ED093F: Dissolved Major Cations",01 Jun 2026,01 Jun 2026,1,%,,,128,91.2
+QC-MRG2-3615721003_ES2664217,"7440-23-5","Sodium",,96.8,%,F,REG,"Major Cations - Dissolved","ED093F - ED093F: Dissolved Major Cations",01 Jun 2026,01 Jun 2026,1,%,,,110,86.0
+QC-MRG2-3615721003_ES2664217,"7440-09-7","Potassium",,99.4,%,F,REG,"Major Cations - Dissolved","ED093F - ED093F: Dissolved Major Cations",01 Jun 2026,01 Jun 2026,1,%,,,127,86.2
+QC-MRG2-3619454001_ES2664217,"NO3+NO2 (as N)","Nitrite + Nitrate as N",<,0.01,mg/L,T,REG,"Nitrite and Nitrate as N (NOx) by Discrete Analyse","EK059G - EK059G:  Nitrite plus Nitrate as N (NOx)  by Discrete Analyse",03 Jun 2026,03 Jun 2026,0.01,mg/L,,,,
+QC-MRG2-3619454001_ES2664217,"7664-41-7 (as N)","Ammonia as N",<,0.01,mg/L,T,REG,"Ammonia as N by Discrete analyser","EK055G - EK055G: Ammonia as N by Discrete Analyser",03 Jun 2026,03 Jun 2026,0.01,mg/L,,,,
+QC-MRG2-3619454002_ES2664217,"NO3+NO2 (as N)","Nitrite + Nitrate as N",,105,%,T,REG,"Nitrite and Nitrate as N (NOx) by Discrete Analyse","EK059G - EK059G:  Nitrite plus Nitrate as N (NOx)  by Discrete Analyse",03 Jun 2026,03 Jun 2026,0.01,%,,,123,89.7
+QC-MRG2-3619454002_ES2664217,"7664-41-7 (as N)","Ammonia as N",,108,%,T,REG,"Ammonia as N by Discrete analyser","EK055G - EK055G: Ammonia as N by Discrete Analyser",03 Jun 2026,03 Jun 2026,0.01,%,,,124,82.2
+QC-MRG2-3619454015_ES2664217,"7664-41-7 (as N)","Ammonia as N",,0.44,mg/L,T,REG,"Ammonia as N by Discrete analyser","EK055G - EK055G: Ammonia as N by Discrete Analyser",03 Jun 2026,03 Jun 2026,0.01,mg/L,,,,
+QC-MRG2-3619454015_ES2664217,"NO3+NO2 (as N)","Nitrite + Nitrate as N",,1.09,mg/L,T,REG,"Nitrite and Nitrate as N (NOx) by Discrete Analyse","EK059G - EK059G:  Nitrite plus Nitrate as N (NOx)  by Discrete Analyse",03 Jun 2026,03 Jun 2026,0.01,mg/L,,,,
+QC-MRG2-3620290001_ES2664217,"TSS","Suspended Solids (SS)",<,5,mg/L,T,REG,"Suspended Solids (High Level)","EA025H - EA025: Total Suspended Solids dried at 104 ± 2°C",03 Jun 2026,03 Jun 2026,5,mg/L,,,,
+QC-MRG3-3612587005_ES2664217,"16887-00-6","Chloride",,50,mg/L,T,REG,"Chloride by Discrete Analyser","ED045G - ED045G: Chloride by Discrete Analyser",29 May 2026,29 May 2026,1,mg/L,,,,
+QC-MRG3-3612587005_ES2664217,"14808-79-8_Turb","Sulfate as SO4 - Turbidimetric",,174,mg/L,F,REG,"Sulfate (Turbidimetric) as SO4 2- by Discrete Anal","ED041G - ED041G: Sulfate (Turbidimetric) as SO4 2- by DA",29 May 2026,29 May 2026,1,mg/L,,,,
+QC-MRG3-3612587005_ES2664217,"7723-14-0_Reac_AsP","Reactive Phosphorus as P",<,0.01,mg/L,F,REG,"Reactive Phosphorus as P-By Discrete Analyser","EK071G - EK071G: Reactive Phosphorus as P by discrete analyser",29 May 2026,29 May 2026,0.01,mg/L,,,,
+QC-MRG3-3612587006_ES2664217,"16887-00-6","Chloride",,98.7,%,T,REG,"Chloride by Discrete Analyser","ED045G - ED045G: Chloride by Discrete Analyser",29 May 2026,29 May 2026,1,%,,,130,70.0
+QC-MRG3-3612587006_ES2664217,"14808-79-8_Turb","Sulfate as SO4 - Turbidimetric",,-999,-,F,REG,"Sulfate (Turbidimetric) as SO4 2- by Discrete Anal","ED041G - ED041G: Sulfate (Turbidimetric) as SO4 2- by DA",29 May 2026,29 May 2026,1,%,"ND",,130,70.0
+QC-MRG3-3612587006_ES2664217,"7723-14-0_Reac_AsP","Reactive Phosphorus as P",,104,%,F,REG,"Reactive Phosphorus as P-By Discrete Analyser","EK071G - EK071G: Reactive Phosphorus as P by discrete analyser",29 May 2026,29 May 2026,0.01,%,,,130,70.0
+QC-MRG4-3610105004_ES2664217,"ALK_HYDROXIDE_CaCO3","Hydroxide Alkalinity as CaCO3",<,1,mg/L,T,REG,"Alkalinity by Auto Titrator","ED037-P - ED037P: Alkalinity by PC Titrator",28 May 2026,28 May 2026,1,mg/L,,,,
+QC-MRG4-3610105004_ES2664217,"ALK_CARBONATE_CaCO3","Carbonate Alkalinity as CaCO3",<,1,mg/L,T,REG,"Alkalinity by Auto Titrator","ED037-P - ED037P: Alkalinity by PC Titrator",28 May 2026,28 May 2026,1,mg/L,,,,
+QC-MRG4-3610105004_ES2664217,"ALK_BICARB_CaCO3","Bicarbonate Alkalinity as CaCO3",,97,mg/L,T,REG,"Alkalinity by Auto Titrator","ED037-P - ED037P: Alkalinity by PC Titrator",28 May 2026,28 May 2026,1,mg/L,,,,
+QC-MRG4-3610105004_ES2664217,"ALK_CACO3","Total Alkalinity as CaCO3",,95,mg/L,T,REG,"Alkalinity by Auto Titrator","ED037-P - ED037P: Alkalinity by PC Titrator",28 May 2026,28 May 2026,1,mg/L,,,,
+QC-MRG4-3610105004_ES2664217,"16984-48-8","Fluoride",,1.3,mg/L,T,REG,"Fluoride by Auto Titrator","EK040P - EK040P: Fluoride by PC Titrator",28 May 2026,28 May 2026,0.1,mg/L,,,,
+QC-MRG4-3610105004_ES2664217,"EC_Lab","Electrical Conductivity @ 25°C",,138,µS/cm,T,REG,"Conductivity by Auto Titrator","EA010-P - EA010P: Conductivity by PC Titrator",28 May 2026,28 May 2026,1,µS/cm,,,,
+QC-MRG4-3610105014_ES2664217,"ALK_HYDROXIDE_CaCO3","Hydroxide Alkalinity as CaCO3",<,1,mg/L,T,REG,"Alkalinity by Auto Titrator","ED037-P - ED037P: Alkalinity by PC Titrator",28 May 2026,28 May 2026,1,mg/L,,,,
+QC-MRG4-3610105014_ES2664217,"ALK_CARBONATE_CaCO3","Carbonate Alkalinity as CaCO3",<,1,mg/L,T,REG,"Alkalinity by Auto Titrator","ED037-P - ED037P: Alkalinity by PC Titrator",28 May 2026,28 May 2026,1,mg/L,,,,
+QC-MRG4-3610105014_ES2664217,"ALK_BICARB_CaCO3","Bicarbonate Alkalinity as CaCO3",,73,mg/L,T,REG,"Alkalinity by Auto Titrator","ED037-P - ED037P: Alkalinity by PC Titrator",28 May 2026,28 May 2026,1,mg/L,,,,
+QC-MRG4-3610105014_ES2664217,"ALK_CACO3","Total Alkalinity as CaCO3",,67,mg/L,T,REG,"Alkalinity by Auto Titrator","ED037-P - ED037P: Alkalinity by PC Titrator",28 May 2026,28 May 2026,1,mg/L,,,,
+QC-MRG4-3610105014_ES2664217,"16984-48-8","Fluoride",,0.4,mg/L,T,REG,"Fluoride by Auto Titrator","EK040P - EK040P: Fluoride by PC Titrator",28 May 2026,28 May 2026,0.1,mg/L,,,,
+QC-MRG4-3610105014_ES2664217,"EC_Lab","Electrical Conductivity @ 25°C",,552,µS/cm,T,REG,"Conductivity by Auto Titrator","EA010-P - EA010P: Conductivity by PC Titrator",28 May 2026,28 May 2026,1,µS/cm,,,,
+QC-MRG4-3610108004_ES2664217,"EC_Lab","Electrical Conductivity @ 25°C",,332,µS/cm,T,REG,"Conductivity by Auto Titrator","EA010-P - EA010P: Conductivity by PC Titrator",28 May 2026,28 May 2026,1,µS/cm,,,,
+QC-MRG4-3612586001_ES2664217,"14797-65-0(as N)","Nitrite as N",<,0.01,mg/L,T,REG,"Nitrite as N by Discrete Analyser","EK057G - EK057G:  Nitrite as N by Discrete Analyser",29 May 2026,29 May 2026,0.01,mg/L,,,,
+QC-MRG4-3612586001_ES2664217,"16887-00-6","Chloride",<,1,mg/L,T,REG,"Chloride by Discrete Analyser","ED045G - ED045G: Chloride by Discrete Analyser",29 May 2026,29 May 2026,1,mg/L,,,,
+QC-MRG4-3612586001_ES2664217,"14808-79-8_Turb","Sulfate as SO4 - Turbidimetric",<,1,mg/L,F,REG,"Sulfate (Turbidimetric) as SO4 2- by Discrete Anal","ED041G - ED041G: Sulfate (Turbidimetric) as SO4 2- by DA",29 May 2026,29 May 2026,1,mg/L,,,,
+QC-MRG4-3612586001_ES2664217,"7723-14-0_Reac_AsP","Reactive Phosphorus as P",<,0.01,mg/L,F,REG,"Reactive Phosphorus as P-By Discrete Analyser","EK071G - EK071G: Reactive Phosphorus as P by discrete analyser",29 May 2026,29 May 2026,0.01,mg/L,,,,
+QC-MRG4-3612586002_ES2664217,"14797-65-0(as N)","Nitrite as N",,105,%,T,REG,"Nitrite as N by Discrete Analyser","EK057G - EK057G:  Nitrite as N by Discrete Analyser",29 May 2026,29 May 2026,0.01,%,,,115,82.3
+QC-MRG4-3612586002_ES2664217,"16887-00-6","Chloride",,111,%,T,REG,"Chloride by Discrete Analyser","ED045G - ED045G: Chloride by Discrete Analyser",29 May 2026,29 May 2026,1,%,,,124,91.8
+QC-MRG4-3612586002_ES2664217,"14808-79-8_Turb","Sulfate as SO4 - Turbidimetric",,96.0,%,F,REG,"Sulfate (Turbidimetric) as SO4 2- by Discrete Anal","ED041G - ED041G: Sulfate (Turbidimetric) as SO4 2- by DA",29 May 2026,29 May 2026,1,%,,,114,81.7
+QC-MRG4-3612586002_ES2664217,"7723-14-0_Reac_AsP","Reactive Phosphorus as P",,99.2,%,F,REG,"Reactive Phosphorus as P-By Discrete Analyser","EK071G - EK071G: Reactive Phosphorus as P by discrete analyser",29 May 2026,29 May 2026,0.01,%,,,114,80.0

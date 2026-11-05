@@ -1,14 +1,13 @@
 # tests/testthat/test-acirl-serial-zero-date.R
 #
-# 2026-10-19 corpus finding (PLAN-06 R-6.3c): the Millbrook quarterlies
-# `2400-7223-09-1` (Sep 2022) and `24006990-11` (Nov 2020) carry, on their
-# `Groundwater Sites` sheet, a `Date of Sample` row holding the visit's serial
-# in every sample column EXCEPT the last (`MP # 4`, cell K11), which holds 0 -
-# Excel's rendering of a formula over an empty cell. The adapter converted it
-# with excel_date(0) = 1899-12-30 and emitted `sample_datetime_raw =
-# "30/12/1899"`; both workbooks then collided on (MP # 4, 1899-12-30): five
-# field readings committed under ES2263318 against a date that does not exist,
-# plus three false value_conflicts from the Nov 2020 file.
+# 2026-10-19 corpus finding (PLAN-06 R-6.3c): some real ACIRL quarterlies
+# carry, on their `Groundwater Sites` sheet, a `Date of Sample` row holding
+# the visit's serial in every sample column EXCEPT the last (cell K11), which
+# holds 0 - Excel's rendering of a formula over an empty cell. The adapter
+# converted it with excel_date(0) = 1899-12-30 and emitted
+# `sample_datetime_raw = "30/12/1899"`; two such workbooks then collided on
+# (that point, 1899-12-30): field readings committed against a date that does
+# not exist, plus false value_conflicts.
 #
 # Decided behaviour: a date-row serial <= 0 is not a date - it is treated
 # exactly as an EMPTY date cell, so the existing fill-down rule (PLAN-06
@@ -17,9 +16,9 @@
 # left, the column's date is NA (-> reconcile's R-8.5 datetime parse_error
 # path), never 1899-12-30.
 #
-# Fixture: fixtures/corpus-2026-10-19/2400-9999-16_SerialZeroDate_WMF.xlsx - the real
-# Sep 2022 `Front Page` + `Groundwater Sites` sheets, anonymized
-# (generate-serial-zero.R). Date row: 44823 in D11:J11, 0 in K11.
+# Fixture: fixtures/corpus-2026-10-19/2400-9999-16_SerialZeroDate_WMF.xlsx - a
+# synthetic `Front Page` + `Groundwater Sites` workbook in the real layout
+# (generate-serial-zero.R). Date row: 45917 in D11:J11, 0 in K11.
 
 acirl_adapter <- function() sampleTidy:::adapter_registry()[["acirl_field_xlsx"]]
 serial0_path <- test_path("fixtures", "corpus-2026-10-19", "2400-9999-16_SerialZeroDate_WMF.xlsx")
@@ -28,11 +27,11 @@ parse_acirl <- function(p) {
   suppressMessages(acirl_adapter()$parse(p, sampleTidy:::file_meta(p)))
 }
 
-test_that("fixture precondition: the date row really holds 44823 ... 0", {
+test_that("fixture precondition: the date row really holds 45917 ... 0", {
   g <- suppressMessages(readxl::read_excel(serial0_path, sheet = "Groundwater Sites",
                                            col_names = FALSE, col_types = "text"))
   expect_identical(g[[2]][[11]], "Date of Sample")
-  expect_identical(g[[10]][[11]], "44823")
+  expect_identical(g[[10]][[11]], "45917")
   expect_identical(g[[11]][[11]], "0")
   expect_identical(g[[11]][[12]], "PZ # 4")
 })
@@ -50,9 +49,9 @@ test_that("R-6.3c: a serial-0 date cell fills from the last real date to its lef
   pz4 <- s[s$feature_raw == "PZ # 4", ]
   expect_equal(nrow(pz4), 1)
   expect_identical(pz4$source_ref, "Groundwater Sites!c11")
-  # 44823 is the date every other column of this sheet carries.
+  # 45917 is the date every other column of this sheet carries.
   left <- s$sample_datetime_raw[s$source_ref == "Groundwater Sites!c10"]
-  expect_identical(left, format(sampleTidy:::excel_date(44823), "%d/%m/%Y"))
+  expect_identical(left, format(sampleTidy:::excel_date(45917), "%d/%m/%Y"))
   expect_identical(pz4$sample_datetime_raw, left)
   expect_identical(length(unique(s$sample_datetime_raw)), 1L)
 })
@@ -62,13 +61,13 @@ test_that("R-6.3c: the serial-0 column's field readings are still emitted (data 
   r <- out$results[out$results$lab_sample_id == "Groundwater Sites!c11", ]
   expect_equal(nrow(r), 5)
   vals <- stats::setNames(r$value_raw, r$analyte_raw)
-  expect_identical(unname(vals[grepl("^pH$", names(vals))]), "6.8")
-  expect_identical(unname(vals[grepl("Conductivity", names(vals))]), "508")
-  expect_identical(unname(vals[grepl("Water Height", names(vals))]), "2.22")
+  expect_identical(unname(vals[grepl("^pH$", names(vals))]), "7.1")
+  expect_identical(unname(vals[grepl("Conductivity", names(vals))]), "432")
+  expect_identical(unname(vals[grepl("Water Height", names(vals))]), "1.87")
 })
 
 test_that("R-6.3c: a serial-0 date with no real date to its left yields NA, not 1899-12-30", {
-  # Same real sheet, with the FIRST sample column's date cell (D11) also set
+  # Same sheet, with the FIRST sample column's date cell (D11) also set
   # to 0: there is nothing to fill from, so that column's date is unknown.
   dir <- withr::local_tempdir()
   p <- file.path(dir, basename(serial0_path))
