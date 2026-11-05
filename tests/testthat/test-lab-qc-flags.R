@@ -45,7 +45,7 @@ lf_lcs_db <- function(env = parent.frame(), ingested = fl_now() - 10 * 86400) {
 }
 
 lf_lcs_row <- list(kind = "lcs", method = "EA010P", method_name = "Conductivity by PC Titrator",
-                   analyte_raw = .ec, qc_lot = "QC-MRG2-3190228002", value_pct = 90.1,
+                   analyte_raw = .ec, qc_lot = "QC-MRG2-1000404002", value_pct = 90.1,
                    limit_low = 95, limit_high = 113, data_raw = "90.1 %",
                    comment = "Recovery less than lower control limit")
 
@@ -116,7 +116,7 @@ test_that("R-19.29: a batch-level LCS failure flags once and names every point w
   fl_with(d$db, function(con) qci_put_report(con, "ES2690001", list(lf_lcs_row)))
   f <- qci_flags(d$db, check = "lab_qc_outlier")
   expect_equal(nrow(f), 1)
-  expect_identical(f$key, sprintf("lab_qc_outlier|ES2690001|lcs|EA010P|%s|QC-MRG2-3190228002", .ec))
+  expect_identical(f$key, sprintf("lab_qc_outlier|ES2690001|lcs|EA010P|%s|QC-MRG2-1000404002", .ec))
   expect_identical(f$site, "B")
   expect_match(f$detail, "ALS QCI ES2690001", fixed = TRUE)
   expect_match(f$detail, "EA010P", fixed = TRUE)

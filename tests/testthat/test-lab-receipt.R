@@ -304,10 +304,10 @@ test_that("R-22.S: the mutation layer accepts the three receipt tables", {
 
 test_that("R-22.S: a QCI's Date Samples Received fills received_at (Sydney midnight as UTC); its receipt columns stay NULL", {
   s <- lr_setup()
-  a <- lr_ingest(s, "ES2670640_0_QCI.pdf", "ES2670640_0_QCI.txt", type = "QC")$report  # 24-Mar-2026, AEDT
-  b <- lr_ingest(s, "ES2070260_0_QCI.pdf", "ES2070260_0_QCI.txt", type = "QC")$report  # 18-Aug-2020, AEST
-  expect_equal(a$received_at, utc("2026-03-23 13:00:00"))
-  expect_equal(b$received_at, utc("2020-08-17 14:00:00"))
+  a <- lr_ingest(s, "ES2670640_0_QCI.pdf", "ES2670640_0_QCI.txt", type = "QC")$report  # 08-Mar-2026, AEDT
+  b <- lr_ingest(s, "ES2070260_0_QCI.pdf", "ES2070260_0_QCI.txt", type = "QC")$report  # 06-Aug-2020, AEST
+  expect_equal(a$received_at, utc("2026-03-07 13:00:00"))
+  expect_equal(b$received_at, utc("2020-08-05 14:00:00"))
   expect_identical(a$status, "parsed")
   expect_true(is.na(a$temp_max_c))
   expect_true(is.na(a$n_coolers))
@@ -322,7 +322,7 @@ test_that("R-22.S: lab_qc_reparse() re-parses a current QCI report in place - re
   expect_no_error(suppressWarnings(lab_qc_reparse(s$con, r$asset, r$path, actor = "test")))
   rep <- qci_reports(s$con)
   expect_equal(nrow(rep), 1)
-  expect_equal(rep$received_at, utc("2026-03-23 13:00:00"))
+  expect_equal(rep$received_at, utc("2026-03-07 13:00:00"))
   o <- qci_outliers(s$con)
   expect_equal(nrow(o), 5)
   expect_true(all(o$uuid_report == rep$uuid))
