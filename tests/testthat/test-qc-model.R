@@ -46,7 +46,7 @@ test_that("R-19.4 .qc_features(con): no qc_feature table -> zero rows, same colu
 
 test_that("R-19.6 .qc_norm_lab_id(): the three corpus spellings normalise to <WO>-<nnn>", {
   norm <- sampleTidy:::.qc_norm_lab_id
-  expect_identical(norm(c("ES2626883001", "ES2650943-001", "ES2670630--001")),
+  expect_identical(norm(c("ES2652688001", "ES2650943-001", "ES2670630--001")),
                    c("ES2652688-001", "ES2650943-001", "ES2670630-001"))
   # other ALS branch prefixes seen in QCI (EN, ED, EM), surrounding whitespace
   expect_identical(norm(c("EN2600123--012", " ED2600456-003 ", "EM2600789007")),

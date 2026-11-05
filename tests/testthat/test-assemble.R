@@ -867,11 +867,11 @@ test_that("R-7.3a: an event with results but no sample metadata AND no feature_r
     "h-chem" = mk_parsed_entry(
       results = mk_result(
         source_hash = "h-chem", work_order = "ES2451393",
-        lab_sample_id = "ES2413933001", feature_raw = NA_character_
+        lab_sample_id = "ES2451393001", feature_raw = NA_character_
       ),
       samples = mk_sample(
         source_hash = "h-chem", source_ref = "srow1", work_order = "ES2451393",
-        lab_sample_id = "ES2413933001", feature_raw = "N.S01",
+        lab_sample_id = "ES2451393001", feature_raw = "N.S01",
         sample_datetime_raw = "2024-05-07 11:30", sample_type = "Normal"
       ),
       meta = list(work_order_guess = "ES2451393")

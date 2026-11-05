@@ -362,7 +362,7 @@ test_that("A92 [ASSUMED]: d counts SOURCE-unit digits under a power-of-ten unit 
   withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   ptm_sample(con, "s-ec", "p-wb", "an-ec", 0.09474, lab = "lm-0003", org = "ALS")
   row <- mk_row(
-    source_ref = "als-ec", work_order = "ES2253232", lab_sample_id = "ES2232317001",
+    source_ref = "als-ec", work_order = "ES2253232", lab_sample_id = "ES2253232001",
     feature_raw = "T.MW01", analyte_raw = "Electrical Conductivity @ 25°C",
     cas_number = NA_character_, method_raw = "EA010P: Conductivity by PC Titrator",
     units_raw = "µS/cm", value_raw = "95", value_num = 95, below_detection = FALSE,
