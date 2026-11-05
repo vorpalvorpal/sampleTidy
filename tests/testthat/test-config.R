@@ -51,6 +51,7 @@ test_that("R-1.1: field_analytes default is the pinned vector", {
       "Standing Water Level", "Standing Water Height", "Standing water level",
       "Water Height", "Water Depth",
       "DO", "ORP", "CH4 Reading % v/v", "H2S Reading % v/v",
+      "O2 Reading % v/v", "CO2 Reading % v/v",
       "Turbidity", "Conductivity", "EC")
   )
 })
