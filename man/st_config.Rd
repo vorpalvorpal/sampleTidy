@@ -36,6 +36,11 @@ archive settling off, and a list such as \code{list()} or
 \code{list(ext = "xls", hold_secs = 600)} turns it on. See \code{\link[=archive_settle]{archive_settle()}}
 for its fields.
 
+\code{content_fingerprinters} is another: \code{NULL} (the default) uses only the
+built-in \code{ole1} fingerprinter, and a named list of
+\verb{list(magic = <raw>, fun = function(path))} adds more. See
+\code{\link[=content_fingerprint]{content_fingerprint()}}.
+
 \code{timezone} is the time zone of local calendar days (default \code{"UTC"});
 it must be one string in \code{\link[=OlsonNames]{OlsonNames()}}. \code{checks}, \code{site_keywords} and
 \code{inbox_batches} are list-valued keys, \code{NULL} by default: \code{checks} is what a

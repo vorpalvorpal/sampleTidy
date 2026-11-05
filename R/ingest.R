@@ -1148,6 +1148,22 @@
 
 # ---- remove switch (R-9.6, A13) ------------------------------------------
 
+#' Do two files have the same, non-NA content fingerprint?
+#'
+#' `FALSE` when either has none, the algorithms differ, or the fingerprint
+#' fails (it then warns, as `content_fingerprint()` does).
+#' @keywords internal
+#' @noRd
+.ig_same_content <- function(a, b) {
+  fa <- content_fingerprint(a)
+  if (is.na(fa$content_hash)) {
+    return(FALSE)
+  }
+  fb <- content_fingerprint(b)
+  !is.na(fb$content_hash) && identical(fa$content_hash_alg, fb$content_hash_alg) &&
+    identical(fa$content_hash, fb$content_hash)
+}
+
 #' Delete input files whose content hash has a *verified* archive copy
 #' (R-9.6, A13)
 #'
@@ -1165,7 +1181,9 @@
 #'   directory);
 #' * re-hashing the archived bytes reproduces the source's xxHash128, or the
 #'   asset's current `asset.hash` (the stored copy's settled hash after an
-#'   accepted file-store rewrite); and
+#'   accepted file-store rewrite), or the source and the copy have the same
+#'   non-NA [content_fingerprint()] (the copy is a store rewrite of the same
+#'   content, or the source is a content-duplicate of an existing asset); and
 #' * the source file still exists.
 #'
 #' The content check is not redundant with the existence check: the archive
@@ -1237,11 +1255,18 @@
     # The copy may hash to the source's hash OR to the asset's current
     # `asset.hash` - the latter is the stored copy's settled hash after an
     # accepted file-store rewrite (`archive_settle()`), which kept the content
-    # and size. Any other hash is an unaccepted change: a rewrite after the
-    # settle window, a size change, an unconfigured extension.
+    # and size. Failing both, the source and the copy may still have the same
+    # content fingerprint (an OLE file the store rewrote, or a source that is a
+    # content-duplicate of an existing asset). Any other hash is an unaccepted
+    # change: a rewrite after the settle window, a changed stream, an
+    # unconfigured extension.
     copy_hash <- tryCatch(hash_file(copy_path), error = function(e) NA_character_)
     accepted <- unique(c(hash, asset_row$hash[[1]]))
-    if (is.na(copy_hash) || !(copy_hash %in% accepted[!is.na(accepted)])) {
+    verified <- !is.na(copy_hash) && copy_hash %in% accepted[!is.na(accepted)]
+    if (!verified && !is.na(copy_hash)) {
+      verified <- .ig_same_content(path, copy_path)
+    }
+    if (!verified) {
       cli::cli_warn(
         "ingest_dir(): archive copy at {.path {copy_path}} does NOT match the
          source {.path {path}} (expected hash {.val {hash}}, archived copy

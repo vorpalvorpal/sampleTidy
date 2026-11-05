@@ -32,16 +32,24 @@ It looks at every asset whose filename has a configured extension
 (the archive time is the asset's \code{insert} row in \code{change_log}). It
 re-hashes each stored copy, and when the hash differs from \code{asset.hash}:
 \itemize{
-\item the size must equal the as-received size (\code{ingest_file.size});
+\item if the \code{asset} table has the \code{content_hash} columns and this asset has a
+\code{content_hash} (an OLE/CFB file; see \code{\link[=content_fingerprint]{content_fingerprint()}}), the stored
+copy's content fingerprint must be unchanged. The size and the
+as-received size do not matter: a store that adds its own storage grows
+the file. A changed or unreadable fingerprint is warned about and not
+accepted;
+\item otherwise (no columns, or no \code{content_hash}) the size must equal the
+as-received size (\code{ingest_file.size});
 \item \code{accept(path, old_hash, asset)}, when configured, must return \code{TRUE}.
 }
 
 A rewrite that passes is settled: \code{asset.hash} is updated through
 \code{\link[=db_update]{db_update()}}, with a \code{change_log} row that keeps the old hash and the
-reason "storage rewrite". Each asset is its own transaction, so a failure
-part-way through keeps the settles already made. A size change, an
-unknown as-received size or an \code{accept} veto is warned about, naming the
-file, and not accepted. \code{ingest_file.hash}, the as-received record, is
+reason "storage rewrite". \code{asset.content_hash} is not changed. Each asset
+is its own transaction, so a failure part-way through keeps the settles
+already made. A size change, an unknown as-received size, a changed
+fingerprint or an \code{accept} veto is warned about, naming the file, and not
+accepted. \code{ingest_file.hash}, the as-received record, is
 never changed; de-duplication stays on it.
 
 \code{\link[=ingest_dir]{ingest_dir()}} runs this at the start of every write phase, so it rarely

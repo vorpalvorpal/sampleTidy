@@ -75,6 +75,13 @@
   archive_settle = function() {
     NULL
   },
+  # Extra content fingerprinters (`content_fingerprint()`,
+  # R/content-fingerprint.R): NULL = the built-in `ole1` only. A named list
+  # of `list(magic = <raw>, fun = function(path))`, validated by
+  # `.cf_registry()`. List-valued, so no env var.
+  content_fingerprinters = function() {
+    NULL
+  },
   # The time zone of "local" calendar days: sample dates, "today" in the
   # flags, report and status stamps. Read at call time via `.st_tz()`, which
   # validates it against `OlsonNames()`. The default is UTC; a deployment
@@ -135,7 +142,7 @@
 #' @keywords internal
 #' @noRd
 .st_config_list_keys <- c("field_analytes", "acirl_transcription_labels", "archive_settle",
-                          "checks", "site_keywords", "inbox_batches", "gas_template_slots")
+                          "content_fingerprinters", "checks", "site_keywords", "inbox_batches", "gas_template_slots")
 
 #' Get or set a sampleTidy configuration value
 #'
@@ -158,6 +165,11 @@
 #' archive settling off, and a list such as `list()` or
 #' `list(ext = "xls", hold_secs = 600)` turns it on. See [archive_settle()]
 #' for its fields.
+#'
+#' `content_fingerprinters` is another: `NULL` (the default) uses only the
+#' built-in `ole1` fingerprinter, and a named list of
+#' `list(magic = <raw>, fun = function(path))` adds more. See
+#' [content_fingerprint()].
 #'
 #' `timezone` is the time zone of local calendar days (default `"UTC"`);
 #' it must be one string in [OlsonNames()]. `checks`, `site_keywords` and
