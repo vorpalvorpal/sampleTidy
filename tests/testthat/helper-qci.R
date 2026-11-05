@@ -6,15 +6,15 @@
 # helper-qc.R (the phase-1 helpers), so both phases test against ONE shape of
 # migration 048's tables.
 #
-# FIXTURES (tests/testthat/fixtures/qci/, see REAL-FIXTURES.md): the `.txt`
-# files are `pdftotext -layout` extracts of real ALS QCI PDFs, anonymised
-# length-preserving (column x-positions are part of what is under test).
+# FIXTURES (tests/testthat/fixtures/qci/): the `.txt` files are synthetic
+# texts in the shape of `pdftotext -layout` extracts of ALS QCI PDFs, built by
+# fixtures/qci/generate.R (column x-positions are part of what is under test).
 #
 # THE PARSER INPUT (R-19.18) is a character vector of lines, exactly
 #   strsplit(paste(pdftools::pdf_text(path), collapse = "\f"), "\n")[[1]]
 # which is line-for-line `readLines()` of the `pdftotext -layout` output
-# (measured on ES2670640, ES2070220 and ES2070260: identical except pdftotext's
-# final trailing "\f"). So a line that begins with "\f" is the first line of a
+# (measured on three lab QCI PDFs: identical except pdftotext's final
+# trailing "\f"). So a line that begins with "\f" is the first line of a
 # new page. [invented: "\f" as the page marker inside `lines`.]
 
 qci_fixture <- function(...) testthat::test_path("fixtures", "qci", ...)

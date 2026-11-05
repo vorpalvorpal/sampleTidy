@@ -1,15 +1,14 @@
 # tests/testthat/test-adapter-crosstab.R
 #
 # Tests for R/adapter-crosstab.R (plan 05: shared parser + `als_xtab` +
-# `als_enmrg`). CONTRACT A34 (2026-07-15): retargeted to the REAL
-# (anonymized, committed) ALS crosstab exports as the primary fixtures for
+# `als_enmrg`). CONTRACT A34 (2026-07-15): retargeted to full-shape
+# ALS crosstab exports (synthetic values, generate.R) as the primary fixtures for
 # every core parsing criterion - `ES2670610_0_XTAB.csv` (XTAB) and
 # `ES2570540_0_ENMRG.CSV` (ENMRG). All expected counts/names/values below
 # were derived by actually parsing those files with the corrected adapter
 # and reading off the results (see PR discussion / dev notes) - never
 # hand-guessed. See PLAN-05-adapters-crosstab.md (A34 block),
-# CONTRACT.md (A29, A34, A37), tests/testthat/fixtures/
-# REAL-FIXTURES.md, and tests/testthat/fixtures/crosstab/README.md.
+# CONTRACT.md (A29, A34, A37) and tests/testthat/fixtures/crosstab/README.md.
 #
 # A small set of synthetic fixtures (generate.R) cover the three criteria
 # the two real files do not: a two-section (WATER+SOIL) fixture, a
@@ -82,7 +81,7 @@ test_that("R-5.2: synthetic two-section/mismatch XTAB and QC ENMRG fixtures matc
 
 # ---- R-5.1 shared parser: real XTAB (ES2670610_0_XTAB.csv) -------------------
 #
-# One `Matrix: WATER` section, 3 REG samples (ES2600185001-003), 26 distinct
+# One `Matrix: WATER` section, 3 REG samples (ES2670610001-003), 26 distinct
 # analytes (some method groups cover several analytes, e.g. "ED037P:
 # Alkalinity by PC Titrator" -> 4 analyte rows, "ED093F: Dissolved Major
 # Cations" -> 4 analyte rows). 26 analytes x 3 samples = 78 cells; every
@@ -133,10 +132,10 @@ test_that("R-5.1 (real XTAB): samples - one row per sample column, feature/date/
   meta <- sampleTidy:::file_meta(xtab_real_path)
   out <- xtab_adapter()$parse(xtab_real_path, meta)
   expect_equal(nrow(out$samples), 3)
-  expect_setequal(out$samples$lab_sample_id, c("ES2600185001", "ES2600185002", "ES2600185003"))
+  expect_setequal(out$samples$lab_sample_id, c("ES2670610001", "ES2670610002", "ES2670610003"))
   expect_setequal(out$samples$feature_raw, c("P.S03", "P.S07", "P.S09"))
   expect_true(all(out$samples$matrix_raw == "WATER"))
-  expect_true(all(out$samples$sample_datetime_raw == "05/01/2026"))
+  expect_true(all(out$samples$sample_datetime_raw == "07/01/2026"))
   expect_true(all(out$samples$sample_type == "Normal")) # all REG
   expect_true(all(out$samples$work_order == "ES2670610"))
 })
@@ -147,7 +146,7 @@ test_that("R-5.1 (real XTAB): CAS number, units and Fluoride below-detection val
   fl <- out$results[out$results$analyte_raw == "Fluoride", ]
   # sample 001's Fluoride cell is "----" (skipped); 002/003 are both "<0.1".
   expect_equal(nrow(fl), 2)
-  expect_setequal(fl$lab_sample_id, c("ES2600185002", "ES2600185003"))
+  expect_setequal(fl$lab_sample_id, c("ES2670610002", "ES2670610003"))
   expect_true(all(fl$cas_number == "16984-48-8"))
   expect_true(all(fl$units_raw == "mg/L"))
   expect_true(all(fl$value_raw == "<0.1"))
@@ -181,13 +180,13 @@ test_that("R-5.1 (real XTAB): ir_validate() passes", {
 
 # ---- R-5.1 shared parser: real ENMRG (ES2570540_0_ENMRG.CSV) -----------------
 #
-# One `Client - Matrix: WATER` section, 7 REG samples (ES2537534001-007), 27
+# One `Client - Matrix: WATER` section, 7 REG samples (ES2570540001-007), 27
 # distinct analytes (27 x 7 = 189 cells; 19 are "----", 170 are values). The
 # file also carries a trailing "QC - Matrix:" reconciliation block (its own
 # ALS-Sample-number row reuses the SAME 7 columns for unrelated QC/other-
 # work-order samples, plus dozens more) that this adapter deliberately does
 # not parse (see README.md) - so this fixture is, from the adapter's
-# perspective, "no QC column", matching REAL-FIXTURES.md's description.
+# perspective, "no QC column", matching README.md's description.
 # Because ENMRG is genuinely UTF-8 (unlike XTAB's legacy bytes), its own
 # degree-sign/micro-sign characters are already correct - no mojibake fix
 # needed.
@@ -212,7 +211,7 @@ test_that("R-5.1 (real ENMRG): samples - 7 rows, correct feature codes, matrix, 
     c("Q.MW02", "Q.MW08", "Q.MW09", "Q.S01", "Q.S03", "Q.S05", "Q.S06")
   )
   expect_true(all(out$samples$matrix_raw == "WATER"))
-  expect_true(all(out$samples$sample_datetime_raw == "26/11/2025"))
+  expect_true(all(out$samples$sample_datetime_raw == "18/11/2025"))
   expect_true(all(out$samples$sample_type == "Normal"))
   expect_true(all(out$samples$work_order == "ES2570540"))
 })
