@@ -712,10 +712,10 @@ acirl_field_xlsx_adapter <- function() {
   # --- ALS cross-reference (R-6.5): exposed, never acted on here -------------
   # EVERY matching label row is scanned, not just the first. A sheet may carry
   # more than one `ALS ... Report No` row - measured: `2400-9003-12-01 2022
-  # December Quarterly Site M.xls` has `ALS Laketno Report No` (holding
+  # December Quarterly Site M.xls` has `ALS <lab-site> Report No` (holding
   # the ACIRL report number, no ES at all) immediately ABOVE `ALS Sydney Report
-  # No.` (holding ES9100003). Breaking on the first match read the Laketon row,
-  # found no `ES#######`, and reported the file as citing NOTHING - which under
+  # No.` (holding ES9100003). Breaking on the first match read the
+  # laboratory's row, found no `ES#######`, and reported the file as citing NOTHING - which under
   # the A74 gate is the difference between importing 57 rows and quarantining
   # them. Scanning every match costs nothing: a row with no ES pattern
   # contributes no work orders.
