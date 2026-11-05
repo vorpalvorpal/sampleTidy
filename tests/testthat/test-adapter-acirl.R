@@ -823,10 +823,8 @@ acirl_fe_labels <- function(ws) {
     vapply(ws$als_candidates, function(x) x$analyte_raw, character(1)))
 }
 
-test_that("default field_analytes allowlist lands O2/CO2/CH4 gas readings in results", {
+test_that("the pinned field_analytes allowlist lands O2/CO2/CH4 gas readings in results", {
   skip_if_not_installed("openxlsx")
-  withr::local_options(list("sampletidy.field_analytes" = NULL))
-  withr::local_envvar(c(SAMPLETIDY_FIELD_ANALYTES = NA))
   path <- withr::local_tempfile(fileext = ".xlsx")
   wb <- openxlsx::createWorkbook()
   openxlsx::addWorksheet(wb, "Groundwater Sites 2")

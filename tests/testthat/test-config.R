@@ -35,30 +35,15 @@ test_that("R-1.1: live_db default lives under R_user_dir, never a cloud-sync pat
   expect_true(grepl(tools::R_user_dir("sampleTidy", "data"), default_db, fixed = TRUE))
 })
 
-# WIDENED 2026-08-01 (A76, Robin): the field set is maximal. The old four-entry
-# default matched labels EXACTLY, so it silently dropped `Electrical
-# Conductivity` (192 real sheets) and every `Standing Water Level` variant (87)
-# - while `Conductivity` and `EC` never appear as standalone labels in the real
-# corpus at all. Every entry below is either measured in the corpus or a
-# registered ACIRL `field` lab_method name; see R/config.R for why the EC-@-25
-# and TSS labels are deliberately absent.
-test_that("R-1.1: field_analytes default is the pinned vector", {
+# The generic core ships no lab labels: the default is empty and a deployment
+# supplies its own (setup-deployment-settings.R pins a test list).
+test_that("R-1.1: field_analytes default is empty (a deployment supplies its labels)", {
   withr::local_options(list("sampletidy.field_analytes" = NULL))
   withr::local_envvar(c(SAMPLETIDY_FIELD_ANALYTES = NA))
-  expect_equal(
-    st_config("field_analytes"),
-    c("pH", "Temperature", "Electrical Conductivity",
-      "Standing Water Level", "Standing Water Height", "Standing water level",
-      "Water Height", "Water Depth",
-      "DO", "ORP", "CH4 Reading % v/v", "H2S Reading % v/v",
-      "O2 Reading % v/v", "CO2 Reading % v/v",
-      "Turbidity", "Conductivity", "EC")
-  )
+  expect_identical(st_config("field_analytes"), character(0))
 })
 
-test_that("R-1.1: the ALS-transcribed labels are NOT on the field allowlist", {
-  withr::local_options(list("sampletidy.field_analytes" = NULL))
-  withr::local_envvar(c(SAMPLETIDY_FIELD_ANALYTES = NA))
+test_that("R-1.1: the ALS-transcribed labels are NOT on the (pinned) field allowlist", {
   allow <- st_config("field_analytes")
   # `Electrical Conductivity @ 25<degC>` is the ALS value transcribed into the
   # ACIRL sheet, never a field reading. ACIRL used to own a `field` lab_method
