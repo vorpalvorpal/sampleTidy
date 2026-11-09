@@ -1,7 +1,7 @@
-# Metadata-only gate for auto-import.cmd. Prints a hash of input_dir (depth 2) + DB size/mtime
+# Metadata-only gate for auto-import.ps1. Prints a hash of input_dir (depth 2) + DB size/mtime
 # + the local date in -TimeZone (ruling R14: the first tick of each local day passes the gate).
 # $Input is PowerShell's automatic pipeline variable, so the parameter is $InputDir
-# (still passed as -Input by auto-import.cmd).
+# (still passed as -Input by auto-import.ps1).
 param([Alias('Input')][string]$InputDir, [string]$Db, [string]$TimeZone)
 $lines = Get-ChildItem -LiteralPath $InputDir -Force -Depth 1 -ErrorAction SilentlyContinue |
   Where-Object { $_.Name -ne '.DS_Store' } |

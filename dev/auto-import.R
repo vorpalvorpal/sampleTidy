@@ -1,5 +1,5 @@
 # Hourly auto-import entry point (PLAN-18 section 3). Called by dev/auto-import.sh
-# or dev/auto-import.cmd, which have already checked that this machine holds the
+# or dev/auto-import.ps1, which have already checked that this machine holds the
 # live DB and that something changed. inbox_run() re-checks and holds the lock.
 args <- commandArgs(trailingOnly = FALSE)
 here <- gsub("~+~", " ", sub("^--file=", "", args[grepl("^--file=", args)]), fixed = TRUE)  # Rscript encodes spaces
