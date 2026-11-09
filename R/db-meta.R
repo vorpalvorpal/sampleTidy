@@ -24,7 +24,8 @@
 #'   `NA_character_` if the key or the table is absent. It creates nothing,
 #'   so it works on a read-only connection.
 #' - `db_meta_set()` inserts or replaces one key, storing `as.character(value)`
-#'   and setting `updated_at`. On a database without the table it runs
+#'   and setting `updated_at`, through the mutation layer (one `change_log`
+#'   row per change). On a database without the table it runs
 #'   [ensure_schema()] first. Inside an open mutation-layer transaction it
 #'   joins it, so it commits or rolls back with the caller.
 #' - `db_meta_read()` opens the database file `db` read-only and returns every
@@ -54,13 +55,21 @@ db_meta_set <- function(con, key, value) {
     cli::cli_abort("{.arg value} must be one non-NA scalar.", class = "sampletidy_error")
   }
   if (!.dm_has_table(con)) ensure_schema(con)
+  # Through the mutation layer, so each stamp leaves a change_log row.
   db_transaction(con, function(con) {
-    DBI::dbExecute(
-      con,
-      "INSERT INTO db_meta (key, value, updated_at) VALUES (?, ?, ?)
-       ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
-      params = list(key, as.character(value), Sys.time())
-    )
+    n <- DBI::dbGetQuery(con, "SELECT count(*) AS n FROM db_meta WHERE key = ?",
+                         params = list(key))$n
+    if (n == 0) {
+      db_append(con, "db_meta",
+                data.frame(key = key, value = as.character(value), updated_at = Sys.time(),
+                           stringsAsFactors = FALSE),
+                actor = "db_meta_set", reason = sprintf("db_meta_set: %s", key))
+    } else {
+      db_update(con, "db_meta", changes = list(value = as.character(value),
+                                               updated_at = Sys.time()),
+                actor = "db_meta_set", reason = sprintf("db_meta_set: %s", key),
+                key = list(key = key))
+    }
   })
   invisible(value)
 }

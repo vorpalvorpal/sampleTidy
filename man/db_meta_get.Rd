@@ -38,7 +38,8 @@ and \code{writer_label}, but never writes them: a deployment does.
 \code{NA_character_} if the key or the table is absent. It creates nothing,
 so it works on a read-only connection.
 \item \code{db_meta_set()} inserts or replaces one key, storing \code{as.character(value)}
-and setting \code{updated_at}. On a database without the table it runs
+and setting \code{updated_at}, through the mutation layer (one \code{change_log}
+row per change). On a database without the table it runs
 \code{\link[=ensure_schema]{ensure_schema()}} first. Inside an open mutation-layer transaction it
 joins it, so it commits or rolls back with the caller.
 \item \code{db_meta_read()} opens the database file \code{db} read-only and returns every
