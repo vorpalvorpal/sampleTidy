@@ -119,6 +119,10 @@ snapshot_db <- function(db = st_config("live_db"), dest_dir = st_config("snapsho
 #' calendar month (`YYYY-MM`) is always kept, regardless of age. Files that
 #' don't match the dated-snapshot naming pattern are left untouched.
 #'
+#' Retention: every snapshot from the last 60 days, plus the newest snapshot
+#' of each older calendar month, indefinitely. [ingest_dir()] calls this
+#' after each snapshot it takes.
+#'
 #' @param dest_dir directory containing dated snapshot files.
 #' @param keep_days snapshots this many days old or younger are always kept.
 #' @return `NULL`, invisibly.

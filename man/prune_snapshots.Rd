@@ -20,3 +20,8 @@ than \code{keep_days}, except that the most recent snapshot within each
 calendar month (\code{YYYY-MM}) is always kept, regardless of age. Files that
 don't match the dated-snapshot naming pattern are left untouched.
 }
+\details{
+Retention: every snapshot from the last 60 days, plus the newest snapshot
+of each older calendar month, indefinitely. \code{\link[=ingest_dir]{ingest_dir()}} calls this
+after each snapshot it takes.
+}

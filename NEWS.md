@@ -1,5 +1,10 @@
 # sampleTidy (development version)
 
+* `ingest_dir()` now calls `prune_snapshots()` after each snapshot it takes, so
+  snapshots no longer accumulate: every snapshot from the last 60 days is kept,
+  plus the newest of each older calendar month. A pruning failure is a warning
+  and never fails the ingest or stops the removal step.
+
 * Initial greenfield skeleton. Architecture and design recorded in the
   pinned design issue (#1). Supersedes the legacy `WEM.data` repository.
 
