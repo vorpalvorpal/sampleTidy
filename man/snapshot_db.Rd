@@ -24,6 +24,16 @@ destination filename is date-only, so it is identical for repeat calls on
 the same day).
 }
 \details{
+If the database's \code{db_meta.writer_generation} (see \code{\link[=db_meta_get]{db_meta_get()}}) is a
+non-negative integer string \code{N}, the name is
+\code{monitoring_YYYY-MM-DD_gN.duckdb}, so machines writing different
+generations never overwrite each other's snapshots. Beside the snapshot it
+writes a manifest, \verb{<name without .duckdb>.manifest.json}, last and through
+a rename: the copy's sha256 and size and facts read from the copy (see
+\code{\link[=read_snapshot_manifest]{read_snapshot_manifest()}}). The manifest of a snapshot about to be
+replaced is deleted just before the replacing rename, so a manifest never
+describes a different file.
+
 Two refusal layers guard against a good snapshot being replaced by a
 worthless one:
 \itemize{

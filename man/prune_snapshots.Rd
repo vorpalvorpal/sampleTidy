@@ -22,14 +22,22 @@ snapshot per ISO week is kept.}
 \code{NULL}, invisibly.
 }
 \description{
-Thins dated \code{monitoring_YYYY-MM-DD.duckdb} snapshots in \code{dest_dir}. Files
-that don't match the dated-snapshot naming pattern are left untouched.
+Thins dated snapshots in \code{dest_dir}: \code{monitoring_YYYY-MM-DD.duckdb} and
+\verb{monitoring_YYYY-MM-DD_g<N>.duckdb} (a writer generation, see
+\code{\link[=snapshot_db]{snapshot_db()}}). Files that match neither pattern are left untouched.
 }
 \details{
+One snapshot per date: when several share a date, only the highest
+generation is kept (a name without one ranks below any \verb{_g<N>}) and the
+others are deleted, at any age. The survivor is then the date's only file in
+the retention below.
+
 Retention (age is today's date minus the file's date): every snapshot up to
 \code{keep_days} old is kept; from there up to \code{keep_days + 7 * keep_weeks} days
 old, only the newest snapshot of each ISO week (\verb{\%G-W\%V}) is kept; older
 than that, only the newest snapshot of each calendar month, indefinitely.
 Each week or month is judged among that age zone's files only.
+A deleted snapshot's manifest (\verb{<name without .duckdb>.manifest.json}) is
+deleted with it; a manifest whose snapshot is absent is left alone.
 \code{\link[=ingest_dir]{ingest_dir()}} calls this after each snapshot it takes.
 }
