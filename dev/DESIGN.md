@@ -353,8 +353,21 @@ during this review blocked for minutes on materialisation). Therefore:
   days (`keep_days`), then the newest per ISO week for the next 8 weeks
   (`keep_weeks`), then the newest snapshot of each older calendar month, indefinitely.
   `ingest_dir()` prunes after each snapshot it takes.
+  When `db_meta.writer_generation` holds `N`, the name is
+  `monitoring_YYYY-MM-DD_gN.duckdb`, so two machines that have written
+  different generations never overwrite each other's snapshot; pruning keeps only
+  the highest generation of each date. Each snapshot gets a
+  `<name>.manifest.json`, written last (sha256, size, schema version, `db_meta`,
+  row counts, newest `ingest_file.updated_at`, duckdb version). Consumers choose
+  snapshots by manifest (`list_snapshots()`, `verify_snapshot()`), never by mtime.
 - **Analysis/reports read the snapshot**, never the live file, so long-lived
   readers can't block the writer and never see partial state.
+- **One writer at a time across machines:** a deployment may set
+  `st_config("writer_check")`, a function `inbox_run()` asks before it touches
+  the DB. Anything but `TRUE` refuses the run: nothing is opened or written
+  except one `events.jsonl` line and the refusal in an existing `status.json`.
+  The triggers hash the folder named by `SAMPLETIDY_GATE_WATCH` too, so a change
+  there alone starts R and the check decides. Unset, nothing changes.
 
 ### 9.2 Concurrency — DuckDB is the lock
 
