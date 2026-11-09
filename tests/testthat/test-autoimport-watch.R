@@ -110,7 +110,7 @@ gw_sh_print <- function(s, ...) {
 test_that(".sh --print-config prints WATCH last: the env value, else the environ file's, else empty", {
   s <- gw_sh_sandbox()
   p <- gw_sh_print(s)
-  expect_identical(names(p), c("DB", "INPUT", "REPORT", "TIMEZONE", "LOG", "WATCH"))
+  expect_identical(names(p), c("DB", "INPUT", "REPORT", "TIMEZONE", "LOG", "NOTIFY", "NOTIFY_FLUSH", "WATCH"))
   expect_identical(p$WATCH, "")
 
   expect_identical(gw_sh_print(s, SAMPLETIDY_GATE_WATCH = s$watch)$WATCH, s$watch)

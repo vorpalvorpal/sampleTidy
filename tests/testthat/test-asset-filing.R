@@ -60,10 +60,10 @@ test_that("P20.5: asset_filing is created empty and records ops-schema version 1
   expect_true(10 %in% DBI::dbGetQuery(con, "SELECT version FROM schema_version")$version)
 })
 
-test_that("P20.5: the migration ladder is versions 1..10, strictly ascending in list order", {
+test_that("P20.5: the migration ladder is versions 1..11, strictly ascending in list order", {
   ns <- asNamespace("sampleTidy")
   versions <- vapply(get(".st_schema_migrations", envir = ns), function(m) m$version, integer(1))
-  expect_identical(versions, 1:10)
+  expect_identical(versions, 1:11)
 })
 
 test_that("P20.5: the primary key is (uuid_asset, system)", {
