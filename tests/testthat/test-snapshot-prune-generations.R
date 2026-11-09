@@ -140,12 +140,11 @@ test_that("pruning a snapshot deletes its manifest; a snapshot without one is st
 test_that("old-format snapshots are pruned along with their manifests", {
   d <- withr::local_tempdir()
   today <- Sys.Date()
-  a <- gp_mk(d, today - 300)
-  b <- gp_mk(d, today - 299)
+  gp_mk(d, today - 300)
+  gp_mk(d, today - 299)
   prune_snapshots(d)
   expect_length(gp_snaps(d), 1L)
   expect_identical(gp_manifests(d), gp_manifest(gp_snaps(d)))
-  expect_true(all(c(a, b) %in% c(a, b)))
 })
 
 test_that("prune_snapshots() never touches other files", {
