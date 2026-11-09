@@ -1046,6 +1046,10 @@
     if (identical(basename(p), "_email.eml")) {
       return(FALSE)
     }
+    # A replay batch's hint file only serves files still in the folder.
+    if (identical(basename(p), .rp_hint_name)) {
+      return(TRUE)
+    }
     # ignore_rule() conflates two different things, and only one of them may
     # authorise deleting the enclosing folder:
     #
@@ -1412,6 +1416,9 @@ ingest_dir <- function(path, db = st_config("live_db"), dry_run = FALSE,
   register_builtin_adapters()
 
   paths <- as.character(fs::dir_ls(path, type = "file", all = TRUE, recurse = FALSE))
+  # A replay batch's hint file (replay_archive(), R/replay.R) is bookkeeping
+  # for archive_file(), not a delivery: it is never routed.
+  paths <- paths[basename(paths) != .rp_hint_name]
 
   pipeline <- with_db_write(
     function(con) {

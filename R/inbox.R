@@ -507,9 +507,11 @@ inbox_batches <- function(pattern = NULL, settle_minutes = 0, leftovers = NULL) 
   out
 }
 
-# Everything in a folder that would be filed (hidden files included).
+# Everything in a folder that would be filed (hidden files included, except a
+# replay batch's hint file, which is dropped rather than filed).
 .inbox_folder_entries <- function(path) {
-  list.files(path, all.files = TRUE, no.. = TRUE, full.names = TRUE)
+  f <- list.files(path, all.files = TRUE, no.. = TRUE, full.names = TRUE)
+  f[basename(f) != .rp_hint_name]
 }
 
 # Judge a settled folder: list(fileable, unfinished = data.frame, n_other, files).
@@ -579,6 +581,7 @@ inbox_batches <- function(pattern = NULL, settle_minutes = 0, leftovers = NULL) 
     }
     moved <- c(moved, basename(f))
   }
+  if (length(.inbox_folder_entries(path)) == 0) unlink(file.path(path, .rp_hint_name))
   if (length(.inbox_folder_entries(path)) == 0) unlink(path, recursive = FALSE, force = FALSE)
   if (dir.exists(path) && length(.inbox_folder_entries(path)) == 0) file.remove(path)
   list(to = normalizePath(dest, mustWork = FALSE), files = moved, error = NULL)
