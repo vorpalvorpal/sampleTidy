@@ -124,6 +124,12 @@
   acirl_job_prefix = function() {
     NULL
   },
+  # `writer_check` (NULL or a function of the database path): asked at the top
+  # of `inbox_run()` whether this machine may write the database now; see
+  # `.ib_writer_check()`. NULL means always allowed. A function, so no env var.
+  writer_check = function() {
+    NULL
+  },
   # Deliberately reads SAMPLETIDY_CORPUS (not the SAMPLETIDY_CORPUS_DIR
   # pattern used for the option/env-var lookup below) - see PLAN-01 R-1.1.
   corpus_dir = function() {
@@ -142,7 +148,8 @@
 #' @keywords internal
 #' @noRd
 .st_config_list_keys <- c("field_analytes", "acirl_transcription_labels", "archive_settle",
-                          "content_fingerprinters", "checks", "site_keywords", "inbox_batches", "gas_template_slots")
+                          "content_fingerprinters", "checks", "site_keywords", "inbox_batches", "gas_template_slots",
+                          "writer_check")
 
 #' Get or set a sampleTidy configuration value
 #'
@@ -202,6 +209,12 @@
 #' is imported. It is list-valued, so it cannot come from an env var, and a
 #' value that is not a character vector without `NA` aborts where it is used.
 #'
+#' `writer_check` is `NULL` (the default: every run may write) or a function
+#' that [inbox_run()] calls first, as `fn(db)`, before it touches the
+#' database. Exactly `TRUE` allows the run; anything else refuses it, and the
+#' run imports nothing (see [inbox_run()]). Like `checks`, it is set in code,
+#' never from an env var.
+#'
 #' @param key configuration key, e.g. `"live_db"`, `"input_dir"`.
 #' @param value if supplied, the value to set for `key`.
 #' @return the resolved value (get), or `value` invisibly (set).
@@ -260,7 +273,8 @@ st_config <- function(key, value) {
 st_capabilities <- function() {
   c("timezone", "checks_option", "checks_streams", "site_names",
     "site_keywords", "date_overrides_env", "inbox_batches", "renderer_hooks",
-    "report_dir", "gas_template_slots", "acirl_job_prefix", "field_analytes")
+    "report_dir", "gas_template_slots", "acirl_job_prefix", "field_analytes",
+    "writer_check")
 }
 
 # Validated zones, memoised per value (OlsonNames() is slow-ish).

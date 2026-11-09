@@ -1,5 +1,26 @@
 # sampleTidy (development version)
 
+* A writer check for running one importer across machines (all off unless
+  configured):
+  - `db_meta` (ops-schema 11) is a key/value table for facts about the
+    database itself, read and written with `db_meta_get()`, `db_meta_set()`
+    and `db_meta_read()`. The core knows `writer_generation` and
+    `writer_label` but never writes them.
+  - `st_config("writer_check")` (default `NULL`) is a function `inbox_run()`
+    calls first, as `fn(db)`. Only `TRUE` allows the run; anything else, or an
+    error, refuses it before the database is touched. A refusal is one
+    `events.jsonl` line and, when `status.json` exists, a `writer_check` field
+    and a first problem in it; it never appears in later statuses or day
+    digests. `st_capabilities()` lists `"writer_check"`.
+  - `snapshot_db()` names the snapshot `monitoring_YYYY-MM-DD_g<N>.duckdb`
+    when `db_meta.writer_generation` is `N`, and writes a
+    `<name>.manifest.json` beside it, last. `read_snapshot_manifest()`,
+    `verify_snapshot()` and `list_snapshots()` read the manifests.
+    `prune_snapshots()` recognises both names, keeps the highest generation of
+    each date and deletes a pruned snapshot's manifest with it.
+  - The auto-import triggers also hash the folder in `SAMPLETIDY_GATE_WATCH`,
+    so a change there alone starts R. `--print-config` prints `WATCH=` last.
+
 * The macOS auto-import trigger (`dev/auto-import.sh`) can send its
   notifications through a command set in `SAMPLETIDY_NOTIFY_COMMAND`
   (called as `<cmd> <title> <message>`), and runs `SAMPLETIDY_NOTIFY_FLUSH`

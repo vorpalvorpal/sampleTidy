@@ -71,4 +71,10 @@ a water-sheet row as a result only if its label, after squishing white
 space and upper-casing, matches an entry. With the default no field reading
 is imported. It is list-valued, so it cannot come from an env var, and a
 value that is not a character vector without \code{NA} aborts where it is used.
+
+\code{writer_check} is \code{NULL} (the default: every run may write) or a function
+that \code{\link[=inbox_run]{inbox_run()}} calls first, as \code{fn(db)}, before it touches the
+database. Exactly \code{TRUE} allows the run; anything else refuses it, and the
+run imports nothing (see \code{\link[=inbox_run]{inbox_run()}}). Like \code{checks}, it is set in code,
+never from an env var.
 }

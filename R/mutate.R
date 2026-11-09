@@ -48,7 +48,9 @@
   # Monitoring-point roles and doubted features (migration 093).
   "feature_role", "feature_dubious",
   # PLAN-20 phase 1 (ops-schema v10): external filing records.
-  "asset_filing"
+  "asset_filing",
+  # PLAN-21 phase (a) (ops-schema v11): the database's own metadata.
+  "db_meta"
 )
 
 #' @keywords internal

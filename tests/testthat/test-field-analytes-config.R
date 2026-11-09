@@ -48,11 +48,12 @@ test_that("field_analytes defaults to character(0)", {
   expect_identical(st_config("field_analytes"), character(0))
 })
 
-test_that("st_capabilities() lists field_analytes last, keeping the existing names in order", {
+# field_analytes was appended last; PLAN-21 phase (a) appended writer_check after it.
+test_that("st_capabilities() lists field_analytes right after the earlier names, which keep their order", {
   caps <- st_capabilities()
-  expect_identical(caps[length(caps)], "field_analytes")
+  expect_identical(caps[[12]], "field_analytes")
   expect_identical(
-    caps[-length(caps)],
+    caps[1:11],
     c("timezone", "checks_option", "checks_streams", "site_names",
       "site_keywords", "date_overrides_env", "inbox_batches", "renderer_hooks",
       "report_dir", "gas_template_slots", "acirl_job_prefix")

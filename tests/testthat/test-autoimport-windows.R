@@ -37,7 +37,8 @@ aw_blank_vars <- c("SAMPLETIDY_AUTOIMPORT_DB", "SAMPLETIDY_AUTOIMPORT_INPUT",
                    "SAMPLETIDY_AUTOIMPORT_LOG", "SAMPLETIDY_AUTOIMPORT_OFF",
                    "SAMPLETIDY_AUTOIMPORT_CODE", "SAMPLETIDY_AUTOIMPORT_NOTIFY",
                    "SAMPLETIDY_AUTOIMPORT_STALE_HOURS", "SAMPLETIDY_INPUT_DIR",
-                   "SAMPLETIDY_REPORT_DIR", "SAMPLETIDY_TIMEZONE", "R_ENVIRON_USER")
+                   "SAMPLETIDY_REPORT_DIR", "SAMPLETIDY_TIMEZONE", "SAMPLETIDY_GATE_WATCH",
+                   "R_ENVIRON_USER")
 
 #' A stub RSCRIPT (the script argument is auto-import.R). It records
 #' `run|REPORT|INPUT|DB|lock-held|arg1` in runs, prints to stdout and stderr,
@@ -178,19 +179,20 @@ aw_prime <- function(s) {
 
 # ---- 1. print config ------------------------------------------------------------------------
 
-test_that("-PrintConfig prints exactly DB, INPUT, REPORT, TIMEZONE, LOG in order and exits 0", {
+# PLAN-21 phase (a): WATCH (SAMPLETIDY_GATE_WATCH, empty when unset) is printed last.
+test_that("-PrintConfig prints exactly DB, INPUT, REPORT, TIMEZONE, LOG, WATCH in order and exits 0", {
   s <- aw_sandbox()
   k <- aw_print(s, aw_std(s, SAMPLETIDY_TIMEZONE = "Pacific/Kiritimati"))
-  expect_identical(k$keys, c("DB", "INPUT", "REPORT", "TIMEZONE", "LOG"))
-  expect_identical(aw_norm(k$vals), aw_norm(c(s$db, s$input, s$report, "Pacific/Kiritimati", s$log)))
+  expect_identical(k$keys, c("DB", "INPUT", "REPORT", "TIMEZONE", "LOG", "WATCH"))
+  expect_identical(aw_norm(k$vals), aw_norm(c(s$db, s$input, s$report, "Pacific/Kiritimati", s$log, "")))
 })
 
-test_that("--print-config (the Mac spelling) prints the same five lines", {
+test_that("--print-config (the Mac spelling) prints the same six lines", {
   s <- aw_sandbox()
   v <- aw_std(s, SAMPLETIDY_TIMEZONE = "Pacific/Kiritimati")
   a <- aw_print(s, v, "-PrintConfig")
   b <- aw_print(s, v, "--print-config")
-  expect_length(b$lines, 5L)
+  expect_length(b$lines, 6L)
   expect_identical(b$lines, a$lines)
 })
 
@@ -202,7 +204,7 @@ test_that("print config has no side effects and works with no DB, a pause file a
   before <- readBin(file.path(aw_lock(s), "pid"), "raw", 100)
   for (a in c("-PrintConfig", "--print-config")) {
     k <- aw_print(s, aw_std(s), a)
-    expect_length(k$lines, 5L)
+    expect_length(k$lines, 6L)
   }
   expect_false(dir.exists(dirname(s$log)))
   expect_false(file.exists(s$log))
