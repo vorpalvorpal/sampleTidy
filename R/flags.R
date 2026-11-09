@@ -1075,11 +1075,17 @@ import_flags <- function(db = st_config("live_db"), now = Sys.time(), checks) {
 
 # ---- the status note's Flags section ---------------------------------------------
 
-.flags_prev_seen <- function(report_dir) {
+# The previous status as a parsed list (status.json, else .import-status.json
+# when status.json does not exist), NULL when absent or not a JSON object.
+.flags_prev_status <- function(report_dir) {
   p <- file.path(report_dir, "status.json")
   if (!file.exists(p)) p <- file.path(report_dir, ".import-status.json")
   js <- tryCatch(jsonlite::fromJSON(p, simplifyVector = FALSE), error = function(e) NULL)
-  fl <- if (is.list(js)) js$flags else NULL
+  if (is.list(js) && !is.null(names(js))) js else NULL
+}
+
+.flags_prev_seen <- function(prev) {
+  fl <- if (is.list(prev)) prev$flags else NULL
   if (!is.list(fl) || length(fl) == 0) return(character(0))
   k <- vapply(fl, function(x) if (is.character(x$key) && length(x$key) == 1) x$key else NA_character_, "")
   s <- vapply(fl, function(x) if (is.character(x$first_seen) && length(x$first_seen) == 1) x$first_seen else NA_character_, "")
@@ -1087,10 +1093,21 @@ import_flags <- function(db = st_config("live_db"), now = Sys.time(), checks) {
   stats::setNames(s[ok], k[ok])
 }
 
+# When the hook failed: the previous status's flags and the time they were
+# checked, or NULL when there is nothing usable to carry.
+.flags_carry <- function(prev) {
+  if (!is.list(prev) || !is.list(prev$flags)) return(NULL)
+  at <- if ("flags_checked_at" %in% names(prev)) prev$flags_checked_at else prev$updated
+  if (!is.character(at) || length(at) != 1 || is.na(at)) return(NULL)
+  list(flags = prev$flags, at = at, site_names = prev$site_names)
+}
+
 # Flags + first_seen for the status: list(flags = data.frame with first_seen,
-# errors = named character).
+# errors = named character, checked_at, carried). When the hook fails and the
+# previous status has flags, `carried` is that status's raw flag list.
 .flags_for_status <- function(db, now, checks, report_dir) {
-  prev <- .flags_prev_seen(report_dir)
+  prevst <- .flags_prev_status(report_dir)
+  prev <- .flags_prev_seen(prevst)
   # `checks` may be a zero-argument function, called on every status build; a
   # failure there (or a result that is not a list) is a "checks" error.
   ck <- tryCatch({
@@ -1098,31 +1115,49 @@ import_flags <- function(db = st_config("live_db"), now = Sys.time(), checks) {
     if (!is.list(r)) stop("checks must return a list, not ", class(r)[[1]], call. = FALSE)
     r
   }, error = function(e) e)
+  carried <- NULL
+  checked_at <- .inbox_local(now, "%Y-%m-%d %H:%M")
   if (inherits(ck, "error")) {
-    errs <- c(checks = conditionMessage(ck))
+    msg <- conditionMessage(ck)
+    errs <- c(checks = msg)
     fl <- .flags_empty()
     ck <- NULL
+    carried <- .flags_carry(prevst)
+    if (is.null(carried)) {
+      checked_at <- NULL
+    } else {
+      checked_at <- carried$at
+      errs[["checks"]] <- paste0(msg, if (!grepl("[.!?]\\s*$", msg)) ".",
+                                 " The flags shown are from the last successful check, at ",
+                                 checked_at, ".")
+      ck <- list(site_names = carried$site_names)
+    }
   } else {
     fl <- tryCatch(import_flags(db = db, now = now, checks = ck), error = function(e) e)
     if (inherits(fl, "error")) {
       errs <- c(import_flags = conditionMessage(fl))
       fl <- .flags_empty()
+      checked_at <- NULL
     } else {
       errs <- attr(fl, "errors")
     }
   }
   fl$first_seen <- if (nrow(fl)) ifelse(fl$key %in% names(prev), unname(prev[fl$key]),
                                         .inbox_fmt_utc(now)) else character(0)
-  list(flags = fl, errors = errs, site_names = ck$site_names)
+  list(flags = fl, errors = errs, site_names = ck$site_names, checked_at = checked_at,
+       carried = if (!is.null(carried)) carried$flags)
 }
 
 .flags_json <- function(fs) {
   fl <- fs$flags
   cols <- c(.flags_cols, "first_seen")
   list(
-    flags = lapply(seq_len(nrow(fl)), function(i) {
+    # Carried flags go in verbatim, as the previous status held them.
+    flags = if (!is.null(fs$carried)) fs$carried else lapply(seq_len(nrow(fl)), function(i) {
       stats::setNames(lapply(cols, function(cl) fl[[cl]][[i]]), cols)
     }),
+    flags_checked_at = fs$checked_at,
+    flags_carried_forward = !is.null(fs$carried),
     flag_errors = lapply(names(fs$errors), function(k) {
       list(check = k, message = unname(fs$errors[[k]]))
     })

@@ -39,7 +39,8 @@ The status records what would be done in \code{dry_run_plan}.}
 \item{checks}{\code{NULL} (no flags in the status), the check inputs for
 \code{\link[=import_flags]{import_flags()}}, or a zero-argument function returning them. A function
 is called on every status refresh, so a deployment can re-read its
-tables each time; if it fails, the status says so.}
+tables each time; if it fails, the status says so and keeps the previous
+status's flags, marked with \code{flags_carried_forward} and \code{flags_checked_at}.}
 
 \item{batch}{which folders are batches, how long they settle and what
 happens to their leftovers: an \code{\link[=inbox_batches]{inbox_batches()}} object. The default is
