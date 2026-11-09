@@ -123,6 +123,8 @@ try {
     $ErrorActionPreference = 'Continue'
     & $RSCRIPT (Join-Path $HERE 'auto-import.R') 2>&1 | ForEach-Object { $w.WriteLine("$_") }
     $rc = $LASTEXITCODE
+  } catch {   # e.g. RSCRIPT not found: log it (a scheduled task's stderr goes nowhere)
+    $w.WriteLine("could not run ${RSCRIPT}: $_"); $rc = 1
   } finally { $w.Dispose(); $ErrorActionPreference = 'Stop' }
   if ($null -eq $rc) { $rc = 1 }
 
