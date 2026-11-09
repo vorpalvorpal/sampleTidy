@@ -255,7 +255,8 @@ test_that("under launchd's conditions the script finds its input, report dir and
 
 test_that("the auto-import scripts, the launchd files and the launcher name no deployment", {
   files <- c(ac_dev("auto-import.sh"), ac_dev("auto-import.R"), ac_dev("auto-import.cmd"),
-             ac_dev("auto-import-gate.ps1"), ac_dev("launchd", "install.sh"),
+             ac_dev("auto-import-gate.ps1"), ac_dev("auto-import.ps1"),
+             ac_dev("launchd", "install.sh"),
              ac_dev("launchd", "net.robinshannon.sampletidy-autoimport.plist"),
              ac_dev("launchd", "helper", "launcher.c"))
   deny <- c("australia/sydney", "aus eastern", "pkm_vault", "\\bpkm\\b", "import triage",
