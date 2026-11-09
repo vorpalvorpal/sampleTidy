@@ -217,6 +217,20 @@
         comments     VARCHAR,
         PRIMARY KEY (uuid_asset, system)
       )"
+  ),
+  # PLAN-21 phase (a): the database's own key/value metadata (db_meta_get(),
+  # db_meta_set(), db_meta_read()). The core knows `writer_generation` and
+  # `writer_label` but never writes them; a deployment does. No operator
+  # migration (R-22.E precedent, as v9/v10): the live DB gets it from the next
+  # ingest_dir(), or from db_meta_set(), both of which run ensure_schema().
+  list(
+    version = 11L,
+    ddl = "
+      CREATE TABLE IF NOT EXISTS db_meta (
+        key        VARCHAR PRIMARY KEY,
+        value      VARCHAR,
+        updated_at TIMESTAMP
+      )"
   )
 )
 
