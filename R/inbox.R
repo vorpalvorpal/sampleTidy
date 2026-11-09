@@ -658,7 +658,8 @@ inbox_batches <- function(pattern = NULL, settle_minutes = 0, leftovers = NULL) 
 #' @param checks `NULL` (no flags in the status), the check inputs for
 #'   [import_flags()], or a zero-argument function returning them. A function
 #'   is called on every status refresh, so a deployment can re-read its
-#'   tables each time; if it fails, the status says so.
+#'   tables each time; if it fails, the status says so and keeps the previous
+#'   status's flags, marked with `flags_carried_forward` and `flags_checked_at`.
 #' @param batch which folders are batches, how long they settle and what
 #'   happens to their leftovers: an [inbox_batches()] object. The default is
 #'   `st_config("inbox_batches")`, or `inbox_batches()` when that is unset.
@@ -1076,7 +1077,9 @@ import_report <- function(db = st_config("live_db"), report_dir, now = Sys.time(
 #' `db_checks`; they never block anything). Read-only on the DB. With `checks`,
 #' also the flags from [import_flags()], their `flag_checks` (each check with its
 #' meaning) and `site_names`, each flag's `first_seen` carried over by key from
-#' the previous `status.json` (else `.import-status.json`).
+#' the previous `status.json` (else `.import-status.json`). If the `checks`
+#' function fails, the previous flags are kept unchanged and marked with
+#' `flags_carried_forward` and `flags_checked_at` (when they were last checked).
 #'
 #' @param db the live database.
 #' @param input_dir the inbox directory.

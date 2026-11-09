@@ -57,5 +57,7 @@ failures and checks that could not run are problems; the full result is in
 \code{db_checks}; they never block anything). Read-only on the DB. With \code{checks},
 also the flags from \code{\link[=import_flags]{import_flags()}}, their \code{flag_checks} (each check with its
 meaning) and \code{site_names}, each flag's \code{first_seen} carried over by key from
-the previous \code{status.json} (else \code{.import-status.json}).
+the previous \code{status.json} (else \code{.import-status.json}). If the \code{checks}
+function fails, the previous flags are kept unchanged and marked with
+\code{flags_carried_forward} and \code{flags_checked_at} (when they were last checked).
 }
