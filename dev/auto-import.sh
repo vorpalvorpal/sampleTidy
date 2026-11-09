@@ -9,6 +9,12 @@
 # works and nothing in the input changed (ctime) since the run began.
 # Test overrides: SAMPLETIDY_AUTOIMPORT_{DB,INPUT,REPORT,RSCRIPT,LOG,CODE,OFF,NOTIFY,STALE_HOURS},
 # SAMPLETIDY_{INPUT_DIR,REPORT_DIR,TIMEZONE} and R_ENVIRON_USER (the environ file read).
+# Deployment config (process env, then R's environ file): SAMPLETIDY_NOTIFY_COMMAND is a
+# single executable path, run as `<cmd> <title> <message>` for each notification (when unset,
+# or not executable, the desktop notification is shown; a non-zero exit is logged only).
+# SAMPLETIDY_NOTIFY_FLUSH is run with no arguments once per run, right after the lock is
+# taken (e.g. to resend notifications queued while offline); its output goes to the log
+# and its exit status is ignored.
 # R-22.H (2026-10-25): an atomic mkdir lock, and a run-health record
 # ($REPORT/.imports.health) that drives retry-after-failure, one notification per
 # failed run, a once-per-local-day (SAMPLETIDY_TIMEZONE) "no success for N hours" notification, and the
@@ -40,10 +46,15 @@ REPORT="${SAMPLETIDY_AUTOIMPORT_REPORT:-${SAMPLETIDY_REPORT_DIR:-}}"
 ZONE="${SAMPLETIDY_TIMEZONE:-}"
 [ -n "$ZONE" ] || ZONE="$(renviron_get SAMPLETIDY_TIMEZONE)"
 [ -n "$ZONE" ] || ZONE=UTC
+NOTIFY="${SAMPLETIDY_AUTOIMPORT_NOTIFY:-}"   # test override, then deployment config
+[ -n "$NOTIFY" ] || NOTIFY="${SAMPLETIDY_NOTIFY_COMMAND:-}"
+[ -n "$NOTIFY" ] || NOTIFY="$(renviron_get SAMPLETIDY_NOTIFY_COMMAND)"
+FLUSH="${SAMPLETIDY_NOTIFY_FLUSH:-}"
+[ -n "$FLUSH" ] || FLUSH="$(renviron_get SAMPLETIDY_NOTIFY_FLUSH)"
 LOG="${SAMPLETIDY_AUTOIMPORT_LOG:-$HOME/Library/Logs/sampletidy-autoimport.log}"
 local_day() { TZ="$ZONE" date +%F; }
 if [ "${1:-}" = --print-config ]; then
-  printf 'DB=%s\nINPUT=%s\nREPORT=%s\nTIMEZONE=%s\nLOG=%s\n' "$DB" "$INPUT" "$REPORT" "$ZONE" "$LOG"
+  printf 'DB=%s\nINPUT=%s\nREPORT=%s\nTIMEZONE=%s\nLOG=%s\nNOTIFY=%s\nNOTIFY_FLUSH=%s\n' "$DB" "$INPUT" "$REPORT" "$ZONE" "$LOG" "$NOTIFY" "$FLUSH"
   exit 0
 fi
 
@@ -57,13 +68,17 @@ if [ ! -d "$INPUT" ]; then logline "input folder not found: $INPUT"; exit 0; fi
 RSCRIPT="${SAMPLETIDY_AUTOIMPORT_RSCRIPT:-Rscript}"
 STATE="$REPORT/.imports.state"; GATE="$REPORT/.imports.gate"
 LOCK="$REPORT/.imports.lock"; HEALTH="$REPORT/.imports.health"; NOTIFIED="$REPORT/.imports.notified"
-NOTIFY="${SAMPLETIDY_AUTOIMPORT_NOTIFY:-}"
 STALE_HOURS="${SAMPLETIDY_AUTOIMPORT_STALE_HOURS:-24}"
 mkdir -p "$REPORT"
 
 notify() {   # notify <title> <message>
-  if [ -n "$NOTIFY" ]; then "$NOTIFY" "$1" "$2"
-  else osascript -e "display notification \"${2//\"/\\\"}\" with title \"${1//\"/\\\"}\"" >/dev/null 2>&1; fi
+  if [ -n "$NOTIFY" ] && [ -x "$NOTIFY" ] && [ ! -d "$NOTIFY" ]; then
+    "$NOTIFY" "$1" "$2"; local rc=$?
+    [ $rc -eq 0 ] || logline "notify command exited $rc"
+    return 0
+  fi
+  [ -z "$NOTIFY" ] || logline "notify command not executable: $NOTIFY"
+  osascript -e "display notification \"${2//\"/\\\"}\" with title \"${1//\"/\\\"}\"" >/dev/null 2>&1
 }
 # Notify once per key (kept in $NOTIFIED).
 notify_once() {   # notify_once <key> <title> <message>
@@ -92,6 +107,11 @@ if ! mkdir "$LOCK" 2>/dev/null; then
   mkdir "$LOCK" 2>/dev/null || { logline "auto-import already in progress (lock held by pid ${lpid:-?}); skipping"; exit 0; }
 fi
 HAVE_LOCK=1; echo $$ >"$LOCK/pid"
+# Flush command (deployment config): once per run, before the health record is read.
+if [ -n "$FLUSH" ]; then
+  if [ -x "$FLUSH" ] && [ ! -d "$FLUSH" ]; then "$FLUSH" >>"$LOG" 2>&1 || true
+  else logline "flush command not executable: $FLUSH"; fi
+fi
 
 # Previous run (R-22.H): a record still "running" while we hold the lock is a
 # crash; a non-zero rc is a failure. Either retries past the gate and is notified

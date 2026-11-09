@@ -103,7 +103,8 @@ test_that("--print-config prints the resolved values from the environ file, exit
   expect_identical(p$REPORT, rep)
   expect_identical(p$TIMEZONE, "Pacific/Auckland")
   # PLAN-21 phase (a): WATCH (SAMPLETIDY_GATE_WATCH, empty when unset) is printed last.
-  expect_identical(names(p), c("DB", "INPUT", "REPORT", "TIMEZONE", "LOG", "WATCH"))
+  expect_identical(names(p), c("DB", "INPUT", "REPORT", "TIMEZONE", "LOG", "NOTIFY", "NOTIFY_FLUSH",
+                               "WATCH"))
   expect_identical(p$WATCH, "")
   expect_identical(p$DB, file.path(s$home, "Library", "Application Support", "org.R-project.R",
                                    "R", "sampleTidy", "monitoring.duckdb"))
