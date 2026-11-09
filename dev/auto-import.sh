@@ -15,6 +15,9 @@
 # SAMPLETIDY_NOTIFY_FLUSH is run with no arguments once per run, right after the lock is
 # taken (e.g. to resend notifications queued while offline); its output goes to the log
 # and its exit status is ignored.
+# SAMPLETIDY_GATE_WATCH is a folder whose metadata listing (depth 2) joins the change hash, so a
+# change there alone starts R (whose writer check then decides); unset, the hash is unchanged. A
+# listing failure there hashes a fixed line instead: it never exits 3 or notifies.
 # R-22.H (2026-10-25): an atomic mkdir lock, and a run-health record
 # ($REPORT/.imports.health) that drives retry-after-failure, one notification per
 # failed run, a once-per-local-day (SAMPLETIDY_TIMEZONE) "no success for N hours" notification, and the
@@ -51,10 +54,12 @@ NOTIFY="${SAMPLETIDY_AUTOIMPORT_NOTIFY:-}"   # test override, then deployment co
 [ -n "$NOTIFY" ] || NOTIFY="$(renviron_get SAMPLETIDY_NOTIFY_COMMAND)"
 FLUSH="${SAMPLETIDY_NOTIFY_FLUSH:-}"
 [ -n "$FLUSH" ] || FLUSH="$(renviron_get SAMPLETIDY_NOTIFY_FLUSH)"
+GWATCH="${SAMPLETIDY_GATE_WATCH:-}"
+[ -n "$GWATCH" ] || GWATCH="$(renviron_get SAMPLETIDY_GATE_WATCH)"
 LOG="${SAMPLETIDY_AUTOIMPORT_LOG:-$HOME/Library/Logs/sampletidy-autoimport.log}"
 local_day() { TZ="$ZONE" date +%F; }
 if [ "${1:-}" = --print-config ]; then
-  printf 'DB=%s\nINPUT=%s\nREPORT=%s\nTIMEZONE=%s\nLOG=%s\nNOTIFY=%s\nNOTIFY_FLUSH=%s\n' "$DB" "$INPUT" "$REPORT" "$ZONE" "$LOG" "$NOTIFY" "$FLUSH"
+  printf 'DB=%s\nINPUT=%s\nREPORT=%s\nTIMEZONE=%s\nLOG=%s\nNOTIFY=%s\nNOTIFY_FLUSH=%s\nWATCH=%s\n' "$DB" "$INPUT" "$REPORT" "$ZONE" "$LOG" "$NOTIFY" "$FLUSH" "$GWATCH"
   exit 0
 fi
 
@@ -135,13 +140,25 @@ fi
 # passes the gate, so R can refresh the status note's dates.
 # snapshot prints the hash; it returns 1 if the input cannot be listed (find's
 # exit status or any stderr), leaving the listing and error in $LOCK/{list,err}.
+# With a watch folder set, its sorted listing (name, ctime, mtime) is hashed last, or
+# `WATCH|unlistable` when it cannot be listed; unset, nothing is added.
+watch_listing() {
+  local out
+  if out="$(find "$GWATCH" -mindepth 1 -maxdepth 2 ! -name .DS_Store -exec stat -f '%N|%c|%m' {} + 2>"$LOCK/werr")" \
+     && [ ! -s "$LOCK/werr" ]; then
+    printf '%s\n' "$out" | LC_ALL=C sort
+  else
+    echo 'WATCH|unlistable'
+  fi
+}
 snapshot() {
   find "$INPUT" -mindepth 1 -maxdepth 2 ! -name .DS_Store -exec stat -f '%N|%z|%m' {} + >"$LOCK/list" 2>"$LOCK/err"
   local frc=$?
   if [ $frc -ne 0 ] || [ -s "$LOCK/err" ]; then return 1; fi
   { LC_ALL=C sort "$LOCK/list"
     stat -f 'DB|%z|%m' "$DB"
-    local_day; } | shasum -a 256 | cut -d' ' -f1
+    local_day
+    [ -z "$GWATCH" ] || watch_listing; } | shasum -a 256 | cut -d' ' -f1
 }
 
 : >"$LOCK/started"   # ctime marker: anything newer arrived (or changed) during the run
@@ -181,8 +198,10 @@ ENDED="$(date -u +%Y-%m-%dT%H:%M:%SZ)"; SUCC="$p_succ"; [ $rc -eq 0 ] && SUCC="$
 write_health done $$ "$STARTED" "$ENDED" "$rc" "$SUCC"
 if [ $rc -eq 0 ]; then
   # Post-run gate: only if the listing works and nothing changed (by ctime; a cloud-synced
-  # folder may keep server mtimes) since the marker. Otherwise leave it stale so the next tick runs.
-  if POST="$(snapshot)" && [ -z "$(find "$INPUT" -mindepth 1 -maxdepth 2 ! -name .DS_Store -cnewer "$LOCK/started" 2>/dev/null)" ]; then
+  # folder may keep server mtimes) in the input, or the watch folder when set, since the
+  # marker. Otherwise leave it stale so the next tick runs.
+  if POST="$(snapshot)" && [ -z "$(find "$INPUT" -mindepth 1 -maxdepth 2 ! -name .DS_Store -cnewer "$LOCK/started" 2>/dev/null)" ] \
+     && { [ -z "$GWATCH" ] || [ -z "$(find "$GWATCH" -mindepth 1 -maxdepth 2 ! -name .DS_Store -cnewer "$LOCK/started" 2>/dev/null)" ]; }; then
     mkdir -p "$REPORT" && echo "$POST" >"$GATE.tmp.$$" && mv "$GATE.tmp.$$" "$GATE"
   else
     logline "input changed during the run; next tick will re-check"

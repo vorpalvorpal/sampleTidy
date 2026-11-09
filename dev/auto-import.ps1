@@ -8,6 +8,9 @@
 # deployment's hooks failed to load) reaches the scheduler.
 # Test overrides: SAMPLETIDY_AUTOIMPORT_{DB,INPUT,REPORT,RSCRIPT,LOG,OFF},
 # SAMPLETIDY_{INPUT_DIR,REPORT_DIR,TIMEZONE}. No R environ file is read here.
+# SAMPLETIDY_GATE_WATCH (process environment) is a folder whose metadata listing joins the
+# gate hash, so a change there alone starts R (whose writer check then decides); unset, the
+# hash is unchanged. A listing failure there hashes a fixed line instead of failing the run.
 # Lock (R-22.H): the directory $REPORT\.imports.lock holding `pid`, created atomically.
 # Arguments: -PrintConfig or --print-config prints the resolved values and exits; any
 # other argument is ignored, so a stray one cannot stop the hourly run.
@@ -45,9 +48,10 @@ $RSCRIPT = env SAMPLETIDY_AUTOIMPORT_RSCRIPT
 if (-not $RSCRIPT) { $RSCRIPT = 'Rscript' }
 $OFF = env SAMPLETIDY_AUTOIMPORT_OFF
 if (-not $OFF) { $OFF = Join-Path $HOME '.sampletidy-autoimport-off' }
+$GWATCH = env SAMPLETIDY_GATE_WATCH
 
 if ($PrintConfig -or $Rest -contains '--print-config') {
-  "DB=$DB"; "INPUT=$WATCH"; "REPORT=$REPORT"; "TIMEZONE=$ZONE"; "LOG=$LOG"
+  "DB=$DB"; "INPUT=$WATCH"; "REPORT=$REPORT"; "TIMEZONE=$ZONE"; "LOG=$LOG"; "WATCH=$GWATCH"
   exit 0
 }
 
@@ -67,7 +71,11 @@ $STATE = Join-Path $REPORT '.imports.state'; $GATE = Join-Path $REPORT '.imports
 $LOCK = Join-Path $REPORT '.imports.lock'
 [void][IO.Directory]::CreateDirectory($REPORT)
 
-function gate_hash { (& (Join-Path $HERE 'auto-import-gate.ps1') -Input $WATCH -Db $DB -TimeZone $ZONE | Out-String).Trim() }
+function gate_hash {
+  $a = @{ Input = $WATCH; Db = $DB; TimeZone = $ZONE }
+  if ($GWATCH) { $a.Watch = $GWATCH }
+  (& (Join-Path $HERE 'auto-import-gate.ps1') @a | Out-String).Trim()
+}
 
 # Atomic lock (R-22.H). CreateDirectory succeeds on an existing folder, so it cannot be
 # the test-and-set. Instead a private folder holding `pid` is built beside the lock and
