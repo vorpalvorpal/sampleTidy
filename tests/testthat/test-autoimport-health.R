@@ -41,6 +41,7 @@ ai_setup <- function(env = parent.frame()) {
             notes = file.path(d, "notes.txt"), copy = file.path(d, "health-copy.json"),
             rscript = file.path(d, "stub-rscript.sh"), notify = file.path(d, "stub-notify.sh"),
             code = file.path(d, "code"))
+  s$environ <- file.path(d, "environ"); file.create(s$environ)   # an empty R user environ file
   writeLines("x", s$db); dir.create(s$input); dir.create(s$report); dir.create(s$code)
   writeLines("x", file.path(s$input, "README.txt"))   # the gate treats an EMPTY listing as "cannot tell"
   s$once <- file.path(d, "stub-once")
@@ -66,7 +67,9 @@ ai_setup <- function(env = parent.frame()) {
     SAMPLETIDY_AUTOIMPORT_OFF = s$off, SAMPLETIDY_AUTOIMPORT_NOTIFY = s$notify,
     SAMPLETIDY_AUTOIMPORT_STALE_HOURS = NA, SAMPLETIDY_AUTOIMPORT_PREV_FAILURE = NA,
     STUB_SLEEP = NA, STUB_RC = NA, STUB_HEALTH_COPY = NA,
-    STUB_ARRIVE = NA, STUB_ARRIVE_FILE = NA, STUB_REMOVE = NA, STUB_LOCK = NA), .local_envir = env)
+    STUB_ARRIVE = NA, STUB_ARRIVE_FILE = NA, STUB_REMOVE = NA, STUB_LOCK = NA,
+    # isolation: never read the developer's ~/.Renviron or inherit their notify/flush commands
+    R_ENVIRON_USER = s$environ, SAMPLETIDY_NOTIFY_COMMAND = NA, SAMPLETIDY_NOTIFY_FLUSH = NA), .local_envir = env)
   s
 }
 
