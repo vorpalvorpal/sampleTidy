@@ -349,8 +349,9 @@ during this review blocked for minutes on materialisation). Therefore:
 - **Snapshots:** checkpointed, closed copies written *into* the
   SharePoint-synced folder — taken under the write lock after `CHECKPOINT`,
   landed via atomic rename so a reader mid-refresh keeps a consistent file.
-  Taken only on days the DB changed; pruned by age (e.g. keep dailies 60 days,
-  monthlies indefinitely — _Open:_ exact retention).
+  Taken only on days the DB changed; pruned by age: every snapshot from the last 60
+  days, plus the newest snapshot of each older calendar month, indefinitely.
+  `ingest_dir()` prunes after each snapshot it takes.
 - **Analysis/reports read the snapshot**, never the live file, so long-lived
   readers can't block the writer and never see partial state.
 
@@ -517,7 +518,7 @@ MVP keeps the seam warm with the per-run summary report.
 
 ## Open questions
 
-- [ ] Exact snapshot retention policy (§9.1).
+- [x] Exact snapshot retention policy (§9.1): 60 days of dailies, then the newest snapshot of each month indefinitely; `ingest_dir()` prunes after each snapshot.
 - [ ] Alert channels (§14).
 - [ ] `awaiting_results` state for incomplete deliveries (§2.2) — post-MVP.
 - [ ] Whether historical backlog gaps (structured-file-less work orders that

@@ -1519,7 +1519,19 @@ ingest_dir <- function(path, db = st_config("live_db"), dry_run = FALSE,
     length(pipeline$settled) > 0
   snapshot_path <- NA_character_
   if (did_something && !dry_run) {
-    snapshot_path <- snapshot_db(db = db, dest_dir = st_config("snapshot_dir"))
+    snapshot_dir <- st_config("snapshot_dir")
+    snapshot_path <- snapshot_db(db = db, dest_dir = snapshot_dir)
+    # Pruning is housekeeping, never a gate on removal: a failure here is
+    # reported but must not fail the ingest or stop `.ig_remove_verified()`.
+    tryCatch(
+      prune_snapshots(dest_dir = snapshot_dir),
+      error = function(e) {
+        cli::cli_warn(c(
+          "Pruning old snapshots failed: {conditionMessage(e)}",
+          i = "The ingest itself is unaffected."
+        ))
+      }
+    )
   }
 
   removed <- character(0)
