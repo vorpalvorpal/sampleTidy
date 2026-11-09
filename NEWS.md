@@ -1,5 +1,12 @@
 # sampleTidy (development version)
 
+* The macOS auto-import trigger (`dev/auto-import.sh`) can send its
+  notifications through a command set in `SAMPLETIDY_NOTIFY_COMMAND`
+  (called as `<cmd> <title> <message>`), and runs `SAMPLETIDY_NOTIFY_FLUSH`
+  once per run (e.g. to resend notifications queued while offline). Both are
+  read from the process environment, then R's environ file; `--print-config`
+  shows them. Without a command it still shows a desktop notification.
+
 * `ingest_dir()` now calls `prune_snapshots()` after each snapshot it takes, so
   snapshots no longer accumulate: every snapshot from the last 60 days is kept,
   plus the newest of each older calendar month. A pruning failure is a warning
