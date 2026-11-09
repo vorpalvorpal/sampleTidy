@@ -50,7 +50,10 @@
 #' copy's settled hash and may stop matching the as-received one
 #' ([archive_settle()]). When the `asset` table has the `content_hash` columns,
 #' a file whose [content_fingerprint()] matches an existing asset's is reused
-#' the same way, and a new row records its fingerprint. If the per-asset directory cannot be created or the copy fails,
+#' the same way, and a new row records its fingerprint. A file
+#' [replay_archive()] put back from the archive (named in its batch's hint
+#' file, with the archive copy's bytes) takes the uuid of its archive folder
+#' and is not copied again. If the per-asset directory cannot be created or the copy fails,
 #' aborts `sampletidy_error` (R-12.4) before inserting the `asset` row.
 #'
 #' `con` is passed straight through to `db_append()` so this participates in
@@ -164,29 +167,38 @@ archive_file <- function(con, path, hash, event, type = "Chemical analysis") {
     )$uuid
   }
 
-  new_uuid <- uuid::UUIDgenerate()
   archive_dir <- st_config("archive_dir")
-  uuid_dir <- file.path(archive_dir, new_uuid)
-  # recursive = FALSE deliberately: this only ever creates the one new
-  # per-asset uuid directory. If `archive_dir` itself does not already
-  # exist, dir.create() fails (returns FALSE) rather than silently
-  # creating it - a missing archive_dir is a real misconfiguration (R-12.4)
-  # and must abort, not be papered over.
-  dir_created <- dir.create(uuid_dir, recursive = FALSE, showWarnings = FALSE)
-  dest <- file.path(uuid_dir, basename(path))
-  copied <- isTRUE(dir_created) && .ar_copy_file(path, dest)
-  if (isTRUE(dir_created)) {
-    if (copied) {
-      .st_on_rollback(con, function() unlink(uuid_dir, recursive = TRUE))
-    } else {
-      unlink(uuid_dir, recursive = TRUE)
+  # A file replay_archive() (R/replay.R) put back from the archive keeps the
+  # uuid of the archive folder it came from: that folder already holds these
+  # bytes, so nothing is created or copied (and a rollback removes nothing).
+  replayed <- .rp_hint_uuid(con, path, hash, archive_dir)
+  filename <- if (is.null(replayed)) basename(path) else replayed$filename
+  if (!is.null(replayed)) {
+    new_uuid <- replayed$uuid
+  } else {
+    new_uuid <- uuid::UUIDgenerate()
+    uuid_dir <- file.path(archive_dir, new_uuid)
+    # recursive = FALSE deliberately: this only ever creates the one new
+    # per-asset uuid directory. If `archive_dir` itself does not already
+    # exist, dir.create() fails (returns FALSE) rather than silently
+    # creating it - a missing archive_dir is a real misconfiguration (R-12.4)
+    # and must abort, not be papered over.
+    dir_created <- dir.create(uuid_dir, recursive = FALSE, showWarnings = FALSE)
+    dest <- file.path(uuid_dir, basename(path))
+    copied <- isTRUE(dir_created) && .ar_copy_file(path, dest)
+    if (isTRUE(dir_created)) {
+      if (copied) {
+        .st_on_rollback(con, function() unlink(uuid_dir, recursive = TRUE))
+      } else {
+        unlink(uuid_dir, recursive = TRUE)
+      }
     }
-  }
-  if (!copied) {
-    cli::cli_abort(
-      "Failed to archive source file {.path {path}} to {.path {dest}}.",
-      class = "sampletidy_error"
-    )
+    if (!copied) {
+      cli::cli_abort(
+        "Failed to archive source file {.path {path}} to {.path {dest}}.",
+        class = "sampletidy_error"
+      )
+    }
   }
 
   row <- tibble::tibble(
@@ -200,7 +212,7 @@ archive_file <- function(con, path, hash, event, type = "Chemical analysis") {
     person = NA_character_,
     uuid_project = uuid_project,
     uuid_feature = NA_character_,
-    filename = basename(path),
+    filename = filename,
     hash = hash,
     comments = NA_character_
   )
