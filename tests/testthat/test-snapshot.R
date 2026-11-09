@@ -23,29 +23,211 @@ test_that("R-9.4: a snapshot opens read-only with a matching analysis count, and
   expect_length(tmp_files, 0)
 })
 
-test_that("R-9.4: prune_snapshots() keeps <=60-day dailies plus each month's final snapshot", {
-  dest_dir <- withr::local_tempdir()
-  today <- Sys.Date()
-  all_dates <- today - 0:89 # 90 consecutive dates, oldest to newest
+# ---- prune_snapshots(): tiered retention (7 days all / 8 weeks weekly / monthly forever) ----
 
-  for (i in seq_along(all_dates)) {
-    d <- all_dates[i]
-    f <- file.path(dest_dir, sprintf("monitoring_%s.duckdb", format(d, "%Y-%m-%d")))
-    writeLines("", f)
+prune_mk <- function(dir, dates) {
+  for (d in as.character(as.Date(dates, origin = "1970-01-01"))) {
+    writeLines("", file.path(dir, sprintf("monitoring_%s.duckdb", d)))
   }
+  invisible(dir)
+}
+prune_left <- function(dir) {
+  f <- list.files(dir, pattern = "^monitoring_\\d{4}-\\d{2}-\\d{2}\\.duckdb$")
+  sort(as.Date(sub("^monitoring_(\\d{4}-\\d{2}-\\d{2})\\.duckdb$", "\\1", f)))
+}
+# Independent oracle: dates (Date vector) -> retained Dates.
+prune_oracle <- function(dates, today, keep_days = 7, keep_weeks = 8) {
+  dates <- sort(unique(dates))
+  age <- as.numeric(today - dates)
+  z1 <- dates[age <= keep_days]
+  z2 <- dates[age > keep_days & age <= keep_days + 7 * keep_weeks]
+  z3 <- dates[age > keep_days + 7 * keep_weeks]
+  newest_per <- function(x, key) {
+    if (length(x) == 0) return(x[0])
+    as.Date(vapply(split(as.numeric(x), key), max, numeric(1)), origin = "1970-01-01")
+  }
+  sort(c(z1, newest_per(z2, format(z2, "%G-W%V")), newest_per(z3, format(z3, "%Y-%m"))))
+}
+prune_run <- function(dir, ...) {
+  prune_snapshots(dir, ...)
+  prune_left(dir)
+}
+# Newest date (weekday == target, 1=Monday) with age >= min_age.
+prune_weekday_at_or_older <- function(wday, min_age, today = Sys.Date()) {
+  cand <- today - (min_age:(min_age + 6))
+  cand[as.integer(format(cand, "%u")) == wday]
+}
 
-  prune_snapshots(dest_dir, keep_days = 60)
+test_that("R-9.4: prune_snapshots() default policy matches the oracle on 400 consecutive daily files", {
+  d <- withr::local_tempdir()
+  today <- Sys.Date()
+  all_dates <- today - 0:399
+  prune_mk(d, all_dates)
+  got <- prune_run(d)
+  expect_equal(as.character(got), as.character(prune_oracle(all_dates, today)))
+})
 
-  remaining_files <- list.files(dest_dir, pattern = "^monitoring_\\d{4}-\\d{2}-\\d{2}\\.duckdb$")
-  remaining_dates <- as.Date(sub("^monitoring_(\\d{4}-\\d{2}-\\d{2})\\.duckdb$", "\\1", remaining_files))
+test_that("R-9.4: prune_snapshots() keeps every file aged <= 7 days, and the age-7 file survives", {
+  d <- withr::local_tempdir()
+  today <- Sys.Date()
+  prune_mk(d, today - 0:7)
+  got <- prune_run(d)
+  expect_equal(as.character(got), as.character(sort(today - 0:7)))
+})
 
-  young <- all_dates[as.numeric(today - all_dates) <= 60]
-  old <- all_dates[as.numeric(today - all_dates) > 60]
-  old_last_per_month <- as.Date(unlist(tapply(old, format(old, "%Y-%m"), function(x) as.numeric(max(x)))),
-                                 origin = "1970-01-01")
-  expected <- sort(unique(c(young, old_last_per_month)))
+test_that("R-9.4: age 7 is kept, age 8 falls under the weekly rule (oracle over ages 5..12)", {
+  d <- withr::local_tempdir()
+  today <- Sys.Date()
+  all_dates <- today - 5:12
+  prune_mk(d, all_dates)
+  got <- prune_run(d)
+  expect_true((today - 7) %in% got)
+  expect_true((today - 8) %in% got) # newest of the zone-2 files, always retained
+  expect_equal(as.character(got), as.character(prune_oracle(all_dates, today)))
+})
 
-  expect_setequal(as.character(remaining_dates), as.character(expected))
+test_that("R-9.4: within one ISO week of the weekly zone only the newest snapshot survives", {
+  d <- withr::local_tempdir()
+  today <- Sys.Date()
+  mon <- prune_weekday_at_or_older(1, 15) # Monday aged 15..21, so Mon..Sun all in zone 2
+  expect_true(as.numeric(today - (mon + 6)) >= 9)
+  prune_mk(d, mon + 0:6)
+  got <- prune_run(d)
+  expect_equal(as.character(got), as.character(mon + 6))
+})
+
+test_that("R-9.4: ISO-week boundary - Sunday and the following Monday are each their own week's newest", {
+  d <- withr::local_tempdir()
+  today <- Sys.Date()
+  mon <- prune_weekday_at_or_older(1, 22) # Monday aged 22..28
+  sun <- mon - 1
+  prune_mk(d, c(sun - 2, sun, mon, mon + 2))
+  got <- prune_run(d)
+  # sun-2 (Fri) shares a week with sun -> removed; mon and mon+2 share a week -> only mon+2
+  expect_equal(as.character(got), as.character(sort(c(sun, mon + 2))))
+  # and Sunday + Monday alone are both retained
+  d2 <- withr::local_tempdir()
+  prune_mk(d2, c(sun, mon))
+  expect_equal(as.character(prune_run(d2)), as.character(sort(c(sun, mon))))
+})
+
+test_that("R-9.4: weekly selection is computed among weekly-zone files only (newer zone-1 files in the same week do not displace it)", {
+  d <- withr::local_tempdir()
+  today <- Sys.Date()
+  mon <- prune_weekday_at_or_older(1, 8) # Monday aged 8..14
+  a <- as.numeric(today - mon)
+  kd <- a - 1 # Monday is the very first zone-2 day; Tue..Sun of that week are zone 1
+  all_dates <- c(mon + 1:6, mon, mon - 1, mon - 3)
+  all_dates <- all_dates[all_dates <= today]
+  prune_mk(d, all_dates)
+  got <- prune_run(d, keep_days = kd)
+  expect_true(mon %in% got)
+  expect_true(all(all_dates[as.numeric(today - all_dates) <= kd] %in% got))
+  expect_true((mon - 1) %in% got)
+  expect_false((mon - 3) %in% got)
+  expect_equal(as.character(got), as.character(prune_oracle(all_dates, today, keep_days = kd)))
+})
+
+test_that("R-9.4: weekly/monthly zone boundary - age 63 is weekly, age 64 is monthly (custom keep_days placing it on a Monday)", {
+  d <- withr::local_tempdir()
+  today <- Sys.Date()
+  cand <- today - (57:120)
+  e <- cand[as.integer(format(cand, "%u")) == 1 & as.integer(format(cand, "%d")) >= 4][1]
+  age_e <- as.numeric(today - e)
+  kd <- age_e - 56 # zone 2 ends exactly at e (a Monday); e-1 and e-2 are monthly
+  expect_gte(kd, 1)
+  prune_mk(d, c(e, e - 1, e - 2))
+  got <- prune_run(d, keep_days = kd)
+  # e is the sole weekly-zone file -> kept. e-1 is the newest monthly-zone file -> kept.
+  # e-2 is same month as e-1 (day-of-month of e >= 4) -> removed.
+  expect_equal(as.character(got), as.character(sort(c(e, e - 1))))
+})
+
+test_that("R-9.4: default boundary ages 60..68 agree with the oracle (age 63 weekly, 64 monthly)", {
+  d <- withr::local_tempdir()
+  today <- Sys.Date()
+  all_dates <- today - 56:70
+  prune_mk(d, all_dates)
+  got <- prune_run(d)
+  expect_equal(as.character(got), as.character(prune_oracle(all_dates, today)))
+})
+
+test_that("R-9.4: monthly zone keeps the last-of-month and first-of-next-month separately and drops mid-month older files", {
+  d <- withr::local_tempdir()
+  today <- Sys.Date()
+  # smallest last-day-of-month with age >= 70
+  cand <- today - 70:110
+  last <- cand[format(cand + 1, "%d") == "01"][1]
+  expect_gte(as.numeric(today - (last + 1)), 64)
+  older_month_last <- as.Date(format(last, "%Y-%m-01")) - 1
+  prune_mk(d, c(last + 1, last, last - 1, last - 10, older_month_last))
+  got <- prune_run(d)
+  expect_equal(as.character(got), as.character(sort(c(last + 1, last, older_month_last))))
+})
+
+test_that("R-9.4: non-snapshot files in the dest_dir are never touched", {
+  d <- withr::local_tempdir()
+  today <- Sys.Date()
+  others <- c("monitoring_pre-001-x_2026-01-01.duckdb", "monitoring_2020-01-01.duckdb.tmp",
+              "monitoring_2020-01-02.duckdb.bak", "notes.txt", "monitoring_latest.duckdb")
+  for (o in others) writeLines("", file.path(d, o))
+  prune_mk(d, today - c(300, 301, 302))
+  prune_snapshots(d)
+  expect_true(all(file.exists(file.path(d, others))))
+  expect_length(prune_left(d), 1)
+})
+
+test_that("R-9.4: custom keep_days / keep_weeks are honoured", {
+  d <- withr::local_tempdir()
+  today <- Sys.Date()
+  all_dates <- today - 0:200
+  prune_mk(d, all_dates)
+  got <- prune_run(d, keep_days = 14, keep_weeks = 2)
+  expect_equal(as.character(got), as.character(prune_oracle(all_dates, today, 14, 2)))
+  d2 <- withr::local_tempdir()
+  prune_mk(d2, all_dates)
+  got2 <- prune_run(d2, keep_days = 0, keep_weeks = 3)
+  expect_true(today %in% got2)
+  expect_equal(as.character(got2), as.character(prune_oracle(all_dates, today, 0, 3)))
+})
+
+test_that("R-9.4: keep_weeks = 0 removes the weekly zone - files past keep_days follow the monthly rule", {
+  d <- withr::local_tempdir()
+  today <- Sys.Date()
+  all_dates <- today - 0:120
+  prune_mk(d, all_dates)
+  got <- prune_run(d, keep_weeks = 0)
+  expect_equal(as.character(got), as.character(prune_oracle(all_dates, today, 7, 0)))
+  older <- got[as.numeric(today - got) > 7]
+  expect_false(anyDuplicated(format(older, "%Y-%m")) > 0)
+})
+
+test_that("R-9.4: prune_snapshots() validates keep_days and keep_weeks", {
+  d <- withr::local_tempdir()
+  expect_error(prune_snapshots(d, keep_days = -1))
+  expect_error(prune_snapshots(d, keep_weeks = -1))
+  expect_error(prune_snapshots(d, keep_days = "a"))
+  expect_error(prune_snapshots(d, keep_weeks = "a"))
+  expect_error(prune_snapshots(d, keep_days = c(1, 2)))
+  expect_error(prune_snapshots(d, keep_weeks = NA_real_))
+  expect_error(prune_snapshots(d, keep_days = NULL))
+})
+
+test_that("R-9.4: prune_snapshots() on an empty directory, and always, returns NULL invisibly", {
+  d <- withr::local_tempdir()
+  expect_invisible(res <- prune_snapshots(d))
+  expect_null(res)
+  prune_mk(d, Sys.Date() - 0:30)
+  expect_invisible(res2 <- prune_snapshots(d))
+  expect_null(res2)
+})
+
+test_that("R-9.4: prune_snapshots() is idempotent - a second run removes nothing", {
+  d <- withr::local_tempdir()
+  prune_mk(d, Sys.Date() - 0:400)
+  first <- prune_run(d)
+  second <- prune_run(d)
+  expect_equal(as.character(second), as.character(first))
 })
 
 test_that("R-9.4: a same-day re-snapshot overwrites (single file per day)", {

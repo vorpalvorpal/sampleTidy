@@ -112,24 +112,29 @@ snapshot_db <- function(db = st_config("live_db"), dest_dir = st_config("snapsho
   final_path
 }
 
-#' Prune old dated snapshots, keeping each month's last one indefinitely
+#' Prune old dated snapshots, thinning them by day, then week, then month
 #'
-#' Deletes dated `monitoring_YYYY-MM-DD.duckdb` snapshots in `dest_dir` older
-#' than `keep_days`, except that the most recent snapshot within each
-#' calendar month (`YYYY-MM`) is always kept, regardless of age. Files that
-#' don't match the dated-snapshot naming pattern are left untouched.
+#' Thins dated `monitoring_YYYY-MM-DD.duckdb` snapshots in `dest_dir`. Files
+#' that don't match the dated-snapshot naming pattern are left untouched.
 #'
-#' Retention: every snapshot from the last 60 days, plus the newest snapshot
-#' of each older calendar month, indefinitely. [ingest_dir()] calls this
-#' after each snapshot it takes.
+#' Retention (age is today's date minus the file's date): every snapshot up to
+#' `keep_days` old is kept; from there up to `keep_days + 7 * keep_weeks` days
+#' old, only the newest snapshot of each ISO week (`%G-W%V`) is kept; older
+#' than that, only the newest snapshot of each calendar month, indefinitely.
+#' Each week or month is judged among that age zone's files only.
+#' [ingest_dir()] calls this after each snapshot it takes.
 #'
 #' @param dest_dir directory containing dated snapshot files.
-#' @param keep_days snapshots this many days old or younger are always kept.
+#' @param keep_days snapshots this many days old or younger are all kept.
+#' @param keep_weeks number of weeks beyond `keep_days` during which one
+#'   snapshot per ISO week is kept.
 #' @return `NULL`, invisibly.
 #' @export
-prune_snapshots <- function(dest_dir = st_config("snapshot_dir"), keep_days = 60) {
+prune_snapshots <- function(dest_dir = st_config("snapshot_dir"),
+                            keep_days = 7, keep_weeks = 8) {
   checkmate::assert_string(dest_dir)
   checkmate::assert_number(keep_days, lower = 0)
+  checkmate::assert_number(keep_weeks, lower = 0)
 
   files <- list.files(dest_dir, pattern = "^monitoring_\\d{4}-\\d{2}-\\d{2}\\.duckdb$")
   if (length(files) == 0) {
@@ -139,16 +144,22 @@ prune_snapshots <- function(dest_dir = st_config("snapshot_dir"), keep_days = 60
   dates <- as.Date(sub("^monitoring_(\\d{4}-\\d{2}-\\d{2})\\.duckdb$", "\\1", files))
   age <- as.numeric(Sys.Date() - dates)
 
-  old_idx <- which(age > keep_days)
-  if (length(old_idx) == 0) {
-    return(invisible(NULL))
+  weekly <- age > keep_days & age <= keep_days + 7 * keep_weeks
+  monthly <- age > keep_days + 7 * keep_weeks
+
+  # Keep the newest file per group; non-members of a zone get NA group.
+  newest_per <- function(zone, group) {
+    idx <- which(zone)
+    keep <- tapply(idx, group[idx], function(i) i[which.max(dates[i])])
+    as.integer(unlist(keep))
   }
+  keep <- c(
+    which(age <= keep_days),
+    newest_per(weekly, format(dates, "%G-W%V")),
+    newest_per(monthly, format(dates, "%Y-%m"))
+  )
 
-  months <- format(dates[old_idx], "%Y-%m")
-  last_per_month <- tapply(dates[old_idx], months, max)
-  keep_old_dates <- as.Date(unlist(last_per_month), origin = "1970-01-01")
-
-  to_remove <- old_idx[!dates[old_idx] %in% keep_old_dates]
+  to_remove <- setdiff(seq_along(files), keep)
   if (length(to_remove) > 0) {
     file.remove(file.path(dest_dir, files[to_remove]))
   }
