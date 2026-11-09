@@ -102,7 +102,7 @@ test_that("--print-config prints the resolved values from the environ file, exit
   expect_identical(p$INPUT, "/x/assets")
   expect_identical(p$REPORT, rep)
   expect_identical(p$TIMEZONE, "Pacific/Auckland")
-  expect_identical(names(p), c("DB", "INPUT", "REPORT", "TIMEZONE", "LOG"))
+  expect_identical(names(p), c("DB", "INPUT", "REPORT", "TIMEZONE", "LOG", "NOTIFY", "NOTIFY_FLUSH"))
   expect_identical(p$DB, file.path(s$home, "Library", "Application Support", "org.R-project.R",
                                    "R", "sampleTidy", "monitoring.duckdb"))
   expect_match(p$LOG, "sampletidy-autoimport.log$")
