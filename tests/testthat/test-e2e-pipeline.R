@@ -499,7 +499,9 @@ test_that("R-10.6: NAMESPACE exports equal the CONTRACT-pinned public API exactl
     # PLAN-21 phase (a): the db_meta key-value table's helpers, and the
     # snapshot manifest's reader, verifier and lister.
     "db_meta_get", "db_meta_set", "db_meta_read",
-    "read_snapshot_manifest", "verify_snapshot", "list_snapshots"
+    "read_snapshot_manifest", "verify_snapshot", "list_snapshots",
+    # PLAN-21 phase (d): re-imports archived inputs missing from a snapshot.
+    "replay_archive"
   )
   actual <- getNamespaceExports("sampleTidy")
   expect_setequal(actual, pinned)
