@@ -20,6 +20,14 @@
     each date and deletes a pruned snapshot's manifest with it.
   - The auto-import triggers also hash the folder in `SAMPLETIDY_GATE_WATCH`,
     so a change there alone starts R. `--print-config` prints `WATCH=` last.
+  - `replay_archive()` is for a deployment that moves its importer to
+    another machine from a snapshot: it lists the archived files the
+    database does not know (by asset uuid, byte hash and content hash; only
+    UUID-named archive folders, known ones skipped unread) and, with
+    `dry_run = FALSE`, copies them into a batch of the input folder
+    (`replay-g<N>` by default). The import then takes them under their
+    original asset uuids, with no new archive folders. It refuses a batch
+    name the configured `inbox_batches` pattern would not see.
 
 * The macOS auto-import trigger (`dev/auto-import.sh`) can send its
   notifications through a command set in `SAMPLETIDY_NOTIFY_COMMAND`
