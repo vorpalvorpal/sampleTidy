@@ -49,7 +49,9 @@ happens to their leftovers: an \code{\link[=inbox_batches]{inbox_batches()}} obj
 \value{
 (invisibly) a list: action, ran, locked, dry_run, started_at,
 ended_at, folders_seen, folders_settled, folders_processed,
-folders_arriving, folders, backup_path, errors, stale_lock.
+folders_arriving, folders, backup_path, errors, stale_lock. A refused
+run has \code{action = "writer_check"}, \code{ran = FALSE} and the reason in
+\code{writer_check}.
 }
 \description{
 Does nothing unless \code{\link[=inbox_check]{inbox_check()}} says something changed. See the
@@ -58,3 +60,20 @@ auto-import spec for the rules (settled gate, backup first, one
 \code{status.json} (and the identical \code{.import-status.json}) and the run log, and
 fires the hooks (\code{\link[=register_hook]{register_hook()}}); it writes no markdown.
 }
+\section{Writer check}{
+
+If \code{st_config("writer_check")} is a function, it is called first, right
+after argument validation, as \code{fn(db)}. Exactly \code{TRUE} allows the run, which
+then proceeds as usual. Anything else refuses it (dry runs too): the run
+never opens, creates, locks, backs up or snapshots the database, writes no
+state, fires no hooks and leaves the input alone. The reason is the value
+itself if it is one non-empty string, else its \code{"reason"} attribute if that
+is one, else \code{"writer check refused"}; an error inside \code{fn} refuses with
+\code{"writer check failed: <message>"}. A refusal appends one line to
+\code{events.jsonl} (never to the day digest or a later status) and, if
+\code{status.json} exists, adds a top-level \code{writer_check} field and puts
+\code{"Import refused by the writer check: <reason>"} first in its problems,
+leaving every other field as it was. The next allowed run rebuilds the
+status without them. \code{NULL} (the default) never refuses.
+}
+

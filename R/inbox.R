@@ -594,7 +594,9 @@ inbox_batches <- function(pattern = NULL, settle_minutes = 0, leftovers = NULL) 
   l <- l[nzchar(trimws(l))]
   out <- lapply(l, function(x) tryCatch(jsonlite::fromJSON(x, simplifyVector = FALSE),
                                         error = function(e) NULL))
-  Filter(Negate(is.null), out)
+  # A writer-check refusal is recorded in events.jsonl but is not a run: it
+  # never supplies the last run's problems, a recent import or a digest run.
+  Filter(function(x) !is.null(x) && !identical(x$action, "writer_check"), out)
 }
 
 .inbox_log_json <- function(res) {
@@ -635,6 +637,68 @@ inbox_batches <- function(pattern = NULL, settle_minutes = 0, leftovers = NULL) 
   p
 }
 
+# ---- the writer check -------------------------------------------------------------------
+
+.inbox_refused_prefix <- "Import refused by the writer check: "
+
+.inbox_one_string <- function(x) is.character(x) && length(x) == 1 && !is.na(x) && nzchar(x)
+
+# NULL when this run may write the database, else the refusal reason. Calls
+# st_config("writer_check") as fn(db); only exactly TRUE allows, and an error
+# inside it refuses (fail safe).
+.inbox_writer_check <- function(db) {
+  fn <- st_config("writer_check")
+  if (is.null(fn)) return(NULL)
+  if (!is.function(fn)) return("writer check failed: st_config(\"writer_check\") is not a function")
+  err <- NULL
+  v <- tryCatch(fn(db), error = function(e) {
+    err <<- conditionMessage(e)
+    NULL
+  })
+  if (!is.null(err)) return(paste0("writer check failed: ", err))
+  if (isTRUE(v)) return(NULL)
+  if (.inbox_one_string(v)) return(as.character(v))
+  r <- attr(v, "reason", exact = TRUE)
+  if (.inbox_one_string(r)) return(as.character(r))
+  "writer check refused"
+}
+
+# A refused run: one events.jsonl line, and the refusal put into an existing
+# status.json. Nothing else (no .imports.log, state, lock, hooks or DB).
+.inbox_writer_refused <- function(res, reason, report_dir) {
+  res$action <- "writer_check"
+  res$writer_check <- reason
+  res$ended_at <- .inbox_fmt_utc(Sys.time())
+  dir.create(report_dir, recursive = TRUE, showWarnings = FALSE)
+  # Seed events.jsonl from the legacy log first, as a real run does.
+  if (!file.exists(.inbox_events_path(report_dir)) && file.exists(.inbox_log_path(report_dir))) {
+    file.copy(.inbox_log_path(report_dir), .inbox_events_path(report_dir))
+  }
+  cat(paste0(.inbox_log_json(res), "\n"), file = .inbox_events_path(report_dir), sep = "",
+      append = TRUE)
+
+  sp <- file.path(report_dir, "status.json")
+  js <- if (file.exists(sp)) {
+    tryCatch(jsonlite::read_json(sp, simplifyVector = FALSE), error = function(e) NULL)
+  }
+  if (is.list(js) && !is.null(names(js))) {
+    old <- js$problems
+    old <- Filter(function(p) !(is.character(p) && startsWith(p, .inbox_refused_prefix)), old)
+    js$problems <- c(list(paste0(.inbox_refused_prefix, reason)), old)
+    js$writer_check <- reason
+    .inbox_write_status_json(js, report_dir)
+  }
+  res
+}
+
+# TRUE when status.json carries a writer-check refusal.
+.inbox_status_refused <- function(report_dir) {
+  sp <- file.path(report_dir, "status.json")
+  if (!file.exists(sp)) return(FALSE)
+  js <- tryCatch(jsonlite::read_json(sp, simplifyVector = FALSE), error = function(e) NULL)
+  is.list(js) && !is.null(js$writer_check)
+}
+
 # ---- section 1: inbox_run() -----------------------------------------------------------------
 
 #' Hourly auto-import sweep of the inbox
@@ -663,9 +727,26 @@ inbox_batches <- function(pattern = NULL, settle_minutes = 0, leftovers = NULL) 
 #' @param batch which folders are batches, how long they settle and what
 #'   happens to their leftovers: an [inbox_batches()] object. The default is
 #'   `st_config("inbox_batches")`, or `inbox_batches()` when that is unset.
+#' @section Writer check:
+#' If `st_config("writer_check")` is a function, it is called first, right
+#' after argument validation, as `fn(db)`. Exactly `TRUE` allows the run, which
+#' then proceeds as usual. Anything else refuses it (dry runs too): the run
+#' never opens, creates, locks, backs up or snapshots the database, writes no
+#' state, fires no hooks and leaves the input alone. The reason is the value
+#' itself if it is one non-empty string, else its `"reason"` attribute if that
+#' is one, else `"writer check refused"`; an error inside `fn` refuses with
+#' `"writer check failed: <message>"`. A refusal appends one line to
+#' `events.jsonl` (never to the day digest or a later status) and, if
+#' `status.json` exists, adds a top-level `writer_check` field and puts
+#' `"Import refused by the writer check: <reason>"` first in its problems,
+#' leaving every other field as it was. The next allowed run rebuilds the
+#' status without them. `NULL` (the default) never refuses.
+#'
 #' @return (invisibly) a list: action, ran, locked, dry_run, started_at,
 #'   ended_at, folders_seen, folders_settled, folders_processed,
-#'   folders_arriving, folders, backup_path, errors, stale_lock.
+#'   folders_arriving, folders, backup_path, errors, stale_lock. A refused
+#'   run has `action = "writer_check"`, `ran = FALSE` and the reason in
+#'   `writer_check`.
 #' @export
 inbox_run <- function(input_dir = st_config("input_dir"),
                       db = st_config("live_db"),
@@ -681,6 +762,9 @@ inbox_run <- function(input_dir = st_config("input_dir"),
   checkmate::assert(checkmate::check_list(checks, null.ok = TRUE),
                     checkmate::check_function(checks))
   batch <- .inbox_resolve_batch(batch, settle_minutes)
+  # The writer check comes before anything that stats, opens, locks or creates
+  # the DB, the state file or the backup dir. NULL (the default) allows.
+  refused <- .inbox_writer_check(db)
 
   res <- list(
     action = NA_character_, ran = FALSE, locked = FALSE, dry_run = dry_run,
@@ -690,8 +774,14 @@ inbox_run <- function(input_dir = st_config("input_dir"),
     folders = list(), backup_path = NA_character_, errors = character(0),
     stale_lock = FALSE
   )
+  if (!is.null(refused)) {
+    return(invisible(.inbox_writer_refused(res, refused, report_dir)))
+  }
 
   action <- inbox_check(input_dir, report_dir, now = now, db = db)
+  # A status left by a refusal is rebuilt by the first allowed run, even when
+  # nothing else changed.
+  if (action == "none" && .inbox_status_refused(report_dir)) action <- "status"
   res$action <- action
   if (action == "none") {
     return(invisible(res))
