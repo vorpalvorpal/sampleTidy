@@ -2,26 +2,34 @@
 % Please edit documentation in R/snapshot.R
 \name{prune_snapshots}
 \alias{prune_snapshots}
-\title{Prune old dated snapshots, keeping each month's last one indefinitely}
+\title{Prune old dated snapshots, thinning them by day, then week, then month}
 \usage{
-prune_snapshots(dest_dir = st_config("snapshot_dir"), keep_days = 60)
+prune_snapshots(
+  dest_dir = st_config("snapshot_dir"),
+  keep_days = 7,
+  keep_weeks = 8
+)
 }
 \arguments{
 \item{dest_dir}{directory containing dated snapshot files.}
 
-\item{keep_days}{snapshots this many days old or younger are always kept.}
+\item{keep_days}{snapshots this many days old or younger are all kept.}
+
+\item{keep_weeks}{number of weeks beyond \code{keep_days} during which one
+snapshot per ISO week is kept.}
 }
 \value{
 \code{NULL}, invisibly.
 }
 \description{
-Deletes dated \code{monitoring_YYYY-MM-DD.duckdb} snapshots in \code{dest_dir} older
-than \code{keep_days}, except that the most recent snapshot within each
-calendar month (\code{YYYY-MM}) is always kept, regardless of age. Files that
-don't match the dated-snapshot naming pattern are left untouched.
+Thins dated \code{monitoring_YYYY-MM-DD.duckdb} snapshots in \code{dest_dir}. Files
+that don't match the dated-snapshot naming pattern are left untouched.
 }
 \details{
-Retention: every snapshot from the last 60 days, plus the newest snapshot
-of each older calendar month, indefinitely. \code{\link[=ingest_dir]{ingest_dir()}} calls this
-after each snapshot it takes.
+Retention (age is today's date minus the file's date): every snapshot up to
+\code{keep_days} old is kept; from there up to \code{keep_days + 7 * keep_weeks} days
+old, only the newest snapshot of each ISO week (\verb{\%G-W\%V}) is kept; older
+than that, only the newest snapshot of each calendar month, indefinitely.
+Each week or month is judged among that age zone's files only.
+\code{\link[=ingest_dir]{ingest_dir()}} calls this after each snapshot it takes.
 }
