@@ -152,7 +152,7 @@ test_that("stage 1: `checks` set in code may be a function and round-trips", {
   expect_identical(st_config("checks"), f)
 })
 
-test_that("st_capabilities() is exported and names the twelve features (six from stage 1, two each from stages 2 and 3, then acirl_job_prefix and field_analytes), in order", {
+test_that("st_capabilities() is exported and names the thirteen features (six from stage 1, two each from stages 2 and 3, then acirl_job_prefix, field_analytes and writer_check), in order", {
   expect_true("st_capabilities" %in% getNamespaceExports("sampleTidy"))
   caps <- st_capabilities()
   expect_type(caps, "character")
@@ -160,9 +160,11 @@ test_that("st_capabilities() is exported and names the twelve features (six from
                     "site_keywords", "date_overrides_env",
                     "inbox_batches", "renderer_hooks",
                     "report_dir", "gas_template_slots",
-                    "acirl_job_prefix", "field_analytes") %in% caps))
-  expect_length(caps, 12)
+                    "acirl_job_prefix", "field_analytes", "writer_check") %in% caps))
+  expect_length(caps, 13)
   expect_identical(caps[9:11], c("report_dir", "gas_template_slots", "acirl_job_prefix"))
+  # PLAN-21 phase (a): the writer check is appended after field_analytes.
+  expect_identical(caps[12:13], c("field_analytes", "writer_check"))
 })
 
 test_that("stage 3: report_dir defaults to <R_user_dir data>/reports", {

@@ -11,7 +11,7 @@
 #           environ file, else <HOME>/Library/Application Support/org.R-project.R/
 #           R/sampleTidy/reports (PKM_VAULT is no longer read)
 #   ZONE    $SAMPLETIDY_TIMEZONE, else the environ file, else UTC
-#   `auto-import.sh --print-config` prints DB/INPUT/REPORT/TIMEZONE/LOG and
+#   `auto-import.sh --print-config` prints DB/INPUT/REPORT/TIMEZONE/LOG/WATCH and
 #   exits 0 with no side effects.
 #
 # ISOLATION (E1, E2). R_ENVIRON_USER (or ~/.Renviron) beats exported variables
@@ -102,7 +102,9 @@ test_that("--print-config prints the resolved values from the environ file, exit
   expect_identical(p$INPUT, "/x/assets")
   expect_identical(p$REPORT, rep)
   expect_identical(p$TIMEZONE, "Pacific/Auckland")
-  expect_identical(names(p), c("DB", "INPUT", "REPORT", "TIMEZONE", "LOG"))
+  # PLAN-21 phase (a): WATCH (SAMPLETIDY_GATE_WATCH, empty when unset) is printed last.
+  expect_identical(names(p), c("DB", "INPUT", "REPORT", "TIMEZONE", "LOG", "WATCH"))
+  expect_identical(p$WATCH, "")
   expect_identical(p$DB, file.path(s$home, "Library", "Application Support", "org.R-project.R",
                                    "R", "sampleTidy", "monitoring.duckdb"))
   expect_match(p$LOG, "sampletidy-autoimport.log$")

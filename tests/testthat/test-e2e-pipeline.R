@@ -495,7 +495,11 @@ test_that("R-10.6: NAMESPACE exports equal the CONTRACT-pinned public API exactl
     # before it sets the zone, the checks and the site keywords.
     "st_capabilities",
     # Stage 2 of the layer move: the recogniser for the inbox's batches.
-    "inbox_batches"
+    "inbox_batches",
+    # PLAN-21 phase (a): the db_meta key-value table's helpers, and the
+    # snapshot manifest's reader, verifier and lister.
+    "db_meta_get", "db_meta_set", "db_meta_read",
+    "read_snapshot_manifest", "verify_snapshot", "list_snapshots"
   )
   actual <- getNamespaceExports("sampleTidy")
   expect_setequal(actual, pinned)
