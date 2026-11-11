@@ -2,6 +2,9 @@
 # registers the Windows import trigger as a scheduled task.
 #
 #   install-task.ps1 [-Print] [-Uninstall] [-Launcher conhost|none] [-Name <n>] [-RenvironFile <f>]
+#                    [-Script <p>] [-Interval <minutes>] [-TimeLimit <ISO 8601 duration>]
+# (-Script, -Interval and -TimeLimit make it a generic installer other packages reuse for their own
+# jobs; their defaults are the auto-import trigger, every 10 minutes, 4 hours.)
 #
 # The task XML is generated and checked here on any OS with pwsh; registration goes through
 # schtasks.exe behind SAMPLETIDY_SCHTASKS, which these tests point at a bash stub that records
@@ -252,4 +255,130 @@ test_that("the installer and the XML name no person, host or path of a deploymen
     txt <- paste(readLines(src, warn = FALSE), collapse = "\n")
     expect_false(grepl("/Users/|~/pkm|~/dev/|OneDrive|SharePoint|bmcc", txt, ignore.case = TRUE))
   }
+})
+
+# ---- 20. the generic installer: -Script, -Interval, -TimeLimit ----------------------------------------
+# A downstream package registers its own job as
+#   install-task.ps1 -Name <n> -Script <p> -Interval <m> -TimeLimit <d> -RenvironFile <f>
+# -TimeLimit is an ISO 8601 duration, as the task XML spells it (PT30M, PT2H, PT1H30M, P1D).
+
+#' A job script under a path with a space; returns its path.
+it_job <- function(s, name = "nightly job.ps1") {
+  d <- file.path(s$dir, "jobs dir")
+  dir.create(d, showWarnings = FALSE)
+  p <- file.path(d, name)
+  writeLines("# a job", p)
+  p
+}
+
+test_that("-Script: the action runs that script, quoted, through the default launcher; the default is unchanged", {
+  s <- it_sandbox()
+  j <- it_job(s)
+  x <- it_print(s, "-Script", j)
+  expect_identical(it_txt(x, "//Actions/Exec/Command"), "conhost.exe")
+  a <- it_txt(x, "//Actions/Exec/Arguments")
+  expect_match(a, "^--headless\\s")
+  expect_match(a, "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File ")
+  expect_true(grepl(sprintf('-File "%s"', it_norm(j)), it_norm(a), fixed = TRUE), info = a)
+  expect_false(grepl("auto-import", a, fixed = TRUE))
+  # omitted: the checkout's trigger, as before
+  expect_true(grepl(sprintf('-File "%s"', it_norm(file.path(s$checkout, "dev", "auto-import.ps1"))),
+                    it_norm(it_txt(it_print(s), "//Actions/Exec/Arguments")), fixed = TRUE))
+})
+
+test_that("-Script goes through -Launcher none too, and -RenvironFile follows it", {
+  s <- it_sandbox()
+  j <- it_job(s)
+  f <- file.path(s$dir, "scratch dir", ".Renviron")
+  x <- it_print(s, "-Script", j, "-Launcher", "none", "-RenvironFile", f)
+  expect_match(it_txt(x, "//Actions/Exec/Command"), "pwsh(\\.exe)?\"?$")
+  a <- it_norm(it_txt(x, "//Actions/Exec/Arguments"))
+  expect_true(grepl(sprintf('-File "%s" -RenvironFile "%s"', it_norm(j), it_norm(f)), a, fixed = TRUE), info = a)
+  expect_false(grepl("conhost|--headless", a))
+})
+
+test_that("-Script: a missing file is refused, non-zero, naming the path, and schtasks is never called", {
+  s <- it_sandbox()
+  nope <- file.path(s$dir, "jobs dir", "no-such-job.ps1")
+  for (args in list(c("-Print", "-Script", nope), c("-Script", nope))) {
+    r <- it_run(s, args)
+    expect_false(identical(r$status, 0L), info = paste(args, collapse = " "))
+    expect_true(grepl(it_norm(nope), it_norm(it_info(r)), fixed = TRUE), info = it_info(r))
+    expect_false(file.exists(s$argv))
+  }
+  # a folder is not a script
+  r <- it_run(s, c("-Print", "-Script", s$dir))
+  expect_false(identical(r$status, 0L))
+})
+
+test_that("-Interval: the time trigger repeats every N minutes; the default stays 10", {
+  s <- it_sandbox()
+  iv <- function(...) it_txt(it_print(s, ...), "//Triggers/TimeTrigger/Repetition/Interval")
+  expect_identical(iv("-Interval", "15"), "PT15M")
+  expect_identical(iv("-Interval", "1"), "PT1M")
+  expect_match(iv("-Interval", "90"), "^PT(90M|1H30M)$")
+  expect_identical(iv(), "PT10M")
+  x <- it_print(s, "-Interval", "15")
+  expect_length(xml2::xml_find_all(x, "//Triggers/*"), 2L)                 # the logon trigger is still there
+  expect_length(xml2::xml_find_all(x, "//Triggers/TimeTrigger/Repetition/Duration"), 0L)
+})
+
+test_that("-Interval: zero, negative and non-numeric values are refused, non-zero, and register nothing", {
+  s <- it_sandbox()
+  for (bad in c("0", "-5", "abc", "")) {
+    r <- it_run(s, c("-Print", "-Interval", bad))
+    expect_false(identical(r$status, 0L), info = paste0("-Interval '", bad, "'"))
+    r <- it_run(s, c("-Interval", bad))
+    expect_false(identical(r$status, 0L), info = paste0("-Interval '", bad, "'"))
+  }
+  expect_false(file.exists(s$argv))
+})
+
+test_that("-TimeLimit: the task's ExecutionTimeLimit is the given ISO 8601 duration; the default stays PT4H", {
+  s <- it_sandbox()
+  tl <- function(...) it_txt(it_print(s, ...), "//Settings/ExecutionTimeLimit")
+  expect_identical(tl("-TimeLimit", "PT30M"), "PT30M")
+  expect_identical(tl("-TimeLimit", "PT2H"), "PT2H")
+  expect_identical(tl("-TimeLimit", "PT1H30M"), "PT1H30M")
+  expect_identical(tl("-TimeLimit", "P1D"), "P1D")
+  expect_identical(tl(), "PT4H")
+})
+
+test_that("-TimeLimit: a malformed duration is refused, non-zero, and registers nothing", {
+  s <- it_sandbox()
+  for (bad in c("4 hours", "banana", "PT", "P", "4H", "-PT1H", "PT1X", "")) {
+    r <- it_run(s, c("-Print", "-TimeLimit", bad))
+    expect_false(identical(r$status, 0L), info = paste0("-TimeLimit '", bad, "'"))
+    r <- it_run(s, c("-TimeLimit", bad))
+    expect_false(identical(r$status, 0L), info = paste0("-TimeLimit '", bad, "'"))
+  }
+  expect_false(file.exists(s$argv))
+})
+
+test_that("the downstream call shape: -Name -Script -Interval -TimeLimit -RenvironFile registers one task with all of them", {
+  s <- it_sandbox()
+  j <- it_job(s)
+  f <- file.path(s$dir, "other env", ".Renviron")
+  r <- it_run(s, c("-Name", "pkg-nightly", "-Script", j, "-Interval", "30", "-TimeLimit", "PT1H", "-RenvironFile", f))
+  expect_identical(r$status, 0L, info = it_info(r))
+  a <- it_argv(s)
+  expect_identical(a[1:2], c("/create", "/xml"))
+  expect_identical(a[4:6], c("/tn", "pkg-nightly", "/f"))
+  expect_length(a, 6L)
+  x <- it_parse(paste(readLines(s$xml, warn = FALSE, encoding = "UTF-8"), collapse = "\n"))
+  expect_match(it_txt(x, "//RegistrationInfo/URI"), "^\\\\?pkg-nightly$")
+  expect_identical(it_txt(x, "//Triggers/TimeTrigger/Repetition/Interval"), "PT30M")
+  expect_identical(it_txt(x, "//Settings/ExecutionTimeLimit"), "PT1H")
+  ar <- it_norm(it_txt(x, "//Actions/Exec/Arguments"))
+  expect_true(grepl(sprintf('-File "%s" -RenvironFile "%s"', it_norm(j), it_norm(f)), ar, fixed = TRUE), info = ar)
+  # the same XML as -Print gives for the same call (the file is what schtasks was handed)
+  p <- it_print(s, "-Name", "pkg-nightly", "-Script", j, "-Interval", "30", "-TimeLimit", "PT1H", "-RenvironFile", f)
+  expect_identical(as.character(xml2::xml_find_all(x, "//Actions")), as.character(xml2::xml_find_all(p, "//Actions")))
+})
+
+test_that("a custom -Script's task is not described as the sampleTidy auto-import trigger", {
+  s <- it_sandbox()
+  x <- it_print(s, "-Script", it_job(s))
+  expect_false(grepl("auto-import", it_txt(x, "//RegistrationInfo/Description"), ignore.case = TRUE))
+  expect_match(it_txt(it_print(s), "//RegistrationInfo/Description"), "auto-import")   # the default keeps its text
 })

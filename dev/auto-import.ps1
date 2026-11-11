@@ -58,17 +58,50 @@ $ENVIRON_LINES = @(); $ENVIRON_ERR = $null
 if (Test-Path -LiteralPath $ENVIRON -PathType Leaf) {
   try { $ENVIRON_LINES = [IO.File]::ReadAllLines($ENVIRON) } catch { $ENVIRON_ERR = "cannot read the environ file $ENVIRON ($($_.Exception.Message))" }
 }
-# renviron_get KEY: the last `KEY=value` line, with one pair of surrounding ' or " removed.
-# No ${VAR} or ~ expansion (the deployment writes absolute paths). CRLF lines are read cleanly.
-function renviron_get([string]$Key) {
-  $v = $null
-  foreach ($l in $ENVIRON_LINES) {
-    $l = $l.TrimEnd("`r")
-    if ($l.StartsWith("$Key=", [StringComparison]::Ordinal)) { $v = $l.Substring($Key.Length + 1) }
-  }
-  if ($v -and $v.Length -ge 2 -and ($v[0] -ceq "'" -or $v[0] -ceq '"') -and $v[-1] -ceq $v[0]) { $v = $v.Substring(1, $v.Length - 2) }
-  $v
+# The environ file as R reads it, once: each KEY=value line has one pair of surrounding ' or "
+# removed, then ${VAR}, ${VAR-dflt} (dflt only if VAR is unset) and ${VAR:-dflt} (also if empty)
+# expanded, nested and inside quotes too (a quoted dflt loses its quotes). VAR is a key set on an
+# earlier line of the file, else the process environment; a bare $VAR and ~ stay literal.
+# A line that expands to empty leaves its key unset. CRLF lines are read cleanly.
+$ENVIRON_VALS = @{}
+function unquote([string]$V) {
+  if ($V.Length -ge 2 -and ($V[0] -ceq "'" -or $V[0] -ceq '"') -and $V[-1] -ceq $V[0]) { $V.Substring(1, $V.Length - 2) } else { $V }
 }
+function expand([string]$S) {
+  $out = [Text.StringBuilder]::new(); $i = 0; $n = $S.Length
+  while ($i -lt $n) {
+    if ($S[$i] -cne '$' -or $i + 1 -ge $n -or $S[$i + 1] -cne '{') { [void]$out.Append($S[$i]); $i++; continue }
+    $d = 1; $j = $i + 2
+    while ($j -lt $n -and $d -gt 0) {
+      if ($S[$j] -ceq '$' -and $j + 1 -lt $n -and $S[$j + 1] -ceq '{') { $d++; $j += 2; continue }
+      if ($S[$j] -ceq '}') { $d-- }
+      $j++
+    }
+    if ($d -gt 0) { [void]$out.Append($S[$i]); $i++; continue }   # no closing brace: literal
+    $whole = $S.Substring($i, $j - $i); $inner = $S.Substring($i + 2, $j - $i - 3)
+    $m = [regex]::Match($inner, '^([A-Za-z_][A-Za-z0-9_]*)(.*)$', 'Singleline')
+    if (-not $m.Success) { [void]$out.Append($whole); $i = $j; continue }
+    $name = $m.Groups[1].Value; $rest = $m.Groups[2].Value
+    $v = if ($ENVIRON_VALS.ContainsKey($name)) { $ENVIRON_VALS[$name] } else { [Environment]::GetEnvironmentVariable($name) }   # $null: unset
+    if ($rest -eq '') { if ($null -ne $v) { [void]$out.Append($v) } }
+    elseif ($rest.StartsWith(':-') -or $rest.StartsWith('-')) {
+      $colon = $rest.StartsWith(':-')
+      if ($null -eq $v -or ($colon -and $v -eq '')) { [void]$out.Append((expand (unquote $rest.Substring($(if ($colon) { 2 } else { 1 }))))) }
+      else { [void]$out.Append($v) }
+    } else { [void]$out.Append($whole) }
+    $i = $j
+  }
+  $out.ToString()
+}
+foreach ($l in $ENVIRON_LINES) {
+  $l = $l.TrimEnd("`r")
+  $eq = $l.IndexOf('=')
+  if ($l.StartsWith('#') -or $eq -lt 1) { continue }
+  $v = expand (unquote $l.Substring($eq + 1))
+  $ENVIRON_VALS[$l.Substring(0, $eq)] = if ($v -eq '') { $null } else { $v }
+}
+# renviron_get KEY: the value R gives KEY from the file ($null when unset).
+function renviron_get([string]$Key) { if ($ENVIRON_VALS.ContainsKey($Key)) { $ENVIRON_VALS[$Key] } }
 # cfg KEY: the process environment, then R's environ file ($null when neither has it).
 function cfg([string]$Key) { $v = env $Key; if (-not $v) { $v = renviron_get $Key }; if ($v) { $v } }
 
