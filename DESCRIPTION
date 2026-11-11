@@ -30,6 +30,7 @@ Imports:
     fs,
     jsonlite,
     pdftools,
+    ps,
     purrr,
     readr,
     readxl,
