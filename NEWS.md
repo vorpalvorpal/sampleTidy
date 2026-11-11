@@ -13,7 +13,7 @@
   mentions launchd.
 * The inbox lock's liveness check no longer uses `tools::pskill()`, which on
   Windows terminates the process it was meant to test: `.st_pid_alive()` uses
-  the new `ps` dependency instead.
+  `ps` (a suggested package) instead.
 
 * A writer check for running one importer across machines (all off unless
   configured):

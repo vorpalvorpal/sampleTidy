@@ -131,6 +131,9 @@ inbox_check <- function(input_dir, report_dir, now = Sys.time(),
 .st_pid_alive <- function(pid) {
   pid <- suppressWarnings(as.integer(pid))
   if (length(pid) != 1 || is.na(pid) || pid <= 0L) return(FALSE)
+  # ps is a Suggests (the pinned Imports are ratified by test): without it assume the holder
+  # is alive, so a lock is kept until its two-hour age limit rather than stolen from a live run.
+  if (!requireNamespace("ps", quietly = TRUE)) return(TRUE)
   isTRUE(tryCatch(ps::ps_is_running(ps::ps_handle(pid)), error = function(e) FALSE))
 }
 
