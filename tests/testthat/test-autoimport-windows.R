@@ -38,7 +38,9 @@ aw_blank_vars <- c("SAMPLETIDY_AUTOIMPORT_DB", "SAMPLETIDY_AUTOIMPORT_INPUT",
                    "SAMPLETIDY_AUTOIMPORT_CODE", "SAMPLETIDY_AUTOIMPORT_NOTIFY",
                    "SAMPLETIDY_AUTOIMPORT_STALE_HOURS", "SAMPLETIDY_INPUT_DIR",
                    "SAMPLETIDY_REPORT_DIR", "SAMPLETIDY_TIMEZONE", "SAMPLETIDY_GATE_WATCH",
-                   "R_ENVIRON_USER")
+                   "SAMPLETIDY_NOTIFY_COMMAND", "SAMPLETIDY_NOTIFY_FLUSH",
+                   "SAMPLETIDY_AUTOIMPORT_RUN", "SAMPLETIDY_AUTOIMPORT_GIT",
+                   "SAMPLETIDY_NOTIFY_DESKTOP", "R_ENVIRON_USER", "R_USER")
 
 #' A stub RSCRIPT (the script argument is auto-import.R). It records
 #' `run|REPORT|INPUT|DB|lock-held|arg1` in runs, prints to stdout and stderr,
@@ -89,7 +91,12 @@ aw_sandbox <- function(env = parent.frame(), rc = 0L, sleep = 0L) {
 aw_std <- function(s, ...) {
   v <- c(SAMPLETIDY_AUTOIMPORT_DB = s$db, SAMPLETIDY_AUTOIMPORT_INPUT = s$input,
          SAMPLETIDY_AUTOIMPORT_REPORT = s$report, SAMPLETIDY_AUTOIMPORT_RSCRIPT = s$rscript,
-         SAMPLETIDY_AUTOIMPORT_LOG = s$log)
+         SAMPLETIDY_AUTOIMPORT_LOG = s$log,
+         # PLAN-21 b2: with CODE unset the trigger runs main from a detached worktree; these
+         # tests run the checkout's own dev/ (the worktree behaviour has its own file)
+         SAMPLETIDY_AUTOIMPORT_CODE = dirname(aw_dev()),
+         # b2: never read the developer's ~/.Renviron
+         R_ENVIRON_USER = file.path(s$dir, "no-such.Renviron"))
   over <- c(...)
   if (length(over)) v <- c(v[setdiff(names(v), names(over))], over)
   v
@@ -179,20 +186,20 @@ aw_prime <- function(s) {
 
 # ---- 1. print config ------------------------------------------------------------------------
 
-# PLAN-21 phase (a): WATCH (SAMPLETIDY_GATE_WATCH, empty when unset) is printed last.
-test_that("-PrintConfig prints exactly DB, INPUT, REPORT, TIMEZONE, LOG, WATCH in order and exits 0", {
+# PLAN-21 phase (a) added WATCH; phase (b) adds NOTIFY and NOTIFY_FLUSH (the .sh's 8 lines).
+test_that("-PrintConfig prints exactly the .sh's eight keys in order and exits 0", {
   s <- aw_sandbox()
   k <- aw_print(s, aw_std(s, SAMPLETIDY_TIMEZONE = "Pacific/Kiritimati"))
-  expect_identical(k$keys, c("DB", "INPUT", "REPORT", "TIMEZONE", "LOG", "WATCH"))
-  expect_identical(aw_norm(k$vals), aw_norm(c(s$db, s$input, s$report, "Pacific/Kiritimati", s$log, "")))
+  expect_identical(k$keys, c("DB", "INPUT", "REPORT", "TIMEZONE", "LOG", "NOTIFY", "NOTIFY_FLUSH", "WATCH"))
+  expect_identical(aw_norm(k$vals), aw_norm(c(s$db, s$input, s$report, "Pacific/Kiritimati", s$log, "", "", "")))
 })
 
-test_that("--print-config (the Mac spelling) prints the same six lines", {
+test_that("--print-config (the Mac spelling) prints the same eight lines", {
   s <- aw_sandbox()
   v <- aw_std(s, SAMPLETIDY_TIMEZONE = "Pacific/Kiritimati")
   a <- aw_print(s, v, "-PrintConfig")
   b <- aw_print(s, v, "--print-config")
-  expect_length(b$lines, 6L)
+  expect_length(b$lines, 8L)
   expect_identical(b$lines, a$lines)
 })
 
@@ -204,7 +211,7 @@ test_that("print config has no side effects and works with no DB, a pause file a
   before <- readBin(file.path(aw_lock(s), "pid"), "raw", 100)
   for (a in c("-PrintConfig", "--print-config")) {
     k <- aw_print(s, aw_std(s), a)
-    expect_length(k$lines, 6L)
+    expect_length(k$lines, 8L)
   }
   expect_false(dir.exists(dirname(s$log)))
   expect_false(file.exists(s$log))
