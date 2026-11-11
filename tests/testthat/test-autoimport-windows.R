@@ -87,6 +87,9 @@ aw_sandbox <- function(env = parent.frame(), rc = 0L, sleep = 0L) {
   s
 }
 
+#' The roaming-profile folder of a sandbox (R's data dir on Windows lives under it, PLAN-21 d5).
+aw_appdata <- function(s) file.path(s$dir, "appdata")
+
 #' The usual variables of a sandboxed run; `...` overrides (NA = leave unset).
 aw_std <- function(s, ...) {
   v <- c(SAMPLETIDY_AUTOIMPORT_DB = s$db, SAMPLETIDY_AUTOIMPORT_INPUT = s$input,
@@ -230,15 +233,15 @@ test_that("print config creates no log folder or report folder", {
 
 # ---- 2. resolution ---------------------------------------------------------------------------
 
-test_that("AUTOIMPORT_REPORT beats SAMPLETIDY_REPORT_DIR, which beats the LOCALAPPDATA default", {
+test_that("AUTOIMPORT_REPORT beats SAMPLETIDY_REPORT_DIR, which beats the APPDATA default (R's data dir)", {
   s <- aw_sandbox()
   other <- file.path(s$dir, "other-reports")
   k <- aw_print(s, aw_std(s, SAMPLETIDY_REPORT_DIR = other))
   expect_identical(aw_norm(k$vals[3]), aw_norm(s$report))
   k <- aw_print(s, aw_std(s, SAMPLETIDY_AUTOIMPORT_REPORT = NA, SAMPLETIDY_REPORT_DIR = other))
   expect_identical(aw_norm(k$vals[3]), aw_norm(other))
-  k <- aw_print(s, aw_std(s, SAMPLETIDY_AUTOIMPORT_REPORT = NA))
-  expect_identical(aw_norm(k$vals[3]), aw_norm(file.path(s$lad, "R", "data", "R", "sampleTidy", "reports")))
+  k <- aw_print(s, aw_std(s, SAMPLETIDY_AUTOIMPORT_REPORT = NA, SAMPLETIDY_AUTOIMPORT_PLATFORM = "Windows", APPDATA = aw_appdata(s)))
+  expect_identical(aw_norm(k$vals[3]), aw_norm(file.path(aw_appdata(s), "R", "data", "R", "sampleTidy", "reports")))
 })
 
 test_that("INPUT_DIR named `input` resolves to its parent; any other name is used verbatim", {
@@ -266,20 +269,22 @@ test_that("INPUT is empty when neither variable is set", {
   expect_identical(k$lines[2], "INPUT=")
 })
 
-test_that("TIMEZONE defaults to UTC, and the DB and LOG default under LOCALAPPDATA", {
+test_that("TIMEZONE defaults to UTC, the DB defaults under APPDATA (R's data dir) and the LOG under LOCALAPPDATA", {
   s <- aw_sandbox()
-  k <- aw_print(s, aw_std(s, SAMPLETIDY_AUTOIMPORT_DB = NA, SAMPLETIDY_AUTOIMPORT_LOG = NA))
+  k <- aw_print(s, aw_std(s, SAMPLETIDY_AUTOIMPORT_DB = NA, SAMPLETIDY_AUTOIMPORT_LOG = NA,
+                          SAMPLETIDY_AUTOIMPORT_PLATFORM = "Windows", APPDATA = aw_appdata(s)))
   expect_identical(k$vals[4], "UTC")
-  expect_identical(aw_norm(k$vals[1]), aw_norm(file.path(s$lad, "R", "data", "R", "sampleTidy", "monitoring.duckdb")))
+  expect_identical(aw_norm(k$vals[1]), aw_norm(file.path(aw_appdata(s), "R", "data", "R", "sampleTidy", "monitoring.duckdb")))
   expect_identical(aw_norm(k$vals[5]), aw_norm(file.path(s$lad, "sampleTidy", "autoimport.log")))
 })
 
 test_that("empty environment values count as unset", {
   s <- aw_sandbox()
   k <- aw_print(s, aw_std(s, SAMPLETIDY_AUTOIMPORT_REPORT = "", SAMPLETIDY_TIMEZONE = "",
-                          SAMPLETIDY_AUTOIMPORT_LOG = ""))
+                          SAMPLETIDY_AUTOIMPORT_LOG = "", SAMPLETIDY_AUTOIMPORT_PLATFORM = "Windows",
+                          APPDATA = aw_appdata(s), R_USER_DATA_DIR = ""))
   expect_identical(k$vals[4], "UTC")
-  expect_identical(aw_norm(k$vals[3]), aw_norm(file.path(s$lad, "R", "data", "R", "sampleTidy", "reports")))
+  expect_identical(aw_norm(k$vals[3]), aw_norm(file.path(aw_appdata(s), "R", "data", "R", "sampleTidy", "reports")))
   expect_identical(aw_norm(k$vals[5]), aw_norm(file.path(s$lad, "sampleTidy", "autoimport.log")))
 })
 

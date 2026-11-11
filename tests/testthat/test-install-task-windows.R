@@ -54,7 +54,8 @@ it_run <- function(s, args = character(), ...) {
   v <- c(HOME = s$home, TMPDIR = s$tmp, TEMP = s$tmp, TMP = s$tmp,
          PATH = paste(c("/usr/bin", "/bin", dirname(Sys.which("pwsh"))), collapse = ":"),
          POWERSHELL_TELEMETRY_OPTOUT = "1", DOTNET_CLI_TELEMETRY_OPTOUT = "1",
-         LOCALAPPDATA = file.path(s$dir, "lad"),
+         LOCALAPPDATA = file.path(s$dir, "lad"), APPDATA = file.path(s$dir, "appdata"),
+         USERPROFILE = file.path(s$dir, "profile"),
          SAMPLETIDY_REPORT_DIR = file.path(s$data, "reports"),
          R_ENVIRON_USER = file.path(s$dir, "no-such.Renviron"),
          SAMPLETIDY_SCHTASKS = s$sch)
@@ -79,6 +80,18 @@ it_print <- function(s, ...) {
 }
 it_txt <- function(x, path) xml2::xml_text(xml2::xml_find_first(x, path))
 it_norm <- function(x) gsub("\\\\", "/", x)
+
+#' What schtasks was handed: the task file decoded as UTF-16 LE with its BOM stripped (PLAN-21 d1).
+#' A file that is not UTF-16 is read as UTF-8 instead, so a test reports the missing behaviour
+#' through its own expectation, not by erroring in the reader.
+it_read_task_file <- function(path) {
+  b <- readBin(path, "raw", file.size(path))
+  if (length(b) >= 2L && identical(b[1:2], as.raw(c(0xff, 0xfe)))) {
+    out <- iconv(list(b[-(1:2)]), "UTF-16LE", "UTF-8")
+    if (!is.na(out)) return(out)
+  }
+  rawToChar(b)
+}
 
 # ---- 17. the XML -----------------------------------------------------------------------------
 
@@ -152,13 +165,49 @@ test_that("XML: the task is named \\sampleTidy-autoimport; -Name changes it", {
   expect_match(it_txt(x2, "//RegistrationInfo/URI"), "^\\\\?sampleTidy-autoimport-sandbox$")
 })
 
-test_that("XML: -RenvironFile adds `-RenvironFile <f>` to the action; by default it is absent", {
+test_that("XML: -RenvironFile defaults to USERPROFILE/.Renviron and is always in the action; a given file replaces it", {
   s <- it_sandbox()
-  expect_false(grepl("RenvironFile", it_txt(it_print(s), "//Actions/Exec/Arguments"), fixed = TRUE))
+  dflt <- it_norm(file.path(s$dir, "profile", ".Renviron"))
+  a <- it_norm(it_txt(it_print(s), "//Actions/Exec/Arguments"))
+  expect_true(endsWith(a, sprintf('-RenvironFile "%s"', dflt)), info = a)
+  expect_false(file.exists(dflt))                                   # the file need not exist
   f <- file.path(s$dir, "scratch dir", ".Renviron")
-  a <- it_txt(it_print(s, "-RenvironFile", f), "//Actions/Exec/Arguments")
-  expect_true(grepl("auto-import.ps1\"? -RenvironFile \"?", it_norm(a)), info = a)
-  expect_true(grepl(it_norm(f), it_norm(a), fixed = TRUE), info = a)
+  a <- it_norm(it_txt(it_print(s, "-RenvironFile", f), "//Actions/Exec/Arguments"))
+  expect_true(grepl("auto-import.ps1\"? -RenvironFile \"?", a), info = a)
+  expect_true(endsWith(a, sprintf('-RenvironFile "%s"', it_norm(f))), info = a)
+  expect_false(grepl(dflt, a, fixed = TRUE), info = a)
+})
+
+test_that("XML: the default -RenvironFile rides on -Script and -Launcher none too", {
+  s <- it_sandbox()
+  dflt <- it_norm(file.path(s$dir, "profile", ".Renviron"))
+  j <- file.path(s$dir, "a job.ps1")
+  writeLines("# a job", j)
+  a <- it_norm(it_txt(it_print(s, "-Script", j), "//Actions/Exec/Arguments"))
+  expect_true(endsWith(a, sprintf('-File "%s" -RenvironFile "%s"', it_norm(j), dflt)), info = a)
+  a <- it_norm(it_txt(it_print(s, "-Launcher", "none"), "//Actions/Exec/Arguments"))
+  expect_true(endsWith(a, sprintf('-RenvironFile "%s"', dflt)), info = a)
+})
+
+test_that("install: the registered file carries the default -RenvironFile too", {
+  s <- it_sandbox()
+  expect_identical(it_run(s)$status, 0L)
+  x <- it_parse(it_read_task_file(s$xml))
+  expect_true(endsWith(it_norm(it_txt(x, "//Actions/Exec/Arguments")),
+                       sprintf('-RenvironFile "%s"', it_norm(file.path(s$dir, "profile", ".Renviron")))))
+})
+
+test_that("USERPROFILE unset and no -RenvironFile: exit 2, no XML, schtasks not called", {
+  s <- it_sandbox()
+  for (args in list("-Print", character())) {
+    r <- it_run(s, args, USERPROFILE = NA)
+    expect_identical(r$status, 2L, info = it_info(r))
+    expect_false(grepl("<Task", r$stdout, fixed = TRUE))
+    expect_false(file.exists(s$argv))
+  }
+  # a given -RenvironFile needs no USERPROFILE
+  r <- it_run(s, c("-Print", "-RenvironFile", file.path(s$dir, "e.env")), USERPROFILE = NA)
+  expect_identical(r$status, 0L, info = it_info(r))
 })
 
 # ---- 19. launchers ------------------------------------------------------------------------------
@@ -198,21 +247,54 @@ test_that("install: schtasks /create /xml <file> /tn sampleTidy-autoimport /f, t
   expect_true(file.exists(s$seen), info = "the XML file existed when schtasks ran")
   expect_false(file.exists(a[3]))                                     # deleted afterwards
   expect_length(list.files(s$tmp, all.files = TRUE, no.. = TRUE), 0L)
-  x <- it_parse(paste(readLines(s$xml, warn = FALSE, encoding = "UTF-8"), collapse = "\n"))
+  x <- it_parse(it_read_task_file(s$xml))
   p <- it_print(s)
   expect_identical(as.character(xml2::xml_find_all(x, "//Actions")), as.character(xml2::xml_find_all(p, "//Actions")))
 })
 
-test_that("install: the XML file's declared encoding matches its bytes (schtasks rejects a mismatch)", {
+test_that("install: the task file is UTF-16 LE with a BOM, declared UTF-16 (schtasks rejects a mismatch)", {
   s <- it_sandbox()
   expect_identical(it_run(s)$status, 0L)
-  b <- readBin(s$xml, "raw", 400)
-  if (identical(b[1:2], as.raw(c(0xff, 0xfe)))) {
-    head <- iconv(list(b[-(1:2)]), "UTF-16LE", "UTF-8")
-    expect_match(head, "encoding=\"UTF-16\"", ignore.case = TRUE)
-  } else {
-    expect_false(grepl("encoding=\"UTF-16\"", rawToChar(b), ignore.case = TRUE))   # UTF-8 bytes declared UTF-16
-  }
+  b <- readBin(s$xml, "raw", file.size(s$xml))
+  expect_identical(b[1:2], as.raw(c(0xff, 0xfe)))
+  expect_false(identical(b[1:3], as.raw(c(0xef, 0xbb, 0xbf))))      # no UTF-8 BOM
+  txt <- it_read_task_file(s$xml)
+  expect_true(startsWith(txt, '<?xml version="1.0" encoding="UTF-16"?>'), info = substr(txt, 1, 80))
+  expect_false(grepl("UTF-8", substr(txt, 1, 100), ignore.case = TRUE))
+  x <- xml2::read_xml(b)                                           # libxml2 reads the bytes as UTF-16
+  expect_identical(xml2::xml_name(x), "Task")
+})
+
+test_that("-Print declares UTF-16 as well", {
+  s <- it_sandbox()
+  r <- it_run(s, "-Print")
+  expect_identical(r$status, 0L, info = it_info(r))
+  expect_true(startsWith(trimws(r$stdout), '<?xml version="1.0" encoding="UTF-16"?>'), info = substr(r$stdout, 1, 80))
+})
+
+test_that("install: the decoded file is -Print's text, once StartBoundary is masked", {
+  s <- it_sandbox()
+  expect_identical(it_run(s)$status, 0L)
+  mask <- function(x) trimws(gsub("<StartBoundary>[^<]*</StartBoundary>", "<StartBoundary/>", gsub("\r\n", "\n", x)))
+  p <- it_run(s, "-Print")
+  expect_identical(p$status, 0L, info = it_info(p))
+  expect_identical(readBin(s$xml, "raw", 2), as.raw(c(0xff, 0xfe)))
+  expect_identical(mask(it_read_task_file(s$xml)), mask(p$stdout))
+})
+
+test_that("install: a non-ASCII checkout path and -Name survive byte-exact in the decoded file", {
+  s <- it_sandbox()
+  co2 <- file.path(s$dir, "ch\u00e9 ckout")
+  file.rename(s$checkout, co2)
+  s$checkout <- co2
+  s$script <- file.path(co2, "dev", "windows", "install-task.ps1")
+  nm <- "t\u00e2che-\u00e9"
+  expect_identical(it_run(s, c("-Name", nm))$status, 0L)
+  expect_identical(readBin(s$xml, "raw", 2), as.raw(c(0xff, 0xfe)))
+  txt <- it_read_task_file(s$xml)
+  expect_true(grepl(file.path(co2, "dev", "auto-import.ps1"), txt, fixed = TRUE))
+  expect_true(grepl(paste0("<URI>\\", nm, "</URI>"), txt, fixed = TRUE))
+  expect_identical(it_argv(s)[5], nm)                               # /tn <name> too
 })
 
 test_that("install: -Name sets the /tn; -Uninstall is schtasks /delete /tn <name> /f and registers nothing", {
@@ -365,7 +447,7 @@ test_that("the downstream call shape: -Name -Script -Interval -TimeLimit -Renvir
   expect_identical(a[1:2], c("/create", "/xml"))
   expect_identical(a[4:6], c("/tn", "pkg-nightly", "/f"))
   expect_length(a, 6L)
-  x <- it_parse(paste(readLines(s$xml, warn = FALSE, encoding = "UTF-8"), collapse = "\n"))
+  x <- it_parse(it_read_task_file(s$xml))
   expect_match(it_txt(x, "//RegistrationInfo/URI"), "^\\\\?pkg-nightly$")
   expect_identical(it_txt(x, "//Triggers/TimeTrigger/Repetition/Interval"), "PT30M")
   expect_identical(it_txt(x, "//Settings/ExecutionTimeLimit"), "PT1H")
@@ -381,4 +463,72 @@ test_that("a custom -Script's task is not described as the sampleTidy auto-impor
   x <- it_print(s, "-Script", it_job(s))
   expect_false(grepl("auto-import", it_txt(x, "//RegistrationInfo/Description"), ignore.case = TRUE))
   expect_match(it_txt(it_print(s), "//RegistrationInfo/Description"), "auto-import")   # the default keeps its text
+})
+
+# ---- 21. PLAN-21 d5: the WorkingDirectory comes from the trigger's own --print-config ----------------
+# One resolver: the installer asks `auto-import.ps1 -RenvironFile <f> --print-config` for REPORT and
+# uses its parent, so the environ file (with R's ${VAR} forms) and R's data dir rule both apply.
+
+test_that("WorkingDirectory: SAMPLETIDY_REPORT_DIR only in the -RenvironFile file, written ${VAR}-style, is read expanded", {
+  s <- it_sandbox()
+  root <- file.path(s$dir, "x root")
+  f <- file.path(s$dir, "scratch.Renviron")
+  writeLines("SAMPLETIDY_REPORT_DIR=${IT_TEST_ROOT}/proj/reports", f)
+  r <- it_run(s, c("-Print", "-RenvironFile", f), SAMPLETIDY_REPORT_DIR = NA, IT_TEST_ROOT = root)
+  expect_identical(r$status, 0L, info = it_info(r))
+  expect_identical(it_norm(it_txt(it_parse(r$stdout), "//Actions/Exec/WorkingDirectory")), it_norm(file.path(root, "proj")))
+})
+
+test_that("WorkingDirectory: the file's value wins over R_ENVIRON_USER, and a plain quoted value works", {
+  s <- it_sandbox()
+  f <- file.path(s$dir, "scratch.Renviron")
+  writeLines(sprintf("SAMPLETIDY_REPORT_DIR='%s'", file.path(s$dir, "q dir", "rep")), f)
+  decoy <- file.path(s$dir, "decoy.Renviron")
+  writeLines("SAMPLETIDY_REPORT_DIR=/decoy/rep", decoy)
+  r <- it_run(s, c("-Print", "-RenvironFile", f), SAMPLETIDY_REPORT_DIR = NA, R_ENVIRON_USER = decoy)
+  expect_identical(r$status, 0L, info = it_info(r))
+  expect_identical(it_norm(it_txt(it_parse(r$stdout), "//Actions/Exec/WorkingDirectory")), it_norm(file.path(s$dir, "q dir")))
+})
+
+test_that("WorkingDirectory: with nothing set and the Windows platform it is APPDATA/R/data/R/sampleTidy", {
+  s <- it_sandbox()
+  r <- it_run(s, "-Print", SAMPLETIDY_REPORT_DIR = NA, SAMPLETIDY_AUTOIMPORT_PLATFORM = "Windows")
+  expect_identical(r$status, 0L, info = it_info(r))
+  expect_identical(it_norm(it_txt(it_parse(r$stdout), "//Actions/Exec/WorkingDirectory")),
+                   it_norm(file.path(s$dir, "appdata", "R", "data", "R", "sampleTidy")))
+  # R_USER_DATA_DIR, set in the environ file, moves it
+  f <- file.path(s$dir, "ud.Renviron")
+  writeLines(sprintf("R_USER_DATA_DIR=%s", file.path(s$dir, "udata")), f)
+  r <- it_run(s, c("-Print", "-RenvironFile", f), SAMPLETIDY_REPORT_DIR = NA, SAMPLETIDY_AUTOIMPORT_PLATFORM = "Windows")
+  expect_identical(r$status, 0L, info = it_info(r))
+  expect_identical(it_norm(it_txt(it_parse(r$stdout), "//Actions/Exec/WorkingDirectory")),
+                   it_norm(file.path(s$dir, "udata", "R", "sampleTidy")))
+})
+
+test_that("WorkingDirectory: a failing --print-config child makes the installer exit 2 and register nothing", {
+  s <- it_sandbox()
+  writeLines("exit 7", file.path(s$checkout, "dev", "auto-import.ps1"))
+  for (args in list("-Print", character())) {
+    r <- it_run(s, args)
+    expect_identical(r$status, 2L, info = it_info(r))
+    expect_false(file.exists(s$argv))
+  }
+})
+
+test_that("the installer no longer carries its own copy of the resolver (env_or_file)", {
+  src <- readLines(testthat::test_path("..", "..", "dev", "windows", "install-task.ps1"), warn = FALSE)
+  expect_false(any(grepl("env_or_file|LOCALAPPDATA", src)))
+  expect_true(any(grepl("print-config", src, ignore.case = TRUE)))
+})
+
+# ---- 22. neither installer sets a persistent environment variable (PLAN-21 d3, item 7) ----------------
+
+test_that("no .ps1 under dev/ sets a persistent environment variable", {
+  files <- list.files(testthat::test_path("..", "..", "dev"), pattern = "\\.ps1$", recursive = TRUE, full.names = TRUE)
+  expect_gt(length(files), 1L)
+  for (f in files) {
+    txt <- paste(readLines(f, warn = FALSE), collapse = "\n")
+    expect_false(grepl("\\bsetx\\b|EnvironmentVariableTarget|HKCU:\\\\Environment", txt, ignore.case = TRUE), info = f)
+    expect_false(grepl("SetEnvironmentVariable\\s*\\([^)]*,[^)]*,[^)]*\\)", txt, ignore.case = TRUE), info = f)
+  }
 })

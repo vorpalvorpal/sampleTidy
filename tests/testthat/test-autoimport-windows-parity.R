@@ -927,3 +927,205 @@ test_that("environ: the .sh and the .ps1 read every ${VAR} form to the same valu
     expect_identical(sh$vals[6], f[[3]], info = sprintf("%s with VAR=%s", f[[1]], format(f[[2]])))
   }
 })
+
+# ---- 17. PLAN-21 d5: R's own data-dir rule, and scratch paths through the environ file ---------------------
+# R's rule (tools::R_user_dir): R_USER_DATA_DIR, then XDG_DATA_HOME, then the platform default (Windows
+# %APPDATA%\R\data, macOS ~/Library/Application Support/org.R-project.R, else ~/.local/share), then
+# R/<package>. Both triggers compute it, so the DB and report defaults are where R itself keeps them.
+# SAMPLETIDY_AUTOIMPORT_PLATFORM (Windows, Darwin, other) is the test seam for the platform.
+# R reads the environ file before it looks at any of this, so a value in the file counts.
+
+#' A full reset between ticks of one test: run records, and the report folder's gate, health and lock.
+ap_clean <- function(s) {
+  ap_reset(s)
+  unlink(list.files(s$report, all.files = TRUE, full.names = TRUE, no.. = TRUE), recursive = TRUE)
+  unlink(s$log)
+}
+
+ap_data_unset <- c(SAMPLETIDY_AUTOIMPORT_DB = NA, SAMPLETIDY_AUTOIMPORT_REPORT = NA)
+ap_pc_args <- function(via) if (via == "sh") "--print-config" else "-PrintConfig"
+ap_norm <- function(x) gsub("\\\\", "/", x)
+
+#' The --print-config key/values of one trigger, with DB and REPORT left to their defaults.
+ap_cfg <- function(s, via, ...) {
+  r <- ap_run(s, c(ap_data_unset), ..., args = ap_pc_args(via), via = via)
+  ap_ok(r)
+  ap_kv(r)
+}
+
+#' What R itself gives as the data dir of sampleTidy: a child Rscript with the same HOME, environ
+#' file and extra environment (the oracle).
+ap_r_data_dir <- function(s, env = character()) {
+  r <- processx::run(as.character(Sys.which("Rscript")),
+                     c("-e", 'cat(tools::R_user_dir("sampleTidy", "data"))'),
+                     env = c(HOME = s$home, PATH = "/usr/bin:/bin", R_ENVIRON_USER = s$environ,
+                             R_PROFILE_USER = file.path(s$home, "none"), env),
+                     error_on_status = FALSE, timeout = 60)
+  expect_identical(r$status, 0L, info = r$stderr)
+  r$stdout
+}
+
+test_that("data dir: on macOS both triggers default to where R_user_dir puts it, in every precedence case", {
+  skip_if_not(Sys.info()[["sysname"]] == "Darwin", "the oracle's default is the macOS one")
+  skip_if(Sys.which("Rscript") == "", "no Rscript")
+  s <- ap_sandbox()
+  rud <- file.path(s$dir, "rud"); xdg <- file.path(s$dir, "xdg")
+  cases <- list(
+    none = list(env = character(), file = NULL),
+    r_user = list(env = c(R_USER_DATA_DIR = rud), file = NULL),
+    xdg = list(env = c(XDG_DATA_HOME = xdg), file = NULL),
+    both = list(env = c(R_USER_DATA_DIR = rud, XDG_DATA_HOME = xdg), file = NULL),
+    file_only = list(env = character(), file = sprintf("R_USER_DATA_DIR=%s", rud)))
+  for (nm in names(cases)) {
+    cs <- cases[[nm]]
+    writeLines(if (is.null(cs$file)) character() else cs$file, s$environ)
+    want <- ap_r_data_dir(s, cs$env)
+    for (via in c("sh", "ps1")) {
+      k <- do.call(ap_cfg, c(list(s, via, SAMPLETIDY_AUTOIMPORT_PLATFORM = "Darwin"), as.list(cs$env)))
+      expect_identical(ap_norm(k$vals[1]), file.path(want, "monitoring.duckdb"), info = paste(nm, via, "DB"))
+      expect_identical(ap_norm(k$vals[3]), file.path(want, "reports"), info = paste(nm, via, "REPORT"))
+    }
+  }
+})
+
+test_that("data dir: the Darwin and 'other' defaults, and R_USER_DATA_DIR beating XDG_DATA_HOME, in both triggers", {
+  s <- ap_sandbox()
+  for (via in c("sh", "ps1")) {
+    k <- ap_cfg(s, via, SAMPLETIDY_AUTOIMPORT_PLATFORM = "Darwin")
+    expect_identical(ap_norm(k$vals[1]), file.path(s$home, "Library", "Application Support", "org.R-project.R", "R", "sampleTidy", "monitoring.duckdb"), info = via)
+    k <- ap_cfg(s, via, SAMPLETIDY_AUTOIMPORT_PLATFORM = "Linux")
+    expect_identical(ap_norm(k$vals[1]), file.path(s$home, ".local", "share", "R", "sampleTidy", "monitoring.duckdb"), info = via)
+    expect_identical(ap_norm(k$vals[3]), file.path(s$home, ".local", "share", "R", "sampleTidy", "reports"), info = via)
+    k <- ap_cfg(s, via, SAMPLETIDY_AUTOIMPORT_PLATFORM = "Linux", XDG_DATA_HOME = file.path(s$dir, "xdg"))
+    expect_identical(ap_norm(k$vals[1]), file.path(s$dir, "xdg", "R", "sampleTidy", "monitoring.duckdb"), info = via)
+    k <- ap_cfg(s, via, SAMPLETIDY_AUTOIMPORT_PLATFORM = "Linux", XDG_DATA_HOME = file.path(s$dir, "xdg"),
+                R_USER_DATA_DIR = file.path(s$dir, "rud"))
+    expect_identical(ap_norm(k$vals[1]), file.path(s$dir, "rud", "R", "sampleTidy", "monitoring.duckdb"), info = via)
+  }
+})
+
+test_that("data dir, Windows branch (.ps1): APPDATA\\R\\data\\R\\sampleTidy, not LOCALAPPDATA; R_USER_DATA_DIR beats it", {
+  s <- ap_sandbox()
+  A <- file.path(s$dir, "roaming")
+  k <- ap_cfg(s, "ps1", SAMPLETIDY_AUTOIMPORT_PLATFORM = "Windows", APPDATA = A)
+  expect_identical(ap_norm(k$vals[1]), file.path(A, "R", "data", "R", "sampleTidy", "monitoring.duckdb"))
+  expect_identical(ap_norm(k$vals[3]), file.path(A, "R", "data", "R", "sampleTidy", "reports"))
+  k <- ap_cfg(s, "ps1", SAMPLETIDY_AUTOIMPORT_PLATFORM = "Windows", APPDATA = A, R_USER_DATA_DIR = file.path(s$dir, "rud"))
+  expect_identical(ap_norm(k$vals[1]), file.path(s$dir, "rud", "R", "sampleTidy", "monitoring.duckdb"))
+  k <- ap_cfg(s, "ps1", SAMPLETIDY_AUTOIMPORT_PLATFORM = "Windows", APPDATA = A, XDG_DATA_HOME = file.path(s$dir, "xdg"))
+  expect_identical(ap_norm(k$vals[1]), file.path(s$dir, "xdg", "R", "sampleTidy", "monitoring.duckdb"))
+})
+
+test_that("data dir, Windows with APPDATA unset: DB is empty, and a tick exits 0 with no log and R not run", {
+  s <- ap_sandbox()
+  # a DB at the old LOCALAPPDATA default would make the tick run, were it still looked at
+  old <- file.path(s$lad, "R", "data", "R", "sampleTidy")
+  dir.create(old, recursive = TRUE); writeLines("x", file.path(old, "monitoring.duckdb"))
+  k <- ap_cfg(s, "ps1", SAMPLETIDY_AUTOIMPORT_PLATFORM = "Windows", APPDATA = NA)
+  expect_identical(k$lines[1], "DB=")
+  r <- ap_run(s, c(ap_data_unset), SAMPLETIDY_AUTOIMPORT_PLATFORM = "Windows", APPDATA = NA)
+  ap_ok(r)
+  expect_length(ap_runs(s), 0L)
+  expect_false(file.exists(s$log))
+})
+
+test_that("DB: SAMPLETIDY_LIVE_DB (env, then the environ file) names it; AUTOIMPORT_DB in the env beats both; in the file it is ignored", {
+  s <- ap_sandbox()
+  fdb <- file.path(s$dir, "from-file", "live.duckdb"); edb <- file.path(s$dir, "from-env", "live.duckdb")
+  adb <- file.path(s$dir, "override", "x.duckdb")
+  dflt <- file.path(s$home, "Library", "Application Support", "org.R-project.R", "R", "sampleTidy", "monitoring.duckdb")
+  for (via in c("sh", "ps1")) {
+    writeLines(sprintf("SAMPLETIDY_LIVE_DB=%s", fdb), s$environ)
+    k <- ap_cfg(s, via, SAMPLETIDY_AUTOIMPORT_PLATFORM = "Darwin")
+    expect_identical(ap_norm(k$vals[1]), fdb, info = paste(via, "file"))
+    k <- ap_cfg(s, via, SAMPLETIDY_AUTOIMPORT_PLATFORM = "Darwin", SAMPLETIDY_LIVE_DB = edb)
+    expect_identical(ap_norm(k$vals[1]), edb, info = paste(via, "env beats file"))
+    k <- ap_cfg(s, via, SAMPLETIDY_AUTOIMPORT_PLATFORM = "Darwin", SAMPLETIDY_AUTOIMPORT_DB = adb, SAMPLETIDY_LIVE_DB = edb)
+    expect_identical(ap_norm(k$vals[1]), adb, info = paste(via, "AUTOIMPORT_DB beats LIVE_DB"))
+    writeLines(sprintf("SAMPLETIDY_AUTOIMPORT_DB=%s", adb), s$environ)
+    k <- ap_cfg(s, via, SAMPLETIDY_AUTOIMPORT_PLATFORM = "Darwin")
+    expect_identical(ap_norm(k$vals[1]), dflt, info = paste(via, "AUTOIMPORT_DB in the file is ignored"))
+  }
+})
+
+test_that("DB: SAMPLETIDY_LIVE_DB in the environ file decides whether the tick is the writer", {
+  s <- ap_sandbox()
+  for (via in c("sh", "ps1")) {
+    ap_clean(s)
+    writeLines(sprintf("SAMPLETIDY_LIVE_DB=%s", s$db), s$environ)
+    ap_ok(ap_run(s, c(ap_data_unset), SAMPLETIDY_AUTOIMPORT_PLATFORM = "Darwin", via = via))
+    expect_length(ap_runs(s), 1L)
+    ap_clean(s)
+    writeLines(sprintf("SAMPLETIDY_LIVE_DB=%s", file.path(s$dir, "no-such.duckdb")), s$environ)
+    ap_ok(ap_run(s, c(ap_data_unset), SAMPLETIDY_AUTOIMPORT_PLATFORM = "Darwin", via = via))
+    expect_length(ap_runs(s), 0L)
+  }
+})
+
+test_that("LOG in the environ file is printed and written to; the process env beats it", {
+  s <- ap_sandbox()
+  flog <- file.path(s$dir, "flog", "file.log"); elog <- file.path(s$dir, "elog", "env.log")
+  for (via in c("sh", "ps1")) {
+    ap_clean(s); unlink(dirname(flog), recursive = TRUE); unlink(dirname(elog), recursive = TRUE)
+    writeLines(sprintf("SAMPLETIDY_AUTOIMPORT_LOG=%s", flog), s$environ)
+    k <- ap_cfg(s, via, SAMPLETIDY_AUTOIMPORT_LOG = NA)
+    expect_identical(ap_norm(k$vals[5]), flog, info = via)
+    ap_ok(ap_run(s, SAMPLETIDY_AUTOIMPORT_LOG = NA, via = via))
+    expect_true(file.exists(flog), info = paste(via, "the log is written where the file says"))
+    expect_gt(length(ap_lines(flog)), 0L)
+    k <- ap_cfg(s, via, SAMPLETIDY_AUTOIMPORT_LOG = elog)
+    expect_identical(ap_norm(k$vals[5]), elog, info = paste(via, "env beats file"))
+  }
+})
+
+test_that("OFF in the environ file pauses; the process env beats it", {
+  s <- ap_sandbox()
+  foff <- file.path(s$dir, "file-off")
+  for (via in c("sh", "ps1")) {
+    writeLines(sprintf("SAMPLETIDY_AUTOIMPORT_OFF=%s", foff), s$environ)
+    ap_clean(s); unlink(foff)
+    ap_ok(ap_run(s, SAMPLETIDY_AUTOIMPORT_OFF = NA, via = via))
+    expect_length(ap_runs(s), 1L)                                       # the file's pause file is absent: it runs
+    writeLines("holder", foff)
+    ap_clean(s)
+    ap_ok(ap_run(s, SAMPLETIDY_AUTOIMPORT_OFF = NA, via = via))
+    expect_length(ap_runs(s), 0L)                                       # present: paused
+    ap_clean(s)
+    ap_ok(ap_run(s, SAMPLETIDY_AUTOIMPORT_OFF = file.path(s$dir, "other-off"), via = via))
+    expect_length(ap_runs(s), 1L)                                       # the env names another file: it wins
+  }
+})
+
+#' The fixture repo of section 14 with the .sh copied in beside the .ps1, so the worktree is made from
+#' the fixture and never from the real checkout. Returns a function running either trigger from it.
+ap_fixture_both <- function(s) {
+  s <- ap_fixture_repo(s)
+  file.copy(ap_dev("auto-import.sh"), file.path(s$repo, "dev", "auto-import.sh"))
+  s
+}
+ap_run_fixture <- function(s, via, ...) {
+  v <- ap_env(s, c(SAMPLETIDY_AUTOIMPORT_CODE = NA, SAMPLETIDY_AUTOIMPORT_RUN = NA), ..., via = via)
+  if (via == "sh") processx::run("bash", file.path(s$repo, "dev", "auto-import.sh"), env = v, error_on_status = FALSE, timeout = 90)
+  else processx::run(as.character(Sys.which("pwsh")), c("-NoProfile", "-File", s$script), env = v, error_on_status = FALSE, timeout = 90)
+}
+
+test_that("RUN in the environ file is where main's worktree is made (CODE unset); the process env beats it", {
+  s <- ap_fixture_both(ap_sandbox())
+  for (via in c("sh", "ps1")) {
+    ap_clean(s)
+    frun <- file.path(s$dir, paste0("file-run-", via)); erun <- file.path(s$dir, paste0("env-run-", via))
+    unlink(c(frun, erun), recursive = TRUE)
+    writeLines(sprintf("SAMPLETIDY_AUTOIMPORT_RUN=%s", frun), s$environ)
+    r <- ap_run_fixture(s, via)
+    ap_ok(r)
+    expect_true(file.exists(file.path(frun, ".git")), info = paste(via, ap_info(r)))
+    expect_true(file.exists(file.path(frun, "dev", "auto-import.R")), info = via)
+    expect_true(any(grepl(file.path(frun, "dev", "auto-import.R"), ap_runs(s), fixed = TRUE)), info = via)
+    # the env beats the file
+    ap_clean(s)
+    writeLines("a new batch", file.path(s$input, paste0("new-", via, ".csv")))
+    ap_ok(ap_run_fixture(s, via, SAMPLETIDY_AUTOIMPORT_RUN = erun))
+    expect_true(file.exists(file.path(erun, ".git")), info = paste(via, "env"))
+  }
+  expect_false(dir.exists(file.path(s$home, ".local", "share", "sampleTidy-run")))   # the .sh's old fixed place
+})
