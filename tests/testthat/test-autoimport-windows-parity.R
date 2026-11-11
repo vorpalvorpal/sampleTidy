@@ -98,11 +98,12 @@ ap_env <- function(s, ..., via = "ps1") {
          R_ENVIRON_USER = s$environ, LOCALAPPDATA = s$lad)
   over <- c(...)
   if (length(over)) v <- c(v[setdiff(names(v), names(over))], over)
+  unset <- names(v)[is.na(v)]   # NA unsets, base variables included
   v <- v[!is.na(v)]
   pw <- dirname(Sys.which("pwsh"))
   base <- c(HOME = s$home, PATH = paste(c(s$bin, "/usr/bin", "/bin", pw), collapse = ":"),
             POWERSHELL_TELEMETRY_OPTOUT = "1", DOTNET_CLI_TELEMETRY_OPTOUT = "1")
-  c(base[setdiff(names(base), names(v))], v)
+  c(base[setdiff(names(base), c(names(v), unset))], v)
 }
 
 ap_cmd <- function(s, args, via) {
@@ -637,10 +638,12 @@ ap_observe <- function(scenario, via) {
     if (k == "last_success_at" && identical(v, h$ended_at)) return("<ended>")
     as.character(v)
   }
+  # Each run has its own sandbox, so its paths are masked before comparing.
+  mask <- function(x) gsub(s$dir, "<sandbox>", x, fixed = TRUE)
   list(status = status,
-       notes = ap_notes(s), notified = sort(ap_notified(s)),
+       notes = mask(ap_notes(s)), notified = sort(mask(ap_notified(s))),
        runs = vapply(strsplit(ap_runs(s), "|", fixed = TRUE), function(x) x[3], ""),
-       keys = names(h), health = unlist(Map(norm, names(h), h)))
+       keys = names(h), health = mask(unlist(Map(norm, names(h), h))))
 }
 ap_same <- function(scenario, label) {
   sh <- ap_observe(scenario, "sh")
