@@ -532,3 +532,81 @@ test_that("no .ps1 under dev/ sets a persistent environment variable", {
     expect_false(grepl("SetEnvironmentVariable\\s*\\([^)]*,[^)]*,[^)]*\\)", txt, ignore.case = TRUE), info = f)
   }
 })
+
+# ---- 21. -Rscript <path> --------------------------------------------------------------------------
+# install-task.ps1 -Rscript <p> hands R's location to the script the task runs, the way it hands
+# -RenvironFile on: for the auto-import trigger and for a -Script job alike. Given, the path must
+# be absolute and must exist (exit 2, nothing registered). Omitted, the action carries no -Rscript.
+
+#' A stand-in Rscript under a path with a space; returns its path.
+it_rscript <- function(s) {
+  d <- file.path(s$dir, "R bin")
+  dir.create(d, showWarnings = FALSE)
+  p <- file.path(d, "Rscript.exe")
+  writeLines("# not really R", p)
+  p
+}
+
+test_that("-Rscript: the trigger's action carries it, quoted, after -RenvironFile", {
+  s <- it_sandbox()
+  rs <- it_rscript(s)
+  f <- file.path(s$dir, "e.env")
+  for (l in c("conhost", "none")) {
+    a <- it_norm(it_txt(it_print(s, "-RenvironFile", f, "-Rscript", rs, "-Launcher", l), "//Actions/Exec/Arguments"))
+    expect_true(grepl("auto-import.ps1", a, fixed = TRUE), info = a)
+    expect_true(endsWith(a, sprintf('-RenvironFile "%s" -Rscript "%s"', it_norm(f), it_norm(rs))), info = a)
+  }
+})
+
+test_that("-Rscript: a -Script job gets it too, after -RenvironFile", {
+  s <- it_sandbox()
+  rs <- it_rscript(s)
+  j <- it_job(s)
+  f <- file.path(s$dir, "e.env")
+  a <- it_norm(it_txt(it_print(s, "-Script", j, "-RenvironFile", f, "-Rscript", rs), "//Actions/Exec/Arguments"))
+  expect_true(endsWith(a, sprintf('-File "%s" -RenvironFile "%s" -Rscript "%s"', it_norm(j), it_norm(f), it_norm(rs))), info = a)
+  expect_false(grepl("auto-import", a, fixed = TRUE), info = a)
+})
+
+test_that("-Rscript omitted: no -Rscript in the action, for the trigger or a -Script job", {
+  s <- it_sandbox()
+  j <- it_job(s)
+  for (args in list(character(), c("-Script", j), c("-Launcher", "none"))) {
+    a <- it_txt(it_print(s, args), "//Actions/Exec/Arguments")
+    expect_false(grepl("Rscript", a, fixed = TRUE), info = a)
+  }
+})
+
+test_that("install: the registered file carries -Rscript too", {
+  s <- it_sandbox()
+  rs <- it_rscript(s)
+  expect_identical(it_run(s, c("-Rscript", rs))$status, 0L)
+  a <- it_norm(it_txt(it_parse(it_read_task_file(s$xml)), "//Actions/Exec/Arguments"))
+  expect_true(endsWith(a, sprintf('-Rscript "%s"', it_norm(rs))), info = a)
+})
+
+test_that("-Rscript: a relative path is refused with exit 2, naming it, and schtasks is never called", {
+  s <- it_sandbox()
+  rs <- it_rscript(s)
+  old <- setwd(dirname(rs)); on.exit(setwd(old), add = TRUE)
+  for (args in list(c("-Print", "-Rscript", basename(rs)), c("-Rscript", basename(rs)))) {
+    r <- it_run(s, args)
+    expect_identical(r$status, 2L, info = it_info(r))
+    expect_match(r$stderr, basename(rs), fixed = TRUE)
+    expect_false(grepl("<Task", r$stdout, fixed = TRUE))
+    expect_false(file.exists(s$argv))
+  }
+})
+
+test_that("-Rscript: a path that does not exist is refused with exit 2, naming it, and schtasks is never called", {
+  s <- it_sandbox()
+  nope <- file.path(s$dir, "no such dir", "Rscript.exe")
+  j <- it_job(s)
+  for (args in list(c("-Print", "-Rscript", nope), c("-Rscript", nope), c("-Script", j, "-Rscript", nope))) {
+    r <- it_run(s, args)
+    expect_identical(r$status, 2L, info = it_info(r))
+    expect_match(r$stderr, "no such dir", fixed = TRUE)
+    expect_false(grepl("<Task", r$stdout, fixed = TRUE))
+    expect_false(file.exists(s$argv))
+  }
+})

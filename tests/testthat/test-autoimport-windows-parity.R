@@ -1129,3 +1129,55 @@ test_that("RUN in the environ file is where main's worktree is made (CODE unset)
   }
   expect_false(dir.exists(file.path(s$home, ".local", "share", "sampleTidy-run")))   # the .sh's old fixed place
 })
+
+# ---- -Rscript parameter (PLAN-21 d, ruling R2) ------------------------------------------------------
+# dev/auto-import.ps1 -Rscript <path> runs R through that program. Precedence: the parameter, then
+# the SAMPLETIDY_AUTOIMPORT_RSCRIPT setting, then Rscript on PATH. (The .sh takes no parameter.)
+
+#' A second stub, under a path with a space, that appends its own name to other.txt.
+ap_other_rscript <- function(s) {
+  d <- file.path(s$dir, "other bin"); dir.create(d)
+  p <- file.path(d, "Rscript-other.sh")
+  s$other <- file.path(s$dir, "other.txt")
+  writeLines(c("#!/bin/bash", sprintf('echo "other|$1" >> "%s"', s$other), "exit 0"), p)
+  Sys.chmod(p, "755")
+  p
+}
+
+test_that("-Rscript: the trigger runs R through the given path, spaces and all", {
+  s <- ap_sandbox()
+  p <- ap_other_rscript(s)
+  ap_ok(ap_run(s, SAMPLETIDY_AUTOIMPORT_RSCRIPT = NA, args = c("-Rscript", p)))
+  expect_length(ap_lines(file.path(s$dir, "other.txt")), 1L)
+  expect_match(ap_lines(file.path(s$dir, "other.txt")), "auto-import\\.R$")
+  expect_length(ap_runs(s), 0L)
+  expect_identical(ap_health(s)$rc, 0L)
+})
+
+test_that("-Rscript beats the SAMPLETIDY_AUTOIMPORT_RSCRIPT setting", {
+  s <- ap_sandbox()
+  p <- ap_other_rscript(s)
+  ap_ok(ap_run(s, args = c("-Rscript", p)))   # ap_env sets the setting to the sandbox stub
+  expect_length(ap_lines(file.path(s$dir, "other.txt")), 1L)
+  expect_length(ap_runs(s), 0L)
+})
+
+test_that("-Rscript works beside -RenvironFile, in either order", {
+  s <- ap_sandbox()
+  p <- ap_other_rscript(s)
+  ap_ok(ap_run(s, args = c("-Rscript", p, "-RenvironFile", s$environ)))
+  expect_length(ap_lines(file.path(s$dir, "other.txt")), 1L)
+  ap_ok(ap_run(s, args = c("-RenvironFile", s$environ, "-Rscript", p)))
+  expect_length(ap_lines(file.path(s$dir, "other.txt")), 2L)
+})
+
+test_that("without -Rscript the setting still wins over PATH, and PATH is the last resort", {
+  s <- ap_sandbox()
+  p <- ap_other_rscript(s)
+  file.copy(p, file.path(s$bin, "Rscript"))   # s$bin is first on PATH
+  ap_ok(ap_run(s))                            # the setting: the sandbox stub
+  expect_length(ap_runs(s), 1L)
+  expect_false(file.exists(file.path(s$dir, "other.txt")))
+  ap_ok(ap_run(s, SAMPLETIDY_AUTOIMPORT_RSCRIPT = NA, SAMPLETIDY_AUTOIMPORT_OFF = s$off))
+  expect_length(ap_lines(file.path(s$dir, "other.txt")), 1L)
+})
