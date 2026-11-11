@@ -44,6 +44,7 @@ Suggests:
     filelock,
     openxlsx,
     processx,
+    ps,
     sf,
     testthat (>= 3.0.0),
     withr

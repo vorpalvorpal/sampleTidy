@@ -262,8 +262,8 @@ test_that(".sh: the input's own listing failure still exits non-zero with a watc
 })
 
 # ==== dev/auto-import.ps1 =====================================================================
-# No R environ file is read by the .ps1: the watch folder comes from the
-# process environment only.
+# PLAN-21 b2: the .ps1 also reads R's environ file; these tests point it at a file that
+# does not exist, so the watch folder comes from the process environment only.
 
 gw_is_win <- function() .Platform$OS.type == "windows"
 
@@ -303,7 +303,10 @@ gw_ps_env <- function(s, ...) {
   v <- c(SAMPLETIDY_AUTOIMPORT_DB = s$db, SAMPLETIDY_AUTOIMPORT_INPUT = s$input,
          SAMPLETIDY_AUTOIMPORT_REPORT = s$report, SAMPLETIDY_AUTOIMPORT_RSCRIPT = s$rscript,
          SAMPLETIDY_AUTOIMPORT_LOG = s$log, SAMPLETIDY_AUTOIMPORT_OFF = s$off,
-         LOCALAPPDATA = s$lad)
+         LOCALAPPDATA = s$lad,
+         # hermetic: run this checkout's dev/ (no worktree, no git) and read no developer .Renviron
+         SAMPLETIDY_AUTOIMPORT_CODE = dirname(gw_dev()),
+         R_ENVIRON_USER = file.path(s$dir, "no-such.Renviron"))
   over <- c(...)
   if (length(over)) v <- c(v[setdiff(names(v), names(over))], over)
   if (gw_is_win()) {
@@ -344,14 +347,14 @@ gw_ps_print <- function(s, args = "-PrintConfig", ...) {
 
 # ---- .ps1: print config ---------------------------------------------------------------------------
 
-test_that(".ps1 print config prints WATCH last, for both spellings: the env value, else empty", {
+test_that(".ps1 print config prints the eight keys with WATCH last, for both spellings: the env value, else empty", {
   s <- gw_ps_sandbox()
   for (a in c("-PrintConfig", "--print-config")) {
     k <- gw_ps_print(s, a)
-    expect_identical(k$keys, c("DB", "INPUT", "REPORT", "TIMEZONE", "LOG", "WATCH"), info = a)
-    expect_identical(k$vals[6], "", info = a)
+    expect_identical(k$keys, c("DB", "INPUT", "REPORT", "TIMEZONE", "LOG", "NOTIFY", "NOTIFY_FLUSH", "WATCH"), info = a)
+    expect_identical(k$vals[8], "", info = a)
     k <- gw_ps_print(s, a, SAMPLETIDY_GATE_WATCH = s$watch)
-    expect_identical(gsub("\\\\", "/", k$vals[6]), gsub("\\\\", "/", s$watch), info = a)
+    expect_identical(gsub("\\\\", "/", k$vals[8]), gsub("\\\\", "/", s$watch), info = a)
   }
 })
 

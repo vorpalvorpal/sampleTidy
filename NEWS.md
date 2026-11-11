@@ -1,5 +1,20 @@
 # sampleTidy (development version)
 
+* The Windows import trigger (`dev/auto-import.ps1`) now matches the Mac one
+  (`dev/auto-import.sh`): run-health record, retry after a failed or crashed run,
+  notify and flush commands, a stale-success notice, listing failures exit 3,
+  an empty input listing never skips, a re-check after the run, the pause
+  file must be a regular file, and `--print-config` prints eight lines. It reads
+  R's `.Renviron` (`-RenvironFile` names another) and runs `main` from a
+  detached worktree (`%LOCALAPPDATA%\\sampleTidy-run`) instead of its own
+  working tree. `dev/windows/install-task.ps1` registers it as a scheduled task
+  (`-Print`, `-Uninstall`, `-Launcher conhost|none`, `-Name`, `-RenvironFile`).
+  The import notice for an unreadable input folder no longer
+  mentions launchd.
+* The inbox lock's liveness check no longer uses `tools::pskill()`, which on
+  Windows terminates the process it was meant to test: `.st_pid_alive()` uses
+  `ps` (a suggested package) instead.
+
 * A writer check for running one importer across machines (all off unless
   configured):
   - `db_meta` (ops-schema 11) is a key/value table for facts about the

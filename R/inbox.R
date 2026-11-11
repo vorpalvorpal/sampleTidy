@@ -126,11 +126,18 @@ inbox_check <- function(input_dir, report_dir, now = Sys.time(),
 
 .inbox_lock_path <- function(db) paste0(db, ".inbox.lock")
 
-.inbox_pid_alive <- function(pid) {
+# Is a process with this pid running? Never signals it: on Windows tools::pskill()
+# always terminates the process, whatever the signal, so it cannot be used to test one.
+.st_pid_alive <- function(pid) {
   pid <- suppressWarnings(as.integer(pid))
   if (length(pid) != 1 || is.na(pid) || pid <= 0L) return(FALSE)
-  isTRUE(tools::pskill(pid, 0L))
+  # ps is a Suggests (the pinned Imports are ratified by test): without it assume the holder
+  # is alive, so a lock is kept until its two-hour age limit rather than stolen from a live run.
+  if (!requireNamespace("ps", quietly = TRUE)) return(TRUE)
+  isTRUE(tryCatch(ps::ps_is_running(ps::ps_handle(pid)), error = function(e) FALSE))
 }
+
+.inbox_pid_alive <- function(pid) .st_pid_alive(pid)
 
 # Returns list(acquired, stale).
 .inbox_lock_acquire <- function(db, now) {
