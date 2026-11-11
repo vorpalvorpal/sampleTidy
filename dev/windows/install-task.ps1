@@ -3,6 +3,7 @@
 # scheduled task. No admin rights are needed: the task is this user's own and runs only while
 # they are logged on.
 #   install-task.ps1 [-Print] [-Uninstall] [-Launcher conhost|none] [-Name <n>] [-RenvironFile <f>]
+#                    [-Script <p>] [-Interval <minutes>] [-TimeLimit <ISO 8601 duration>]
 # -Print writes the task XML to stdout and touches nothing. -Uninstall deletes the task. The
 # task runs every 10 minutes and at logon (StartWhenAvailable catches up a missed tick); a run
 # that is still going when the next is due makes that one a no-op (IgnoreNew).
@@ -10,6 +11,9 @@
 # window flashes every 10 minutes (a hidden task still shows one for a console program);
 # -Launcher none starts pwsh directly. -Name is the task name (default sampleTidy-autoimport);
 # a second task with another name and -RenvironFile <f> runs against a separate environ file.
+# -Script <p> registers another PowerShell script instead (it must exist; another package's job),
+# -Interval <minutes> is the repeat (default 10) and -TimeLimit the longest a run may take, as an
+# ISO 8601 duration such as PT30M or PT2H (default PT4H). A bad value stops it before anything is written.
 # The task never fetches code: auto-import.ps1 runs the main branch of the checkout it lives in.
 # Registration goes through schtasks.exe (SAMPLETIDY_SCHTASKS names another program, for tests).
 # The task's WorkingDirectory is the report folder's parent: R reads a .Renviron from its
@@ -19,7 +23,10 @@ param(
   [switch]$Uninstall,
   [ValidateSet('conhost', 'none')][string]$Launcher = 'conhost',
   [string]$Name = 'sampleTidy-autoimport',
-  [string]$RenvironFile
+  [string]$RenvironFile,
+  [string]$Script,
+  [string]$Interval = '10',
+  [string]$TimeLimit = 'PT4H'
 )
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $false
@@ -42,9 +49,21 @@ if ($Uninstall) {
   return
 }
 
+# Refuse bad values before anything is built or registered.
+function refuse([string]$Why) { [Console]::Error.WriteLine("install-task.ps1: $Why"); exit 2 }
+if ($Interval -notmatch '^[0-9]+$' -or [int64]$Interval -lt 1) { refuse "-Interval must be a whole number of minutes, 1 or more (got '$Interval')" }
+if ($TimeLimit -notmatch '^P(?=[0-9]|T[0-9])([0-9]+D)?(T(?=[0-9])([0-9]+H)?([0-9]+M)?([0-9]+S)?)?$') { refuse "-TimeLimit must be an ISO 8601 duration such as PT30M or PT2H (got '$TimeLimit')" }
+
 # The task's pieces, all absolute. The checkout is two folders up from this script (dev\windows).
 $checkout = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-$trigger = Join-Path (Join-Path $checkout 'dev') 'auto-import.ps1'
+if ($PSBoundParameters.ContainsKey('Script')) {
+  if (-not $Script -or -not (Test-Path -LiteralPath $Script -PathType Leaf)) { refuse "-Script not found: $Script" }
+  $trigger = [IO.Path]::GetFullPath($Script)
+  $what = "scheduled job $([IO.Path]::GetFileName($trigger))"
+} else {
+  $trigger = Join-Path (Join-Path $checkout 'dev') 'auto-import.ps1'
+  $what = 'sampleTidy auto-import trigger: imports new input files when something changed.'
+}
 $pwsh = $null
 if ($IsWindows) {   # the Store alias path is stable across updates; ProcessPath is versioned
   $cmd = Get-Command pwsh -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -88,13 +107,13 @@ $xml = @"
 <?xml version="1.0" encoding="UTF-8"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
-    <Description>sampleTidy auto-import trigger: imports new input files when something changed.</Description>
+    <Description>$(x $what)</Description>
     <URI>\$(x $Name)</URI>
   </RegistrationInfo>
   <Triggers>
     <TimeTrigger>
       <Repetition>
-        <Interval>PT10M</Interval>
+        <Interval>PT$($Interval)M</Interval>
         <StopAtDurationEnd>false</StopAtDurationEnd>
       </Repetition>
       <StartBoundary>$start</StartBoundary>
@@ -124,7 +143,7 @@ $xml = @"
     <Hidden>true</Hidden>
     <RunOnlyIfIdle>false</RunOnlyIfIdle>
     <WakeToRun>false</WakeToRun>
-    <ExecutionTimeLimit>PT4H</ExecutionTimeLimit>
+    <ExecutionTimeLimit>$(x $TimeLimit)</ExecutionTimeLimit>
     <Priority>7</Priority>
   </Settings>
   <Actions Context="Author">
