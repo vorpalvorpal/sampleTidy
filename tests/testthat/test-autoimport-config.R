@@ -346,3 +346,54 @@ test_that("auto-import.R reads its report dir from st_config('report_dir'), not 
   expect_true(grepl('st_config("report_dir")', txt, fixed = TRUE))
   expect_false(grepl("PKM_VAULT", txt, fixed = TRUE))
 })
+
+# ---- 6. R's ${VAR} forms in the environ file (helper-renviron-forms.R) ---------------------------
+# A line written the way R itself reads it, `KEY=${KEY-'value'}`, must give the value R gives it,
+# not the literal text (found live: a notify command was logged "not executable").
+
+test_that("R itself gives the values the table in helper-renviron-forms.R says (the oracle)", {
+  skip_on_os("windows")
+  skip_if(Sys.which("Rscript") == "", "no Rscript")
+  for (f in rf_forms) {
+    expect_identical(rf_r_value(paste0(rf_key, "=", f[[1]]), f[[2]]), f[[3]],
+                     info = sprintf("%s with VAR=%s", f[[1]], format(f[[2]])))
+  }
+})
+
+test_that("the environ file's ${VAR}, ${VAR-default} and ${VAR:-default} give the value R gives (NOTIFY)", {
+  s <- ac_sandbox()
+  for (f in rf_forms) {
+    p <- ac_print(s, env = rf_env(f[[2]]), environ_lines = paste0(rf_key, "=", f[[1]]))
+    expect_identical(p$NOTIFY, f[[3]], info = sprintf("%s with VAR=%s", f[[1]], format(f[[2]])))
+  }
+})
+
+test_that("R's own `KEY=${KEY-'value'}` form works for every key the trigger reads from the file", {
+  s <- ac_sandbox()
+  mk <- function(k, v) sprintf("%s=${%s-'%s'}", k, k, v)
+  p <- ac_print(s, environ_lines = c(
+    mk("SAMPLETIDY_INPUT_DIR", "/b c/input"), mk("SAMPLETIDY_REPORT_DIR", "/r d/rep"),
+    mk("SAMPLETIDY_TIMEZONE", "Pacific/Auckland"), mk("SAMPLETIDY_NOTIFY_COMMAND", "/n o/notify"),
+    mk("SAMPLETIDY_NOTIFY_FLUSH", "/n o/flush"), mk("SAMPLETIDY_GATE_WATCH", "/w x/watch")))
+  expect_identical(p$INPUT, "/b c")                  # a folder named `input` is replaced by its parent
+  expect_identical(p$REPORT, "/r d/rep")
+  expect_identical(p$TIMEZONE, "Pacific/Auckland")
+  expect_identical(p$NOTIFY, "/n o/notify")
+  expect_identical(p$NOTIFY_FLUSH, "/n o/flush")
+  expect_identical(p$WATCH, "/w x/watch")
+})
+
+test_that("`KEY=${KEY-'value'}` with KEY already set in the process environment is that value", {
+  s <- ac_sandbox()
+  p <- ac_print(s, env = c(SAMPLETIDY_NOTIFY_COMMAND = "/from/env"),
+                environ_lines = "SAMPLETIDY_NOTIFY_COMMAND=${SAMPLETIDY_NOTIFY_COMMAND-'/from/file'}")
+  expect_identical(p$NOTIFY, "/from/env")
+})
+
+test_that("a ${VAR} may name a key set on an earlier line of the same file, as in R", {
+  s <- ac_sandbox()
+  lines <- c("SAMPLETIDY_REPORT_DIR=/r/rep", "SAMPLETIDY_NOTIFY_COMMAND=${SAMPLETIDY_REPORT_DIR}/notify")
+  expect_identical(ac_print(s, environ_lines = lines)$NOTIFY, "/r/rep/notify")
+  skip_if(Sys.which("Rscript") == "", "no Rscript")
+  expect_identical(rf_r_value(lines), "/r/rep/notify")
+})

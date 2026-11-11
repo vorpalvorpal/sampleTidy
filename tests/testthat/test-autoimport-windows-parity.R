@@ -718,20 +718,20 @@ test_that("environ: the process environment beats the file", {
   expect_identical(k$vals[8], "/from/env")
 })
 
-test_that("environ: the last KEY= line wins; one pair of quotes is stripped; nothing is expanded", {
+test_that("environ: the last KEY= line wins; one pair of quotes is stripped; a bare $VAR and ~ are not expanded", {
   s <- ap_sandbox()
   writeLines(c("SAMPLETIDY_TIMEZONE=First/Zone",
                "SAMPLETIDY_TIMEZONE='Second/Zone'",
                'SAMPLETIDY_GATE_WATCH="/with spaces/watch"',
                "SAMPLETIDY_NOTIFY_FLUSH=\"'nested'\"",
                "SAMPLETIDY_NOTIFY_COMMAND=$HOME/bin/notify",
-               "SAMPLETIDY_REPORT_DIR=~/reports/${X}"), s$environ)
+               "SAMPLETIDY_REPORT_DIR=~/reports/$X"), s$environ)   # (a ${X} IS expanded, as R does: see 13b)
   k <- ap_print_env(s)
   expect_identical(k$vals[4], "Second/Zone")
   expect_identical(k$vals[8], "/with spaces/watch")
   expect_identical(k$vals[7], "'nested'")
   expect_identical(k$vals[6], "$HOME/bin/notify")
-  expect_identical(k$vals[3], "~/reports/${X}")
+  expect_identical(k$vals[3], "~/reports/$X")
 })
 
 test_that("environ: comment lines and blank lines are ignored; a CRLF file is read cleanly", {
@@ -878,4 +878,52 @@ test_that("CODE set: the child runs CODE/dev/auto-import.R and git is never call
   expect_identical(normalizePath(runs[[1]][4]), normalizePath(file.path(s$code, "dev", "auto-import.R")))
   expect_false(file.exists(s$gitlog))
   expect_false(dir.exists(s$run))
+})
+
+# ---- 13b. R's ${VAR} forms in the environ file (helper-renviron-forms.R) -------------------------
+# R expands ${VAR}, ${VAR-default} and ${VAR:-default}; both triggers must give the value R gives,
+# and the same value as each other (found live: `KEY=${KEY-'path'}` was read as that literal text).
+
+test_that("environ: ${VAR}, ${VAR-default} and ${VAR:-default} give the value R gives (NOTIFY), in the .ps1", {
+  s <- ap_sandbox()
+  for (f in rf_forms) {
+    writeLines(paste0(rf_key, "=", f[[1]]), s$environ)
+    k <- do.call(ap_print_env, c(list(s), as.list(rf_env(f[[2]]))))
+    expect_identical(k$vals[6], f[[3]], info = sprintf("%s with VAR=%s", f[[1]], format(f[[2]])))
+  }
+})
+
+test_that("environ: R's own `KEY=${KEY-'value'}` form works for every key the .ps1 reads from the file", {
+  s <- ap_sandbox()
+  mk <- function(k, v) sprintf("%s=${%s-'%s'}", k, k, v)
+  writeLines(c(mk("SAMPLETIDY_INPUT_DIR", "/b c/input"), mk("SAMPLETIDY_REPORT_DIR", "/r d/rep"),
+               mk("SAMPLETIDY_TIMEZONE", "Pacific/Auckland"), mk("SAMPLETIDY_NOTIFY_COMMAND", "/n o/notify"),
+               mk("SAMPLETIDY_NOTIFY_FLUSH", "/n o/flush"), mk("SAMPLETIDY_GATE_WATCH", "/w x/watch")), s$environ)
+  k <- ap_print_env(s)
+  expect_identical(k$vals[2:4], c("/b c", "/r d/rep", "Pacific/Auckland"))
+  expect_identical(k$vals[6:8], c("/n o/notify", "/n o/flush", "/w x/watch"))
+})
+
+test_that("environ: `KEY=${KEY-'value'}` with KEY already set in the process environment is that value", {
+  s <- ap_sandbox()
+  writeLines("SAMPLETIDY_NOTIFY_COMMAND=${SAMPLETIDY_NOTIFY_COMMAND-'/from/file'}", s$environ)
+  expect_identical(ap_print_env(s, SAMPLETIDY_NOTIFY_COMMAND = "/from/env")$vals[6], "/from/env")
+})
+
+test_that("environ: a ${VAR} may name a key set on an earlier line of the same file, as in R", {
+  s <- ap_sandbox()
+  writeLines(c("SAMPLETIDY_REPORT_DIR=/r/rep", "SAMPLETIDY_NOTIFY_COMMAND=${SAMPLETIDY_REPORT_DIR}/notify"), s$environ)
+  expect_identical(ap_print_env(s)$vals[6], "/r/rep/notify")
+})
+
+test_that("environ: the .sh and the .ps1 read every ${VAR} form to the same value, and it is R's", {
+  s <- ap_sandbox()
+  for (f in rf_forms) {
+    writeLines(paste0(rf_key, "=", f[[1]]), s$environ)
+    ev <- as.list(rf_env(f[[2]]))
+    ps <- do.call(ap_print_env, c(list(s), ev))
+    sh <- do.call(ap_print_env, c(list(s), ev, list(args = "--print-config", via = "sh")))
+    expect_identical(sh$vals[6], ps$vals[6], info = sprintf("sh vs ps1: %s with VAR=%s", f[[1]], format(f[[2]])))
+    expect_identical(sh$vals[6], f[[3]], info = sprintf("%s with VAR=%s", f[[1]], format(f[[2]])))
+  }
 })
