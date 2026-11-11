@@ -347,7 +347,8 @@ test_that("dry_run = FALSE copies each listed file into input/replay-g<N>, byte 
   expect_identical(ra_visible(batch), c("one.csv", "two.csv"))
   expect_identical(unname(tools::md5sum(file.path(batch, "one.csv"))), unname(tools::md5sum(p1)))
   expect_identical(unname(tools::md5sum(file.path(batch, "two.csv"))), unname(tools::md5sum(p2)))
-  expect_equal(normalizePath(r$copied_to), normalizePath(file.path(batch, c("one.csv", "two.csv"))))
+  # copied_to follows the archive listing, whose order is by random folder id
+  expect_equal(sort(normalizePath(r$copied_to)), normalizePath(file.path(batch, c("one.csv", "two.csv"))))
   # no temporary file is left anywhere under the input folder
   left <- list.files(w$input, recursive = TRUE, all.files = TRUE)
   expect_false(any(grepl("\\.tmp$|~$|\\.part$", left)))
