@@ -9,7 +9,7 @@
   detached worktree (`%LOCALAPPDATA%\\sampleTidy-run`) instead of its own
   working tree. `dev/windows/install-task.ps1` registers it as a scheduled task
   (`-Print`, `-Uninstall`, `-Launcher conhost|none`, `-Name`, `-RenvironFile`).
-  The sampleTidy-wide import notice for an unreadable input folder no longer
+  The import notice for an unreadable input folder no longer
   mentions launchd.
 * The inbox lock's liveness check no longer uses `tools::pskill()`, which on
   Windows terminates the process it was meant to test: `.st_pid_alive()` uses
