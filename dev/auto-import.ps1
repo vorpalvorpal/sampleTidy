@@ -11,7 +11,7 @@
 # listing works and nothing in the input changed (by time) since the run began. The exit
 # code is Rscript's, so an rc 3 (the deployment's hooks failed to load) reaches the scheduler.
 # Test overrides: SAMPLETIDY_AUTOIMPORT_{DB,INPUT,REPORT,RSCRIPT,LOG,CODE,RUN,GIT,OFF,NOTIFY,
-# STALE_HOURS}, SAMPLETIDY_NOTIFY_DESKTOP, SAMPLETIDY_{INPUT_DIR,REPORT_DIR,TIMEZONE} and
+# STALE_HOURS,PLATFORM} (LOG, OFF and RUN are read from the process env, then the environ file), SAMPLETIDY_NOTIFY_DESKTOP, SAMPLETIDY_{INPUT_DIR,REPORT_DIR,TIMEZONE} and
 # R_ENVIRON_USER (the environ file read).
 # Deployment config (process env, then R's user environ file: R_ENVIRON_USER, else
 # $HOME\.Renviron, else $R_USER\.Renviron, else Documents\.Renviron): SAMPLETIDY_NOTIFY_COMMAND
@@ -109,8 +109,27 @@ function cfg([string]$Key) { $v = env $Key; if (-not $v) { $v = renviron_get $Ke
 # Deployment values, resolved with no side effects: the SAMPLETIDY_AUTOIMPORT_* test
 # override, then the process environment, then R's user environ file, then a default.
 $LAD = env LOCALAPPDATA
+# R's data dir for sampleTidy, as tools::R_user_dir("sampleTidy", "data") gives it: R_USER_DATA_DIR,
+# then XDG_DATA_HOME (each from the process env, then the environ file), then the platform default
+# (Windows %APPDATA%\R\data, macOS ~/Library/Application Support/org.R-project.R, else
+# ~/.local/share), then R\sampleTidy. Windows with no APPDATA has no default: $DATA stays $null.
+# SAMPLETIDY_AUTOIMPORT_PLATFORM (Windows, Darwin, other) overrides the platform (tests).
+$PLATFORM = env SAMPLETIDY_AUTOIMPORT_PLATFORM
+if (-not $PLATFORM) { $PLATFORM = if ($IsWindows) { 'Windows' } elseif ($IsMacOS) { 'Darwin' } else { 'other' } }
+$DATA = cfg R_USER_DATA_DIR
+if (-not $DATA) { $DATA = cfg XDG_DATA_HOME }
+if (-not $DATA) {
+  $DATA = switch ($PLATFORM) {
+    'Windows' { if (env APPDATA) { Join-Path (env APPDATA) 'R\data' } }
+    'Darwin' { if ($HOME) { Join-Path $HOME 'Library/Application Support/org.R-project.R' } }
+    default { if ($HOME) { Join-Path $HOME '.local/share' } }
+  }
+}
+if ($DATA) { $DATA = Join-Path (Join-Path $DATA 'R') 'sampleTidy' }
+# DB: the AUTOIMPORT_DB test override (env only), then SAMPLETIDY_LIVE_DB (R's own key), then the default.
 $DB = env SAMPLETIDY_AUTOIMPORT_DB
-if (-not $DB) { $DB = Join-Path $LAD 'R\data\R\sampleTidy\monitoring.duckdb' }
+if (-not $DB) { $DB = cfg SAMPLETIDY_LIVE_DB }
+if (-not $DB -and $DATA) { $DB = Join-Path $DATA 'monitoring.duckdb' }
 $WATCH = env SAMPLETIDY_AUTOIMPORT_INPUT
 if (-not $WATCH) {
   $WATCH = cfg SAMPLETIDY_INPUT_DIR
@@ -122,18 +141,18 @@ if (-not $WATCH) {
 }
 $REPORT = env SAMPLETIDY_AUTOIMPORT_REPORT
 if (-not $REPORT) { $REPORT = cfg SAMPLETIDY_REPORT_DIR }
-if (-not $REPORT) { $REPORT = Join-Path $LAD 'R\data\R\sampleTidy\reports' }
+if (-not $REPORT -and $DATA) { $REPORT = Join-Path $DATA 'reports' }
 $ZONE = cfg SAMPLETIDY_TIMEZONE
 if (-not $ZONE) { $ZONE = 'UTC' }
 $NOTIFY = env SAMPLETIDY_AUTOIMPORT_NOTIFY   # test override, then deployment config
 if (-not $NOTIFY) { $NOTIFY = cfg SAMPLETIDY_NOTIFY_COMMAND }
 $FLUSH = cfg SAMPLETIDY_NOTIFY_FLUSH
 $GWATCH = cfg SAMPLETIDY_GATE_WATCH
-$LOG = env SAMPLETIDY_AUTOIMPORT_LOG
+$LOG = cfg SAMPLETIDY_AUTOIMPORT_LOG
 if (-not $LOG) { $LOG = Join-Path $LAD 'sampleTidy\autoimport.log' }
 $RSCRIPT = env SAMPLETIDY_AUTOIMPORT_RSCRIPT
 if (-not $RSCRIPT) { $RSCRIPT = 'Rscript' }
-$OFF = env SAMPLETIDY_AUTOIMPORT_OFF
+$OFF = cfg SAMPLETIDY_AUTOIMPORT_OFF
 if (-not $OFF) { $OFF = Join-Path $HOME '.sampletidy-autoimport-off' }
 $STALE_HOURS = env SAMPLETIDY_AUTOIMPORT_STALE_HOURS
 if (-not $STALE_HOURS) { $STALE_HOURS = '24' }
@@ -144,7 +163,7 @@ if ($PrintConfig -or $Rest -contains '--print-config') {
   exit 0
 }
 
-if (-not (Test-Path -LiteralPath $DB -PathType Leaf)) { exit 0 }   # not the writer machine
+if (-not $DB -or -not (Test-Path -LiteralPath $DB -PathType Leaf)) { exit 0 }   # not the writer machine
 # Off switch: a regular file (agents append a line each) pauses auto-import; remove it to resume.
 if (Test-Path -LiteralPath $OFF -PathType Leaf) { exit 0 }
 
@@ -367,7 +386,7 @@ try {
     $GIT = env SAMPLETIDY_AUTOIMPORT_GIT
     if (-not $GIT) { $GIT = 'git' }
     $REPO = Split-Path -Parent $HERE
-    $RUN = env SAMPLETIDY_AUTOIMPORT_RUN
+    $RUN = cfg SAMPLETIDY_AUTOIMPORT_RUN
     if (-not $RUN) { $RUN = Join-Path $LAD 'sampleTidy-run' }
     $ok = $false
     try {
