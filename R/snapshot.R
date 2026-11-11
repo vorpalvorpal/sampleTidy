@@ -75,16 +75,30 @@ snapshot_db <- function(db = st_config("live_db"), dest_dir = st_config("snapsho
         sprintf("monitoring_%s_g%s.duckdb", date, gen)
       final_path <<- file.path(dest_dir, final_name)
       tmp_path <<- paste0(final_path, ".tmp")
-      copied <- file.copy(db, tmp_path, overwrite = TRUE)
-      if (!isTRUE(copied)) {
-        cli::cli_abort(
-          "Failed to snapshot {.path {db}} to {.path {tmp_path}}.",
-          class = "sampletidy_error"
-        )
-      }
     },
     db = db
   )
+
+  # The copy happens after the write connection is closed (Windows refuses to
+  # copy a file this process holds open read-write), through a READ-ONLY
+  # connection held for the duration, which keeps other writers out.
+  ro_con <- tryCatch(
+    DBI::dbConnect(duckdb::duckdb(), db, read_only = TRUE),
+    error = function(e) e
+  )
+  copied <- FALSE
+  if (!inherits(ro_con, "error")) {
+    copied <- tryCatch(isTRUE(file.copy(db, tmp_path, overwrite = TRUE)),
+                       error = function(e) FALSE)
+    DBI::dbDisconnect(ro_con, shutdown = TRUE)
+  }
+  if (!isTRUE(copied)) {
+    unlink(tmp_path)
+    cli::cli_abort(
+      "Failed to snapshot {.path {db}} to {.path {tmp_path}}.",
+      class = "sampletidy_error"
+    )
+  }
 
   # Verify the copy before it can ever replace an existing, presumably-good
   # snapshot at `final_path`. A copy that is unreadable or has zero tables
