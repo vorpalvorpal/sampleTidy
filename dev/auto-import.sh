@@ -165,7 +165,7 @@ snapshot() {
 if ! NOW="$(snapshot)"; then
   logline "cannot list $INPUT: $(head -1 "$LOCK/err")"
   notify_once "listfail:$(local_day)" "sampleTidy import cannot read its input" \
-    "The input folder cannot be listed ($INPUT). launchd's bash may need Full Disk Access."
+    "The input folder cannot be listed ($INPUT). Check its permissions (on macOS the launcher may need Full Disk Access)."
   exit 3
 fi
 EMPTY=
