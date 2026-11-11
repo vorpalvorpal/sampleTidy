@@ -183,10 +183,10 @@ $NOTIFIED = Join-Path $REPORT '.imports.notified'
 
 # The local day (SAMPLETIDY_TIMEZONE, an IANA id; an unknown one falls back to the machine's zone).
 function local_day {
-  $zone = $null
-  try { $zone = [TimeZoneInfo]::FindSystemTimeZoneById($ZONE) } catch {}
-  if (-not $zone) { $zone = [TimeZoneInfo]::Local }
-  [TimeZoneInfo]::ConvertTimeFromUtc([DateTime]::UtcNow, $zone).ToString('yyyy-MM-dd')
+  $tzi = $null
+  try { $tzi = [TimeZoneInfo]::FindSystemTimeZoneById($ZONE) } catch {}
+  if (-not $tzi) { $tzi = [TimeZoneInfo]::Local }
+  [TimeZoneInfo]::ConvertTimeFromUtc([DateTime]::UtcNow, $tzi).ToString('yyyy-MM-dd')
 }
 
 # Run an external command with arguments; a .ps1 runs as a child of this same pwsh. Returns
