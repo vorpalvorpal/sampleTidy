@@ -286,11 +286,11 @@ test_that("retry: a `done` record with rc 0 and an unchanged gate is skipped, wi
 
 test_that("stale: no success for 24 h notifies once per local day, also on a tick that skips", {
   s <- ap_sandbox()
-  ap_prime(s)
+  tz <- "Pacific/Kiritimati"
+  ap_prime(s, SAMPLETIDY_TIMEZONE = tz)          # the gate hashes the local date: prime in the same zone
   succ <- ap_utc(Sys.time() - 48 * 3600)
   rec <- function() ap_write_health(s, state = "done", pid = 1L, started_at = succ, ended_at = succ, rc = 0L, last_success_at = succ)
   rec()
-  tz <- "Pacific/Kiritimati"
   ap_ok(ap_run(s, SAMPLETIDY_TIMEZONE = tz))
   expect_length(ap_runs(s), 0L)                  # the gate still skips
   expect_identical(ap_notes(s), paste0("2|sampleTidy import stale|No successful import since ", succ, " (over 24 hours)"))
