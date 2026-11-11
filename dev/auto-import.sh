@@ -7,7 +7,8 @@
 # (find error) logs, notifies once a day and exits 3 before the gate is compared; an
 # empty listing never skips; the gate is written after a good run only if the listing
 # works and nothing in the input changed (ctime) since the run began.
-# Test overrides: SAMPLETIDY_AUTOIMPORT_{DB,INPUT,REPORT,RSCRIPT,LOG,CODE,OFF,NOTIFY,STALE_HOURS},
+# Test overrides: SAMPLETIDY_AUTOIMPORT_{DB,INPUT,REPORT,RSCRIPT,LOG,CODE,OFF,RUN,NOTIFY,STALE_HOURS,PLATFORM}
+# (LOG, OFF and RUN are read from the process env, then the environ file; DB, INPUT, REPORT from the env only),
 # SAMPLETIDY_{INPUT_DIR,REPORT_DIR,TIMEZONE} and R_ENVIRON_USER (the environ file read).
 # Deployment config (process env, then R's environ file): SAMPLETIDY_NOTIFY_COMMAND is a
 # single executable path, run as `<cmd> <title> <message>` for each notification (when unset,
@@ -81,7 +82,31 @@ renviron_get() {
 
 # Deployment values, resolved with no side effects: the SAMPLETIDY_AUTOIMPORT_* test
 # override, then the process environment, then R's user environ file, then a default.
-DB="${SAMPLETIDY_AUTOIMPORT_DB:-$HOME/Library/Application Support/org.R-project.R/R/sampleTidy/monitoring.duckdb}"
+# cfg KEY: the process environment, then R's environ file (empty when neither has it).
+cfg() { local v="${!1:-}"; [ -n "$v" ] || v="$(renviron_get "$1")"; printf '%s' "$v"; }
+# R's data dir for sampleTidy, as tools::R_user_dir("sampleTidy", "data") gives it: R_USER_DATA_DIR,
+# then XDG_DATA_HOME (each from the process env, then the environ file), then the platform default
+# (Windows %APPDATA%\R\data, macOS ~/Library/Application Support/org.R-project.R, else
+# ~/.local/share), then R/sampleTidy. Windows with no APPDATA has no default: DATA stays empty.
+# SAMPLETIDY_AUTOIMPORT_PLATFORM (Windows, Darwin, other) overrides the platform (tests).
+PLATFORM="${SAMPLETIDY_AUTOIMPORT_PLATFORM:-}"
+if [ -z "$PLATFORM" ]; then
+  case "$(uname -s)" in Darwin) PLATFORM=Darwin ;; MINGW*|MSYS*|CYGWIN*) PLATFORM=Windows ;; *) PLATFORM=other ;; esac
+fi
+DATA="$(cfg R_USER_DATA_DIR)"
+[ -n "$DATA" ] || DATA="$(cfg XDG_DATA_HOME)"
+if [ -z "$DATA" ]; then
+  case "$PLATFORM" in
+    Windows) [ -z "${APPDATA:-}" ] || DATA="$APPDATA/R/data" ;;
+    Darwin) DATA="$HOME/Library/Application Support/org.R-project.R" ;;
+    *) DATA="$HOME/.local/share" ;;
+  esac
+fi
+[ -z "$DATA" ] || DATA="$DATA/R/sampleTidy"
+# DB: the AUTOIMPORT_DB test override (env only), then SAMPLETIDY_LIVE_DB (R's own key), then the default.
+DB="${SAMPLETIDY_AUTOIMPORT_DB:-}"
+[ -n "$DB" ] || DB="$(cfg SAMPLETIDY_LIVE_DB)"
+if [ -z "$DB" ] && [ -n "$DATA" ]; then DB="$DATA/monitoring.duckdb"; fi
 if [ -n "${SAMPLETIDY_AUTOIMPORT_INPUT:-}" ]; then INPUT="$SAMPLETIDY_AUTOIMPORT_INPUT"; else
   INPUT="${SAMPLETIDY_INPUT_DIR:-}"
   [ -n "$INPUT" ] || INPUT="$(renviron_get SAMPLETIDY_INPUT_DIR)"
@@ -90,7 +115,7 @@ if [ -n "${SAMPLETIDY_AUTOIMPORT_INPUT:-}" ]; then INPUT="$SAMPLETIDY_AUTOIMPORT
 fi
 REPORT="${SAMPLETIDY_AUTOIMPORT_REPORT:-${SAMPLETIDY_REPORT_DIR:-}}"
 [ -n "$REPORT" ] || REPORT="$(renviron_get SAMPLETIDY_REPORT_DIR)"
-[ -n "$REPORT" ] || REPORT="$HOME/Library/Application Support/org.R-project.R/R/sampleTidy/reports"
+if [ -z "$REPORT" ] && [ -n "$DATA" ]; then REPORT="$DATA/reports"; fi
 ZONE="${SAMPLETIDY_TIMEZONE:-}"
 [ -n "$ZONE" ] || ZONE="$(renviron_get SAMPLETIDY_TIMEZONE)"
 [ -n "$ZONE" ] || ZONE=UTC
@@ -101,7 +126,8 @@ FLUSH="${SAMPLETIDY_NOTIFY_FLUSH:-}"
 [ -n "$FLUSH" ] || FLUSH="$(renviron_get SAMPLETIDY_NOTIFY_FLUSH)"
 GWATCH="${SAMPLETIDY_GATE_WATCH:-}"
 [ -n "$GWATCH" ] || GWATCH="$(renviron_get SAMPLETIDY_GATE_WATCH)"
-LOG="${SAMPLETIDY_AUTOIMPORT_LOG:-$HOME/Library/Logs/sampletidy-autoimport.log}"
+LOG="$(cfg SAMPLETIDY_AUTOIMPORT_LOG)"
+[ -n "$LOG" ] || LOG="$HOME/Library/Logs/sampletidy-autoimport.log"
 local_day() { TZ="$ZONE" date +%F; }
 if [ "${1:-}" = --print-config ]; then
   printf 'DB=%s\nINPUT=%s\nREPORT=%s\nTIMEZONE=%s\nLOG=%s\nNOTIFY=%s\nNOTIFY_FLUSH=%s\nWATCH=%s\n' "$DB" "$INPUT" "$REPORT" "$ZONE" "$LOG" "$NOTIFY" "$FLUSH" "$GWATCH"
@@ -110,7 +136,8 @@ fi
 
 [ -f "$DB" ] || exit 0                                  # not the writer machine
 # Off switch: touch this file to pause auto-import; remove it to resume.
-[ -f "${SAMPLETIDY_AUTOIMPORT_OFF:-$HOME/.sampletidy-autoimport-off}" ] && exit 0
+OFF="$(cfg SAMPLETIDY_AUTOIMPORT_OFF)"; [ -n "$OFF" ] || OFF="$HOME/.sampletidy-autoimport-off"
+[ -f "$OFF" ] && exit 0
 
 mkdir -p "$(dirname "$LOG")"
 logline() { echo "=== $(date '+%Y-%m-%d %H:%M:%S') $*" >>"$LOG"; }
@@ -225,7 +252,8 @@ fi
 # is moved to main's commit on every run. CODE overrides it (tests).
 RUN="${SAMPLETIDY_AUTOIMPORT_CODE:-}"
 if [ -z "$RUN" ]; then
-  REPO="$(dirname "$HERE")"; RUN="$HOME/.local/share/sampleTidy-run"   # no spaces: Rscript mangles them in --file
+  REPO="$(dirname "$HERE")"; RUN="$(cfg SAMPLETIDY_AUTOIMPORT_RUN)"
+  [ -n "$RUN" ] || RUN="$HOME/.local/share/sampleTidy-run"   # no spaces: Rscript mangles them in --file
   if [ -d "$RUN/.git" ] || [ -f "$RUN/.git" ]; then
     git -C "$RUN" checkout -q --detach "$(git -C "$REPO" rev-parse main)" >>"$LOG" 2>&1
   else

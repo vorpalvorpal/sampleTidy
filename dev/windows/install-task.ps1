@@ -3,7 +3,7 @@
 # scheduled task. No admin rights are needed: the task is this user's own and runs only while
 # they are logged on.
 #   install-task.ps1 [-Print] [-Uninstall] [-Launcher conhost|none] [-Name <n>] [-RenvironFile <f>]
-#                    [-Script <p>] [-Interval <minutes>] [-TimeLimit <ISO 8601 duration>]
+#                    [-Rscript <p>] [-Script <p>] [-Interval <minutes>] [-TimeLimit <ISO 8601 duration>]
 # -Print writes the task XML to stdout and touches nothing. -Uninstall deletes the task. The
 # task runs every 10 minutes and at logon (StartWhenAvailable catches up a missed tick); a run
 # that is still going when the next is due makes that one a no-op (IgnoreNew).
@@ -14,8 +14,11 @@
 # -Script <p> registers another PowerShell script instead (it must exist; another package's job),
 # -Interval <minutes> is the repeat (default 10) and -TimeLimit the longest a run may take, as an
 # ISO 8601 duration such as PT30M or PT2H (default PT4H). A bad value stops it before anything is written.
+# -Rscript <p> (absolute, must exist; exit 2 otherwise) is passed on after -RenvironFile, to the
+# trigger and to a -Script job alike; omitted, nothing is added.
 # The task never fetches code: auto-import.ps1 runs the main branch of the checkout it lives in.
 # Registration goes through schtasks.exe (SAMPLETIDY_SCHTASKS names another program, for tests).
+# -RenvironFile defaults to %USERPROFILE%\.Renviron and is always in the action (exit 2 if neither exists).
 # The task's WorkingDirectory is the report folder's parent: R reads a .Renviron from its
 # working directory, so it must be a folder that holds none.
 param(
@@ -24,6 +27,7 @@ param(
   [ValidateSet('conhost', 'none')][string]$Launcher = 'conhost',
   [string]$Name = 'sampleTidy-autoimport',
   [string]$RenvironFile,
+  [string]$Rscript,
   [string]$Script,
   [string]$Interval = '10',
   [string]$TimeLimit = 'PT4H'
@@ -54,6 +58,18 @@ function refuse([string]$Why) { [Console]::Error.WriteLine("install-task.ps1: $W
 if ($Interval -notmatch '^[0-9]+$' -or [int64]$Interval -lt 1) { refuse "-Interval must be a whole number of minutes, 1 or more (got '$Interval')" }
 if ($TimeLimit -notmatch '^P(?=[0-9]|T[0-9])([0-9]+D)?(T(?=[0-9])([0-9]+H)?([0-9]+M)?([0-9]+S)?)?$') { refuse "-TimeLimit must be an ISO 8601 duration such as PT30M or PT2H (got '$TimeLimit')" }
 
+if ($PSBoundParameters.ContainsKey('Rscript')) {
+  if (-not $Rscript -or -not [IO.Path]::IsPathRooted($Rscript)) { refuse "-Rscript must be an absolute path (got '$Rscript')" }
+  if (-not (Test-Path -LiteralPath $Rscript -PathType Leaf)) { refuse "-Rscript not found: $Rscript" }
+}
+
+# The environ file every task reads: -RenvironFile, else %USERPROFILE%\.Renviron (it need not exist).
+if (-not $RenvironFile) {
+  $profileDir = [Environment]::GetEnvironmentVariable('USERPROFILE')
+  if (-not $profileDir) { refuse 'USERPROFILE is not set and no -RenvironFile was given' }
+  $RenvironFile = Join-Path $profileDir '.Renviron'
+}
+
 # The task's pieces, all absolute. The checkout is two folders up from this script (dev\windows).
 $checkout = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 if ($PSBoundParameters.ContainsKey('Script')) {
@@ -72,39 +88,26 @@ if ($IsWindows) {   # the Store alias path is stable across updates; ProcessPath
 if (-not $pwsh) { $pwsh = [Environment]::ProcessPath }
 $user = if ($IsWindows) { [Security.Principal.WindowsIdentity]::GetCurrent().Name } else { [Environment]::UserName }
 
-# The report folder (SAMPLETIDY_REPORT_DIR, else the environ file, else the default), as the trigger finds it.
-function env_or_file([string]$Key) {
-  $v = [Environment]::GetEnvironmentVariable($Key)
-  if ($v) { return $v }
-  $f = $RenvironFile
-  if (-not $f) { $f = [Environment]::GetEnvironmentVariable('R_ENVIRON_USER') }
-  if (-not $f) {
-    $h = [Environment]::GetEnvironmentVariable('HOME'); $ru = [Environment]::GetEnvironmentVariable('R_USER')
-    $dir = if ($h) { $h } elseif ($ru) { $ru } else { [Environment]::GetFolderPath($(if ($IsWindows) { 'MyDocuments' } else { 'UserProfile' })) }
-    $f = Join-Path $dir '.Renviron'
-  }
-  if (Test-Path -LiteralPath $f -PathType Leaf) {
-    foreach ($l in [IO.File]::ReadAllLines($f)) {
-      $l = $l.TrimEnd("`r")
-      if ($l.StartsWith("$Key=", [StringComparison]::Ordinal)) { $v = $l.Substring($Key.Length + 1) }
-    }
-    if ($v -and $v.Length -ge 2 -and ($v[0] -ceq "'" -or $v[0] -ceq '"') -and $v[-1] -ceq $v[0]) { $v = $v.Substring(1, $v.Length - 2) }
-  }
-  $v
-}
-$report = env_or_file 'SAMPLETIDY_REPORT_DIR'
-if (-not $report) { $report = Join-Path ([Environment]::GetEnvironmentVariable('LOCALAPPDATA')) 'R\data\R\sampleTidy\reports' }
+# The report folder, as the trigger itself resolves it: the installer asks the trigger for its
+# configuration, so the environ file (with R's ${VAR} forms) and R's data-dir rule apply here too.
+$triggerPs1 = Join-Path (Join-Path $checkout 'dev') 'auto-import.ps1'
+$cfgOut = @(& ([Environment]::ProcessPath) -NoProfile -NonInteractive -File $triggerPs1 -RenvironFile $RenvironFile --print-config 2>&1 | ForEach-Object { "$_" })
+if ($LASTEXITCODE -ne 0) { refuse "auto-import.ps1 --print-config failed (exit $LASTEXITCODE): $($cfgOut -join ' ')" }
+$reportLine = $cfgOut | Where-Object { $_.StartsWith('REPORT=', [StringComparison]::Ordinal) } | Select-Object -Last 1
+$report = if ($reportLine) { $reportLine.Substring(7) } else { '' }
+if (-not $report) { refuse 'auto-import.ps1 --print-config gave no REPORT folder (is APPDATA set?)' }
 $workdir = Split-Path -Parent ([IO.Path]::GetFullPath($report).TrimEnd('\', '/'))
 
 $psArgs = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$trigger`""
-if ($RenvironFile) { $psArgs += " -RenvironFile `"$RenvironFile`"" }
+$psArgs += " -RenvironFile `"$RenvironFile`""
+if ($PSBoundParameters.ContainsKey('Rscript')) { $psArgs += " -Rscript `"$Rscript`"" }
 if ($Launcher -eq 'conhost') { $command = 'conhost.exe'; $arguments = "--headless `"$pwsh`" $psArgs" }
 else { $command = $pwsh; $arguments = $psArgs }
 
 function x([string]$S) { [Security.SecurityElement]::Escape($S) }
 $start = (Get-Date).AddMinutes(1).ToString("yyyy-MM-dd'T'HH:mm:ss")
 $xml = @"
-<?xml version="1.0" encoding="UTF-8"?>
+<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
     <Description>$(x $what)</Description>
@@ -158,9 +161,9 @@ $xml = @"
 
 if ($Print) { $xml; return }
 
-# schtasks wants the file's declared encoding to match its bytes: UTF-8, no BOM.
+# schtasks wants the file's declared encoding to match its bytes: UTF-16 LE with a BOM.
 $file = [IO.Path]::GetTempFileName()
 try {
-  [IO.File]::WriteAllText($file, $xml, [Text.UTF8Encoding]::new($false))
+  [IO.File]::WriteAllText($file, $xml, [Text.UnicodeEncoding]::new($false, $true))
   schtasks @('/create', '/xml', $file, '/tn', $Name, '/f')
 } finally { Remove-Item -LiteralPath $file -Force -ErrorAction SilentlyContinue }
