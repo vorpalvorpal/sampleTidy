@@ -8,7 +8,12 @@
   R's `.Renviron` (`-RenvironFile` names another) and runs `main` from a
   detached worktree (`%LOCALAPPDATA%\\sampleTidy-run`) instead of its own
   working tree. `dev/windows/install-task.ps1` registers it as a scheduled task
-  (`-Print`, `-Uninstall`, `-Launcher conhost|none`, `-Name`, `-RenvironFile`).
+  (`-Print`, `-Uninstall`, `-Launcher conhost|none`, `-Name`, `-RenvironFile`);
+  `-Script`, `-Interval` (minutes) and `-TimeLimit` (ISO 8601, e.g. `PT30M`) let
+  another package register its own job, and a bad value is refused up front.
+  Both triggers now read `.Renviron` values as R does: `${VAR}`, `${VAR-dflt}`
+  and `${VAR:-dflt}` are expanded (nested, and inside quotes), while a bare
+  `$VAR` and `~` stay literal.
   The import notice for an unreadable input folder no longer
   mentions launchd.
 * The inbox lock's liveness check no longer uses `tools::pskill()`, which on

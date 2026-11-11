@@ -24,14 +24,59 @@
 # SAMPLETIDY_AUTOIMPORT_PREV_FAILURE text that appears in status.json problems.
 export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"   # a GUI or launchd PATH may lack Rscript
 HERE="$(cd "$(dirname "$0")" && pwd)"
-# renviron_get KEY: the last `KEY=value` line of R's user environ file
-# ($R_ENVIRON_USER, else ~/.Renviron), with one pair of surrounding ' or " removed.
-# No ${VAR} or ~ expansion (the deployment writes absolute paths).
+# renviron_get KEY: the value R gives KEY from its user environ file ($R_ENVIRON_USER, else
+# ~/.Renviron), read the way R reads it: one pair of surrounding ' or " removed, then ${VAR},
+# ${VAR-dflt} (dflt only if VAR is unset) and ${VAR:-dflt} (also if empty) expanded, nested
+# and inside quotes too (a quoted dflt loses its quotes). VAR is the process environment or
+# a key set on an earlier line of the file; a bare $VAR and ~ stay literal. A line that
+# expands to empty leaves its key unset. awk, not bash, so it runs under bash 3.2 (launchd).
 renviron_get() {
-  local v
-  v="$(sed -n "s/^$1=//p" "${R_ENVIRON_USER:-$HOME/.Renviron}" 2>/dev/null | tail -1)"
-  case "$v" in \'*\') v="${v#\'}"; v="${v%\'}";; \"*\") v="${v#\"}"; v="${v%\"}";; esac
-  printf '%s' "$v"
+  local f="${R_ENVIRON_USER:-$HOME/.Renviron}"
+  [ -r "$f" ] || return 0
+  awk -v want="$1" '
+    function isname(c) { return c ~ /^[A-Za-z0-9_]$/ }
+    function lookup(n) { if (n in fs) return fs[n]; if (n in ENVIRON) return ENVIRON[n]; return "\001" }  # \001: unset
+    function unquote(v,   q) {
+      q = substr(v, 1, 1)
+      if (length(v) >= 2 && (q == "\"" || q == "\047") && substr(v, length(v), 1) == q) return substr(v, 2, length(v) - 2)
+      return v
+    }
+    function expand(s,   out, i, n, c, d, j, ch, inner, k, name, rest, v, dflt) {
+      out = ""; n = length(s); i = 1
+      while (i <= n) {
+        c = substr(s, i, 1)
+        if (c != "$" || substr(s, i + 1, 1) != "{") { out = out c; i++; continue }
+        d = 1; j = i + 2
+        while (j <= n && d > 0) {
+          ch = substr(s, j, 1)
+          if (ch == "$" && substr(s, j + 1, 1) == "{") { d++; j += 2; continue }
+          if (ch == "}") d--
+          j++
+        }
+        if (d > 0) { out = out c; i++; continue }    # no closing brace: literal
+        inner = substr(s, i + 2, j - i - 3)
+        k = 1
+        while (k <= length(inner) && isname(substr(inner, k, 1))) k++
+        name = substr(inner, 1, k - 1); rest = substr(inner, k)
+        if (name == "" || substr(name, 1, 1) ~ /^[0-9]$/) { out = out substr(s, i, j - i); i = j; continue }
+        v = lookup(name)
+        if (rest == "") { if (v != "\001") out = out v }
+        else if (rest ~ /^:-/ || rest ~ /^-/) {
+          dflt = substr(rest, (rest ~ /^:-/) ? 3 : 2)
+          if (v == "\001" || (v == "" && rest ~ /^:-/)) out = out expand(unquote(dflt))
+          else out = out v
+        } else out = out substr(s, i, j - i)
+        i = j
+      }
+      return out
+    }
+    { sub(/\r$/, "") }
+    /^#/ { next }
+    { eq = index($0, "="); if (eq < 2) next
+      key = substr($0, 1, eq - 1); val = expand(unquote(substr($0, eq + 1)))
+      if (val == "") fs[key] = "\001"; else fs[key] = val }
+    END { if ((want in fs) && fs[want] != "\001") print fs[want] }
+  ' "$f" 2>/dev/null
 }
 
 # Deployment values, resolved with no side effects: the SAMPLETIDY_AUTOIMPORT_* test
