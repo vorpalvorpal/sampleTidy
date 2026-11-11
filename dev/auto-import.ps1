@@ -32,8 +32,9 @@
 # SAMPLETIDY_AUTOIMPORT_PREV_FAILURE text that appears in status.json problems.
 # Arguments: -PrintConfig or --print-config prints the resolved values and exits;
 # -RenvironFile <f> reads <f> as the environ file (and gives it to R as R_ENVIRON_USER); any
-# other argument is ignored, so a stray one cannot stop the scheduled run.
-param([switch]$PrintConfig, [string]$RenvironFile, [Parameter(ValueFromRemainingArguments)][string[]]$Rest)
+# -Rscript <p> runs R through that program (beating SAMPLETIDY_AUTOIMPORT_RSCRIPT, then PATH);
+# any other argument is ignored, so a stray one cannot stop the scheduled run.
+param([switch]$PrintConfig, [string]$RenvironFile, [Alias('Rscript')][string]$RscriptPath, [Parameter(ValueFromRemainingArguments)][string[]]$Rest)
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $false
 $HERE = $PSScriptRoot
@@ -150,7 +151,8 @@ $FLUSH = cfg SAMPLETIDY_NOTIFY_FLUSH
 $GWATCH = cfg SAMPLETIDY_GATE_WATCH
 $LOG = cfg SAMPLETIDY_AUTOIMPORT_LOG
 if (-not $LOG) { $LOG = Join-Path $LAD 'sampleTidy\autoimport.log' }
-$RSCRIPT = env SAMPLETIDY_AUTOIMPORT_RSCRIPT
+$RSCRIPT = $RscriptPath
+if (-not $RSCRIPT) { $RSCRIPT = env SAMPLETIDY_AUTOIMPORT_RSCRIPT }
 if (-not $RSCRIPT) { $RSCRIPT = 'Rscript' }
 $OFF = cfg SAMPLETIDY_AUTOIMPORT_OFF
 if (-not $OFF) { $OFF = Join-Path $HOME '.sampletidy-autoimport-off' }

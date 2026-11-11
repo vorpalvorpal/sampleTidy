@@ -3,7 +3,7 @@
 # scheduled task. No admin rights are needed: the task is this user's own and runs only while
 # they are logged on.
 #   install-task.ps1 [-Print] [-Uninstall] [-Launcher conhost|none] [-Name <n>] [-RenvironFile <f>]
-#                    [-Script <p>] [-Interval <minutes>] [-TimeLimit <ISO 8601 duration>]
+#                    [-Rscript <p>] [-Script <p>] [-Interval <minutes>] [-TimeLimit <ISO 8601 duration>]
 # -Print writes the task XML to stdout and touches nothing. -Uninstall deletes the task. The
 # task runs every 10 minutes and at logon (StartWhenAvailable catches up a missed tick); a run
 # that is still going when the next is due makes that one a no-op (IgnoreNew).
@@ -14,6 +14,8 @@
 # -Script <p> registers another PowerShell script instead (it must exist; another package's job),
 # -Interval <minutes> is the repeat (default 10) and -TimeLimit the longest a run may take, as an
 # ISO 8601 duration such as PT30M or PT2H (default PT4H). A bad value stops it before anything is written.
+# -Rscript <p> (absolute, must exist; exit 2 otherwise) is passed on after -RenvironFile, to the
+# trigger and to a -Script job alike; omitted, nothing is added.
 # The task never fetches code: auto-import.ps1 runs the main branch of the checkout it lives in.
 # Registration goes through schtasks.exe (SAMPLETIDY_SCHTASKS names another program, for tests).
 # -RenvironFile defaults to %USERPROFILE%\.Renviron and is always in the action (exit 2 if neither exists).
@@ -25,6 +27,7 @@ param(
   [ValidateSet('conhost', 'none')][string]$Launcher = 'conhost',
   [string]$Name = 'sampleTidy-autoimport',
   [string]$RenvironFile,
+  [string]$Rscript,
   [string]$Script,
   [string]$Interval = '10',
   [string]$TimeLimit = 'PT4H'
@@ -54,6 +57,11 @@ if ($Uninstall) {
 function refuse([string]$Why) { [Console]::Error.WriteLine("install-task.ps1: $Why"); exit 2 }
 if ($Interval -notmatch '^[0-9]+$' -or [int64]$Interval -lt 1) { refuse "-Interval must be a whole number of minutes, 1 or more (got '$Interval')" }
 if ($TimeLimit -notmatch '^P(?=[0-9]|T[0-9])([0-9]+D)?(T(?=[0-9])([0-9]+H)?([0-9]+M)?([0-9]+S)?)?$') { refuse "-TimeLimit must be an ISO 8601 duration such as PT30M or PT2H (got '$TimeLimit')" }
+
+if ($PSBoundParameters.ContainsKey('Rscript')) {
+  if (-not $Rscript -or -not [IO.Path]::IsPathRooted($Rscript)) { refuse "-Rscript must be an absolute path (got '$Rscript')" }
+  if (-not (Test-Path -LiteralPath $Rscript -PathType Leaf)) { refuse "-Rscript not found: $Rscript" }
+}
 
 # The environ file every task reads: -RenvironFile, else %USERPROFILE%\.Renviron (it need not exist).
 if (-not $RenvironFile) {
@@ -92,6 +100,7 @@ $workdir = Split-Path -Parent ([IO.Path]::GetFullPath($report).TrimEnd('\', '/')
 
 $psArgs = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$trigger`""
 $psArgs += " -RenvironFile `"$RenvironFile`""
+if ($PSBoundParameters.ContainsKey('Rscript')) { $psArgs += " -Rscript `"$Rscript`"" }
 if ($Launcher -eq 'conhost') { $command = 'conhost.exe'; $arguments = "--headless `"$pwsh`" $psArgs" }
 else { $command = $pwsh; $arguments = $psArgs }
 
