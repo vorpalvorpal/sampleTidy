@@ -12,7 +12,7 @@ a data.frame of \code{\link[=db_check]{db_check()}} rows.
 \description{
 The checks every sampleTidy database should satisfy (PLAN-22 A2):
 orphan references the DB does not enforce, duplicates, alias invariants,
-vocabularies, value and hash shape, date and coordinate sanity, the core
+vocabularies, value and hash shape, date and feature-geometry sanity, the core
 schema version, and (migration tier) view coverage and expected
 constraints. A deployment adds its own through \code{db_checks(extra =)}.
 }

@@ -1,5 +1,39 @@
 # sampleTidy (development version)
 
+* The site feature register (PLAN-23). A feature no longer carries coordinates:
+  `feature` loses `lon`, `lat` and `geom_wkt` and gains `class`, and positions,
+  lines and areas live in a new table, `feature_geometry`, in EPSG:7856 (GDA2020
+  / MGA zone 56) metres, read back through the view `v_feature_location`. The
+  package does not create these tables (`ensure_schema()` cannot rebuild a table
+  a foreign key points at): it ships the DDL and the view SQL as internal
+  constants for an operator-run migration, and every register function and check
+  tolerates a database that has not been migrated (the functions abort saying
+  migration 117 is missing; the checks pass with no rows).
+  - `add_feature()` takes `class` and `date_start`, no longer takes `lon`, `lat`
+    or `geom_wkt` (it aborts naming `add_feature_geometry()`), and refuses a
+    `class` outside the vocabulary (extend it with
+    `st_config("feature_classes_extra")`) and a name whose canonical key (upper
+    case, leading zeros dropped from each digit run) matches an existing
+    feature's.
+  - New: `add_feature_geometry()`, `supersede_feature_geometry()` (a
+    correction), `withdraw_feature_geometry()` (a drawing made in error),
+    `end_feature_geometry()` and `replace_feature_geometry()` (a change on the
+    ground). A geometry row is never edited in place beyond stamping
+    `superseded` and `date_end` once, and never deleted. The WKT is checked by a
+    small reader written in plain R (well-formedness only; no `sf`).
+  - `db_checks_core()` gains `feature_geometry_wkt_valid`,
+    `feature_geometry_in_bbox`, `feature_location_unique`,
+    `feature_name_canonical_clash`, `feature_first_sample` (warn),
+    `orphan_feature_geometry`, `feature_geometry_history`,
+    `vocab_feature_geometry` and `vocab_feature_class` (warn), and loses
+    `feature_coords` and `feature_geom_matches_lonlat`.
+    `expected_constraints_present` also expects the `feature_geometry` keys once
+    the table exists. `db_checks_params()` gains `first_sample_since` and
+    `feature_classes`; `bbox` is now in EPSG:7856 metres and the `{bbox_*}` SQL
+    tokens are gone. A migration that gives a feature its first samples must
+    pass `allow = "feature_first_sample"` to `mig_db_checks_gate()`.
+  - The label matcher is unchanged.
+
 * The Windows import trigger (`dev/auto-import.ps1`) now matches the Mac one
   (`dev/auto-import.sh`): run-health record, retry after a failed or crashed run,
   notify and flush commands, a stale-success notice, listing failures exit 3,
