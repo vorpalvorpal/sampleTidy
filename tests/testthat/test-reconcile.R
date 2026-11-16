@@ -3895,51 +3895,6 @@ test_that("C.2/C.1 MISS path: when the assumed site yields NO hit the row stays 
 
 # ---- C.3: the iff gate, operationally ---------------------------------------
 
-test_that("C.3: a resolved feature with NA/blank site makes the whole event INELIGIBLE for Layer 3 (fail closed), even though the visible non-NA sites are single", {
-  # PLAN-23 (2026-11-17): the fixture now enforces `site NOT NULL`, as the
-  # live table always has, so a NULL-site feature can no longer be seeded.
-  # The blank-site half of the rule is covered by the D15/C.3 test below.
-  # Skipped, not deleted, pending a decision on whether the NA branch of
-  # the resolver is still wanted as a defence.
-  skip("a NULL feature site cannot exist under the PLAN-23 feature DDL")
-  path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
-  DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix) VALUES
-    ('f-local-nosite', 'V.VIRT01', NULL, 'surface', 'water')")
-  DBI::dbExecute(con, "INSERT INTO feature_alias
-    (uuid, uuid_feature, name, alias_key, kind, n_seen, auto_assign, first_seen, last_seen, confirmed_by) VALUES
-    ('fa-local-nosite', 'f-local-nosite', 'V.VIRT01', 'v.virt01', 'self', 0, TRUE,
-     TIMESTAMP '2025-01-01 00:00:00', TIMESTAMP '2025-01-01 00:00:00', NULL)")
-
-  event <- mk_event(mk_rows(
-    mk_row(source_ref = "nosite", feature_raw = "V.VIRT01",
-           lab_sample_id = "XX9999986001", sample_datetime_raw = "12 Jun 2025 09:00"),
-    mk_row(source_ref = "th", feature_raw = "TH.S01",
-           lab_sample_id = "XX9999986002", sample_datetime_raw = "12 Jun 2025 09:00"),
-    mk_row(source_ref = "candidate", feature_raw = "MW02A",
-           lab_sample_id = "XX9999986003", sample_datetime_raw = "12 Jun 2025 09:00")
-  ))
-  out <- reconcile_event(event, con)
-
-  c <- out$clean[out$clean$source_ref == "candidate", ]
-  expect_true(c$feature_pending)
-  expect_true(is.na(c$uuid_feature))
-
-  # POSITIVE CONTROL (same test): the identical event MINUS the NA-site row
-  # DOES let Layer 3 fire and resolve "MW02A" - proving the NA-site row
-  # itself (not an unimplemented/disabled resolver in general) is what
-  # blocks the negative case above.
-  clean_event <- mk_event(mk_rows(
-    mk_row(source_ref = "th", feature_raw = "TH.S01",
-           lab_sample_id = "XX9999986004", sample_datetime_raw = "12 Jun 2025 09:00"),
-    mk_row(source_ref = "candidate", feature_raw = "MW02A",
-           lab_sample_id = "XX9999986005", sample_datetime_raw = "12 Jun 2025 09:00")
-  ))
-  out_clean <- reconcile_event(clean_event, con)
-  cc <- out_clean$clean[out_clean$clean$source_ref == "candidate", ]
-  expect_false(cc$feature_pending)
-  expect_identical(cc$uuid_feature, "f-0009")
-})
-
 test_that("D15/C.3: a resolved feature with a BLANK (empty-string, not NA) site ALSO makes the event INELIGIBLE for Layer 3 (fail closed) - the other half of C.3's 'NA or blank site' rule; the sibling test above covers only the NA half", {
   path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix) VALUES
