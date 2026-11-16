@@ -930,8 +930,8 @@ test_that("R-15.37: confirming an identity-mapped pending alias (alias_key == lo
   # lower(f-9601.name)); fa-9602 is a SEPARATE pending row that arrived
   # later carrying the identical key - the exact shape the n.s01/m.e02
   # duplicates came from (RULINGS R3/R4).
-  DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix, lon, lat) VALUES
-    ('f-9601', 'Z.IDENT01', 'Z', 'surface', 'water', 150.9601, -33.9601)")
+  DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix) VALUES
+    ('f-9601', 'Z.IDENT01', 'Z', 'surface', 'water')")
   DBI::dbExecute(con, "INSERT INTO feature_alias
     (uuid, uuid_feature, name, alias_key, kind, n_seen, auto_assign,
      first_seen, last_seen, confirmed_by) VALUES
@@ -1044,8 +1044,8 @@ test_that("Phase-7b round-2 item 4: an identity confirmation is recognised even 
   key <- .rc_feature_key(nbsp_name)
   expect_false(identical(key, tolower(nbsp_name))) # the two folds genuinely diverge on this input
 
-  DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix, lon, lat) VALUES
-    ('f-9901', ?, 'Z', 'surface', 'water', 150.9901, -33.9901)", params = list(nbsp_name))
+  DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix) VALUES
+    ('f-9901', ?, 'Z', 'surface', 'water')", params = list(nbsp_name))
   DBI::dbExecute(con, "INSERT INTO feature_alias
     (uuid, uuid_feature, name, alias_key, kind, n_seen, auto_assign,
      first_seen, last_seen, confirmed_by) VALUES
@@ -1082,8 +1082,8 @@ test_that("Phase-7b round-2 item 4: .fa_identity_duplicates()/merge_identity_ali
   nbsp_name <- "Z.NBSPTEST02 "
   key <- .rc_feature_key(nbsp_name)
 
-  DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix, lon, lat) VALUES
-    ('f-9903', ?, 'Z', 'surface', 'water', 150.9903, -33.9903)", params = list(nbsp_name))
+  DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix) VALUES
+    ('f-9903', ?, 'Z', 'surface', 'water')", params = list(nbsp_name))
   DBI::dbExecute(con, "INSERT INTO feature_alias
     (uuid, uuid_feature, name, alias_key, kind, n_seen, auto_assign,
      first_seen, last_seen, confirmed_by) VALUES
@@ -1113,8 +1113,8 @@ test_that("Phase-7b item 6: bounding a 'self' arm aborts - own-name reachability
   con <- setup$con
   withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
-  DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix, lon, lat) VALUES
-    ('f-9801', 'Z.SELFBOUND01', 'Z', 'surface', 'water', 150.9801, -33.9801)")
+  DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix) VALUES
+    ('f-9801', 'Z.SELFBOUND01', 'Z', 'surface', 'water')")
 
   # (a) a DIRECT re-confirm of a row that already carries kind = 'self',
   # with a bound - must abort before writing anything.
@@ -1201,8 +1201,8 @@ test_that("Phase-7b round-2 M1 coverage gap: an identity mapping BECOMING a feat
   # mutant (`target_is_self` dropping `|| is_identity`), `self_arm` stays NA
   # (no pre-existing self arm to find) AND `alias$kind[[1]]` is 'pending', so
   # `target_is_self` would be FALSE and the bound would be silently written.
-  DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix, lon, lat) VALUES
-    ('f-9820', 'Z.NEWSELF01', 'Z', 'surface', 'water', 150.9820, -33.9820)")
+  DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix) VALUES
+    ('f-9820', 'Z.NEWSELF01', 'Z', 'surface', 'water')")
   DBI::dbExecute(con, "INSERT INTO feature_alias
     (uuid, uuid_feature, name, alias_key, kind, n_seen, auto_assign,
      first_seen, last_seen, confirmed_by) VALUES
@@ -1233,8 +1233,8 @@ test_that("Phase-7b round-3 A2: the BOUNDS-ONLY R1 guard must also fire on a mis
   # its OWN uuid_feature is in hand without picking anything. The bounds-only
   # copy of the R1 guard used to check only `kind == 'self'` and let a bound
   # land here, making the feature unreachable by its own name.
-  DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix, lon, lat) VALUES
-    ('f-9840', 'Z.MISLABEL9840', 'Z', 'surface', 'water', 150.9840, -33.9840)")
+  DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix) VALUES
+    ('f-9840', 'Z.MISLABEL9840', 'Z', 'surface', 'water')")
   DBI::dbExecute(con, "INSERT INTO feature_alias
     (uuid, uuid_feature, name, alias_key, kind, n_seen, auto_assign,
      first_seen, last_seen, confirmed_by) VALUES
@@ -1272,8 +1272,8 @@ test_that("Phase-7b round-2 M4 coverage gap: re-confirming a row that IS ALREADY
   # `self_arm` would be set to `uuid_alias` itself, and the F.19 post-pass
   # would then repoint-onto-itself (a no-op) and DELETE the feature's own
   # self arm.
-  DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix, lon, lat) VALUES
-    ('f-9830', 'Z.SELFRECONF01', 'Z', 'surface', 'water', 150.9830, -33.9830)")
+  DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix) VALUES
+    ('f-9830', 'Z.SELFRECONF01', 'Z', 'surface', 'water')")
   DBI::dbExecute(con, "INSERT INTO feature_alias
     (uuid, uuid_feature, name, alias_key, kind, n_seen, auto_assign,
      first_seen, last_seen, confirmed_by) VALUES
@@ -1311,8 +1311,8 @@ test_that("Phase-7b round-3 A11: an open sample_collision row on a redundant ide
   con <- setup$con
   withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
-  DBI::dbExecute(con, "INSERT INTO feature (uuid,name,site,flow,matrix,lon,lat) VALUES
-    ('f-9850','Z.ORPH9850','Z','surface','water',150.9850,-33.9850)")
+  DBI::dbExecute(con, "INSERT INTO feature (uuid,name,site,flow,matrix) VALUES
+    ('f-9850','Z.ORPH9850','Z','surface','water')")
   DBI::dbExecute(con, "INSERT INTO feature_alias
     (uuid,uuid_feature,name,alias_key,kind,n_seen,auto_assign,first_seen,last_seen,confirmed_by) VALUES
     ('fa-9850-self','f-9850','Z.ORPH9850','z.orph9850','self',0,TRUE,
@@ -1386,8 +1386,7 @@ fa_e8_setup <- function() {
     ensure_schema(con) # review_queue/change_log/schema_version - reused, not re-derived
 
     DBI::dbExecute(con, "CREATE TABLE feature (
-      uuid VARCHAR PRIMARY KEY, name VARCHAR, site VARCHAR,
-      lon DOUBLE NOT NULL, lat DOUBLE NOT NULL)")
+      uuid VARCHAR PRIMARY KEY, name VARCHAR, site VARCHAR)")
     DBI::dbExecute(con, "CREATE TABLE feature_alias (
       uuid VARCHAR PRIMARY KEY, uuid_feature VARCHAR REFERENCES feature(uuid),
       name VARCHAR NOT NULL, alias_key VARCHAR NOT NULL, kind VARCHAR,
@@ -1419,8 +1418,8 @@ fa_e8_setup <- function() {
     # (top of this section) creates them.
     for (ddl in .fa_empty_registry_ddl) DBI::dbExecute(con, ddl)
 
-    DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, lon, lat) VALUES
-      ('f-e8-01', 'Z.E8DUP01', 'Z', 150.8801, -33.8801)")
+    DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site) VALUES
+      ('f-e8-01', 'Z.E8DUP01', 'Z')")
 
     DBI::dbExecute(con, "INSERT INTO feature_alias
       (uuid, uuid_feature, name, alias_key, kind, n_seen, auto_assign, first_seen, last_seen, confirmed_by) VALUES
@@ -1451,9 +1450,9 @@ fa_e8_setup <- function() {
     # which is exactly ONE identity pair (fa-e8-self/fa-e8-dup, both ->
     # f-e8-01). Both R-15.44 tests below assert `result$alias_key` never
     # contains 'z.e8diff01'.
-    DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, lon, lat) VALUES
-      ('f-e8-02', 'Z.E8DIFF01', 'Z', 150.8802, -33.8802),
-      ('f-e8-03', 'Z.E8DIFF02', 'Z', 150.8803, -33.8803)")
+    DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site) VALUES
+      ('f-e8-02', 'Z.E8DIFF01', 'Z'),
+      ('f-e8-03', 'Z.E8DIFF02', 'Z')")
     DBI::dbExecute(con, "INSERT INTO feature_alias
       (uuid, uuid_feature, name, alias_key, kind, n_seen, auto_assign, first_seen, last_seen, confirmed_by) VALUES
       ('fa-e8-self2', 'f-e8-02', 'Z.E8DIFF01', 'z.e8diff01', 'self', 2, FALSE,
@@ -1623,8 +1622,7 @@ fa_e8_dup_loser_setup <- function() {
     ensure_schema(con)
 
     DBI::dbExecute(con, "CREATE TABLE feature (
-      uuid VARCHAR PRIMARY KEY, name VARCHAR, site VARCHAR,
-      lon DOUBLE NOT NULL, lat DOUBLE NOT NULL)")
+      uuid VARCHAR PRIMARY KEY, name VARCHAR, site VARCHAR)")
     DBI::dbExecute(con, "CREATE TABLE feature_alias (
       uuid VARCHAR PRIMARY KEY, uuid_feature VARCHAR REFERENCES feature(uuid),
       name VARCHAR NOT NULL, alias_key VARCHAR NOT NULL, kind VARCHAR,
@@ -1645,8 +1643,8 @@ fa_e8_dup_loser_setup <- function() {
       value DOUBLE)")
     for (ddl in .fa_empty_registry_ddl) DBI::dbExecute(con, ddl)
 
-    DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, lon, lat) VALUES
-      ('f-dup-01', 'Z.DUPLOSER01', 'Z', 150.9101, -33.9101)")
+    DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site) VALUES
+      ('f-dup-01', 'Z.DUPLOSER01', 'Z')")
 
     DBI::dbExecute(con, "INSERT INTO feature_alias
       (uuid, uuid_feature, name, alias_key, kind, n_seen, auto_assign, first_seen, last_seen, confirmed_by) VALUES

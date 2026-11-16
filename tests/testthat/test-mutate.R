@@ -27,15 +27,12 @@ test_that("R-9.1: db_append() of 2 rows writes 2 change_log rows with one shared
   withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   before <- count_change_log(con)
-  # lon/lat added (R-11.17): the live `feature` table declares them DOUBLE NOT
-  # NULL (helper-db.R's DDL now mirrors that), so a fixture omitting them
-  # fails on an unrelated NOT NULL constraint rather than testing db_append()
-  # itself - reconciled per the P11-mutate brief.
+  # PLAN-23: `feature` no longer has lon/lat/geom_wkt (positions are in
+  # `feature_geometry`), so the appended rows carry only the register columns.
   new_features <- tibble::tibble(
     uuid = c("f-1001", "f-1002"), name = c("T.NEW1", "T.NEW2"),
     site = c("TestSite", "TestSite"), flow = c("surface", "surface"),
-    matrix = c("water", "water"), lon = c(150.1001, 150.1002),
-    lat = c(-33.1001, -33.1002)
+    matrix = c("water", "water")
   )
   db_append(con, "feature", new_features, actor = "tester", reason = "bulk add")
 
@@ -108,9 +105,8 @@ test_that("R-9.1: db_delete() removes the row and writes a change_log delete ent
   con <- seed_con(path)
   withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
-  # lon/lat added (R-11.17 reconciliation - see the db_append test above).
-  DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix, lon, lat) VALUES
-    ('f-9999', 'T.THROWAWAY', 'TestSite', 'surface', 'water', 150.9999, -33.9999)")
+  DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix) VALUES
+    ('f-9999', 'T.THROWAWAY', 'TestSite', 'surface', 'water')")
   before <- count_change_log(con)
 
   db_delete(con, "feature", uuid = "f-9999", actor = "tester", reason = "cleanup")
@@ -495,11 +491,9 @@ test_that("R-9.1: add_feature() inserts a row and a change_log entry", {
   withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   before <- count_change_log(con)
 
-  # lon/lat added (R-11.17 reconciliation): the fixed add_feature() signature
-  # requires them (live `feature.lon`/`lat` are DOUBLE NOT NULL) - see the
-  # dedicated R-11.17 tests below for the missing-lon/lat and round-trip
-  # cases this baseline test doesn't cover.
-  add_feature(name = "T.NEW1", site = "TestSite", lon = 150.5001, lat = -33.5001,
+  # PLAN-23 (R-23.3): add_feature() takes NO coordinates - positions are added
+  # with add_feature_geometry(). See test-add-feature-register.R.
+  add_feature(name = "T.NEW1", site = "TestSite",
               flow = "surface", matrix = "water",
               actor = "tester", reason = "new monitoring point")
 
@@ -681,34 +675,33 @@ test_that("Phase-7b round-2 item 5b: review_queue() also returns the typed uuid_
   expect_identical(hit$uuid_incoming[[1]], "an-incoming")
 })
 
-# ---- R-11.17: add_feature() aligned to the live `feature` schema (F5/A-4) --
+# ---- R-11.17 (REWRITTEN by PLAN-23 / R-23.3, R-23.4): add_feature() and the `feature` schema --
 #
-# The live `feature` table is 19 columns, `lon`/`lat` DOUBLE NOT NULL, and
-# `add_feature()` (mutate.R:324-338) omits them - a broken exported API that
-# cannot insert against the live-shaped DDL. Fix: add lon/lat as required
-# (no-default) arguments, checkmate-validated as numbers, aborting
-# `sampletidy_error` at the argument check (not a raw DB constraint error)
-# when omitted. `virtual` stays (A58/A67).
+# R-11.17 required `lon`/`lat` (DOUBLE NOT NULL live) on add_feature() and
+# round-tripped them. PLAN-23 R23-1 rebuilds `feature` WITHOUT lon/lat/geom_wkt:
+# add_feature() takes no coordinates (a position is added afterwards with
+# add_feature_geometry()), and a call that passes one aborts naming that
+# function (tested in test-add-feature-register.R, R-23.4). The two tests
+# below keep R-11.17's intent - add_feature() inserts against the live-shaped
+# DDL, `virtual` round-trips, and an argument problem fails at the argument
+# check, never as a raw DB error - in the new shape.
 
-test_that("R-11.17: add_feature() with lon/lat inserts against the live-shaped DDL and the row round-trips coordinates + virtual", {
+test_that("R-11.17 (rewritten, R-23.3): add_feature() with no coordinates inserts against the live-shaped DDL and the row round-trips `virtual`", {
   path <- seed_db()
   withr::local_options(list("sampletidy.live_db" = path))
   con <- seed_con(path)
   withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
-  add_feature(name = "T.NEWCOORD", site = "SiteA", lon = 150.1234, lat = -33.5678,
+  add_feature(name = "T.NEWCOORD", site = "SiteA",
               virtual = TRUE, actor = "tester", reason = "new monitoring point")
 
-  row <- DBI::dbGetQuery(
-    con, "SELECT lon, lat, virtual FROM feature WHERE name = 'T.NEWCOORD'"
-  )
+  row <- DBI::dbGetQuery(con, "SELECT * FROM feature WHERE name = 'T.NEWCOORD'")
   expect_equal(nrow(row), 1)
-  expect_equal(row$lon, 150.1234)
-  expect_equal(row$lat, -33.5678)
   expect_true(row$virtual)
+  expect_false(any(c("lon", "lat", "geom_wkt") %in% names(row)))
 })
 
-test_that("R-11.17: add_feature() omitting lon/lat aborts as sampletidy_error at the argument check, not a DB error", {
+test_that("R-11.17 (rewritten, R-23.4): add_feature() given lon/lat aborts as sampletidy_error at the argument check, not a DB error, and writes nothing", {
   path <- seed_db()
   withr::local_options(list("sampletidy.live_db" = path))
   con <- seed_con(path)
@@ -716,26 +709,21 @@ test_that("R-11.17: add_feature() omitting lon/lat aborts as sampletidy_error at
   before <- count_change_log(con)
 
   err <- tryCatch(
-    add_feature(name = "T.NOLONLAT", site = "TestSite", actor = "tester",
-                reason = "missing coordinates"),
+    add_feature(name = "T.NOLONLAT", site = "TestSite", lon = 150.1, lat = -33.1,
+                actor = "tester", reason = "coordinates are no longer accepted"),
     error = function(e) e
   )
   expect_s3_class(err, "sampletidy_error")
-  # NB db_transaction() (mutate.R:106-115) already wraps *any* error raised
-  # inside its fn(con) body - including a raw DB constraint failure - as
-  # class sampletidy_error with the prefix "Mutation transaction failed and
-  # was rolled back: ...". So `class = "sampletidy_error"` alone does not
-  # discriminate "argument check fired first" from "DB write was attempted
-  # and failed" - both look identical on class. The two ARE distinguishable
-  # on the message: a DB-path failure carries that specific wrapper prefix
-  # (verified against the transaction-wrap code, not guessed); an
-  # argument-check failure never enters db_transaction() at all, so it can
-  # never carry it.
+  # db_transaction() wraps ANY error raised inside its body as class
+  # sampletidy_error with the prefix "Mutation transaction failed" (see the
+  # original note, kept): so the class alone does not tell an argument-check
+  # failure from a DB-write failure; the message does.
   expect_false(
     grepl("Mutation transaction failed", conditionMessage(err), fixed = TRUE),
     info = paste("error passed through db_transaction()'s DB-failure wrapper",
                  "instead of failing at the argument check:", conditionMessage(err))
   )
+  expect_match(conditionMessage(err), "add_feature_geometry", fixed = TRUE)
 
   n_features <- DBI::dbGetQuery(con, "SELECT count(*) AS n FROM feature WHERE name = 'T.NOLONLAT'")$n
   expect_equal(n_features, 0)
@@ -751,7 +739,7 @@ test_that("Phase-8b C4: add_feature() with an empty/whitespace-only name aborts 
   before <- count_change_log(con)
 
   err_empty <- tryCatch(
-    add_feature(name = "", site = "TestSite", lon = 150.99, lat = -33.99,
+    add_feature(name = "", site = "TestSite",
                 actor = "tester", reason = "blank name"),
     error = function(e) e
   )
@@ -763,7 +751,7 @@ test_that("Phase-8b C4: add_feature() with an empty/whitespace-only name aborts 
   )
 
   err_blank <- tryCatch(
-    add_feature(name = "   ", site = "TestSite", lon = 150.98, lat = -33.98,
+    add_feature(name = "   ", site = "TestSite",
                 actor = "tester", reason = "whitespace-only name"),
     error = function(e) e
   )
@@ -776,7 +764,7 @@ test_that("Phase-8b C4: add_feature() with an empty/whitespace-only name aborts 
   # growth (the argument check fires before any connection is opened, so
   # there is nothing to roll back).
   n_features <- DBI::dbGetQuery(
-    con, "SELECT count(*) AS n FROM feature WHERE lon IN (150.99, 150.98)"
+    con, "SELECT count(*) AS n FROM feature WHERE trim(name) = ''"
   )$n
   expect_equal(n_features, 0)
   after <- count_change_log(con)
@@ -1139,7 +1127,7 @@ test_that("R-15.30: add_feature() creates a self alias in the same transaction t
   before <- count_change_log(con)
 
   new_uuid <- add_feature(
-    name = "T.NEWSELF9001", site = "T", lon = 150.7001, lat = -33.7001,
+    name = "T.NEWSELF9001", site = "T",
     flow = "surface", matrix = "water",
     actor = "tester", reason = "F.9: post-001 feature must get a self alias"
   )
@@ -1231,7 +1219,7 @@ test_that("R-15.30/B3: a failure on the SECOND write of add_feature()'s atomic p
 
   err <- tryCatch(
     add_feature(
-      name = "T.NEWSELF9002", site = "T", lon = 150.7002, lat = -33.7002,
+      name = "T.NEWSELF9002", site = "T",
       flow = "surface", matrix = "water",
       actor = "tester", reason = "B3: second-write failure must roll back the first"
     ),
@@ -1265,14 +1253,14 @@ test_that("Phase-7b round-2 item 10: add_feature() aborts when the name's .rc_fe
   con <- seed_con(path)
   withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
-  add_feature(name = "T.DUPNAME9010", site = "T", lon = 150.9010, lat = -33.9010,
+  add_feature(name = "T.DUPNAME9010", site = "T",
               actor = "tester", reason = "first")
 
   before_features <- DBI::dbGetQuery(con, "SELECT count(*) AS n FROM feature")$n
   before_aliases <- DBI::dbGetQuery(con, "SELECT count(*) AS n FROM feature_alias")$n
 
   err <- tryCatch(
-    add_feature(name = "T.DUPNAME9010", site = "T", lon = 150.9011, lat = -33.9011,
+    add_feature(name = "T.DUPNAME9010", site = "T",
                 actor = "tester", reason = "second, same name"),
     error = function(e) e
   )
@@ -1322,7 +1310,7 @@ test_that("Phase-7b round-3 T1.5/A1: add_feature() SUCCEEDS over a dangling pend
   expect_true("fa-pend-9012" %in% pending_features(con)$uuid_alias)
 
   new_uuid <- add_feature(
-    name = nm, site = "S", lon = 150.9012, lat = -33.9012,
+    name = nm, site = "S",
     actor = "alice", reason = "new monitoring point behind a dangling pending alias"
   )
 
@@ -1353,7 +1341,7 @@ test_that("Phase-7b round-2 item 11: add_feature()'s self alias is NOT stamped c
   withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
   new_uuid <- add_feature(
-    name = "T.NOCONFIRM9011", site = "T", lon = 150.9021, lat = -33.9021,
+    name = "T.NOCONFIRM9011", site = "T",
     actor = "tester", reason = "F.9 self alias, no confirmed_by"
   )
 
@@ -1482,23 +1470,24 @@ test_that("W-F: db_update() does NOT share the dbAppendTable masking hazard - a 
   con <- seed_con(path)
   withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
-  DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix, lon, lat) VALUES
-    ('f-wf-1', 'T.WF1', 'TestSite', 'surface', 'water', 150.0, -33.0)")
+  DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix) VALUES
+    ('f-wf-1', 'T.WF1', 'TestSite', 'surface', 'water')")
   before_log <- count_change_log(con)
 
-  # feature.lon is DOUBLE NOT NULL (R-11.17); db_update() never calls
+  # feature.name is VARCHAR NOT NULL (PLAN-23 2.1; this test used lon, which
+  # no longer exists). db_update() never calls
   # DBI::dbAppendTable() (plain parameterised UPDATE), so it has no
   # register/unregister step to mask the error - verified directly.
   expect_error(
-    db_update(con, "feature", "f-wf-1", changes = list(lon = NA_real_),
+    db_update(con, "feature", "f-wf-1", changes = list(name = NA_character_),
               actor = "tester", reason = "should fail"),
     regexp = "NOT NULL constraint failed", class = "sampletidy_error"
   )
 
   after_log <- count_change_log(con)
   expect_equal(after_log, before_log)
-  unchanged <- DBI::dbGetQuery(con, "SELECT lon FROM feature WHERE uuid = 'f-wf-1'")$lon
-  expect_equal(unchanged, 150.0)
+  unchanged <- DBI::dbGetQuery(con, "SELECT name FROM feature WHERE uuid = 'f-wf-1'")$name
+  expect_equal(unchanged, "T.WF1")
 })
 
 test_that("R-12.6: a commit-time failure rolls back the whole call and aborts sampletidy_error, leaving no partial write (dbCommit() must sit inside the tryCatch)", {
