@@ -712,7 +712,7 @@ add_feature <- function(name, site, class = NA_character_, flow = NA_character_,
       .st_require_feature_register(con, "add_feature()")
       db_transaction(con, function(con) {
         # PLAN-23 3.2: two names that reduce to the same canonical key
-        # (`B.S1` / `B.S01`, `B.MW2A` / `B.MW02A`) are the same point to the
+        # (`X.S1` / `X.S01`, `X.MW2A` / `X.MW02A`) are the same point to the
         # label matcher's structural rules. Every feature counts, ended ones
         # included.
         existing <- DBI::dbGetQuery(con, "SELECT name FROM feature")

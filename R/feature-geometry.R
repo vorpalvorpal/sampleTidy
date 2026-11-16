@@ -8,7 +8,7 @@
 # adds a row that names its predecessor in `supersedes`, and nothing is
 # deleted.
 #
-# The DDL constants below are the single source: a bmcc migration executes
+# The DDL constants below are the single source: a deployment migration executes
 # them, and the test fixture is checked against them. `ensure_schema()` does
 # NOT create these tables - DuckDB cannot drop a column or a constraint on a
 # table a foreign key points at, so `feature` is rebuilt by an operator-run
