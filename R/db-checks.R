@@ -46,8 +46,7 @@
 #'
 #' @param name a unique check name.
 #' @param sql either one SQL string, in which `{param}` tokens are filled from
-#'   [db_checks_params()] (`{min_date}`, `{tz}`, `{mask_variants}`,
-#'   `{bbox_xmin}`/`{bbox_ymin}`/`{bbox_xmax}`/`{bbox_ymax}`), or a function
+#'   [db_checks_params()] (`{min_date}`, `{tz}`, `{mask_variants}`), or a function
 #'   `function(con, params)` returning a data.frame with a `key` column.
 #' @param description what the check asserts.
 #' @param tier `"hourly"`, `"migration"` or `"on_demand"`.
@@ -83,8 +82,15 @@ db_check <- function(name, sql, description, tier = "hourly", severity = "error"
 #' @param ... named overrides of the defaults:
 #'   * `min_date`: samples dated before this are implausible (default
 #'     `"1980-01-01"`);
-#'   * `bbox`: `c(xmin, ymin, xmax, ymax)` that physical features must lie
-#'     in, or `NULL` (default) for no box - finite coordinates suffice;
+#'   * `bbox`: `c(xmin, ymin, xmax, ymax)` in EPSG:7856 metres that current
+#'     feature geometry must lie in (read by `feature_geometry_in_bbox` only),
+#'     or `NULL` (default): then only the MGA grid range applies;
+#'   * `first_sample_since`: `feature_first_sample` reports features whose
+#'     samples were all inserted at or after this time. `NULL` (default)
+#'     means 14 days before the run; otherwise a `POSIXct`;
+#'   * `feature_classes`: the `feature.class` vocabulary
+#'     `vocab_feature_class` accepts (default the core one; a deployment
+#'     extends it);
 #'   * `tz`: the time zone whose calendar day `sample.date` names (default
 #'     configured time zone, `st_config("timezone")`);
 #'   * `mask_variants`: the registered mask variants (default the core
@@ -98,6 +104,8 @@ db_checks_params <- function(...) {
   p <- list(
     min_date = "1980-01-01",
     bbox = NULL,
+    first_sample_since = NULL,
+    feature_classes = .st_feature_classes,
     tz = .st_tz(),
     mask_variants = .st_core_mask_variants,
     # R-22.S: lab_receipt_warm flags an SRN whose warmest cooler is above
@@ -131,6 +139,8 @@ db_checks_params <- function(...) {
                      class = "sampletidy_error")
     }
   }
+  if (!is.null(p$first_sample_since)) checkmate::assert_posixct(p$first_sample_since, len = 1, any.missing = FALSE)
+  checkmate::assert_character(p$feature_classes, any.missing = FALSE)
   if (!checkmate::test_string(p$tz) || !grepl("^[A-Za-z0-9_/+-]+$", p$tz)) {
     cli::cli_abort("{.arg tz} must be one time-zone name.", class = "sampletidy_error")
   }
@@ -149,16 +159,10 @@ db_checks_params <- function(...) {
 # The text each `{token}` is replaced by. Only these names are tokens, so a
 # regex quantifier such as `{32}` in a check's SQL is left alone.
 .dbc_tokens <- function(params) {
-  b <- params$bbox
-  num <- function(x) if (is.infinite(x)) sprintf("CAST('%sinf' AS DOUBLE)", if (x < 0) "-" else "") else
-    format(x, digits = 15)
-  if (is.null(b)) b <- c(xmin = -Inf, ymin = -Inf, xmax = Inf, ymax = Inf)
   c(
     min_date = as.character(as.Date(params$min_date)),
     tz = params$tz,
     mask_variants = .dbc_sql_list(params$mask_variants),
-    bbox_xmin = num(b[["xmin"]]), bbox_ymin = num(b[["ymin"]]),
-    bbox_xmax = num(b[["xmax"]]), bbox_ymax = num(b[["ymax"]]),
     core_version = as.character(.dbc_core_version()),
     alias_kinds = .dbc_sql_list(c(.fa_kind_vocabulary, "pending")),
     ingest_states = .dbc_sql_list(unique(c(names(.st_ingest_transitions), unlist(.st_ingest_transitions)))),
@@ -333,13 +337,108 @@ WHERE reason IS NULL OR trim(reason) = ''",
     .dbc_sql_list(.st_source_cells), .dbc_sql_list(.st_treatments)))
 }
 
+# ---- PLAN-23: the site feature register ----------------------------------------------------
+#
+# Every register check returns zero rows on a database migration 117 has not
+# reached (`.st_has_feature_register()` is FALSE), so the core still runs against
+# a pre-117 live database.
+
+.dbc_no_rows <- function() data.frame(key = character(0), stringsAsFactors = FALSE)
+
+# A register check from one SQL string (it may use the `{...}` tokens), guarded.
+.dbc_register_sql <- function(sql) {
+  force(sql)
+  function(con, params) {
+    if (!.st_has_feature_register(con)) return(.dbc_no_rows())
+    DBI::dbGetQuery(con, .dbc_fill(sql, .dbc_tokens(params)))
+  }
+}
+
+# Any feature_geometry row (current or not) whose WKT is malformed or whose
+# type does not suit its role.
+.dbc_feature_geometry_wkt_valid <- function(con, params) {
+  if (!.st_has_feature_register(con)) return(.dbc_no_rows())
+  g <- DBI::dbGetQuery(con, "SELECT uuid, role, geom_wkt FROM feature_geometry ORDER BY uuid")
+  p <- .st_wkt_check(g$geom_wkt, g$role)
+  bad <- !is.na(p)
+  data.frame(key = as.character(g$uuid[bad]), problem = p[bad], stringsAsFactors = FALSE)
+}
+
+# A CURRENT row with a vertex outside the MGA grid range (a point in degrees
+# lands here), or outside params$bbox when one is set. Rows the WKT reader
+# rejects are feature_geometry_wkt_valid's, not this check's.
+.dbc_feature_geometry_in_bbox <- function(con, params) {
+  empty <- data.frame(key = character(0), xmin = numeric(0), ymin = numeric(0),
+                      xmax = numeric(0), ymax = numeric(0), stringsAsFactors = FALSE)
+  if (!.st_has_feature_register(con)) return(empty)
+  g <- DBI::dbGetQuery(con, "SELECT uuid, geom_wkt FROM feature_geometry
+                             WHERE superseded IS NULL ORDER BY uuid")
+  rows <- lapply(seq_len(nrow(g)), function(i) {
+    p <- .st_wkt_parse(g$geom_wkt[[i]])
+    if (!is.na(p$problem) || nrow(p$coords) == 0L) return(NULL)
+    out <- .st_coords_outside(p$coords, .st_geometry_grid_range) ||
+      (!is.null(params$bbox) && .st_coords_outside(p$coords, params$bbox))
+    if (!out) return(NULL)
+    data.frame(key = as.character(g$uuid[[i]]),
+               xmin = min(p$coords[, 1]), ymin = min(p$coords[, 2]),
+               xmax = max(p$coords[, 1]), ymax = max(p$coords[, 2]), stringsAsFactors = FALSE)
+  })
+  rows <- rows[!vapply(rows, is.null, NA)]
+  if (length(rows) == 0L) empty else do.call(rbind, rows)
+}
+
+# Every feature whose canonical name key is shared with another feature (ended
+# ones included), so two clashing features give two rows.
+.dbc_feature_name_canonical_clash <- function(con, params) {
+  if (!.st_has_feature_register(con)) return(.dbc_no_rows())
+  f <- DBI::dbGetQuery(con, "SELECT uuid, name FROM feature ORDER BY name, uuid")
+  key <- .st_feature_name_key(f$name)
+  bad <- !is.na(key) & (duplicated(key) | duplicated(key, fromLast = TRUE))
+  data.frame(key = as.character(f$uuid[bad]), name = f$name[bad], canonical = key[bad],
+             stringsAsFactors = FALSE)
+}
+
+# A non-virtual feature whose samples ALL have a change_log insert row, the
+# earliest at or after `first_sample_since`. "Just received" means the sample
+# row was inserted recently, not that it is dated recently; one sample with no
+# insert row (older than change_log) means the feature's first sample is not
+# new. Samples are reached through every alias arm of the feature.
+.dbc_feature_first_sample <- function(con, params) {
+  if (!.st_has_feature_register(con)) return(.dbc_no_rows())
+  since <- params$first_sample_since
+  if (is.null(since)) since <- Sys.time() - 14 * 86400
+  DBI::dbGetQuery(con, "
+WITH ins AS (
+  SELECT uuid_row, min(\"at\") AS inserted_at FROM change_log
+  WHERE tbl = 'sample' AND action = 'insert' GROUP BY uuid_row),
+s AS (
+  SELECT fa.uuid_feature, ins.inserted_at
+  FROM \"sample\" smp JOIN feature_alias fa ON fa.uuid = smp.uuid_feature_alias
+  LEFT JOIN ins ON ins.uuid_row = smp.uuid
+  WHERE fa.uuid_feature IS NOT NULL)
+SELECT f.uuid AS key, f.name, min(s.inserted_at) AS first_insert_at, count(*) AS n_samples
+FROM s JOIN feature f ON f.uuid = s.uuid_feature
+WHERE NOT coalesce(f.virtual, FALSE)
+GROUP BY f.uuid, f.name
+HAVING count(s.inserted_at) = count(*) AND min(s.inserted_at) >= CAST(? AS TIMESTAMP)
+ORDER BY f.name",
+    params = list(format(since, "%Y-%m-%d %H:%M:%OS6", tz = "UTC")))
+}
+
+.dbc_vocab_feature_class <- function(con, params) {
+  if (!.st_has_feature_register(con)) return(.dbc_no_rows())
+  DBI::dbGetQuery(con, sprintf("
+SELECT uuid AS key, name, class FROM feature
+WHERE class IS NOT NULL AND class NOT IN (%s)", .dbc_sql_list(params$feature_classes)))
+}
+
 # ---- the core catalogue ----------------------------------------------------------------
 
 #' The generic standing database checks
 #'
 #' The checks every sampleTidy database should satisfy (PLAN-22 A2):
 #' orphan references the DB does not enforce, duplicates, alias invariants,
-#' vocabularies, value and hash shape, date and coordinate sanity, the core
+#' vocabularies, value and hash shape, date and feature-geometry sanity, the core
 #' schema version, and (migration tier) view coverage and expected
 #' constraints. A deployment adds its own through `db_checks(extra =)`.
 #'
@@ -383,7 +482,15 @@ SELECT w.table_name || '.' || w.col || ' ' || w.constraint_type AS key FROM want
    AND c.constraint_type = w.constraint_type AND list_contains(c.constraint_column_names, w.col))
 UNION ALL
 SELECT 'ux_sample_identity' AS key
-WHERE NOT EXISTS (SELECT 1 FROM duckdb_indexes() WHERE index_name = 'ux_sample_identity')",
+WHERE NOT EXISTS (SELECT 1 FROM duckdb_indexes() WHERE index_name = 'ux_sample_identity')
+UNION ALL
+SELECT w.table_name || '.' || w.col || ' ' || w.constraint_type AS key
+FROM (VALUES ('feature_geometry','PRIMARY KEY','uuid'), ('feature_geometry','FOREIGN KEY','supersedes'))
+  w(table_name, constraint_type, col)
+WHERE EXISTS (SELECT 1 FROM duckdb_tables() t WHERE t.table_name = w.table_name)
+  AND NOT EXISTS (
+    SELECT 1 FROM duckdb_constraints() c WHERE c.table_name = w.table_name
+     AND c.constraint_type = w.constraint_type AND list_contains(c.constraint_column_names, w.col))",
        "Constraints and indexes the code relies on still exist (a table rebuild can silently drop them).",
        "migration", "error"),
     # ---- schema markers
@@ -622,18 +729,48 @@ UNION ALL SELECT uuid, 'feature_alias' FROM feature_alias WHERE date_start > dat
 UNION ALL SELECT uuid_feature, 'qc_feature' FROM qc_feature WHERE date_start > date_end
 UNION ALL SELECT uuid, 'project' FROM project WHERE date_start > date_end",
        "No transposed validity windows.", "hourly", "error"),
-    # ---- coordinates
-    ck("feature_coords", "
-SELECT uuid AS key, name, lon, lat, geom_wkt FROM feature WHERE NOT coalesce(virtual, false) AND (
-     lon IS NULL OR lat IS NULL OR isnan(lon) OR isnan(lat) OR isinf(lon) OR isinf(lat)
-  OR NOT (lon BETWEEN {bbox_xmin} AND {bbox_xmax} AND lat BETWEEN {bbox_ymin} AND {bbox_ymax}))",
-       "Physical features have finite coordinates, inside the bbox when one is configured.", "hourly", "warn"),
-    ck("feature_geom_matches_lonlat", "
-SELECT uuid AS key, name, lon, lat, geom_wkt FROM feature
-WHERE NOT isnan(lon) AND NOT isnan(lat) AND (geom_wkt IS NULL OR
-  abs(CAST(regexp_extract(geom_wkt, 'POINT \\(([-0-9.eE]+) ', 1) AS DOUBLE) - lon) > 1e-4 OR
-  abs(CAST(regexp_extract(geom_wkt, ' ([-0-9.eE]+)\\)$', 1) AS DOUBLE) - lat) > 1e-4)",
-       "geom_wkt and lon/lat agree to 1e-4 degrees.", "on_demand", "warn")
+    # ---- the site feature register (PLAN-23): positions, lines and areas live in
+    # feature_geometry (EPSG:7856); these replace the retired feature_coords and
+    # feature_geom_matches_lonlat.
+    ck("feature_geometry_wkt_valid", .dbc_feature_geometry_wkt_valid,
+       "Every feature_geometry row (current or not) holds well-formed WKT of a type its role allows.",
+       "hourly", "error"),
+    ck("feature_geometry_in_bbox", .dbc_feature_geometry_in_bbox,
+       "Current feature geometry lies inside the MGA grid range (a point in degrees does not) and inside the configured bbox (EPSG:7856 metres), when one is set.",
+       "hourly", "error"),
+    ck("feature_location_unique", .dbc_register_sql("
+SELECT uuid_feature AS key, count(*) AS n FROM feature_geometry
+WHERE role = 'location' AND superseded IS NULL AND date_end IS NULL
+GROUP BY uuid_feature HAVING count(*) > 1"),
+       "A feature has at most one in-use location (current, with no date_end).", "hourly", "error"),
+    ck("feature_name_canonical_clash", .dbc_feature_name_canonical_clash,
+       "No two features have names that reduce to the same canonical key (upper case, leading zeros dropped); every feature sharing a key is reported.",
+       "hourly", "error"),
+    ck("feature_first_sample", .dbc_feature_first_sample,
+       "Reports features that have just received their first samples (all inserted since params$first_sample_since); virtual features are excluded.",
+       "hourly", "warn"),
+    ck("orphan_feature_geometry", .dbc_register_sql("
+SELECT uuid AS key, uuid_feature FROM feature_geometry
+WHERE uuid_feature NOT IN (SELECT uuid FROM feature)"),
+       "feature_geometry.uuid_feature points at a feature.", "hourly", "error"),
+    ck("feature_geometry_history", .dbc_register_sql("
+SELECT g.uuid AS key, g.supersedes FROM feature_geometry g
+LEFT JOIN feature_geometry p ON p.uuid = g.supersedes
+WHERE (g.supersedes IS NOT NULL AND (p.superseded IS NULL
+         OR p.uuid_feature <> g.uuid_feature OR p.role <> g.role))
+   OR (g.superseded IS NOT NULL AND g.superseded < g.recorded)"),
+       "A correction's predecessor is superseded and has the same feature and role; no row was superseded before it was recorded.",
+       "hourly", "error"),
+    ck("vocab_feature_geometry", .dbc_register_sql(sprintf("
+SELECT uuid AS key, role, quality, source_crs FROM feature_geometry
+WHERE coalesce(role, '') NOT IN (%s) OR coalesce(quality, '') NOT IN (%s)
+   OR NOT (regexp_full_match(coalesce(source_crs, ''), 'EPSG:[0-9]+') OR source_crs = 'unknown')
+   OR trim(coalesce(source, '')) = ''",
+       .dbc_sql_list(.st_geometry_roles), .dbc_sql_list(.st_geometry_qualities))),
+       "feature_geometry role, quality and source_crs are in their vocabularies and source is not blank.",
+       "hourly", "error"),
+    ck("vocab_feature_class", .dbc_vocab_feature_class,
+       "feature.class is NULL or in the feature class vocabulary (params$feature_classes).", "hourly", "warn")
   )
 }
 

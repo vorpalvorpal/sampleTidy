@@ -11,8 +11,15 @@ db_checks_params(...)
 \itemize{
 \item \code{min_date}: samples dated before this are implausible (default
 \code{"1980-01-01"});
-\item \code{bbox}: \code{c(xmin, ymin, xmax, ymax)} that physical features must lie
-in, or \code{NULL} (default) for no box - finite coordinates suffice;
+\item \code{bbox}: \code{c(xmin, ymin, xmax, ymax)} in EPSG:7856 metres that current
+feature geometry must lie in (read by \code{feature_geometry_in_bbox} only),
+or \code{NULL} (default): then only the MGA grid range applies;
+\item \code{first_sample_since}: \code{feature_first_sample} reports features whose
+samples were all inserted at or after this time. \code{NULL} (default)
+means 14 days before the run; otherwise a \code{POSIXct};
+\item \code{feature_classes}: the \code{feature.class} vocabulary
+\code{vocab_feature_class} accepts (default the core one; a deployment
+extends it);
 \item \code{tz}: the time zone whose calendar day \code{sample.date} names (default
 configured time zone, \code{st_config("timezone")});
 \item \code{mask_variants}: the registered mask variants (default the core
