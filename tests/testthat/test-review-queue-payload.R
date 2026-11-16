@@ -531,9 +531,9 @@ test_that("R-16.10 property (15/18 - .rc_self_precedence_notes, subkind='self_pr
   # that folds from a hostile-byte feature_raw (R1: the self arm wins over
   # the shadowed historical arm and the row RESOLVES, with a non-blocking
   # self_precedence_note naming the raw feature text).
-  DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix, date_end, lon, lat) VALUES
-    ('f-p16sp-a', 'P16 Self A', 'T', 'surface', 'water', NULL, 150.9101, -33.9101),
-    ('f-p16sp-b', 'P16 Historical B', 'T', 'surface', 'water', NULL, 150.9102, -33.9102)")
+  DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix, date_end) VALUES
+    ('f-p16sp-a', 'P16 Self A', 'T', 'surface', 'water', NULL),
+    ('f-p16sp-b', 'P16 Historical B', 'T', 'surface', 'water', NULL)")
 
   hazard_feature_raw <- paste0("SELFHAZ.", P16_HAZARD)
   key <- .rc_feature_key(hazard_feature_raw)

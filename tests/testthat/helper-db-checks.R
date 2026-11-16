@@ -36,7 +36,6 @@ dbc_hourly_names <- c(
   "vocab_review_status", "vocab_mask_variant", "vocab_feature_flow",
   "analysis_value_shape", "hash_format",
   "sample_date_plausible", "sample_date_datetime_agree", "date_windows_ordered",
-  "feature_coords",
   # R-22.E: an ingest_file.message_id naming no ingest_email row.
   "ingest_file_email_dangling",
   # R-22.S: lab_qc_report.kind is QC / QCI / SRN; an SRN received warm.
@@ -45,8 +44,15 @@ dbc_hourly_names <- c(
   "ingest_file_needs_review_resolved",
   # Monitoring-point roles: feature_role / feature_dubious keyed to a feature,
   # and their vocabularies.
-  "orphan_feature_role_refs", "vocab_feature_role"
+  "orphan_feature_role_refs", "vocab_feature_role",
+  # PLAN-23 (R-23.18): the site feature register. `feature_coords` is RETIRED
+  # (it read feature.lon/lat, which no longer exist); these nine replace it.
+  "feature_geometry_wkt_valid", "feature_geometry_in_bbox", "feature_location_unique",
+  "feature_name_canonical_clash", "feature_first_sample", "orphan_feature_geometry",
+  "feature_geometry_history", "vocab_feature_geometry", "vocab_feature_class"
 )
+# The checks PLAN-23 retires from the core (they read the dropped lon/lat/geom_wkt).
+dbc_retired_names <- c("feature_coords", "feature_geom_matches_lonlat")
 dbc_migration_only_names <- c(
   "measurement_view_coverage", "measurement_view_no_fanout",
   "measurement_rank1_unique", "expected_constraints_present",
@@ -55,8 +61,7 @@ dbc_migration_only_names <- c(
 )
 dbc_on_demand_names <- c(
   "review_resolved_dangling", "change_log_dangling_source_hash",
-  "change_log_shape", "alias_window_ambiguous", "sample_in_feature_window",
-  "feature_geom_matches_lonlat"
+  "change_log_shape", "alias_window_ambiguous", "sample_in_feature_window"
 )
 dbc_all_names <- c(dbc_hourly_names, dbc_migration_only_names, dbc_on_demand_names)
 
@@ -65,8 +70,10 @@ dbc_warn_names <- c(
   "dup_sample_identity_null_datetime", "alias_key_normalised",
   "alias_window_ambiguous", "fraction_matches_code", "vocab_mask_variant",
   "vocab_feature_flow", "change_log_shape", "sample_date_datetime_agree",
-  "sample_in_feature_window", "feature_coords", "feature_geom_matches_lonlat",
-  "lab_receipt_warm", "ingest_file_needs_review_resolved"
+  "sample_in_feature_window",
+  "lab_receipt_warm", "ingest_file_needs_review_resolved",
+  # PLAN-23: the two warn-severity register checks.
+  "feature_first_sample", "vocab_feature_class"
 )
 
 dbc_result_cols <- c("name", "tier", "severity", "status", "n", "ms", "sample", "message")
@@ -243,8 +250,6 @@ dbc_srn_report <- function(con, uuid, uuid_asset, work_order, temp_max, days_ago
   dbc_exec(con, "UPDATE feature SET flow = 'flowing' WHERE flow = 'surface'")
   # vocab_mask_variant: 'epa' is a deployment variant, not a core one.
   dbc_exec(con, "UPDATE feature_mask SET variant = 'old' WHERE variant = 'epa'")
-  # feature_geom_matches_lonlat: geometry agrees with lon/lat.
-  dbc_exec(con, "UPDATE feature SET geom_wkt = 'POINT (' || CAST(lon AS VARCHAR) || ' ' || CAST(lat AS VARCHAR) || ')'")
 
   # alias_pending_consistent: each pending alias has an open review item.
   # orphan_review_open_refs: it points at rows that exist.
@@ -324,6 +329,9 @@ dbc_srn_report <- function(con, uuid, uuid_asset, work_order, temp_max, days_ago
   dbc_exec(con, "INSERT INTO schema_version (version, applied_at) VALUES (1072, TIMESTAMP '2026-10-22 00:00:00')")
 
   dbc_set_v_measurement(con)
+  # PLAN-23 section 3.7: the db-checks fixture creates v_feature_location (the
+  # reference SQL, helper-feature-register.R) so view_nonempty sees it.
+  DBI::dbExecute(con, .t23_view_feature_location_sql)
   DBI::dbExecute(con, "
     CREATE VIEW v_feature_dates AS
     SELECT f.uuid AS uuid_feature, f.name, min(s.date) AS first_date, max(s.date) AS last_date
@@ -391,6 +399,36 @@ dbc_alias <- function(con, uuid, feature, name, key, kind, auto = FALSE) {
 dbc_v_measurement_plus <- function(con, extra) {
   DBI::dbExecute(con, "CREATE TABLE dbc_vm AS SELECT * FROM v_measurement")
   dbc_set_v_measurement(con, extra = extra)
+}
+
+# ---- PLAN-23 helpers: seed a geometry row / a feature / a logged sample insert ----
+
+#' Insert one feature_geometry row (SQL-literal args for the nullable columns).
+dbc_geom <- function(con, uuid, feature, role, wkt, quality = "surveyed", source = "fixture",
+                     source_crs = "EPSG:7856", recorded = "2026-04-01 00:00:00",
+                     date_start = "NULL", date_end = "NULL", supersedes = "NULL", superseded = "NULL") {
+  dbc_exec(con, sprintf(
+    "INSERT INTO feature_geometry (uuid, uuid_feature, role, geom_wkt, source, source_crs, quality,
+                                   date_start, date_end, recorded, supersedes, superseded)
+     VALUES (?, ?, ?, ?, ?, ?, ?, %s, %s, TIMESTAMP '%s', %s, %s)",
+    date_start, date_end, recorded, supersedes, superseded),
+    uuid, feature, role, wkt, source, source_crs, quality)
+}
+
+#' Insert a feature and (optionally) its self alias.
+dbc_feature <- function(con, uuid, name, site, self_alias = NULL, virtual = FALSE, class = NA_character_) {
+  dbc_exec(con, "INSERT INTO feature (uuid, name, site, class, flow, matrix, virtual)
+                 VALUES (?, ?, ?, ?, 'flowing', 'water', ?)", uuid, name, site, class, virtual)
+  if (!is.null(self_alias)) {
+    dbc_alias(con, self_alias, uuid, name, tolower(name), "self", auto = TRUE)
+  }
+}
+
+#' The change_log row that marks a sample as INSERTED through the mutation layer.
+dbc_sample_insert_logged <- function(con, sample_uuid, at) {
+  dbc_exec(con, "INSERT INTO change_log (uuid, \"at\", actor, action, tbl, uuid_row, reason)
+                 VALUES (?, CAST(? AS TIMESTAMP), 'test', 'insert', 'sample', ?, 'seed')",
+           paste0("cl-ins-", sample_uuid), at, sample_uuid)
 }
 
 dbc_violation_cases <- list(
@@ -534,8 +572,8 @@ dbc_violation_cases <- list(
   list(check = "alias_self_arm", key = "f-0002", label = "a feature with two self aliases",
        seed = function(con) dbc_alias(con, "fa-self2", "f-0002", "T.S02", "t.s02", "self", auto = TRUE)),
   list(check = "alias_self_arm", key = "f-new", label = "a feature with no self alias",
-       seed = function(con) DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix, geom_wkt, lon, lat)
-                                                 VALUES ('f-new', 'T.S10', 'T', 'flowing', 'water', 'POINT (150.2 -33.2)', 150.2, -33.2)")),
+       seed = function(con) DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix)
+                                                 VALUES ('f-new', 'T.S10', 'T', 'flowing', 'water')")),
   list(check = "alias_pending_consistent", key = "fa-pf", label = "a pending alias that has a feature",
        seed = function(con) {
          dbc_alias(con, "fa-pf", "f-0001", "T S01x", "t s01x", "pending")
@@ -593,13 +631,103 @@ dbc_violation_cases <- list(
   list(check = "date_windows_ordered", key = "p-0003", label = "a transposed project window",
        seed = function(con) DBI::dbExecute(con, "UPDATE project SET date_start = TIMESTAMP '2025-02-01 00:00:00',
                                                  date_end = TIMESTAMP '2025-01-01 00:00:00' WHERE uuid = 'p-0003'")),
-  list(check = "feature_coords", key = "f-0002", label = "NaN coordinates",
-       seed = function(con) DBI::dbExecute(con, "UPDATE feature SET lon = 'NaN'::DOUBLE, lat = 'NaN'::DOUBLE,
-                                                 geom_wkt = 'POINT EMPTY' WHERE uuid = 'f-0002'")),
-  list(check = "feature_coords", key = "f-0002", label = "coordinates outside the configured bbox",
-       params = list(bbox = c(xmin = 150, ymin = -33.2, xmax = 150.2, ymax = -33)),
-       seed = function(con) DBI::dbExecute(con, "UPDATE feature SET lon = 151.5, lat = -33.5,
-                                                 geom_wkt = 'POINT (151.5 -33.5)' WHERE uuid = 'f-0002'")),
-  list(check = "feature_geom_matches_lonlat", key = "f-0002", label = "geometry disagreeing with lon/lat",
-       seed = function(con) DBI::dbExecute(con, "UPDATE feature SET geom_wkt = 'POINT (151 -34)' WHERE uuid = 'f-0002'"))
+  # ---- PLAN-23 (R-23.18): one seeded violation per new check -----------------------
+  # Every case violates ONLY its own check. Keys: the geometry uuid for the
+  # geometry checks, the feature uuid for feature_location_unique /
+  # feature_name_canonical_clash / feature_first_sample / vocab_feature_class.
+  # NB feature_name_canonical_clash lists EVERY feature sharing the key (PLAN-23
+  # 3.5), so a clash between two features is n == 2 (see dbc_violation_n).
+  list(check = "feature_geometry_wkt_valid", key = "g-bad1",
+       label = "a withdrawn (non-current) row whose geom_wkt is malformed",
+       seed = function(con) dbc_geom(con, "g-bad1", "f-0002", "location", "POINT (300000)",
+                                     superseded = "TIMESTAMP '2026-05-01 00:00:00'")),
+  list(check = "feature_geometry_wkt_valid", key = "g-bad2",
+       label = "a location whose geometry type is not allowed for its role",
+       seed = function(con) dbc_geom(con, "g-bad2", "f-0013", "location",
+                                     "LINESTRING (300000 6300000, 300010 6300010)")),
+  list(check = "feature_geometry_in_bbox", key = "g-deg",
+       label = "a current polygon stored in degrees (outside the grid range)",
+       seed = function(con) dbc_geom(con, "g-deg", "f-0002", "extent",
+                                     "POLYGON ((150 -33, 150.1 -33, 150.1 -33.1, 150 -33))")),
+  list(check = "feature_geometry_in_bbox", key = "g-out",
+       label = "a current location outside the configured bbox (EPSG:7856 metres)",
+       params = list(bbox = c(xmin = 290000, ymin = 6290000, xmax = 310000, ymax = 6310000)),
+       seed = function(con) dbc_geom(con, "g-out", "f-0013", "location", "POINT (350000 6300000)")),
+  list(check = "feature_location_unique", key = "f-0002",
+       label = "a second in-use location on one feature",
+       seed = function(con) dbc_geom(con, "g-dup", "f-0002", "location", "POINT (300210 6300210)")),
+  list(check = "feature_name_canonical_clash", key = "f-clash",
+       label = "T.S2 beside T.S02 (same canonical name)",
+       seed = function(con) dbc_feature(con, "f-clash", "T.S2", "T", self_alias = "fa-clash")),
+  list(check = "feature_name_canonical_clash", key = "f-clash",
+       label = "T.S6 beside the END-DATED T.S06 (ended features still count)",
+       seed = function(con) dbc_feature(con, "f-clash", "T.S6", "T", self_alias = "fa-clash")),
+  list(check = "feature_first_sample", key = "f-fs",
+       label = "a feature whose only sample was inserted after first_sample_since",
+       params = list(first_sample_since = as.POSIXct("2026-01-01 00:00:00", tz = "UTC")),
+       seed = function(con) {
+         dbc_feature(con, "f-fs", "T.S11", "T", self_alias = "fa-fs")
+         dbc_new_sample(con, "s-fs", alias = "fa-fs", date = "2025-06-01", datetime = "2025-05-31 23:00:00")
+         dbc_sample_insert_logged(con, "s-fs", "2026-06-02 00:00:00")
+       }),
+  list(check = "orphan_feature_geometry", key = "g-orph",
+       label = "a geometry row naming a missing feature",
+       seed = function(con) dbc_geom(con, "g-orph", "f-gone", "location", "POINT (301500 6301500)")),
+  list(check = "feature_geometry_history", key = "g-0001",
+       label = "a row superseded before it was recorded",
+       seed = function(con) DBI::dbExecute(con, "UPDATE feature_geometry SET superseded = TIMESTAMP '2025-01-01 00:00:00'
+                                                 WHERE uuid = 'g-0001'")),
+  list(check = "feature_geometry_history", key = "g-hist",
+       label = "a correction whose predecessor was never stamped superseded",
+       seed = function(con) dbc_geom(con, "g-hist", "f-0002", "location", "POINT (300205 6300205)",
+                                     supersedes = "'g-0003'", date_end = "DATE '2026-01-01'")),
+  list(check = "vocab_feature_geometry", key = "g-q",
+       label = "a quality outside the vocabulary",
+       seed = function(con) dbc_geom(con, "g-q", "f-0002", "extent",
+                                     "POLYGON ((300190 6300190, 300210 6300190, 300210 6300210, 300190 6300190))",
+                                     quality = "excellent")),
+  list(check = "vocab_feature_geometry", key = "g-s",
+       label = "a blank source",
+       seed = function(con) dbc_geom(con, "g-s", "f-0002", "extent",
+                                     "POLYGON ((300190 6300190, 300210 6300190, 300210 6300210, 300190 6300190))",
+                                     source = "   ")),
+  list(check = "vocab_feature_geometry", key = "g-c",
+       label = "a source_crs that is neither EPSG:<digits> nor unknown",
+       seed = function(con) dbc_geom(con, "g-c", "f-0002", "extent",
+                                     "POLYGON ((300190 6300190, 300210 6300190, 300210 6300210, 300190 6300190))",
+                                     source_crs = "WGS84")),
+  list(check = "vocab_feature_class", key = "f-0002",
+       label = "feature.class outside the vocabulary",
+       seed = function(con) DBI::dbExecute(con, "UPDATE feature SET class = 'widget' WHERE uuid = 'f-0002'")),
+  # R-23.20: the rebuilt feature_mask lost its FK (the 117 trap that matters).
+  list(check = "expected_constraints_present", key = "feature_mask.uuid_feature FOREIGN KEY",
+       label = "feature_mask rebuilt without its foreign key",
+       seed = function(con) {
+         DBI::dbExecute(con, "CREATE TEMP TABLE dbc_fm AS SELECT * FROM feature_mask")
+         DBI::dbExecute(con, "DROP TABLE feature_mask")
+         DBI::dbExecute(con, "CREATE TABLE feature_mask (uuid_feature VARCHAR NOT NULL, variant VARCHAR NOT NULL,
+                                                         name VARCHAR, PRIMARY KEY (uuid_feature, variant))")
+         DBI::dbExecute(con, "INSERT INTO feature_mask SELECT * FROM dbc_fm")
+       }),
+  # R-23.20: feature_geometry rebuilt without its PRIMARY KEY (uuid kept UNIQUE
+  # so the self foreign key still binds and ONLY the primary key is missing).
+  list(check = "expected_constraints_present", key = "feature_geometry.uuid PRIMARY KEY",
+       label = "feature_geometry rebuilt without its primary key",
+       seed = function(con) {
+         DBI::dbExecute(con, "CREATE TEMP TABLE dbc_fg AS SELECT * FROM feature_geometry")
+         DBI::dbExecute(con, "DROP VIEW v_feature_location")
+         DBI::dbExecute(con, "DROP TABLE feature_geometry")
+         DBI::dbExecute(con, "CREATE TABLE feature_geometry (
+           uuid VARCHAR UNIQUE, uuid_feature VARCHAR NOT NULL, role VARCHAR NOT NULL, geom_wkt VARCHAR NOT NULL,
+           source VARCHAR NOT NULL, source_crs VARCHAR NOT NULL, quality VARCHAR NOT NULL, date_start DATE,
+           date_end DATE, recorded TIMESTAMP NOT NULL, supersedes VARCHAR UNIQUE REFERENCES feature_geometry(uuid),
+           superseded TIMESTAMP, comments VARCHAR)")
+         DBI::dbExecute(con, "INSERT INTO feature_geometry SELECT * FROM dbc_fg WHERE supersedes IS NULL")
+         DBI::dbExecute(con, "INSERT INTO feature_geometry SELECT * FROM dbc_fg WHERE supersedes IS NOT NULL")
+         DBI::dbExecute(con, .t23_view_feature_location_sql)
+       })
 )
+
+# The n a case expects when it is not 1: the canonical-clash check reports BOTH
+# features that share a name (PLAN-23 3.5: "every feature whose key is shared").
+dbc_violation_n <- function(cs) if (identical(cs$check, "feature_name_canonical_clash")) 2L else 1L

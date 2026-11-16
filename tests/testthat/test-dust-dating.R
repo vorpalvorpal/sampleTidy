@@ -353,9 +353,9 @@ dust_db_setup <- function(legacy = TRUE) {
     "sampletidy.remove_ingested" = FALSE
   ), .local_envir = env)
 
-  DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix, date_end, lon, lat) VALUES
-    ('f-d07', 'N.D07', 'N', NULL, 'dust', NULL, 150.31, -33.71),
-    ('f-d08', 'N.D08', 'N', NULL, 'dust', NULL, 150.32, -33.72)")
+  DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix, date_end) VALUES
+    ('f-d07', 'N.D07', 'N', NULL, 'dust', NULL),
+    ('f-d08', 'N.D08', 'N', NULL, 'dust', NULL)")
   DBI::dbExecute(con, "INSERT INTO feature_alias
     (uuid, uuid_feature, name, alias_key, kind, n_seen, auto_assign, first_seen, last_seen, confirmed_by) VALUES
     ('fa-d07', 'f-d07', 'N.D07', 'n.d07', 'self', 0, TRUE,

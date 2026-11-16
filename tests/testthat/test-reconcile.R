@@ -3435,8 +3435,8 @@ test_that("B.4: a key reaching >=1 alias row (all auto_assign=FALSE) is gated fr
   # parse of 'T.S77' IS a unique hit (site T, point S77, matching the new
   # feature below) - without the B.4 gate, Layer 2 would silently
   # auto-resolve exactly this parked ambiguity.
-  DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix, lon, lat) VALUES
-    ('f-local-s77', 'T.S77', 'T', 'surface', 'water', 150.7777, -33.7777)")
+  DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix) VALUES
+    ('f-local-s77', 'T.S77', 'T', 'surface', 'water')")
   DBI::dbExecute(con, "INSERT INTO feature_alias
     (uuid, uuid_feature, name, alias_key, kind, n_seen, auto_assign, first_seen, last_seen, confirmed_by) VALUES
     ('fa-local-s77a', 'f-local-s77', 'T.S77', 't.s77', 'self', 0, FALSE,
@@ -3570,8 +3570,8 @@ test_that("B.6: a Layer-2 structural hit carries the target's self-alias uuid; a
   path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   # test-local target with NO self-alias, to exercise the "review, never a
   # NA alias" fallback (B.6).
-  DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix, lon, lat) VALUES
-    ('f-local-s99', 'T.S99', 'T', 'surface', 'water', 150.9999, -33.0099)")
+  DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix) VALUES
+    ('f-local-s99', 'T.S99', 'T', 'surface', 'water')")
 
   event <- mk_event(mk_rows(
     # The target is f-0007 (T.S07), NOT f-0002: f-0007 carries TWO alias rows
@@ -3606,8 +3606,8 @@ test_that("B.6: a Layer-2 structural hit carries the target's self-alias uuid; a
   # resolved site ('T', established here by 'T.S01') and structurally hits
   # a target ('T.S99L3') that - like f-local-s99 above - carries no
   # self-alias.
-  DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix, lon, lat) VALUES
-    ('f-local-s99l3', 'T.S99L3', 'T', 'surface', 'water', 150.9998, -33.0098)")
+  DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix) VALUES
+    ('f-local-s99l3', 'T.S99L3', 'T', 'surface', 'water')")
 
   event2 <- mk_event(mk_rows(
     mk_row(source_ref = "site_anchor", feature_raw = "T.S01", lab_sample_id = "XX9999993001",
@@ -3807,8 +3807,8 @@ test_that("C.1: the site set is computed over the CURRENT EVENT ONLY, never re-q
 
 test_that("C.2: Layer 3 never retries a row that yielded a recognised site prefix (even with a missed point), and never retries a candidate whose separator survived an unrecognised prefix", {
   path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
-  DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix, lon, lat) VALUES
-    ('f-local-th-s77', 'TH.S77', 'TH', 'surface', 'water', 150.7778, -33.7778)")
+  DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix) VALUES
+    ('f-local-th-s77', 'TH.S77', 'TH', 'surface', 'water')")
   DBI::dbExecute(con, "INSERT INTO feature_alias
     (uuid, uuid_feature, name, alias_key, kind, n_seen, auto_assign, first_seen, last_seen, confirmed_by) VALUES
     ('fa-local-th-s77', 'f-local-th-s77', 'TH.S77', 'th.s77', 'self', 0, TRUE,
@@ -3897,8 +3897,8 @@ test_that("C.2/C.1 MISS path: when the assumed site yields NO hit the row stays 
 
 test_that("C.3: a resolved feature with NA/blank site makes the whole event INELIGIBLE for Layer 3 (fail closed), even though the visible non-NA sites are single", {
   path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
-  DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix, lon, lat) VALUES
-    ('f-local-nosite', 'V.VIRT01', NULL, 'surface', 'water', 150.5555, -33.5555)")
+  DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix) VALUES
+    ('f-local-nosite', 'V.VIRT01', NULL, 'surface', 'water')")
   DBI::dbExecute(con, "INSERT INTO feature_alias
     (uuid, uuid_feature, name, alias_key, kind, n_seen, auto_assign, first_seen, last_seen, confirmed_by) VALUES
     ('fa-local-nosite', 'f-local-nosite', 'V.VIRT01', 'v.virt01', 'self', 0, TRUE,
@@ -3936,8 +3936,8 @@ test_that("C.3: a resolved feature with NA/blank site makes the whole event INEL
 
 test_that("D15/C.3: a resolved feature with a BLANK (empty-string, not NA) site ALSO makes the event INELIGIBLE for Layer 3 (fail closed) - the other half of C.3's 'NA or blank site' rule; the sibling test above covers only the NA half", {
   path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
-  DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix, lon, lat) VALUES
-    ('f-local-blanksite', 'V.VIRT02', '', 'surface', 'water', 150.5556, -33.5556)")
+  DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix) VALUES
+    ('f-local-blanksite', 'V.VIRT02', '', 'surface', 'water')")
   DBI::dbExecute(con, "INSERT INTO feature_alias
     (uuid, uuid_feature, name, alias_key, kind, n_seen, auto_assign, first_seen, last_seen, confirmed_by) VALUES
     ('fa-local-blanksite', 'f-local-blanksite', 'V.VIRT02', 'v.virt02', 'self', 0, TRUE,
@@ -4683,8 +4683,7 @@ seed_pre003_con <- function(dir = NULL) {
   con <- DBI::dbConnect(duckdb::duckdb(), path, read_only = FALSE)
   DBI::dbExecute(con, "CREATE TABLE feature (
     uuid VARCHAR PRIMARY KEY, name VARCHAR, site VARCHAR, flow VARCHAR, matrix VARCHAR,
-    geom_wkt VARCHAR, virtual BOOLEAN, date_start DATE, date_end DATE,
-    lon DOUBLE NOT NULL, lat DOUBLE NOT NULL)")
+    virtual BOOLEAN, date_start DATE, date_end DATE)")
   # PRE-003 shape (001:368-381) - NO date_start/date_end columns. This is the
   # genuine "absent column" case E.1/S-15.5 pins: fa$date_start must read
   # back NULL (not a column of NA) against a DB that never ran migration 003.
@@ -4705,8 +4704,8 @@ seed_pre003_con <- function(dir = NULL) {
     date_start TIMESTAMP, date_end TIMESTAMP, regulated_by VARCHAR, cypher VARCHAR,
     site VARCHAR, value VARCHAR)")
 
-  DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix, lon, lat) VALUES
-    ('f-pre003-01', 'P.S01', 'P', 'surface', 'water', 150.9001, -33.9001)")
+  DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix) VALUES
+    ('f-pre003-01', 'P.S01', 'P', 'surface', 'water')")
   DBI::dbExecute(con, "INSERT INTO feature_alias
     (uuid, uuid_feature, name, alias_key, kind, auto_assign, first_seen, last_seen) VALUES
     ('fa-pre003-01', 'f-pre003-01', 'P.S01', 'p.s01', 'self', TRUE,
@@ -4791,9 +4790,9 @@ test_that("R-15.26: the review payload's candidate list is the UNION of the WHOL
   # unbounded. Both aliases are auto_assign=FALSE so `.rc_feature_candidates`
   # never auto-resolves either row - both stay "pending" and reach
   # `.rc_feature_review` regardless of date or row order.
-  DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix, date_end, lon, lat) VALUES
-    ('f-ord-a', 'T.ORD01', 'T', 'surface', 'water', DATE '2024-12-31', 150.5001, -33.5001),
-    ('f-ord-b', 'T.ORD02', 'T', 'surface', 'water', NULL, 150.5002, -33.5002)")
+  DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix, date_end) VALUES
+    ('f-ord-a', 'T.ORD01', 'T', 'surface', 'water', DATE '2024-12-31'),
+    ('f-ord-b', 'T.ORD02', 'T', 'surface', 'water', NULL)")
   DBI::dbExecute(con, "INSERT INTO feature_alias
     (uuid, uuid_feature, name, alias_key, kind, auto_assign, first_seen, last_seen) VALUES
     ('fa-ord-a', 'f-ord-a', 'ORDKEYNOSITE', 'ordkeynosite', 'descriptive', FALSE,
@@ -4982,9 +4981,9 @@ test_that("R-15.16: payload emission at the expired-candidate count boundary - e
      DATE '2018-01-01', DATE '2019-12-31')")
 
   # Case 2: TWO live candidates + ONE expired candidate, one shared key.
-  DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix, lon, lat) VALUES
-    ('f-exp16-live1', 'T.EXP16L1', 'T', 'surface', 'water', 150.6001, -33.6001),
-    ('f-exp16-live2', 'T.EXP16L2', 'T', 'surface', 'water', 150.6002, -33.6002)")
+  DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix) VALUES
+    ('f-exp16-live1', 'T.EXP16L1', 'T', 'surface', 'water'),
+    ('f-exp16-live2', 'T.EXP16L2', 'T', 'surface', 'water')")
   DBI::dbExecute(con, "INSERT INTO feature_alias
     (uuid, uuid_feature, name, alias_key, kind, auto_assign, first_seen, last_seen, date_start, date_end) VALUES
     ('fa-exp16b1', 'f-exp16-live1', 'QQQEXP16B', 'qqqexp16b', 'descriptive', FALSE,
@@ -5077,8 +5076,8 @@ test_that("R-15.46: a key holding exactly ONE live arm (auto_assign=FALSE) AND a
   # This key's date-bounds-admitted live-arm count is ONE (the unbounded
   # arm); its filtered candidate count is ZERO. Both are true at once - that
   # is the whole point of the ruling C4's mistake needed.
-  DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix, lon, lat) VALUES
-    ('f-1546-live', 'T.Q1546LIVE', 'T', 'surface', 'water', 150.6041, -33.6041)")
+  DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix) VALUES
+    ('f-1546-live', 'T.Q1546LIVE', 'T', 'surface', 'water')")
   DBI::dbExecute(con, "INSERT INTO feature_alias
     (uuid, uuid_feature, name, alias_key, kind, auto_assign, first_seen, last_seen, date_start, date_end) VALUES
     ('fa-1546-live', 'f-1546-live', 'QQQ1546', 'qqq1546', 'descriptive', FALSE,
@@ -5196,10 +5195,10 @@ test_that("R-15.45 (E.7): a key reaching a live SELF arm plus one live NON-self 
   # reaches candidate collection (never the Layer-1 `next`) - the actual
   # multi-candidate, self-included shape self-precedence needs. T.DUAL
   # itself is NOT touched by this insert.
-  DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix, lon, lat) VALUES
-    ('f-e7dual2-self', 'T.E7DUAL2', 'T', 'surface', 'water', 150.6031, -33.6031),
-    ('f-e7dual2-opp1', 'T.E7DUAL2OPP1', 'T', 'surface', 'water', 150.6032, -33.6032),
-    ('f-e7dual2-opp2', 'T.E7DUAL2OPP2', 'T', 'surface', 'water', 150.6033, -33.6033)")
+  DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix) VALUES
+    ('f-e7dual2-self', 'T.E7DUAL2', 'T', 'surface', 'water'),
+    ('f-e7dual2-opp1', 'T.E7DUAL2OPP1', 'T', 'surface', 'water'),
+    ('f-e7dual2-opp2', 'T.E7DUAL2OPP2', 'T', 'surface', 'water')")
   DBI::dbExecute(con, "INSERT INTO feature_alias
     (uuid, uuid_feature, name, alias_key, kind, auto_assign, first_seen, last_seen) VALUES
     ('fa-e7dual2-self', 'f-e7dual2-self', 'T.E7DUAL2', 't.e7dual2', 'self', TRUE,
@@ -5525,9 +5524,9 @@ test_that("PLAN-7b item 1: a multi-analyte panel resolving via self-precedence o
 test_that("PLAN-7b item 2 (kills M5): when several ARMS resolve to the SAME feature, the arm written to sample.uuid_feature_alias is the `kind == 'self'` one - not whichever arm the DB happens to return first - proved in BOTH insert orders", {
   path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
-  DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix, lon, lat) VALUES
-    ('f-tb-a', 'T.TBCASEA', 'T', 'surface', 'water', 150.7001, -33.7001),
-    ('f-tb-b', 'T.TBCASEB', 'T', 'surface', 'water', 150.7002, -33.7002)")
+  DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix) VALUES
+    ('f-tb-a', 'T.TBCASEA', 'T', 'surface', 'water'),
+    ('f-tb-b', 'T.TBCASEB', 'T', 'surface', 'water')")
 
   # Case A: self arm inserted FIRST, the non-self arm SECOND.
   DBI::dbExecute(con, "INSERT INTO feature_alias
@@ -5579,9 +5578,9 @@ test_that("PLAN-7b item 2 (kills M5): when several ARMS resolve to the SAME feat
 test_that("PLAN-7b item 3 (kills M1): Layer 3 never retries a row Layer 2 already recognised SOME site for through a DIRECT (separator-less) boundary, even when that recognition did not itself produce a hit - without the guard, the WHOLE canonicalised raw is reinterpreted as a point of the work order's single site and silently merges onto an unrelated feature (the live N.K01/P.B01 shape)", {
   path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
-  DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix, lon, lat) VALUES
-    ('f-cx-anchor', 'X.ANCHOR', 'X', 'surface', 'water', 150.8001, -33.8001),
-    ('f-cx-collide', 'X.XY01', 'X', 'surface', 'water', 150.8002, -33.8002)")
+  DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix) VALUES
+    ('f-cx-anchor', 'X.ANCHOR', 'X', 'surface', 'water'),
+    ('f-cx-collide', 'X.XY01', 'X', 'surface', 'water')")
   DBI::dbExecute(con, "INSERT INTO feature_alias
     (uuid, uuid_feature, name, alias_key, kind, auto_assign, first_seen, last_seen) VALUES
     ('fa-cx-anchor', 'f-cx-anchor', 'X.ANCHOR', 'x.anchor', 'self', TRUE,
@@ -5691,8 +5690,7 @@ seed_no_feature_date_end_con <- function(dir = NULL) {
   path <- file.path(dir, "no-fde.duckdb")
   con <- DBI::dbConnect(duckdb::duckdb(), path, read_only = FALSE)
   DBI::dbExecute(con, "CREATE TABLE feature (
-    uuid VARCHAR PRIMARY KEY, name VARCHAR, site VARCHAR, flow VARCHAR, matrix VARCHAR,
-    lon DOUBLE NOT NULL, lat DOUBLE NOT NULL)")
+    uuid VARCHAR PRIMARY KEY, name VARCHAR, site VARCHAR, flow VARCHAR, matrix VARCHAR)")
   DBI::dbExecute(con, "CREATE TABLE feature_alias (
     uuid VARCHAR PRIMARY KEY, uuid_feature VARCHAR, name VARCHAR NOT NULL,
     alias_key VARCHAR NOT NULL, kind VARCHAR, n_seen INTEGER DEFAULT 0,
@@ -5710,8 +5708,8 @@ seed_no_feature_date_end_con <- function(dir = NULL) {
     date_start TIMESTAMP, date_end TIMESTAMP, regulated_by VARCHAR, cypher VARCHAR,
     site VARCHAR, value VARCHAR)")
 
-  DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix, lon, lat) VALUES
-    ('f-nfde-01', 'P.S01', 'P', 'surface', 'water', 150.9001, -33.9001)")
+  DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix) VALUES
+    ('f-nfde-01', 'P.S01', 'P', 'surface', 'water')")
   DBI::dbExecute(con, "INSERT INTO feature_alias
     (uuid, uuid_feature, name, alias_key, kind, auto_assign, first_seen, last_seen) VALUES
     ('fa-nfde-01', 'f-nfde-01', 'P.S01', 'p.s01', 'self', TRUE,
