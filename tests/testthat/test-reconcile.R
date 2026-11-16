@@ -3896,6 +3896,12 @@ test_that("C.2/C.1 MISS path: when the assumed site yields NO hit the row stays 
 # ---- C.3: the iff gate, operationally ---------------------------------------
 
 test_that("C.3: a resolved feature with NA/blank site makes the whole event INELIGIBLE for Layer 3 (fail closed), even though the visible non-NA sites are single", {
+  # PLAN-23 (2026-11-17): the fixture now enforces `site NOT NULL`, as the
+  # live table always has, so a NULL-site feature can no longer be seeded.
+  # The blank-site half of the rule is covered by the D15/C.3 test below.
+  # Skipped, not deleted, pending a decision on whether the NA branch of
+  # the resolver is still wanted as a defence.
+  skip("a NULL feature site cannot exist under the PLAN-23 feature DDL")
   path <- seed_db(); con <- seed_con(path); withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix) VALUES
     ('f-local-nosite', 'V.VIRT01', NULL, 'surface', 'water')")
