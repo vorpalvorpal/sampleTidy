@@ -7,12 +7,12 @@
 add_feature(
   name,
   site,
-  lon,
-  lat,
+  class = NA_character_,
   flow = NA_character_,
   matrix = NA_character_,
-  geom_wkt = NA_character_,
+  date_start = as.Date(NA),
   virtual = FALSE,
+  ...,
   actor,
   reason
 )
@@ -22,17 +22,21 @@ add_feature(
 
 \item{site}{site name.}
 
-\item{lon}{longitude, \verb{DOUBLE NOT NULL} on the live schema.}
-
-\item{lat}{latitude, \verb{DOUBLE NOT NULL} on the live schema.}
+\item{class}{what kind of thing the feature is: one of the feature class
+vocabulary (for example \code{"bore"}, \code{"pump"}, \code{"tank"}), or \code{NA} when not
+yet classified. A deployment adds its own through
+\code{st_config("feature_classes_extra")}.}
 
 \item{flow}{flow type (e.g. \code{"surface"}), optional.}
 
 \item{matrix}{sample matrix (e.g. \code{"water"}), optional.}
 
-\item{geom_wkt}{optional WKT geometry string.}
+\item{date_start}{the date the feature came into being, optional (\code{Date}).}
 
 \item{virtual}{optional logical flag, defaults to \code{FALSE}.}
+
+\item{...}{must be empty. Passing \code{lon}, \code{lat} or \code{geom_wkt} aborts naming
+\code{\link[=add_feature_geometry]{add_feature_geometry()}}; anything else aborts too.}
 
 \item{actor}{who is making this change.}
 
@@ -47,6 +51,10 @@ Resolves its own connection via \code{with_db_write(st_config("live_db"))}
 with a fresh \code{uuid::UUIDgenerate()} for the new row.
 }
 \details{
+A feature carries no coordinates (PLAN-23): its position is a
+\code{feature_geometry} row, added afterwards with \code{\link[=add_feature_geometry]{add_feature_geometry()}}. A
+feature with no position yet simply has none.
+
 PLAN-15 F.9/S-15.8: post-001, \code{sample.uuid_feature_alias} is the ONLY path
 from a sample to a feature, and migration 001 gave every then-existing
 feature a \code{kind = 'self'} alias. A feature created by this function alone
@@ -66,4 +74,17 @@ confirmation, which CONTRACT A55 forbids), with \code{alias_key = .rc_feature_ke
 convention exactly. Layer-1's exact match reaches this row on
 \code{auto_assign} alone (\code{R/reconcile.R:388-398}); it never reads
 \code{confirmed_by} at all.
+
+Refused (\code{sampletidy_error}, nothing written): a name with no letter or
+digit; a \code{class} outside the vocabulary (\code{.st_feature_classes} plus
+\code{st_config("feature_classes_extra")}); a name whose canonical key (upper
+case, leading zeros dropped from each digit run) equals that of an existing
+feature, ended ones included (\code{X.S1} against \code{X.S01}, but \code{X.MW102} does not
+clash with \code{X.MW12}); a name whose alias key an existing alias already
+holds; \code{lon}, \code{lat} or \code{geom_wkt} (coordinates are gone: see
+\code{\link[=add_feature_geometry]{add_feature_geometry()}}) or any other extra argument; and a database that
+migration 117 has not reached.
+}
+\seealso{
+\code{\link[=add_feature_geometry]{add_feature_geometry()}}
 }

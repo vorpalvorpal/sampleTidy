@@ -82,6 +82,12 @@
   content_fingerprinters = function() {
     NULL
   },
+  # Extra `feature.class` words `add_feature()` accepts beyond the core
+  # vocabulary (PLAN-23): a character vector, default none. List-valued, so no
+  # env var.
+  feature_classes_extra = function() {
+    character(0)
+  },
   # The time zone of "local" calendar days: sample dates, "today" in the
   # flags, report and status stamps. Read at call time via `.st_tz()`, which
   # validates it against `OlsonNames()`. The default is UTC; a deployment
@@ -149,7 +155,7 @@
 #' @noRd
 .st_config_list_keys <- c("field_analytes", "acirl_transcription_labels", "archive_settle",
                           "content_fingerprinters", "checks", "site_keywords", "inbox_batches", "gas_template_slots",
-                          "writer_check")
+                          "writer_check", "feature_classes_extra")
 
 #' Get or set a sampleTidy configuration value
 #'
