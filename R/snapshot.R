@@ -83,7 +83,8 @@ snapshot_db <- function(db = st_config("live_db"), dest_dir = st_config("snapsho
   # copy a file this process holds open read-write), through a READ-ONLY
   # connection held for the duration, which keeps other writers out.
   ro_con <- tryCatch(
-    DBI::dbConnect(duckdb::duckdb(), db, read_only = TRUE),
+    DBI::dbConnect(duckdb::duckdb(), db, read_only = TRUE,
+                   config = st_duckdb_config()),
     error = function(e) e
   )
   copied <- FALSE
@@ -105,7 +106,8 @@ snapshot_db <- function(db = st_config("live_db"), dest_dir = st_config("snapsho
   # (e.g. `db` existed but held an empty/degenerate database) is deleted here,
   # never renamed into place.
   verify_con <- tryCatch(
-    DBI::dbConnect(duckdb::duckdb(), tmp_path, read_only = TRUE),
+    DBI::dbConnect(duckdb::duckdb(), tmp_path, read_only = TRUE,
+                   config = st_duckdb_config()),
     error = function(e) e
   )
   if (inherits(verify_con, "error")) {

@@ -6,6 +6,9 @@
 #' connections abort if the file does not exist (DuckDB would otherwise
 #' silently create it); read-write connections create the file if absent.
 #'
+#' Every connection is opened with `config = st_duckdb_config()`, so it carries
+#' the package memory cap.
+#'
 #' @param db path to the DuckDB file.
 #' @param read_only if `TRUE` (default), open read-only.
 #' @return an open DBI connection; caller is responsible for disconnecting.
@@ -23,7 +26,8 @@ st_connect <- function(db, read_only = TRUE) {
   }
 
   tryCatch(
-    DBI::dbConnect(duckdb::duckdb(), db, read_only = read_only),
+    DBI::dbConnect(duckdb::duckdb(), db, read_only = read_only,
+                   config = st_duckdb_config()),
     error = function(e) {
       cli::cli_abort(
         "Failed to connect to database at {.path {db}}: {conditionMessage(e)}",
@@ -60,7 +64,8 @@ with_db_write <- function(fn, db = st_config("live_db"), max_wait = 60, every = 
 
   repeat {
     con <- tryCatch(
-      DBI::dbConnect(duckdb::duckdb(), db, read_only = FALSE),
+      DBI::dbConnect(duckdb::duckdb(), db, read_only = FALSE,
+                   config = st_duckdb_config()),
       error = function(e) {
         last_err <<- e
         NULL
