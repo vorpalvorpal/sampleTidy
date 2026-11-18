@@ -3,14 +3,14 @@
 # the `config` list for every connection the package opens.
 
 # NB: duckdb 1.4 ignores `config` in dbConnect() for an in-memory database;
-# the reference connection therefore uses a temporary file.
+# the config therefore goes to the driver, duckdb::duckdb(config = ).
 # What DuckDB itself reports for a plain connection opened with `limit`
 # (DuckDB reformats the value, e.g. "1.8 GiB", so never compare strings
 # against the input).
 duckdb_reported_limit <- function(limit = NULL) {
   config <- if (is.null(limit)) list() else list(memory_limit = limit)
   db <- tempfile(fileext = ".duckdb")
-  con <- DBI::dbConnect(duckdb::duckdb(), dbdir = db, config = config)
+  con <- DBI::dbConnect(duckdb::duckdb(config = config), dbdir = db)
   on.exit({
     DBI::dbDisconnect(con, shutdown = TRUE)
     unlink(c(db, paste0(db, ".wal")))
@@ -137,7 +137,7 @@ test_that("with_db_write() connects with the cap", {
   expect_equal(got, duckdb_reported_limit("1GB"))
 })
 
-test_that("no R/ source opens DuckDB without the config helper", {
+test_that("no R/ source passes the config to dbConnect() instead of the driver", {
   r_dir <- testthat::test_path("..", "..", "R")
   skip_if_not(dir.exists(r_dir), "R/ source not available")
   offenders <- character()
@@ -147,7 +147,8 @@ test_that("no R/ source opens DuckDB without the config helper", {
     hits <- grep("dbConnect\\(\\s*duckdb::duckdb\\(", code)
     for (i in hits) {
       window <- paste(code[i:min(i + 4L, length(code))], collapse = " ")
-      if (!grepl("st_duckdb_config\\(", window)) {
+      if (!grepl("duckdb::duckdb\\(\\s*config\\s*=\\s*st_duckdb_config\\(\\)",
+                 window)) {
         offenders <- c(offenders, sprintf("%s:%d", basename(f), i))
       }
     }
