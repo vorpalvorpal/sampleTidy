@@ -26,8 +26,8 @@ st_connect <- function(db, read_only = TRUE) {
   }
 
   tryCatch(
-    DBI::dbConnect(duckdb::duckdb(), db, read_only = read_only,
-                   config = st_duckdb_config()),
+    DBI::dbConnect(duckdb::duckdb(config = st_duckdb_config()), db,
+                   read_only = read_only),
     error = function(e) {
       cli::cli_abort(
         "Failed to connect to database at {.path {db}}: {conditionMessage(e)}",
@@ -64,8 +64,7 @@ with_db_write <- function(fn, db = st_config("live_db"), max_wait = 60, every = 
 
   repeat {
     con <- tryCatch(
-      DBI::dbConnect(duckdb::duckdb(), db, read_only = FALSE,
-                   config = st_duckdb_config()),
+      DBI::dbConnect(duckdb::duckdb(config = st_duckdb_config()), db, read_only = FALSE),
       error = function(e) {
         last_err <<- e
         NULL
