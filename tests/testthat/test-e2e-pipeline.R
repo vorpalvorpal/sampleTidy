@@ -503,7 +503,9 @@ test_that("R-10.6: NAMESPACE exports equal the CONTRACT-pinned public API exactl
     "db_meta_get", "db_meta_set", "db_meta_read",
     "read_snapshot_manifest", "verify_snapshot", "list_snapshots",
     # PLAN-21 phase (d): re-imports archived inputs missing from a snapshot.
-    "replay_archive"
+    "replay_archive",
+    # state_dir: the machine-state folder setting and the imports lock path.
+    "st_state_dir", "st_imports_lock_path"
   )
   actual <- getNamespaceExports("sampleTidy")
   expect_setequal(actual, pinned)
