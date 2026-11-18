@@ -550,12 +550,13 @@ test_that("flush: a set but missing command is logged and ignored", {
 
 # ---- 9. --print-config ---------------------------------------------------------------------------
 
-test_that("--print-config: eight lines, the .sh's keys in the .sh's order, NOTIFY and NOTIFY_FLUSH resolved", {
+test_that("--print-config: nine lines, the .sh's keys in the .sh's order, NOTIFY and NOTIFY_FLUSH resolved", {
   s <- ap_sandbox()
   k <- ap_print(s, SAMPLETIDY_AUTOIMPORT_NOTIFY = NA, SAMPLETIDY_NOTIFY_COMMAND = "/some/notify",
                 SAMPLETIDY_NOTIFY_FLUSH = "/some/flush", SAMPLETIDY_GATE_WATCH = "/some/watch")
-  expect_identical(k$keys, c("DB", "INPUT", "REPORT", "TIMEZONE", "LOG", "NOTIFY", "NOTIFY_FLUSH", "WATCH"))
+  expect_identical(k$keys, c("DB", "INPUT", "REPORT", "TIMEZONE", "LOG", "NOTIFY", "NOTIFY_FLUSH", "WATCH", "STATE"))
   expect_identical(k$vals[6:8], c("/some/notify", "/some/flush", "/some/watch"))
+  expect_identical(k$vals[9], k$vals[3])   # STATE is the report folder when SAMPLETIDY_STATE_DIR is unset
   k2 <- ap_print(s, SAMPLETIDY_NOTIFY_COMMAND = "/some/notify", args = "--print-config")   # the AUTOIMPORT_NOTIFY override wins
   expect_identical(k2$vals[6], s$notify)
 })

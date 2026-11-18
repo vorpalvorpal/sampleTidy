@@ -189,20 +189,20 @@ aw_prime <- function(s) {
 
 # ---- 1. print config ------------------------------------------------------------------------
 
-# PLAN-21 phase (a) added WATCH; phase (b) adds NOTIFY and NOTIFY_FLUSH (the .sh's 8 lines).
-test_that("-PrintConfig prints exactly the .sh's eight keys in order and exits 0", {
+# PLAN-21 phase (a) added WATCH; phase (b) adds NOTIFY and NOTIFY_FLUSH; state_dir adds STATE (the .sh's 9 lines).
+test_that("-PrintConfig prints exactly the .sh's nine keys in order and exits 0", {
   s <- aw_sandbox()
   k <- aw_print(s, aw_std(s, SAMPLETIDY_TIMEZONE = "Pacific/Kiritimati"))
-  expect_identical(k$keys, c("DB", "INPUT", "REPORT", "TIMEZONE", "LOG", "NOTIFY", "NOTIFY_FLUSH", "WATCH"))
-  expect_identical(aw_norm(k$vals), aw_norm(c(s$db, s$input, s$report, "Pacific/Kiritimati", s$log, "", "", "")))
+  expect_identical(k$keys, c("DB", "INPUT", "REPORT", "TIMEZONE", "LOG", "NOTIFY", "NOTIFY_FLUSH", "WATCH", "STATE"))
+  expect_identical(aw_norm(k$vals), aw_norm(c(s$db, s$input, s$report, "Pacific/Kiritimati", s$log, "", "", "", s$report)))
 })
 
-test_that("--print-config (the Mac spelling) prints the same eight lines", {
+test_that("--print-config (the Mac spelling) prints the same nine lines", {
   s <- aw_sandbox()
   v <- aw_std(s, SAMPLETIDY_TIMEZONE = "Pacific/Kiritimati")
   a <- aw_print(s, v, "-PrintConfig")
   b <- aw_print(s, v, "--print-config")
-  expect_length(b$lines, 8L)
+  expect_length(b$lines, 9L)
   expect_identical(b$lines, a$lines)
 })
 
@@ -214,7 +214,7 @@ test_that("print config has no side effects and works with no DB, a pause file a
   before <- readBin(file.path(aw_lock(s), "pid"), "raw", 100)
   for (a in c("-PrintConfig", "--print-config")) {
     k <- aw_print(s, aw_std(s), a)
-    expect_length(k$lines, 8L)
+    expect_length(k$lines, 9L)
   }
   expect_false(dir.exists(dirname(s$log)))
   expect_false(file.exists(s$log))
