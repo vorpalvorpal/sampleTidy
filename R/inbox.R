@@ -254,8 +254,7 @@ inbox_batches <- function(pattern = NULL, settle_minutes = 0, leftovers = NULL) 
 
 .inbox_read_con <- function(db) {
   if (!file.exists(db)) return(NULL)
-  tryCatch(DBI::dbConnect(duckdb::duckdb(), db, read_only = TRUE,
-                   config = st_duckdb_config()),
+  tryCatch(DBI::dbConnect(duckdb::duckdb(config = st_duckdb_config()), db, read_only = TRUE),
            error = function(e) NULL)
 }
 
