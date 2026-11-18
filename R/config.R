@@ -111,6 +111,11 @@
   report_dir = function() {
     file.path(tools::R_user_dir("sampleTidy", "data"), "reports")
   },
+  # `state_dir` (NULL or a directory): where the eight machine-state files live
+  # (see `st_state_dir()`). NULL means the report dir, as before.
+  state_dir = function() {
+    NULL
+  },
   # `gas_template_slots` (NULL or a character vector of feature names): names
   # the lab's gas template prints at a site that has no such probe; see
   # `.st_gas_template_slots()`. List-valued, so no env var.
@@ -189,9 +194,16 @@
 #' what happens to the files an import leaves behind. `NULL` means
 #' `inbox_batches()`: every non-hidden subfolder, settled at once, left in place.
 #'
-#' `report_dir` is the directory the auto-import job keeps its status note, logs,
-#' lock and gate in (default: a `reports` folder under `tools::R_user_dir("sampleTidy", "data")`;
-#' a deployment sets `SAMPLETIDY_REPORT_DIR`). `gas_template_slots` is `NULL`
+#' `report_dir` is the directory the auto-import job keeps its notes for people
+#' (`Import status.md`, `<date>-imports.md`) and `.import-status.json` in (default: a
+#' `reports` folder under `tools::R_user_dir("sampleTidy", "data")`; a deployment sets
+#' `SAMPLETIDY_REPORT_DIR`). `state_dir` (option `sampletidy.state_dir`, env var
+#' `SAMPLETIDY_STATE_DIR`; empty counts as unset) is where the eight machine-state files
+#' go: `.imports.lock`, `.imports.state`, `.imports.gate`, `.imports.health`,
+#' `.imports.log`, `.imports.notified`, `events.jsonl` and `status.json`. It defaults to
+#' `NULL`, meaning the report dir, so nothing changes until it is set. Set it to a
+#' folder that is not synced, such as `tools::R_user_dir("sampleTidy", "data")`
+#' (recommended); nothing moves existing files for you. See [st_state_dir()]. `gas_template_slots` is `NULL`
 #' or a character vector of feature names that the lab's gas template prints
 #' at a site that has no such probe: the gas adapter skips a numeric reading
 #' at one as `template_slot`. It is list-valued, so it cannot come from an
@@ -305,4 +317,31 @@ st_capabilities <- function() {
   }
   assign(tz, TRUE, envir = .st_tz_ok)
   tz
+}
+
+#' The folder that holds the machine-state files
+#'
+#' `st_state_dir()` is the `state_dir` setting (option `sampletidy.state_dir` or env var
+#' `SAMPLETIDY_STATE_DIR`) when it is set and not empty, otherwise `report_dir` itself.
+#' It holds `.imports.lock`, `.imports.state`, `.imports.gate`, `.imports.health`,
+#' `.imports.log`, `.imports.notified`, `events.jsonl` and `status.json`. The notes for
+#' people and `.import-status.json` stay in the report dir. Nothing moves files when the
+#' setting changes. The recommended value is `tools::R_user_dir("sampleTidy", "data")`.
+#'
+#' `st_imports_lock_path()` is the `.imports.lock` folder the launcher
+#' (`dev/auto-import.sh` or `.ps1`) takes, inside `st_state_dir()`. It is not the
+#' `<db>.inbox.lock` that sits beside the database.
+#'
+#' @param report_dir The report directory.
+#' @return A path.
+#' @export
+st_state_dir <- function(report_dir = st_config("report_dir")) {
+  d <- st_config("state_dir")
+  if (is.null(d) || length(d) != 1L || is.na(d) || !nzchar(d)) report_dir else d
+}
+
+#' @rdname st_state_dir
+#' @export
+st_imports_lock_path <- function(report_dir = st_config("report_dir")) {
+  file.path(st_state_dir(report_dir), ".imports.lock")
 }
