@@ -52,9 +52,16 @@ the input directory \code{\link[=inbox_run]{inbox_run()}} treats as batches, how
 what happens to the files an import leaves behind. \code{NULL} means
 \code{inbox_batches()}: every non-hidden subfolder, settled at once, left in place.
 
-\code{report_dir} is the directory the auto-import job keeps its status note, logs,
-lock and gate in (default: a \code{reports} folder under \code{tools::R_user_dir("sampleTidy", "data")};
-a deployment sets \code{SAMPLETIDY_REPORT_DIR}). \code{gas_template_slots} is \code{NULL}
+\code{report_dir} is the directory the auto-import job keeps its notes for people
+(\verb{Import status.md}, \verb{<date>-imports.md}) and \code{.import-status.json} in (default: a
+\code{reports} folder under \code{tools::R_user_dir("sampleTidy", "data")}; a deployment sets
+\code{SAMPLETIDY_REPORT_DIR}). \code{state_dir} (option \code{sampletidy.state_dir}, env var
+\code{SAMPLETIDY_STATE_DIR}; empty counts as unset) is where the eight machine-state files
+go: \code{.imports.lock}, \code{.imports.state}, \code{.imports.gate}, \code{.imports.health},
+\code{.imports.log}, \code{.imports.notified}, \code{events.jsonl} and \code{status.json}. It defaults to
+\code{NULL}, meaning the report dir, so nothing changes until it is set. Set it to a
+folder that is not synced, such as \code{tools::R_user_dir("sampleTidy", "data")}
+(recommended); nothing moves existing files for you. See \code{\link[=st_state_dir]{st_state_dir()}}. \code{gas_template_slots} is \code{NULL}
 or a character vector of feature names that the lab's gas template prints
 at a site that has no such probe: the gas adapter skips a numeric reading
 at one as \code{template_slot}. It is list-valued, so it cannot come from an
