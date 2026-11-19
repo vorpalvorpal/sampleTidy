@@ -40,12 +40,13 @@
 #' @noRd
 .lab_receipt_create_schema <- function(con) {
   have <- DBI::dbGetQuery(con, "SELECT column_name FROM information_schema.columns
-                                 WHERE table_name = 'lab_qc_report'")$column_name
+                                 WHERE table_catalog = current_database()
+                                   AND table_name = 'lab_qc_report'")$column_name
   for (k in setdiff(names(.lab_receipt_report_cols), have)) {
     DBI::dbExecute(con, sprintf("ALTER TABLE lab_qc_report ADD COLUMN %s %s", k,
                                 .lab_receipt_report_cols[[k]]))
   }
-  for (t in setdiff(names(.lab_receipt_ddl), DBI::dbListTables(con))) {
+  for (t in setdiff(names(.lab_receipt_ddl), .st_main_tables(con))) {
     DBI::dbExecute(con, .lab_receipt_ddl[[t]])
   }
   invisible(con)
@@ -54,7 +55,7 @@
 # Does this DB carry the receipt schema? (False before the operator migration.)
 .lab_receipt_ready <- function(con) {
   if (!DBI::dbExistsTable(con, "lab_qc_report")) return(FALSE)
-  all(names(.lab_receipt_ddl) %in% DBI::dbListTables(con)) &&
+  all(names(.lab_receipt_ddl) %in% .st_main_tables(con)) &&
     all(names(.lab_receipt_report_cols) %in% DBI::dbListFields(con, "lab_qc_report"))
 }
 

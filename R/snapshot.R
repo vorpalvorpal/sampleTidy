@@ -119,7 +119,7 @@ snapshot_db <- function(db = st_config("live_db"), dest_dir = st_config("snapsho
       class = "sampletidy_error"
     )
   }
-  tables <- DBI::dbListTables(verify_con)
+  tables <- .st_main_tables(verify_con)
   facts <- if (length(tables) > 0) {
     tryCatch(.sn_facts(verify_con), error = function(e) e)
   }
@@ -183,7 +183,8 @@ snapshot_db <- function(db = st_config("live_db"), dest_dir = st_config("snapsho
 # The manifest facts read from a connection to the copy.
 .sn_facts <- function(con) {
   tbls <- DBI::dbGetQuery(con, "SELECT table_name FROM information_schema.tables
-                                WHERE table_schema = 'main' AND table_type = 'BASE TABLE'
+                                WHERE table_catalog = current_database() AND table_schema = 'main'
+                                  AND table_type = 'BASE TABLE'
                                 ORDER BY table_name")$table_name
   counts <- stats::setNames(lapply(tbls, function(t) {
     as.integer(DBI::dbGetQuery(con, sprintf("SELECT count(*) AS n FROM %s",

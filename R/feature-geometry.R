@@ -365,7 +365,8 @@ FROM t3 JOIN feature f ON f.uuid = t3.uuid_feature;)---"
 #' Has this database been through migration 117?
 #'
 #' `TRUE` when the table `feature_geometry` exists AND `feature` has no column
-#' `lon`; `FALSE` on a pre-117 database. Every register function and check
+#' `lon`; `FALSE` on a pre-117 database. Only the connection's main database
+#' counts: the catalogue views list every ATTACHed database too. Every register function and check
 #' asks this first, so the package still opens a database that is in the old
 #' shape.
 #' @param con an open DBI connection.
@@ -373,11 +374,13 @@ FROM t3 JOIN feature f ON f.uuid = t3.uuid_feature;)---"
 #' @noRd
 .st_has_feature_register <- function(con) {
   has_geom <- nrow(DBI::dbGetQuery(
-    con, "SELECT 1 FROM information_schema.tables WHERE table_name = 'feature_geometry' LIMIT 1")) > 0
+    con, "SELECT 1 FROM information_schema.tables
+          WHERE table_catalog = current_database() AND table_name = 'feature_geometry' LIMIT 1")) > 0
   if (!has_geom) return(FALSE)
   has_lon <- nrow(DBI::dbGetQuery(
     con, "SELECT 1 FROM information_schema.columns
-          WHERE table_name = 'feature' AND column_name = 'lon' LIMIT 1")) > 0
+          WHERE table_catalog = current_database() AND table_name = 'feature' AND column_name = 'lon'
+          LIMIT 1")) > 0
   !has_lon
 }
 

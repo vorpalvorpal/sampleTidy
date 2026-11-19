@@ -97,3 +97,17 @@ with_db_write <- function(fn, db = st_config("live_db"), max_wait = 60, every = 
   on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
   fn(con)
 }
+
+#' The tables and views of the connection's MAIN database, plus its temporary
+#' ones: what `DBI::dbListTables()` returns on a lone database. On DuckDB that
+#' function also lists the tables of every ATTACHed database, so a probe for "does
+#' this database have table X" must not use it.
+#' @param con an open DuckDB connection.
+#' @return a sorted character vector of table names.
+#' @keywords internal
+#' @noRd
+.st_main_tables <- function(con) {
+  DBI::dbGetQuery(con, "SELECT DISTINCT table_name FROM information_schema.tables
+                        WHERE table_catalog IN (current_database(), 'temp')
+                        ORDER BY table_name")$table_name
+}

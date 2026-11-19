@@ -16,7 +16,8 @@
 # date (PLAN-23 3.6).
 .st_mask_window_cols <- function(con) {
   dated <- nrow(DBI::dbGetQuery(con, "SELECT 1 FROM information_schema.columns
-    WHERE table_name = 'feature_mask' AND column_name = 'date_start' LIMIT 1")) > 0
+    WHERE table_catalog = current_database() AND table_name = 'feature_mask'
+      AND column_name = 'date_start' LIMIT 1")) > 0
   if (dated) "fm.date_start AS date_start, fm.date_end AS date_end"
   else "CAST(NULL AS DATE) AS date_start, CAST(NULL AS DATE) AS date_end"
 }
