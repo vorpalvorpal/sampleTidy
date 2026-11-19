@@ -63,7 +63,10 @@
     `long`, `gas_report`, `common`. `vocab_mask_variant` still accepts `old` on
     `analyte_mask`, whose variants are unchanged.
   - The feature class vocabulary gains `site`, `network`, `road`,
-    `sampling_point`, `watercourse`, `spillway`, `riser` and `ancillary`.
+    `sampling_point`, `watercourse`, `spillway`, `riser` and `ancillary`, and
+    loses `surface_point` and `seep` (such a spot is a `sampling_point` whose
+    `flow` says seep). An `outline` may also be an open `LINESTRING` or
+    `MULTILINESTRING`, where only a crest or edge is drawn.
   - The EPA licence-point readers behind the `missing_analytes` and
     `holding_time` flags match a sample to an `EPA` mask row only when the
     sample's date is in the row's window, so a moved point number stays with
