@@ -19,7 +19,7 @@
 # live scripts load the package that way), and testthat runs setup files only
 # inside a test run, so this can never reach a live import.
 Sys.unsetenv(c("SAMPLETIDY_TIMEZONE", "SAMPLETIDY_DATE_OVERRIDES",
-               "SAMPLETIDY_SITE_KEYWORDS", "SAMPLETIDY_REPORT_DIR",
+               "SAMPLETIDY_SITE_KEYWORDS", "SAMPLETIDY_REPORT_DIR", "SAMPLETIDY_STATE_DIR",
                "SAMPLETIDY_INPUT_DIR", "SAMPLETIDY_ACIRL_JOB_PREFIX"))
 local({
   empty_environ <- tempfile("empty-renviron-")

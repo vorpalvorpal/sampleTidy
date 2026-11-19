@@ -107,11 +107,13 @@ gw_sh_print <- function(s, ...) {
 
 # ---- .sh: --print-config ---------------------------------------------------------------------
 
-test_that(".sh --print-config prints WATCH last: the env value, else the environ file's, else empty", {
+test_that(".sh --print-config prints WATCH then STATE: the env value, else the environ file's, else empty", {
   s <- gw_sh_sandbox()
   p <- gw_sh_print(s)
-  expect_identical(names(p), c("DB", "INPUT", "REPORT", "TIMEZONE", "LOG", "NOTIFY", "NOTIFY_FLUSH", "WATCH"))
+  expect_identical(names(p), c("DB", "INPUT", "REPORT", "TIMEZONE", "LOG", "NOTIFY", "NOTIFY_FLUSH", "WATCH", "STATE"))
   expect_identical(p$WATCH, "")
+  expect_identical(p$STATE, p$REPORT)   # SAMPLETIDY_STATE_DIR unset: the state folder is the report folder
+  expect_identical(p$STATE, s$report)
 
   expect_identical(gw_sh_print(s, SAMPLETIDY_GATE_WATCH = s$watch)$WATCH, s$watch)
 
@@ -347,12 +349,13 @@ gw_ps_print <- function(s, args = "-PrintConfig", ...) {
 
 # ---- .ps1: print config ---------------------------------------------------------------------------
 
-test_that(".ps1 print config prints the eight keys with WATCH last, for both spellings: the env value, else empty", {
+test_that(".ps1 print config prints the nine keys with STATE last, for both spellings: the env value, else empty", {
   s <- gw_ps_sandbox()
   for (a in c("-PrintConfig", "--print-config")) {
     k <- gw_ps_print(s, a)
-    expect_identical(k$keys, c("DB", "INPUT", "REPORT", "TIMEZONE", "LOG", "NOTIFY", "NOTIFY_FLUSH", "WATCH"), info = a)
+    expect_identical(k$keys, c("DB", "INPUT", "REPORT", "TIMEZONE", "LOG", "NOTIFY", "NOTIFY_FLUSH", "WATCH", "STATE"), info = a)
     expect_identical(k$vals[8], "", info = a)
+    expect_identical(k$vals[9], k$vals[3], info = a)   # STATE is the report folder when SAMPLETIDY_STATE_DIR is unset
     k <- gw_ps_print(s, a, SAMPLETIDY_GATE_WATCH = s$watch)
     expect_identical(gsub("\\\\", "/", k$vals[8]), gsub("\\\\", "/", s$watch), info = a)
   }

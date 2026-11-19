@@ -34,6 +34,13 @@
     pass `allow = "feature_first_sample"` to `mig_db_checks_gate()`.
   - The label matcher is unchanged.
 
+* Every DuckDB connection the package opens now caps memory (DuckDB's own
+  default is 80% of RAM). The new exported `st_duckdb_config()` returns the
+  `config` list; the limit comes from the option
+  `sampleTidy.duckdb_memory_limit`, then the environment variable
+  `SAMPLETIDY_DUCKDB_MEMORY_LIMIT`, then the default `"2GB"`. `"none"` removes
+  the cap.
+
 * The Windows import trigger (`dev/auto-import.ps1`) now matches the Mac one
   (`dev/auto-import.sh`): run-health record, retry after a failed or crashed run,
   notify and flush commands, a stale-success notice, listing failures exit 3,

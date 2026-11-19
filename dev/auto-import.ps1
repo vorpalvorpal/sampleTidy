@@ -26,8 +26,8 @@
 # Code: main's last commit is checked out detached into SAMPLETIDY_AUTOIMPORT_RUN (default
 # %LOCALAPPDATA%\sampleTidy-run) on every run and that copy is run, never this working tree;
 # SAMPLETIDY_AUTOIMPORT_CODE runs a given tree instead (tests). It never fetches.
-# Lock (R-22.H): the directory $REPORT\.imports.lock holding `pid`, created atomically.
-# Run-health record ($REPORT\.imports.health) as in the .sh: it drives retry-after-failure,
+# Lock (R-22.H): the directory $STATEDIR\.imports.lock holding `pid`, created atomically.
+# Run-health record ($STATEDIR\.imports.health) as in the .sh: it drives retry-after-failure,
 # one notice per failed run, a once-per-local-day "no success for N hours" notice, and the
 # SAMPLETIDY_AUTOIMPORT_PREV_FAILURE text that appears in status.json problems.
 # Arguments: -PrintConfig or --print-config prints the resolved values and exits;
@@ -143,6 +143,9 @@ if (-not $WATCH) {
 $REPORT = env SAMPLETIDY_AUTOIMPORT_REPORT
 if (-not $REPORT) { $REPORT = cfg SAMPLETIDY_REPORT_DIR }
 if (-not $REPORT -and $DATA) { $REPORT = Join-Path $DATA 'reports' }
+# $STATEDIR: where the machine-state files live (SAMPLETIDY_STATE_DIR); unset or empty, the report dir.
+$STATEDIR = cfg SAMPLETIDY_STATE_DIR
+if (-not $STATEDIR) { $STATEDIR = $REPORT }
 $ZONE = cfg SAMPLETIDY_TIMEZONE
 if (-not $ZONE) { $ZONE = 'UTC' }
 $NOTIFY = env SAMPLETIDY_AUTOIMPORT_NOTIFY   # test override, then deployment config
@@ -161,7 +164,7 @@ if (-not $STALE_HOURS) { $STALE_HOURS = '24' }
 
 if ($PrintConfig -or $Rest -contains '--print-config') {
   "DB=$DB"; "INPUT=$WATCH"; "REPORT=$REPORT"; "TIMEZONE=$ZONE"; "LOG=$LOG"
-  "NOTIFY=$NOTIFY"; "NOTIFY_FLUSH=$FLUSH"; "WATCH=$GWATCH"
+  "NOTIFY=$NOTIFY"; "NOTIFY_FLUSH=$FLUSH"; "WATCH=$GWATCH"; "STATE=$STATEDIR"
   exit 0
 }
 
@@ -178,10 +181,11 @@ if ($ENVIRON_ERR) { logline $ENVIRON_ERR }
 if (-not $WATCH -or -not (Test-Path -LiteralPath $WATCH -PathType Container)) {
   logline "input folder not found: $WATCH"; exit 0
 }
-$STATE = Join-Path $REPORT '.imports.state'; $GATE = Join-Path $REPORT '.imports.gate'
-$LOCK = Join-Path $REPORT '.imports.lock'; $HEALTH = Join-Path $REPORT '.imports.health'
-$NOTIFIED = Join-Path $REPORT '.imports.notified'
+$STATE = Join-Path $STATEDIR '.imports.state'; $GATE = Join-Path $STATEDIR '.imports.gate'
+$LOCK = Join-Path $STATEDIR '.imports.lock'; $HEALTH = Join-Path $STATEDIR '.imports.health'
+$NOTIFIED = Join-Path $STATEDIR '.imports.notified'
 [void][IO.Directory]::CreateDirectory($REPORT)
+[void][IO.Directory]::CreateDirectory($STATEDIR)
 
 # The local day (SAMPLETIDY_TIMEZONE, an IANA id; an unknown one falls back to the machine's zone).
 function local_day {
@@ -414,6 +418,7 @@ try {
   $env:SAMPLETIDY_AUTOIMPORT_INPUT = $WATCH
   $env:SAMPLETIDY_AUTOIMPORT_DB = $DB
   $env:SAMPLETIDY_AUTOIMPORT_REPORT = $REPORT
+  $env:SAMPLETIDY_STATE_DIR = $STATEDIR
   # & hands control back even for a .cmd/.bat Rscript. 2>&1 folds stderr in (each line
   # arrives as an ErrorRecord; "$_" is its text) and the writer appends it to the log.
   $w = [IO.StreamWriter]::new([IO.FileStream]::new($LOG, 'Append', 'Write', 'ReadWrite'), $utf8)
