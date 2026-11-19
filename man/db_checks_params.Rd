@@ -22,8 +22,13 @@ means 14 days before the run; otherwise a \code{POSIXct};
 extends it);
 \item \code{tz}: the time zone whose calendar day \code{sample.date} names (default
 configured time zone, \code{st_config("timezone")});
-\item \code{mask_variants}: the registered mask variants (default the core
-\code{long}, \code{old}, \code{gas_report}; a deployment adds its own);
+\item \code{class_flow}: a named list from \code{feature.class} to the non-NULL
+\code{feature.flow} values that class allows, read by \code{feature_class_flow}
+(default the core rule; a class not listed is unconstrained);
+\item \code{mask_variants}: the registered feature mask variants (default the core
+\code{long}, \code{gas_report}, \code{common}; a deployment adds its own, such as
+\code{EPA}). On \code{analyte_mask} the check also accepts \code{long}, \code{old} and
+\code{gas_report};
 \item \code{receipt_max_temp_c}, \code{receipt_lookback_days}: the SRN receipt
 temperature above which \code{lab_receipt_warm} warns (default 6), and how
 many days back it looks (default 90).
