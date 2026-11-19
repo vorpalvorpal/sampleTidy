@@ -93,6 +93,19 @@ test_that("R-23.8: add_feature_geometry() accepts every role with a suitable typ
   }
 })
 
+test_that("R-23.8: add_feature_geometry() accepts an outline drawn as an open LINESTRING or MULTILINESTRING (a crest or edge, D17-68)", {
+  s <- t23_setup()
+  crest <- "LINESTRING (300000 6300000, 300010 6300005, 300020 6300000)"
+  edges <- "MULTILINESTRING ((300000 6300000, 300010 6300000), (300000 6300010, 300010 6300010))"
+  for (w in c(crest, edges)) {
+    u <- call_geom(add_feature_geometry, s, uuid_feature = "f-0002", role = "outline", geom_wkt = w,
+                   source = "plan", source_crs = "unknown", quality = "approximate")
+    g <- t23_geom(s$con, u)
+    expect_identical(g$role, "outline")
+    expect_identical(sub(" .*", "", g$geom_wkt), sub(" .*", "", w))
+  }
+})
+
 refusals <- list(
   list(label = "uuid_feature is not a feature.uuid", args = list(uuid_feature = "f-nope")),
   list(label = "role outside the vocabulary", args = list(role = "centre")),

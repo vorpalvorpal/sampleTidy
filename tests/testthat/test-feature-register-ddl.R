@@ -26,21 +26,32 @@ test_that("R-23.1: .st_geometry_role_types maps each role to the WKT types it al
   expect_setequal(rt$location, "POINT")
   expect_setequal(rt$route, c("LINESTRING", "MULTILINESTRING"))
   expect_setequal(rt$extent, c("POLYGON", "MULTIPOLYGON"))
-  expect_setequal(rt$outline, c("POLYGON", "MULTIPOLYGON"))
+  # outline: a footprint or boundary, or an open line where only a crest or edge is drawn (D17-68)
+  expect_setequal(rt$outline, c("POLYGON", "MULTIPOLYGON", "LINESTRING", "MULTILINESTRING"))
 })
 
-test_that("R-23.1: .st_feature_classes holds the generic vocabulary of 2.4 (a deployment extends it, it never shrinks)", {
-  want <- c("bore", "gas_well", "gas_point", "dust_gauge", "weather_station", "surface_point",
-            "seep", "tap", "dam", "pond", "cell", "landfill", "gas_field", "wall", "sump", "pit",
-            "pump", "valve", "meter", "pipe", "drain", "culvert", "inlet", "headwall", "aerator",
-            "dosing_unit", "tank", "switchboard", "telemetry", "building", "cable")
+test_that("R-23.1: .st_feature_classes is exactly the 17 Nov vocabulary of 2.4 (a deployment extends it through config)", {
+  # PLAN-23 2.4, decided 17 Nov (D17-8, D17-58, D17-162, D17-166), by group.
+  want <- c(
+    "site", "landfill", "cell", "gas_field", "network", "road",                         # places and systems
+    "bore", "gas_well", "gas_point", "dust_gauge", "weather_station", "sampling_point", "tap",  # monitoring points
+    "dam", "pond", "drain", "watercourse", "spillway", "headwall", "inlet", "culvert",  # water structures
+    "wall", "sump", "pit", "pump", "valve", "meter", "pipe", "riser", "aerator",        # plant
+    "dosing_unit", "tank", "switchboard", "telemetry", "building", "cable",
+    "ancillary")                                                                        # ancillary (provisional)
   expect_type(.st_feature_classes, "character")
   expect_false(anyNA(.st_feature_classes))
   expect_false(anyDuplicated(.st_feature_classes) > 0)
-  # [to confirm] vocabulary: pin that every listed word is present, not that no other is.
-  expect_true(all(want %in% .st_feature_classes), info = paste(setdiff(want, .st_feature_classes), collapse = ","))
+  expect_setequal(.st_feature_classes, want)
   # generic words only: lower-case snake_case, no digits, no site-style codes.
   expect_true(all(grepl("^[a-z]+(_[a-z]+)*$", .st_feature_classes)))
+})
+
+test_that("R-23.1: surface_point and seep are dropped from the class vocabulary (a seep is a sampling_point whose flow says seep)", {
+  expect_false("surface_point" %in% .st_feature_classes)
+  expect_false("seep" %in% .st_feature_classes)
+  expect_true("sampling_point" %in% .st_feature_classes)
+  expect_true("seep" %in% .st_feature_flows)
 })
 
 # ---- R-23.1: DDL of feature -----------------------------------------------------------
