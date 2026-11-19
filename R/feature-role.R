@@ -33,7 +33,7 @@
 #' @keywords internal
 #' @noRd
 .feature_role_create_schema <- function(con) {
-  for (t in setdiff(names(.feature_role_ddl), DBI::dbListTables(con))) {
+  for (t in setdiff(names(.feature_role_ddl), .st_main_tables(con))) {
     DBI::dbExecute(con, .feature_role_ddl[[t]])
   }
   invisible(con)
@@ -41,5 +41,5 @@
 
 # Does this DB carry both tables? (False before the operator migration.)
 .feature_role_ready <- function(con) {
-  all(names(.feature_role_ddl) %in% DBI::dbListTables(con))
+  all(names(.feature_role_ddl) %in% .st_main_tables(con))
 }

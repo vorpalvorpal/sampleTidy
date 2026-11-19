@@ -256,7 +256,7 @@
     DBI::dbGetQuery(
       con,
       "SELECT constraint_column_names FROM duckdb_constraints()
-        WHERE constraint_type = 'FOREIGN KEY' AND table_name = ?",
+        WHERE database_name = current_database() AND constraint_type = 'FOREIGN KEY' AND table_name = ?",
       params = list(table)
     ),
     error = function(e) NULL
@@ -280,7 +280,8 @@
     DBI::dbGetQuery(
       con,
       "SELECT table_name, constraint_column_names FROM duckdb_constraints()
-        WHERE constraint_type = 'FOREIGN KEY' AND referenced_table = ?",
+        WHERE database_name = current_database() AND constraint_type = 'FOREIGN KEY'
+          AND referenced_table = ?",
       params = list(table)
     ),
     error = function(e) NULL

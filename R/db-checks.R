@@ -632,32 +632,38 @@ WITH want(table_name, constraint_type, col) AS (VALUES
   ('review_queue_candidate','FOREIGN KEY','uuid_review'),
   ('analysis','PRIMARY KEY','uuid'), ('sample','PRIMARY KEY','uuid'), ('feature','PRIMARY KEY','uuid'),
   ('feature_alias','PRIMARY KEY','uuid'), ('lab_method','PRIMARY KEY','uuid'), ('analyte','PRIMARY KEY','uuid'),
-  ('ingest_file','PRIMARY KEY','hash'), ('lab_qc_report','UNIQUE','uuid_asset'))
-SELECT w.table_name || '.' || w.col || ' ' || w.constraint_type AS key FROM want w WHERE NOT EXISTS (
-  SELECT 1 FROM duckdb_constraints() c WHERE c.table_name = w.table_name
-   AND c.constraint_type = w.constraint_type AND list_contains(c.constraint_column_names, w.col))
-UNION ALL
+  ('ingest_file','PRIMARY KEY','hash'), ('lab_qc_report','UNIQUE','uuid_asset')),
+-- The PLAN-23 register keys come first (ord 1; they are conditional on the
+-- table or column existing), so they head the check's sample.
+miss AS (
 -- PLAN-23: the dated mask's and the link tables' keys, once the column exists
 -- (a pre-117 feature_mask has no uuid; the link tables arrive with 117).
-SELECT w.table_name || '.' || w.col || ' ' || w.constraint_type AS key
+SELECT w.table_name || '.' || w.col || ' ' || w.constraint_type AS key, 1 AS ord
 FROM (VALUES ('feature_mask','PRIMARY KEY','uuid'), ('feature_predecessor','PRIMARY KEY','uuid'),
              ('feature_flow','PRIMARY KEY','uuid')) w(table_name, constraint_type, col)
 WHERE EXISTS (SELECT 1 FROM duckdb_columns() k WHERE k.table_name = w.table_name AND k.column_name = w.col
                 AND k.database_name = current_database())
   AND NOT EXISTS (
-    SELECT 1 FROM duckdb_constraints() c WHERE c.table_name = w.table_name
+    SELECT 1 FROM duckdb_constraints() c WHERE c.database_name = current_database() AND c.table_name = w.table_name
      AND c.constraint_type = w.constraint_type AND list_contains(c.constraint_column_names, w.col))
 UNION ALL
-SELECT 'ux_sample_identity' AS key
-WHERE NOT EXISTS (SELECT 1 FROM duckdb_indexes() WHERE index_name = 'ux_sample_identity')
-UNION ALL
-SELECT w.table_name || '.' || w.col || ' ' || w.constraint_type AS key
+SELECT w.table_name || '.' || w.col || ' ' || w.constraint_type AS key, 1 AS ord
 FROM (VALUES ('feature_geometry','PRIMARY KEY','uuid'), ('feature_geometry','FOREIGN KEY','supersedes'))
   w(table_name, constraint_type, col)
-WHERE EXISTS (SELECT 1 FROM duckdb_tables() t WHERE t.table_name = w.table_name)
+WHERE EXISTS (SELECT 1 FROM duckdb_tables() t
+              WHERE t.database_name = current_database() AND t.table_name = w.table_name)
   AND NOT EXISTS (
-    SELECT 1 FROM duckdb_constraints() c WHERE c.table_name = w.table_name
-     AND c.constraint_type = w.constraint_type AND list_contains(c.constraint_column_names, w.col))",
+    SELECT 1 FROM duckdb_constraints() c WHERE c.database_name = current_database() AND c.table_name = w.table_name
+     AND c.constraint_type = w.constraint_type AND list_contains(c.constraint_column_names, w.col))
+UNION ALL
+SELECT w.table_name || '.' || w.col || ' ' || w.constraint_type AS key, 2 AS ord FROM want w WHERE NOT EXISTS (
+  SELECT 1 FROM duckdb_constraints() c WHERE c.database_name = current_database() AND c.table_name = w.table_name
+   AND c.constraint_type = w.constraint_type AND list_contains(c.constraint_column_names, w.col))
+UNION ALL
+SELECT 'ux_sample_identity' AS key, 3 AS ord
+WHERE NOT EXISTS (SELECT 1 FROM duckdb_indexes()
+                  WHERE database_name = current_database() AND index_name = 'ux_sample_identity'))
+SELECT key FROM miss ORDER BY ord, key",
        "Constraints and indexes the code relies on still exist (a table rebuild can silently drop them).",
        "migration", "error"),
     # ---- schema markers
@@ -865,7 +871,7 @@ WHERE source_hash IS NOT NULL AND NOT regexp_full_match(source_hash, '[0-9a-f]{3
 SELECT uuid AS key, tbl, action, actor FROM change_log
 WHERE actor IS NULL OR reason IS NULL OR action IS NULL
    OR action NOT IN ('insert', 'update', 'delete', 'provenance')
-   OR tbl IS NULL OR tbl NOT IN (SELECT table_name FROM duckdb_tables())
+   OR tbl IS NULL OR tbl NOT IN (SELECT table_name FROM duckdb_tables() WHERE database_name = current_database())
    OR (source_hash IS NOT NULL AND NOT regexp_full_match(source_hash, '[0-9a-f]{32}'))",
        "change_log rows carry actor and reason, a known action and table, and xxHash provenance.",
        "on_demand", "warn"),
