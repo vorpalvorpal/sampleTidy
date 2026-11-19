@@ -408,6 +408,8 @@ test_that("R-10.6: NAMESPACE exports equal the CONTRACT-pinned public API exactl
     "add_feature_geometry", "supersede_feature_geometry",
     "withdraw_feature_geometry", "end_feature_geometry",
     "replace_feature_geometry",
+    # DuckDB memory cap, added 2026-11-17: the config every connection uses.
+    "st_duckdb_config",
     # PLAN-15 curation API, added 2026-07-23. The pin is a deliberate gate on
     # the public surface, so new exports belong here explicitly.
     "pending_features", "pending_analytes",
@@ -505,7 +507,9 @@ test_that("R-10.6: NAMESPACE exports equal the CONTRACT-pinned public API exactl
     "db_meta_get", "db_meta_set", "db_meta_read",
     "read_snapshot_manifest", "verify_snapshot", "list_snapshots",
     # PLAN-21 phase (d): re-imports archived inputs missing from a snapshot.
-    "replay_archive"
+    "replay_archive",
+    # state_dir: the machine-state folder setting and the imports lock path.
+    "st_state_dir", "st_imports_lock_path"
   )
   actual <- getNamespaceExports("sampleTidy")
   expect_setequal(actual, pinned)

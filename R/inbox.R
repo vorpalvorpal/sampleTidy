@@ -18,9 +18,10 @@
 # Formats in the configured time zone (`.st_tz()`, read at call time).
 .inbox_local <- function(x, fmt) format(x, fmt, tz = .st_tz())
 
-.inbox_state_path <- function(report_dir) file.path(report_dir, ".imports.state")
-.inbox_log_path <- function(report_dir) file.path(report_dir, ".imports.log")
-.inbox_events_path <- function(report_dir) file.path(report_dir, "events.jsonl")
+.inbox_state_path <- function(report_dir) file.path(st_state_dir(report_dir), ".imports.state")
+.inbox_log_path <- function(report_dir) file.path(st_state_dir(report_dir), ".imports.log")
+.inbox_events_path <- function(report_dir) file.path(st_state_dir(report_dir), "events.jsonl")
+.inbox_status_json_path <- function(report_dir) file.path(st_state_dir(report_dir), "status.json")
 
 .inbox_db_stat <- function(db) {
   if (!file.exists(db)) return(list(db_size = NA_real_, db_mtime = NA_real_))
@@ -254,7 +255,7 @@ inbox_batches <- function(pattern = NULL, settle_minutes = 0, leftovers = NULL) 
 
 .inbox_read_con <- function(db) {
   if (!file.exists(db)) return(NULL)
-  tryCatch(DBI::dbConnect(duckdb::duckdb(), db, read_only = TRUE),
+  tryCatch(DBI::dbConnect(duckdb::duckdb(config = st_duckdb_config()), db, read_only = TRUE),
            error = function(e) NULL)
 }
 
@@ -687,7 +688,7 @@ inbox_batches <- function(pattern = NULL, settle_minutes = 0, leftovers = NULL) 
   cat(paste0(.inbox_log_json(res), "\n"), file = .inbox_events_path(report_dir), sep = "",
       append = TRUE)
 
-  sp <- file.path(report_dir, "status.json")
+  sp <- .inbox_status_json_path(report_dir)
   js <- if (file.exists(sp)) {
     tryCatch(jsonlite::read_json(sp, simplifyVector = FALSE), error = function(e) NULL)
   }
@@ -703,7 +704,7 @@ inbox_batches <- function(pattern = NULL, settle_minutes = 0, leftovers = NULL) 
 
 # TRUE when status.json carries a writer-check refusal.
 .inbox_status_refused <- function(report_dir) {
-  sp <- file.path(report_dir, "status.json")
+  sp <- .inbox_status_json_path(report_dir)
   if (!file.exists(sp)) return(FALSE)
   js <- tryCatch(jsonlite::read_json(sp, simplifyVector = FALSE), error = function(e) NULL)
   is.list(js) && !is.null(js$writer_check)
@@ -1217,12 +1218,13 @@ import_status <- function(db = st_config("live_db"), input_dir, report_dir,
   invisible(file.path(report_dir, "Import status.md"))
 }
 
-# The status json: status.json and the legacy .import-status.json, identical.
+# The status json: status.json (state dir) and .import-status.json (report dir, read by
+# the vault's daily note), identical.
 .inbox_write_status_json <- function(js, report_dir) {
-  for (f in c(".import-status.json", "status.json")) {
-    jsonlite::write_json(js, file.path(report_dir, f),
-                         auto_unbox = TRUE, pretty = TRUE, na = "null", null = "null",
-                         digits = NA)
+  dir.create(st_state_dir(report_dir), recursive = TRUE, showWarnings = FALSE)
+  for (f in c(file.path(report_dir, ".import-status.json"), .inbox_status_json_path(report_dir))) {
+    jsonlite::write_json(js, f, auto_unbox = TRUE, pretty = TRUE, na = "null",
+                         null = "null", digits = NA)
   }
   invisible(NULL)
 }

@@ -20,7 +20,7 @@
 # change there alone starts R (whose writer check then decides); unset, the hash is unchanged. A
 # listing failure there hashes a fixed line instead: it never exits 3 or notifies.
 # R-22.H (2026-10-25): an atomic mkdir lock, and a run-health record
-# ($REPORT/.imports.health) that drives retry-after-failure, one notification per
+# ($STATEDIR/.imports.health; SAMPLETIDY_STATE_DIR, default the report dir) that drives retry-after-failure, one notification per
 # failed run, a once-per-local-day (SAMPLETIDY_TIMEZONE) "no success for N hours" notification, and the
 # SAMPLETIDY_AUTOIMPORT_PREV_FAILURE text that appears in status.json problems.
 export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"   # a GUI or launchd PATH may lack Rscript
@@ -116,6 +116,11 @@ fi
 REPORT="${SAMPLETIDY_AUTOIMPORT_REPORT:-${SAMPLETIDY_REPORT_DIR:-}}"
 [ -n "$REPORT" ] || REPORT="$(renviron_get SAMPLETIDY_REPORT_DIR)"
 if [ -z "$REPORT" ] && [ -n "$DATA" ]; then REPORT="$DATA/reports"; fi
+# STATEDIR: where the machine-state files live (SAMPLETIDY_STATE_DIR, env then environ file);
+# unset or empty, the report dir, so nothing changes until it is set.
+STATEDIR="${SAMPLETIDY_STATE_DIR:-}"
+[ -n "$STATEDIR" ] || STATEDIR="$(renviron_get SAMPLETIDY_STATE_DIR)"
+[ -n "$STATEDIR" ] || STATEDIR="$REPORT"
 ZONE="${SAMPLETIDY_TIMEZONE:-}"
 [ -n "$ZONE" ] || ZONE="$(renviron_get SAMPLETIDY_TIMEZONE)"
 [ -n "$ZONE" ] || ZONE=UTC
@@ -130,7 +135,7 @@ LOG="$(cfg SAMPLETIDY_AUTOIMPORT_LOG)"
 [ -n "$LOG" ] || LOG="$HOME/Library/Logs/sampletidy-autoimport.log"
 local_day() { TZ="$ZONE" date +%F; }
 if [ "${1:-}" = --print-config ]; then
-  printf 'DB=%s\nINPUT=%s\nREPORT=%s\nTIMEZONE=%s\nLOG=%s\nNOTIFY=%s\nNOTIFY_FLUSH=%s\nWATCH=%s\n' "$DB" "$INPUT" "$REPORT" "$ZONE" "$LOG" "$NOTIFY" "$FLUSH" "$GWATCH"
+  printf 'DB=%s\nINPUT=%s\nREPORT=%s\nTIMEZONE=%s\nLOG=%s\nNOTIFY=%s\nNOTIFY_FLUSH=%s\nWATCH=%s\nSTATE=%s\n' "$DB" "$INPUT" "$REPORT" "$ZONE" "$LOG" "$NOTIFY" "$FLUSH" "$GWATCH" "$STATEDIR"
   exit 0
 fi
 
@@ -143,10 +148,10 @@ mkdir -p "$(dirname "$LOG")"
 logline() { echo "=== $(date '+%Y-%m-%d %H:%M:%S') $*" >>"$LOG"; }
 if [ ! -d "$INPUT" ]; then logline "input folder not found: $INPUT"; exit 0; fi
 RSCRIPT="${SAMPLETIDY_AUTOIMPORT_RSCRIPT:-Rscript}"
-STATE="$REPORT/.imports.state"; GATE="$REPORT/.imports.gate"
-LOCK="$REPORT/.imports.lock"; HEALTH="$REPORT/.imports.health"; NOTIFIED="$REPORT/.imports.notified"
+STATE="$STATEDIR/.imports.state"; GATE="$STATEDIR/.imports.gate"
+LOCK="$STATEDIR/.imports.lock"; HEALTH="$STATEDIR/.imports.health"; NOTIFIED="$STATEDIR/.imports.notified"
 STALE_HOURS="${SAMPLETIDY_AUTOIMPORT_STALE_HOURS:-24}"
-mkdir -p "$REPORT"
+mkdir -p "$REPORT" "$STATEDIR"
 
 notify() {   # notify <title> <message>
   if [ -n "$NOTIFY" ] && [ -x "$NOTIFY" ] && [ ! -d "$NOTIFY" ]; then
@@ -265,7 +270,7 @@ STARTED="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 write_health running $$ "$STARTED" "" "" "$p_succ"
 { echo "=== $(date '+%Y-%m-%d %H:%M:%S') auto-import start ($(git -C "$RUN" rev-parse --short HEAD 2>/dev/null || echo "$RUN"))"
   SAMPLETIDY_AUTOIMPORT_INPUT="$INPUT" SAMPLETIDY_AUTOIMPORT_DB="$DB" \
-  SAMPLETIDY_AUTOIMPORT_REPORT="$REPORT" "$RSCRIPT" "$RUN/dev/auto-import.R"; } >>"$LOG" 2>&1
+  SAMPLETIDY_AUTOIMPORT_REPORT="$REPORT" SAMPLETIDY_STATE_DIR="$STATEDIR" "$RSCRIPT" "$RUN/dev/auto-import.R"; } >>"$LOG" 2>&1
 rc=$?
 ENDED="$(date -u +%Y-%m-%dT%H:%M:%SZ)"; SUCC="$p_succ"; [ $rc -eq 0 ] && SUCC="$ENDED"
 write_health done $$ "$STARTED" "$ENDED" "$rc" "$SUCC"
@@ -275,7 +280,7 @@ if [ $rc -eq 0 ]; then
   # marker. Otherwise leave it stale so the next tick runs.
   if POST="$(snapshot)" && [ -z "$(find "$INPUT" -mindepth 1 -maxdepth 2 ! -name .DS_Store -cnewer "$LOCK/started" 2>/dev/null)" ] \
      && { [ -z "$GWATCH" ] || [ -z "$(find "$GWATCH" -mindepth 1 -maxdepth 2 ! -name .DS_Store -cnewer "$LOCK/started" 2>/dev/null)" ]; }; then
-    mkdir -p "$REPORT" && echo "$POST" >"$GATE.tmp.$$" && mv "$GATE.tmp.$$" "$GATE"
+    mkdir -p "$STATEDIR" && echo "$POST" >"$GATE.tmp.$$" && mv "$GATE.tmp.$$" "$GATE"
   else
     logline "input changed during the run; next tick will re-check"
   fi

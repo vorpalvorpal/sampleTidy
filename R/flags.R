@@ -1078,7 +1078,7 @@ import_flags <- function(db = st_config("live_db"), now = Sys.time(), checks) {
 # The previous status as a parsed list (status.json, else .import-status.json
 # when status.json does not exist), NULL when absent or not a JSON object.
 .flags_prev_status <- function(report_dir) {
-  p <- file.path(report_dir, "status.json")
+  p <- .inbox_status_json_path(report_dir)
   if (!file.exists(p)) p <- file.path(report_dir, ".import-status.json")
   js <- tryCatch(jsonlite::fromJSON(p, simplifyVector = FALSE), error = function(e) NULL)
   if (is.list(js) && !is.null(names(js))) js else NULL
