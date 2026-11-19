@@ -83,7 +83,8 @@ test_that("db_checks_params(): defaults, and named overrides", {
   expect_identical(p$feature_classes, .st_feature_classes)
   expect_null(p$bbox)
   expect_identical(p$tz, "Australia/Sydney")
-  expect_setequal(p$mask_variants, c("long", "old", "gas_report"))
+  # PLAN-23 (D17-75, D17-77): `old` leaves the core variants, `common` arrives.
+  expect_setequal(p$mask_variants, c("long", "gas_report", "common"))
   expect_length(p$min_date, 1L)
 
   b <- c(xmin = 150, ymin = -34, xmax = 151, ymax = -33)
@@ -140,7 +141,9 @@ for (cs in dbc_violation_cases) local({
     params <- do.call(db_checks_params, if (is.null(cs$params)) list() else cs$params)
     res <- dbc_with(db, function(con) {
       cs$seed(con)
-      db_checks(con, tier = "all", params = params)
+      # a case may name a narrower tier (PLAN-23: feature_sample_after_end,
+      # whose offender the on_demand sample_in_feature_window also reports)
+      db_checks(con, tier = if (is.null(cs$tier)) "all" else cs$tier, params = params)
     })
     dbc_expect_only(res, cs$check, cs$key, n = dbc_violation_n(cs))
   })
@@ -321,9 +324,10 @@ test_that("db_checks(params): tz sets the day sample.date and sample.datetime mu
 test_that("db_checks(params): mask_variants registers a deployment's own variant", {
   db <- dbc_db()
   dbc_with(db, function(con) {
-    DBI::dbExecute(con, "INSERT INTO feature_mask VALUES ('f-0002', 'epa', 'Licence point 1')")
+    DBI::dbExecute(con, "INSERT INTO feature_mask (uuid, uuid_feature, variant, name)
+                         VALUES ('fm-lic', 'f-0001', 'epa', 'Licence point 1')")
     expect_identical(dbc_row(db_checks(con), "vocab_mask_variant")$status, "fail")
-    p <- db_checks_params(mask_variants = c("long", "old", "gas_report", "epa"))
+    p <- db_checks_params(mask_variants = c("long", "gas_report", "common", "epa"))
     expect_identical(dbc_row(db_checks(con, params = p), "vocab_mask_variant")$status, "pass")
   })
 })

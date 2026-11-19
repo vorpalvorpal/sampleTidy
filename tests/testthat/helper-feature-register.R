@@ -75,8 +75,9 @@ t23_setup <- function(env = parent.frame()) {
 }
 
 #' A seed_db() twin on the PRE-117 shape (PLAN-23 section 3.8): `feature` is the
-#' 19-column table with `lon`/`lat` NOT NULL and `geom_wkt`, and there is no
-#' `feature_geometry`. Same feature rows as the seed (uuid, name, site, ...),
+#' 19-column table with `lon`/`lat` NOT NULL and `geom_wkt`, there is no
+#' `feature_geometry`, `feature_mask` is the undated 3-column table, and there
+#' are no `feature_predecessor` / `feature_flow`. Same feature rows as the seed (uuid, name, site, ...),
 #' every one at lon 150 / lat -33. Returns the path (closed). The caller's
 #' frame owns the temp dir (withr wrong-frame trap: see seed_db()).
 local_pre117_db <- function(dir = NULL, env = parent.frame()) {
@@ -95,7 +96,56 @@ local_pre117_db <- function(dir = NULL, env = parent.frame()) {
      date_end, cypher, elevation, uuid_project, 150.0, -33.0, NULL, comments, virtual
     FROM t23_keep_feature")
   DBI::dbExecute(con, "DROP TABLE t23_keep_feature")
+  # The 17/18 Nov revision: before 117 the mask is undated and keyless, and the
+  # two link tables do not exist.
+  DBI::dbExecute(con, "CREATE TEMP TABLE t23_keep_mask AS SELECT uuid_feature, variant, name FROM feature_mask")
+  DBI::dbExecute(con, "DROP TABLE feature_mask")
+  DBI::dbExecute(con, .st_test_core_ddl_pre117$feature_mask)
+  DBI::dbExecute(con, "INSERT INTO feature_mask SELECT * FROM t23_keep_mask")
+  DBI::dbExecute(con, "DROP TABLE t23_keep_mask")
+  DBI::dbExecute(con, "DROP TABLE feature_predecessor")
+  DBI::dbExecute(con, "DROP TABLE feature_flow")
   path
+}
+
+#' A fuller "nothing was written" fingerprint for the 17/18 Nov register
+#' functions: every register table whole (ordered), plus the change_log count.
+t23_reg_fingerprint <- function(con) {
+  q <- function(sql) DBI::dbGetQuery(con, sql)
+  list(
+    feature = q("SELECT * FROM feature ORDER BY uuid"),
+    alias = q("SELECT * FROM feature_alias ORDER BY uuid"),
+    mask = q("SELECT * FROM feature_mask ORDER BY uuid"),
+    predecessor = q("SELECT * FROM feature_predecessor ORDER BY uuid"),
+    flow = q("SELECT * FROM feature_flow ORDER BY uuid"),
+    log = q("SELECT count(*) AS n FROM change_log")$n
+  )
+}
+
+#' Assert that nothing in the register (or change_log) changed since `before`.
+t23_expect_unchanged <- function(con, before) {
+  now <- t23_reg_fingerprint(con)
+  for (k in names(before)) testthat::expect_identical(now[[k]], before[[k]], info = k)
+}
+
+#' change_log rows for one table (oldest first), optionally only for one
+#' `uuid_row`.
+t23_log_rows <- function(con, tbl, uuid_row = NULL) {
+  if (is.null(uuid_row)) {
+    DBI::dbGetQuery(con, "SELECT * FROM change_log WHERE tbl = ? ORDER BY \"at\", action, field",
+                    params = list(tbl))
+  } else {
+    DBI::dbGetQuery(con, "SELECT * FROM change_log WHERE tbl = ? AND uuid_row = ? ORDER BY \"at\", action, field",
+                    params = list(tbl, uuid_row))
+  }
+}
+
+#' Insert a sample (with no analyses) on an alias, dated `date` (midday
+#' Sydney: the stored datetime is 02:00 UTC that day).
+t23_sample <- function(con, uuid, alias, date, project = "p-0001") {
+  DBI::dbExecute(con, "INSERT INTO \"sample\" (uuid, uuid_feature_alias, uuid_project, date, datetime, organisation)
+                       VALUES (?, ?, ?, CAST(? AS TIMESTAMP), CAST(? AS TIMESTAMP), 'ALS')",
+                 params = list(uuid, alias, project, date, paste(date, "02:00:00")))
 }
 
 #' Column names of a table, in ordinal order.

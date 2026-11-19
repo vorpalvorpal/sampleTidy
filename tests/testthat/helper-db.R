@@ -114,12 +114,55 @@
     -- the same string may legitimately map to different features at
     -- different times. Identity is the alias's own uuid.
   ",
+  # PLAN-23 section 2.1 (17/18 Nov revision, D17-64): the DATED mask. A copy
+  # of `.st_core_ddl_feature_mask` EXCEPT for its foreign key to feature: the
+  # seed declares no FKs (helper-db-checks.R's `.dbc_add_fks()` adds this one,
+  # as for analysis/sample/lab_method), so tests that rebuild `feature` (the
+  # pre-117 twin) can drop it. test-feature-register-ddl.R pins that this copy
+  # and the constant agree on everything else.
   feature_mask = "
     CREATE TABLE feature_mask (
-      uuid_feature VARCHAR,
-      variant VARCHAR,
-      name VARCHAR
-    )",
+      uuid         VARCHAR PRIMARY KEY,
+      uuid_feature VARCHAR NOT NULL,
+      variant      VARCHAR NOT NULL,
+      name         VARCHAR,
+      date_start   DATE,
+      date_end     DATE,
+      comments     VARCHAR,
+      CHECK (date_start IS NULL OR date_end IS NULL OR date_end >= date_start)
+    );
+    CREATE INDEX idx_feature_mask_feature ON feature_mask(uuid_feature, variant);
+    CREATE INDEX idx_feature_mask_variant ON feature_mask(variant)",
+  # PLAN-23 section 2.6: the two link tables (no FK, by design), literal copies
+  # of `.st_core_ddl_feature_predecessor` / `.st_core_ddl_feature_flow`.
+  feature_predecessor = "
+    CREATE TABLE feature_predecessor (
+      uuid             VARCHAR PRIMARY KEY,
+      uuid_feature     VARCHAR NOT NULL,
+      uuid_predecessor VARCHAR NOT NULL,
+      date_break       DATE,
+      source           VARCHAR NOT NULL,
+      comments         VARCHAR,
+      CHECK (uuid_feature <> uuid_predecessor)
+    );
+    CREATE INDEX idx_feature_predecessor_feature ON feature_predecessor(uuid_feature);
+    CREATE INDEX idx_feature_predecessor_pred    ON feature_predecessor(uuid_predecessor)",
+  feature_flow = "
+    CREATE TABLE feature_flow (
+      uuid       VARCHAR PRIMARY KEY,
+      uuid_from  VARCHAR NOT NULL,
+      uuid_to    VARCHAR NOT NULL,
+      carries    VARCHAR,
+      drive      VARCHAR NOT NULL,
+      date_start DATE,
+      date_end   DATE,
+      source     VARCHAR NOT NULL,
+      comments   VARCHAR,
+      CHECK (uuid_from <> uuid_to),
+      CHECK (date_start IS NULL OR date_end IS NULL OR date_end >= date_start)
+    );
+    CREATE INDEX idx_feature_flow_from ON feature_flow(uuid_from);
+    CREATE INDEX idx_feature_flow_to   ON feature_flow(uuid_to)",
   analyte = "
     CREATE TABLE analyte (
       uuid VARCHAR PRIMARY KEY,
@@ -269,6 +312,13 @@
       geom_wkt VARCHAR,
       comments VARCHAR,
       virtual BOOLEAN DEFAULT FALSE
+    )",
+  # The pre-117 (undated, keyless) feature_mask: no uuid, no dates.
+  feature_mask = "
+    CREATE TABLE feature_mask (
+      uuid_feature VARCHAR,
+      variant VARCHAR,
+      name VARCHAR
     )"
 )
 
@@ -507,14 +557,39 @@ seed_db <- function(dir = NULL) {
     ('fa-0024', 'f-0013', 'Q.S01', 'q.s01', 'self', 0, TRUE,
      TIMESTAMP '2025-01-01 00:00:00', TIMESTAMP '2025-01-01 00:00:00', NULL)")
 
+  # PLAN-23 3.8 (2.5 rule 5): the common name T.SN01 MOVES between two features
+  # on a fixed date by dated rows - f-0002 (T.S02) holds it until 2024-12-31,
+  # f-0007 (T.S07) from 2025-01-01. Each holder has a historical_code alias arm
+  # of the same key whose window covers its mask row's (feature_common_alias),
+  # and the two arms are disjoint (alias_window_ambiguous).
+  DBI::dbExecute(con, "INSERT INTO feature_alias
+    (uuid, uuid_feature, name, alias_key, kind, n_seen, auto_assign, confirmed_by, date_start, date_end) VALUES
+    ('fa-0025', 'f-0002', 'T.SN01', 't.sn01', 'historical_code', 0, TRUE, NULL, NULL, DATE '2024-12-31'),
+    ('fa-0026', 'f-0007', 'T.SN01', 't.sn01', 'historical_code', 0, TRUE, NULL, DATE '2025-01-01', NULL)")
+
   # feature_mask (f-0001/long is an alias; f-0002/epa and f-0003/long both
   # resolve the string "AMBIG" - the deliberate ambiguity fixture). Untouched
   # by plan 11: R-11.4 stops joining feature_mask for candidate matching, but
   # the table and these rows stay for other plans' pre-existing tests.
-  DBI::dbExecute(con, "INSERT INTO feature_mask (uuid_feature, variant, name) VALUES
-    ('f-0001', 'long', 'Test Surface 01'),
-    ('f-0002', 'epa', 'AMBIG'),
-    ('f-0003', 'long', 'AMBIG')")
+  # PLAN-23 (D17-64): mask rows have their own uuid and a date window (NULL
+  # ends open); fm-0004/fm-0005 are the common-name move above.
+  DBI::dbExecute(con, "INSERT INTO feature_mask (uuid, uuid_feature, variant, name, date_start, date_end) VALUES
+    ('fm-0001', 'f-0001', 'long', 'Test Surface 01', NULL, NULL),
+    ('fm-0002', 'f-0002', 'epa', 'AMBIG', NULL, NULL),
+    ('fm-0003', 'f-0003', 'long', 'AMBIG', NULL, NULL),
+    ('fm-0004', 'f-0002', 'common', 'T.SN01', NULL, DATE '2024-12-31'),
+    ('fm-0005', 'f-0007', 'common', 'T.SN01', DATE '2025-01-01', NULL)")
+
+  # PLAN-23 2.6 / 3.8: one row in each link table. T.S07 (f-0007) continues the
+  # record of the ended T.S06 (f-0006, which has no samples) from 2020-07-01;
+  # water goes from T.S05 to T.S07 by gravity from 2024-01-01 (both ends have
+  # open windows, so feature_flow_dates has nothing to report).
+  DBI::dbExecute(con, "INSERT INTO feature_predecessor
+    (uuid, uuid_feature, uuid_predecessor, date_break, source, comments) VALUES
+    ('fp-0001', 'f-0007', 'f-0006', DATE '2020-07-01', 'fixture', NULL)")
+  DBI::dbExecute(con, "INSERT INTO feature_flow
+    (uuid, uuid_from, uuid_to, carries, drive, date_start, date_end, source, comments) VALUES
+    ('ff-0001', 'f-0005', 'f-0007', 'stormwater', 'gravity', DATE '2024-01-01', NULL, 'fixture', NULL)")
 
   # REVISED 2026-07-24 (PLAN-15 E.1): `feature_alias` gains `date_start DATE`
   # and `date_end DATE` (both NULLABLE, unbounded on NULL) in the CREATE

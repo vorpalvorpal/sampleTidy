@@ -408,6 +408,10 @@ test_that("R-10.6: NAMESPACE exports equal the CONTRACT-pinned public API exactl
     "add_feature_geometry", "supersede_feature_geometry",
     "withdraw_feature_geometry", "end_feature_geometry",
     "replace_feature_geometry",
+    # PLAN-23 17/18 Nov revision: ending a feature, dated masks, the predecessor
+    # and flow links, and the one label rule (PLAN-23 3.2, section 11).
+    "end_feature", "set_feature_mask", "add_feature_predecessor",
+    "add_feature_flow", "end_feature_flow", "feature_labels",
     # DuckDB memory cap, added 2026-11-17: the config every connection uses.
     "st_duckdb_config",
     # PLAN-15 curation API, added 2026-07-23. The pin is a deliberate gate on
