@@ -34,6 +34,41 @@
     pass `allow = "feature_first_sample"` to `mig_db_checks_gate()`.
   - The label matcher is unchanged.
 
+* The site feature register, 17/18 Nov revision (PLAN-23): ended features,
+  dated masks and common names, and links between features.
+  - `feature_mask` is dated: each row has its own `uuid`, a `date_start` /
+    `date_end` window (inclusive, NULL ends open) and `comments`. Variant `old`
+    is withdrawn (predecessors are links now) and `common` arrives (the code on
+    site signs and field sheets, also an alias arm). Two new link tables:
+    `feature_predecessor` (an earlier, different feature whose record a feature
+    continues) and `feature_flow` (water from one feature to another, by gravity
+    or pumped). As before, the package ships the DDL as internal constants for
+    the operator-run migration, plus `COMMENT ON` statements documenting every
+    register table and column; the mutation allowlist gains the link tables.
+  - New: `end_feature()` (ends a feature and its self alias arm together),
+    `set_feature_mask()` (a dated mask row; for `common` it also adds the alias
+    arm and refuses a name another feature holds), `add_feature_predecessor()`,
+    `add_feature_flow()`, `end_feature_flow()`, and `feature_labels()` (the one
+    label rule: common, systematic or long name on a date). Each refuses on a
+    database that migration 117 has not reached. `st_config("mask_variants_extra")`
+    registers a deployment's own mask variants for `set_feature_mask()`.
+  - `db_checks_core()` gains `feature_class_flow`, `feature_sample_after_end`,
+    `feature_self_arm_end`, `feature_mask_overlap`, `feature_common_unique`,
+    `feature_common_alias`, `orphan_feature_link`, `feature_predecessor_cycle`,
+    `feature_predecessor_dates`, `feature_flow_overlap`,
+    `vocab_feature_flow_link`, `feature_flow_dates` and (migration tier)
+    `register_comments_present`. `expected_constraints_present` expects the
+    primary keys of the dated mask and the link tables once they exist.
+    `db_checks_params()` gains `class_flow`; its `mask_variants` default is now
+    `long`, `gas_report`, `common`. `vocab_mask_variant` still accepts `old` on
+    `analyte_mask`, whose variants are unchanged.
+  - The feature class vocabulary gains `site`, `network`, `road`,
+    `sampling_point`, `watercourse`, `spillway`, `riser` and `ancillary`.
+  - The EPA licence-point readers behind the `missing_analytes` and
+    `holding_time` flags match a sample to an `EPA` mask row only when the
+    sample's date is in the row's window, so a moved point number stays with
+    the old feature for earlier samples.
+
 * Every DuckDB connection the package opens now caps memory (DuckDB's own
   default is 80% of RAM). The new exported `st_duckdb_config()` returns the
   `config` list; the limit comes from the option
