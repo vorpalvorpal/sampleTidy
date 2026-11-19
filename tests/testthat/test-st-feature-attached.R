@@ -63,7 +63,7 @@ test_that("R-23.30: with a pre-117 database attached, a register check still run
   r <- res[res$name == "feature_self_arm_end", , drop = FALSE]
   expect_identical(nrow(r), 1L)
   expect_identical(r$status, "fail")     # not a silent pass from the guard
-  expect_true("f-0006" %in% as.character(r$sample[[1]]$key))
+  expect_true("f-0006" %in% as.character(r$keys[[1]]))
 })
 
 test_that("R-23.30: with a pre-117 database attached, feature_sample_after_end still reports main's late sample", {
@@ -74,7 +74,7 @@ test_that("R-23.30: with a pre-117 database attached, feature_sample_after_end s
   r <- res[res$name == "feature_sample_after_end", , drop = FALSE]
   expect_identical(nrow(r), 1L)
   expect_identical(r$status, "fail")
-  expect_true("s-att-late" %in% as.character(r$sample[[1]]$key))
+  expect_true("s-att-late" %in% as.character(r$keys[[1]]))
 })
 
 # ---- the mask readers' window columns (R/feature-register.R) -------------------------------
@@ -108,5 +108,5 @@ test_that("R-23.20: main's feature_predecessor without its primary key is report
   res <- db_checks(con, tier = "migration")
   r <- res[res$name == "expected_constraints_present", , drop = FALSE]
   expect_identical(r$status, "fail")
-  expect_true("feature_predecessor.uuid PRIMARY KEY" %in% as.character(r$sample[[1]]$key))
+  expect_true("feature_predecessor.uuid PRIMARY KEY" %in% as.character(r$keys[[1]]))
 })
