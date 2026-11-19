@@ -22,7 +22,8 @@ run_one <- function(db, name, params = db_checks_params(), seed = NULL, tier = "
   })
 }
 
-sample_keys <- function(r) as.character(r$sample[[1]]$key)
+# every offending key (`keys`), not the first `sample_n` rows of `sample`
+sample_keys <- function(r) as.character(r$keys[[1]])
 
 # ---- the catalogue (R-23.30) -----------------------------------------------------------------
 
