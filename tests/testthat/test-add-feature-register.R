@@ -149,11 +149,11 @@ test_that("R-23.5: with feature_classes_extra unset (the normal case) add_featur
 # ---- R-23.6 -------------------------------------------------------------------------------
 
 test_that("R-23.6: .st_feature_name_key() is .rc_canonical_point() of the WHOLE trimmed name", {
-  x <- c("B.S01", "B.MW02A", "B.MW102", "  t.s1 ", "B.MW12", "TH.G001")
+  x <- c("T.S01", "T.MW02A", "T.MW102", "  t.s1 ", "T.MW12", "TH.G001")
   expect_identical(.st_feature_name_key(x), .rc_canonical_point(trimws(x)))
-  expect_identical(.st_feature_name_key(c("B.S01", "B.S1", "B.MW2A", "B.MW02A", "b.s01")),
-                   c("B.S1", "B.S1", "B.MW2A", "B.MW2A", "B.S1"))
-  expect_false(identical(.st_feature_name_key("B.MW102"), .st_feature_name_key("B.MW12")))
+  expect_identical(.st_feature_name_key(c("T.S01", "T.S1", "T.MW2A", "T.MW02A", "t.s01")),
+                   c("T.S1", "T.S1", "T.MW2A", "T.MW2A", "T.S1"))
+  expect_false(identical(.st_feature_name_key("T.MW102"), .st_feature_name_key("T.MW12")))
 })
 
 test_that("R-23.6: add_feature('T.S1') is refused when T.S01 exists (canonical clash); nothing written", {
