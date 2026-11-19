@@ -49,7 +49,24 @@ dbc_hourly_names <- c(
   # (it read feature.lon/lat, which no longer exist); these nine replace it.
   "feature_geometry_wkt_valid", "feature_geometry_in_bbox", "feature_location_unique",
   "feature_name_canonical_clash", "feature_first_sample", "orphan_feature_geometry",
-  "feature_geometry_history", "vocab_feature_geometry", "vocab_feature_class"
+  "feature_geometry_history", "vocab_feature_geometry", "vocab_feature_class",
+  # PLAN-23 17/18 Nov revision (R-23.24, R-23.30): ended features, class/flow,
+  # dated masks and common names, the predecessor and flow links. NB the flow
+  # link vocabulary check is `vocab_feature_flow_link`: 3.5 calls it
+  # `vocab_feature_flow`, but that name is already the feature.flow check.
+  "feature_class_flow", "feature_sample_after_end", "feature_self_arm_end",
+  "feature_mask_overlap", "feature_common_unique", "feature_common_alias",
+  "orphan_feature_link", "feature_predecessor_cycle", "feature_predecessor_dates",
+  "feature_flow_overlap", "vocab_feature_flow_link", "feature_flow_dates"
+)
+# The register checks of PLAN-23 3.5 added on 17/18 Nov (hourly ones, then the
+# one migration-tier check).
+dbc_register_1117_names <- c(
+  "feature_class_flow", "feature_sample_after_end", "feature_self_arm_end",
+  "feature_mask_overlap", "feature_common_unique", "feature_common_alias",
+  "orphan_feature_link", "feature_predecessor_cycle", "feature_predecessor_dates",
+  "feature_flow_overlap", "vocab_feature_flow_link", "feature_flow_dates",
+  "register_comments_present"
 )
 # The checks PLAN-23 retires from the core (they read the dropped lon/lat/geom_wkt).
 dbc_retired_names <- c("feature_coords", "feature_geom_matches_lonlat")
@@ -57,7 +74,9 @@ dbc_migration_only_names <- c(
   "measurement_view_coverage", "measurement_view_no_fanout",
   "measurement_rank1_unique", "expected_constraints_present",
   "schema_version_no_duplicates", "schema_version_core_contiguous",
-  "fraction_matches_code"
+  "fraction_matches_code",
+  # PLAN-23 3.5: a register table lost its table comment.
+  "register_comments_present"
 )
 dbc_on_demand_names <- c(
   "review_resolved_dangling", "change_log_dangling_source_hash",
@@ -73,7 +92,10 @@ dbc_warn_names <- c(
   "sample_in_feature_window",
   "lab_receipt_warm", "ingest_file_needs_review_resolved",
   # PLAN-23: the two warn-severity register checks.
-  "feature_first_sample", "vocab_feature_class"
+  "feature_first_sample", "vocab_feature_class",
+  # PLAN-23 17/18 Nov: the warn-severity ones.
+  "feature_class_flow", "feature_self_arm_end", "feature_common_alias",
+  "feature_predecessor_dates", "feature_flow_dates", "register_comments_present"
 )
 
 dbc_result_cols <- c("name", "tier", "severity", "status", "n", "ms", "sample", "message")
@@ -192,7 +214,8 @@ dbc_set_v_measurement <- function(con, ...) {
     DBI::dbExecute(con, sprintf("CREATE TEMP TABLE dbc_keep_%s AS SELECT * FROM \"%s\"", t, t))
   }
   for (t in tabs) DBI::dbExecute(con, sprintf("DROP TABLE \"%s\"", t))
-  fm <- .dbc_sub1(ddl$feature_mask, "uuid_feature VARCHAR,", "uuid_feature VARCHAR REFERENCES feature(uuid),")
+  fm <- .dbc_sub1(ddl$feature_mask, "uuid_feature VARCHAR NOT NULL,",
+                  "uuid_feature VARCHAR NOT NULL REFERENCES feature(uuid),")
   lm <- .dbc_sub1(ddl$lab_method, "uuid_analyte VARCHAR,", "uuid_analyte VARCHAR REFERENCES analyte(uuid),")
   sm <- .dbc_sub1(ddl$sample, "uuid_feature_alias VARCHAR NOT NULL,",
                   "uuid_feature_alias VARCHAR NOT NULL REFERENCES feature_alias(uuid),")
@@ -248,8 +271,12 @@ dbc_srn_report <- function(con, uuid, uuid_asset, work_order, temp_max, days_ago
   dbc_exec(con, "UPDATE feature_alias SET date_start = DATE '2020-07-01' WHERE uuid = 'fa-0008'")
   # vocab_feature_flow: 'surface' is not a flow (groundwater/still/seep/flowing).
   dbc_exec(con, "UPDATE feature SET flow = 'flowing' WHERE flow = 'surface'")
-  # vocab_mask_variant: 'epa' is a deployment variant, not a core one.
-  dbc_exec(con, "UPDATE feature_mask SET variant = 'old' WHERE variant = 'epa'")
+  # vocab_mask_variant: 'epa' is a deployment variant, not a core one (and
+  # PLAN-23 withdraws 'old' from the core: long, gas_report, common).
+  dbc_exec(con, "UPDATE feature_mask SET variant = 'gas_report' WHERE variant = 'epa'")
+  # feature_self_arm_end (PLAN-23 2.5 rule 8): an ended feature's self arm
+  # ends with it - T.S06 (f-0006) ended 2020-06-30.
+  dbc_exec(con, "UPDATE feature_alias SET date_end = DATE '2020-06-30' WHERE uuid = 'fa-0013'")
 
   # alias_pending_consistent: each pending alias has an open review item.
   # orphan_review_open_refs: it points at rows that exist.
@@ -332,6 +359,12 @@ dbc_srn_report <- function(con, uuid, uuid_asset, work_order, temp_max, days_ago
   # PLAN-23 section 3.7: the db-checks fixture creates v_feature_location (the
   # reference SQL, helper-feature-register.R) so view_nonempty sees it.
   DBI::dbExecute(con, .t23_view_feature_location_sql)
+  # PLAN-23 2.6 / 3.8: the register tables' DuckDB comments, so
+  # register_comments_present passes. Read from the package constant (the one
+  # source); before it exists the check does not exist either.
+  if (exists(".st_core_comments", envir = asNamespace("sampleTidy"), inherits = FALSE)) {
+    for (stmt in get(".st_core_comments", envir = asNamespace("sampleTidy"))) DBI::dbExecute(con, stmt)
+  }
   DBI::dbExecute(con, "
     CREATE VIEW v_feature_dates AS
     SELECT f.uuid AS uuid_feature, f.name, min(s.date) AS first_date, max(s.date) AS last_date
@@ -606,7 +639,8 @@ dbc_violation_cases <- list(
        seed = function(con) DBI::dbExecute(con, "INSERT INTO review_queue (uuid, created_at, kind, status, resolution)
                                                  VALUES ('rq-rs', TIMESTAMP '2025-06-01 00:00:00', 'parse_error', 'resolved', 'ignored')")),
   list(check = "vocab_mask_variant", key = "nickname", label = "unregistered mask variant",
-       seed = function(con) DBI::dbExecute(con, "INSERT INTO feature_mask VALUES ('f-0002', 'nickname', 'Second creek')")),
+       seed = function(con) DBI::dbExecute(con, "INSERT INTO feature_mask (uuid, uuid_feature, variant, name)
+                                                 VALUES ('fm-nick', 'f-0002', 'nickname', 'Second creek')")),
   list(check = "vocab_feature_flow", key = "f-0002", label = "feature.flow outside the vocabulary",
        seed = function(con) DBI::dbExecute(con, "UPDATE feature SET flow = 'river' WHERE uuid = 'f-0002'")),
   list(check = "analysis_value_shape", key = "an-shape", label = "analysis with neither value nor value_chr",
@@ -625,9 +659,14 @@ dbc_violation_cases <- list(
        seed = function(con) dbc_new_sample(con, "s-future", date = format(Sys.Date() + 30), datetime = NA)),
   list(check = "sample_date_datetime_agree", key = "s-skew", label = "sample date and datetime on different days",
        seed = function(con) dbc_new_sample(con, "s-skew", date = "2025-06-01", datetime = "2025-06-05 02:00:00")),
-  list(check = "sample_in_feature_window", key = "s-late", label = "a sample after its feature's date_end",
-       seed = function(con) dbc_new_sample(con, "s-late", alias = "fa-0013", date = "2025-01-01",
-                                           datetime = "2024-12-31 23:00:00")),
+  # PLAN-23: a sample AFTER its feature's date_end now also fails the hourly
+  # feature_sample_after_end (that case is below), so this one seeds the other
+  # half of the window: a sample BEFORE its feature's date_start.
+  list(check = "sample_in_feature_window", key = "s-early", label = "a sample before its feature's date_start",
+       seed = function(con) {
+         DBI::dbExecute(con, "UPDATE feature SET date_start = DATE '2025-07-01' WHERE uuid = 'f-0002'")
+         dbc_new_sample(con, "s-early", alias = "fa-0002", date = "2025-06-01", datetime = "2025-05-31 23:00:00")
+       }),
   list(check = "date_windows_ordered", key = "p-0003", label = "a transposed project window",
        seed = function(con) DBI::dbExecute(con, "UPDATE project SET date_start = TIMESTAMP '2025-02-01 00:00:00',
                                                  date_end = TIMESTAMP '2025-01-01 00:00:00' WHERE uuid = 'p-0003'")),
@@ -705,9 +744,12 @@ dbc_violation_cases <- list(
        seed = function(con) {
          DBI::dbExecute(con, "CREATE TEMP TABLE dbc_fm AS SELECT * FROM feature_mask")
          DBI::dbExecute(con, "DROP TABLE feature_mask")
-         DBI::dbExecute(con, "CREATE TABLE feature_mask (uuid_feature VARCHAR NOT NULL, variant VARCHAR NOT NULL,
-                                                         name VARCHAR, PRIMARY KEY (uuid_feature, variant))")
+         # the dated shape (PLAN-23 2.1) with its primary key, minus the FK
+         DBI::dbExecute(con, "CREATE TABLE feature_mask (uuid VARCHAR PRIMARY KEY, uuid_feature VARCHAR NOT NULL,
+                                                         variant VARCHAR NOT NULL, name VARCHAR, date_start DATE,
+                                                         date_end DATE, comments VARCHAR)")
          DBI::dbExecute(con, "INSERT INTO feature_mask SELECT * FROM dbc_fm")
+         DBI::dbExecute(con, "COMMENT ON TABLE feature_mask IS 'rebuilt'")
        }),
   # R-23.20: feature_geometry rebuilt without its PRIMARY KEY (uuid kept UNIQUE
   # so the self foreign key still binds and ONLY the primary key is missing).
@@ -725,9 +767,107 @@ dbc_violation_cases <- list(
          DBI::dbExecute(con, "INSERT INTO feature_geometry SELECT * FROM dbc_fg WHERE supersedes IS NULL")
          DBI::dbExecute(con, "INSERT INTO feature_geometry SELECT * FROM dbc_fg WHERE supersedes IS NOT NULL")
          DBI::dbExecute(con, .t23_view_feature_location_sql)
+         # a rebuild drops the table comment; restore one so only the key is missing
+         DBI::dbExecute(con, "COMMENT ON TABLE feature_geometry IS 'rebuilt'")
+       }),
+  # ---- PLAN-23 17/18 Nov revision (R-23.24, R-23.30): one seeded violation per new check ----
+  # Keys: the feature uuid (feature_class_flow, feature_self_arm_end), the
+  # sample uuid (feature_sample_after_end), the mask uuid (mask and common-name
+  # checks), the link uuid (predecessor and flow checks), the table name
+  # (register_comments_present). A PAIR check (two overlapping rows) reports
+  # the pair once, keyed by the lesser uuid, as alias_window_ambiguous does;
+  # every seeded pair below makes the SEEDED row the lesser uuid.
+  list(check = "feature_class_flow", key = "f-0003",
+       label = "a bore whose flow is 'still'",
+       seed = function(con) DBI::dbExecute(con, "UPDATE feature SET flow = 'still' WHERE uuid = 'f-0003'")),
+  # tier = "hourly": the on_demand sample_in_feature_window also (rightly)
+  # reports a sample after its feature's end.
+  list(check = "feature_sample_after_end", key = "s-late", tier = "hourly",
+       label = "a sample dated after its feature's end, reached through a historical_code arm",
+       seed = function(con) dbc_new_sample(con, "s-late", alias = "fa-0007", date = "2025-01-01",
+                                           datetime = "2024-12-31 23:00:00")),
+  list(check = "feature_self_arm_end", key = "f-0006",
+       label = "an ended feature whose self arm is still open",
+       seed = function(con) DBI::dbExecute(con, "UPDATE feature_alias SET date_end = NULL WHERE uuid = 'fa-0013'")),
+  list(check = "feature_mask_overlap", key = "fm-0000-ov",
+       label = "a second open long-name row on one feature",
+       seed = function(con) DBI::dbExecute(con, "INSERT INTO feature_mask (uuid, uuid_feature, variant, name)
+                                                 VALUES ('fm-0000-ov', 'f-0001', 'long', 'Test surface one')")),
+  list(check = "feature_common_unique", key = "fm-cu",
+       label = "a common name equal to another feature's systematic name (with its alias arm)",
+       seed = function(con) {
+         DBI::dbExecute(con, "INSERT INTO feature_mask (uuid, uuid_feature, variant, name)
+                              VALUES ('fm-cu', 'f-0005', 'common', 'T.S02')")
+         dbc_alias(con, "fa-cu", "f-0005", "T.S02", "t.s02", "historical_code")
+       }),
+  list(check = "feature_common_alias", key = "fm-ca",
+       label = "a common name with no alias arm of the same key",
+       seed = function(con) DBI::dbExecute(con, "INSERT INTO feature_mask (uuid, uuid_feature, variant, name)
+                                                 VALUES ('fm-ca', 'f-0005', 'common', 'T.C99')")),
+  list(check = "orphan_feature_link", key = "fp-orph",
+       label = "a predecessor link naming a missing feature",
+       seed = function(con) DBI::dbExecute(con, "INSERT INTO feature_predecessor (uuid, uuid_feature, uuid_predecessor, source)
+                                                 VALUES ('fp-orph', 'f-0001', 'f-gone', 'fixture')")),
+  list(check = "orphan_feature_link", key = "ff-orph",
+       label = "a flow link naming a missing feature",
+       seed = function(con) DBI::dbExecute(con, "INSERT INTO feature_flow (uuid, uuid_from, uuid_to, drive, source)
+                                                 VALUES ('ff-orph', 'f-gone', 'f-0001', 'gravity', 'fixture')")),
+  # a two-row loop puts BOTH rows on it: n == 2 (dbc_violation_n).
+  list(check = "feature_predecessor_cycle", key = "fp-cyc",
+       label = "a predecessor link that closes a loop (T.S06 <- T.S07 <- T.S06)",
+       seed = function(con) DBI::dbExecute(con, "INSERT INTO feature_predecessor (uuid, uuid_feature, uuid_predecessor, source)
+                                                 VALUES ('fp-cyc', 'f-0006', 'f-0007', 'fixture')")),
+  list(check = "feature_predecessor_dates", key = "fp-pd",
+       label = "a date_break on or before a day the predecessor still has samples after",
+       seed = function(con) DBI::dbExecute(con, "INSERT INTO feature_predecessor (uuid, uuid_feature, uuid_predecessor, date_break, source)
+                                                 VALUES ('fp-pd', 'f-0002', 'f-0001', DATE '2025-05-01', 'fixture')")),
+  list(check = "feature_flow_overlap", key = "ff-0000-ov",
+       label = "a second flow link on the same pair whose window overlaps the first",
+       seed = function(con) DBI::dbExecute(con, "INSERT INTO feature_flow (uuid, uuid_from, uuid_to, drive, date_start, source)
+                                                 VALUES ('ff-0000-ov', 'f-0005', 'f-0007', 'pumped', DATE '2025-01-01', 'fixture')")),
+  list(check = "vocab_feature_flow_link", key = "ff-dr",
+       label = "a flow link whose drive is not gravity or pumped",
+       seed = function(con) DBI::dbExecute(con, "INSERT INTO feature_flow (uuid, uuid_from, uuid_to, drive, source)
+                                                 VALUES ('ff-dr', 'f-0001', 'f-0002', 'siphon', 'fixture')")),
+  list(check = "vocab_feature_flow_link", key = "ff-src",
+       label = "a flow link with a blank source",
+       seed = function(con) DBI::dbExecute(con, "INSERT INTO feature_flow (uuid, uuid_from, uuid_to, drive, source)
+                                                 VALUES ('ff-src', 'f-0001', 'f-0002', 'gravity', '   ')")),
+  list(check = "feature_flow_dates", key = "ff-fd",
+       label = "a flow link that runs past an end's date_end",
+       seed = function(con) DBI::dbExecute(con, "INSERT INTO feature_flow (uuid, uuid_from, uuid_to, drive, date_start, source)
+                                                 VALUES ('ff-fd', 'f-0001', 'f-0006', 'gravity', DATE '2019-01-01', 'fixture')")),
+  list(check = "register_comments_present", key = "feature_flow",
+       label = "a register table that lost its table comment",
+       seed = function(con) DBI::dbExecute(con, "COMMENT ON TABLE feature_flow IS NULL")),
+  # R-23.20 (3.5): the dated mask's, and the link tables', primary keys.
+  list(check = "expected_constraints_present", key = "feature_mask.uuid PRIMARY KEY",
+       label = "feature_mask rebuilt without its primary key",
+       seed = function(con) {
+         DBI::dbExecute(con, "CREATE TEMP TABLE dbc_fm AS SELECT * FROM feature_mask")
+         DBI::dbExecute(con, "DROP TABLE feature_mask")
+         DBI::dbExecute(con, "CREATE TABLE feature_mask (uuid VARCHAR, uuid_feature VARCHAR NOT NULL REFERENCES feature(uuid),
+                                                         variant VARCHAR NOT NULL, name VARCHAR, date_start DATE,
+                                                         date_end DATE, comments VARCHAR)")
+         DBI::dbExecute(con, "INSERT INTO feature_mask SELECT * FROM dbc_fm")
+         DBI::dbExecute(con, "COMMENT ON TABLE feature_mask IS 'rebuilt'")
+       }),
+  list(check = "expected_constraints_present", key = "feature_flow.uuid PRIMARY KEY",
+       label = "feature_flow rebuilt without its primary key",
+       seed = function(con) {
+         DBI::dbExecute(con, "CREATE TEMP TABLE dbc_ff AS SELECT * FROM feature_flow")
+         DBI::dbExecute(con, "DROP TABLE feature_flow")
+         DBI::dbExecute(con, "CREATE TABLE feature_flow (uuid VARCHAR, uuid_from VARCHAR NOT NULL, uuid_to VARCHAR NOT NULL,
+                                                         carries VARCHAR, drive VARCHAR NOT NULL, date_start DATE,
+                                                         date_end DATE, source VARCHAR NOT NULL, comments VARCHAR)")
+         DBI::dbExecute(con, "INSERT INTO feature_flow SELECT * FROM dbc_ff")
+         DBI::dbExecute(con, "COMMENT ON TABLE feature_flow IS 'rebuilt'")
        })
 )
 
 # The n a case expects when it is not 1: the canonical-clash check reports BOTH
-# features that share a name (PLAN-23 3.5: "every feature whose key is shared").
-dbc_violation_n <- function(cs) if (identical(cs$check, "feature_name_canonical_clash")) 2L else 1L
+# features that share a name (PLAN-23 3.5: "every feature whose key is shared"),
+# and a two-row predecessor loop has both rows on it.
+dbc_violation_n <- function(cs) {
+  if (cs$check %in% c("feature_name_canonical_clash", "feature_predecessor_cycle")) 2L else 1L
+}

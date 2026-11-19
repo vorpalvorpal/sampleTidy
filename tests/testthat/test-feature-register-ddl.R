@@ -1,6 +1,7 @@
 # PLAN-23 (the site feature register), sampleTidy part: the DDL constants, the
 # write allowlist, and the pre-117 guard.
-#   R-23.1  .st_core_ddl_feature / _feature_mask / _feature_geometry
+#   R-23.1  .st_core_ddl_feature / _feature_geometry
+#   R-23.25 .st_core_ddl_feature_mask (dated; rewritten 19 Nov, see test-st-feature-ddl.R)
 #   R-23.2  "feature_geometry" on .st_mutate_allowlist; db_append() logs it
 #   R-23.7  .st_has_feature_register() (the guard every later test leans on)
 # plus the vocabulary constants of PLAN-23 3.1 / 2.4.
@@ -88,25 +89,35 @@ test_that("R-23.1: feature.name and feature.site are NOT NULL, class is nullable
   expect_no_error(DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, class) VALUES ('f4', 'X.C', 'X', 'anything')"))
 })
 
-test_that("R-23.1: .st_core_ddl_feature_mask recreates feature_mask as live has it: PK (uuid_feature, variant), FK to feature, variant index", {
+# REWRITTEN for the 17/18 Nov revision (D17-64): this test used to pin the
+# undated live mask (3 columns, PK (uuid_feature, variant)). The mask is now
+# DATED with its own uuid; the full R-23.25 pins are in test-st-feature-ddl.R.
+test_that("R-23.25: .st_core_ddl_feature_mask creates the DATED mask: uuid PK, FK to feature, both indexes; (feature, variant) is no longer a key", {
   con <- DBI::dbConnect(duckdb::duckdb())
   withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
   DBI::dbExecute(con, .st_core_ddl_feature)
   DBI::dbExecute(con, .st_core_ddl_feature_mask)
-  expect_identical(t23_cols(con, "feature_mask"), c("uuid_feature", "variant", "name"))
+  expect_identical(t23_cols(con, "feature_mask"),
+                   c("uuid", "uuid_feature", "variant", "name", "date_start", "date_end", "comments"))
   k <- DBI::dbGetQuery(con, "SELECT constraint_type, constraint_column_names FROM duckdb_constraints()
                              WHERE table_name = 'feature_mask'")
-  expect_true("PRIMARY KEY" %in% k$constraint_type)
-  pk <- k$constraint_column_names[k$constraint_type == "PRIMARY KEY"][[1]]
-  expect_setequal(unlist(pk), c("uuid_feature", "variant"))
+  pk <- k$constraint_column_names[k$constraint_type == "PRIMARY KEY"]
+  expect_length(pk, 1L)
+  expect_identical(unlist(pk), "uuid")
   expect_true("FOREIGN KEY" %in% k$constraint_type)
   idx <- DBI::dbGetQuery(con, "SELECT index_name FROM duckdb_indexes() WHERE table_name = 'feature_mask'")$index_name
-  expect_true("idx_feature_mask_variant" %in% idx)
+  expect_true(all(c("idx_feature_mask_feature", "idx_feature_mask_variant") %in% idx))
   # FK enforced
-  expect_error(DBI::dbExecute(con, "INSERT INTO feature_mask VALUES ('no-such', 'long', 'x')"))
+  expect_error(DBI::dbExecute(con, "INSERT INTO feature_mask (uuid, uuid_feature, variant, name)
+                                    VALUES ('m0', 'no-such', 'long', 'x')"))
   DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site) VALUES ('f1', 'X.A', 'X')")
-  DBI::dbExecute(con, "INSERT INTO feature_mask VALUES ('f1', 'long', 'x')")
-  expect_error(DBI::dbExecute(con, "INSERT INTO feature_mask VALUES ('f1', 'long', 'again')"))  # PK
+  DBI::dbExecute(con, "INSERT INTO feature_mask (uuid, uuid_feature, variant, name, date_end)
+                       VALUES ('m1', 'f1', 'common', 'X.OLD', DATE '2024-12-31')")
+  # a second row of the same variant on the same feature is allowed (a dated move)
+  expect_no_error(DBI::dbExecute(con, "INSERT INTO feature_mask (uuid, uuid_feature, variant, name, date_start)
+                                       VALUES ('m2', 'f1', 'common', 'X.NEW', DATE '2025-01-01')"))
+  expect_error(DBI::dbExecute(con, "INSERT INTO feature_mask (uuid, uuid_feature, variant, name)
+                                    VALUES ('m1', 'f1', 'long', 'dup uuid')"))  # PK
 })
 
 # ---- R-23.1: DDL of feature_geometry -------------------------------------------------
@@ -194,14 +205,27 @@ test_that("R-23.1: feature_geometry's two CHECKs refuse date_end < date_start an
 test_that("R-23.1: the helper fixture DDL (helper-db.R, a literal copy) and the package constants describe the same tables", {
   a <- DBI::dbConnect(duckdb::duckdb()); b <- DBI::dbConnect(duckdb::duckdb())
   withr::defer(DBI::dbDisconnect(a, shutdown = TRUE)); withr::defer(DBI::dbDisconnect(b, shutdown = TRUE))
-  DBI::dbExecute(a, .st_core_ddl_feature);  DBI::dbExecute(a, .st_core_ddl_feature_geometry)
-  DBI::dbExecute(b, .st_test_core_ddl$feature); DBI::dbExecute(b, .st_test_core_ddl$feature_geometry)
-  for (t in c("feature", "feature_geometry")) {
+  # PLAN-23 17/18 Nov: the dated mask and the two link tables too. The seed's
+  # mask copy deliberately omits the FK to feature (helper-db.R), so FOREIGN
+  # KEY rows are compared separately below.
+  tabs <- c("feature", "feature_geometry", "feature_mask", "feature_predecessor", "feature_flow")
+  for (k in c("feature", "feature_geometry", "feature_mask", "feature_predecessor", "feature_flow")) {
+    DBI::dbExecute(a, get(paste0(".st_core_ddl_", k)))
+    DBI::dbExecute(b, .st_test_core_ddl[[k]])
+  }
+  for (t in tabs) {
     expect_identical(t23_coltypes(a, t), t23_coltypes(b, t), info = t)
   }
-  # the constraints agree too
+  ia <- DBI::dbGetQuery(a, "SELECT table_name, index_name FROM duckdb_indexes() ORDER BY 1, 2")
+  ib <- DBI::dbGetQuery(b, "SELECT table_name, index_name FROM duckdb_indexes() ORDER BY 1, 2")
+  expect_identical(ia, ib)
+  fk <- DBI::dbGetQuery(a, "SELECT table_name FROM duckdb_constraints() WHERE constraint_type = 'FOREIGN KEY'
+                            AND table_name = 'feature_mask'")
+  expect_equal(nrow(fk), 1L)
+  # the constraints agree too (bar that one FK)
   kq <- "SELECT table_name, constraint_type, list_sort(constraint_column_names) AS cols
-         FROM duckdb_constraints() ORDER BY 1, 2, 3"
+         FROM duckdb_constraints()
+         WHERE NOT (table_name = 'feature_mask' AND constraint_type = 'FOREIGN KEY') ORDER BY 1, 2, 3"
   ka <- DBI::dbGetQuery(a, kq); kb <- DBI::dbGetQuery(b, kq)
   expect_identical(vapply(ka$cols, paste, "", collapse = ","), vapply(kb$cols, paste, "", collapse = ","))
   expect_identical(ka$constraint_type, kb$constraint_type)

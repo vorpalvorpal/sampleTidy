@@ -153,15 +153,17 @@ test_that("PLAN-14 R-14.1/A32: db_update()/db_delete() abort when a composite `k
   con <- seed_con(path)
   withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
-  # `feature_mask` (already on `.st_mutate_allowlist`) has no `uuid` column
-  # and no uniqueness constraint on (uuid_feature, variant) - so two rows can
-  # legitimately share a key value. The table is already part of
+  # `feature_mask` (already on `.st_mutate_allowlist`) has no uniqueness
+  # constraint on (uuid_feature, variant) - so two rows can legitimately share
+  # a key value (PLAN-23: the mask is DATED, so a feature has several rows of
+  # one variant; each row now has its own `uuid`, but the composite `key =`
+  # path stays for back-compat, PLAN-23 3.1). The table is already part of
   # helper-db.R's shared seed schema (seeded with f-0001/f-0002/f-0003), so
   # only the two extra F1/long rows for this test are inserted here - 'F1'
   # does not collide with the seeded uuid_feature values.
-  DBI::dbExecute(con, "INSERT INTO feature_mask (uuid_feature, variant, name) VALUES
-    ('F1', 'long', 'Bore Twelve'),
-    ('F1', 'long', 'Borehole 12')")
+  DBI::dbExecute(con, "INSERT INTO feature_mask (uuid, uuid_feature, variant, name) VALUES
+    ('fm-t1', 'F1', 'long', 'Bore Twelve'),
+    ('fm-t2', 'F1', 'long', 'Borehole 12')")
 
   before <- count_change_log(con)
 

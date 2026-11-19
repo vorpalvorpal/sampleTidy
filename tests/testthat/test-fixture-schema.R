@@ -39,6 +39,21 @@ fs_live_cols <- list(
     recorded = "TIMESTAMP", supersedes = "VARCHAR", superseded = "TIMESTAMP",
     comments = "VARCHAR"
   ),
+  # PLAN-23 17/18 Nov (D17-64, D17-75, D17-81): the dated mask and the two
+  # link tables, as 2.1 and 2.6 define them (post-117).
+  feature_mask = c(
+    uuid = "VARCHAR", uuid_feature = "VARCHAR", variant = "VARCHAR", name = "VARCHAR",
+    date_start = "DATE", date_end = "DATE", comments = "VARCHAR"
+  ),
+  feature_predecessor = c(
+    uuid = "VARCHAR", uuid_feature = "VARCHAR", uuid_predecessor = "VARCHAR",
+    date_break = "DATE", source = "VARCHAR", comments = "VARCHAR"
+  ),
+  feature_flow = c(
+    uuid = "VARCHAR", uuid_from = "VARCHAR", uuid_to = "VARCHAR", carries = "VARCHAR",
+    drive = "VARCHAR", date_start = "DATE", date_end = "DATE", source = "VARCHAR",
+    comments = "VARCHAR"
+  ),
   feature_alias = c(
     uuid = "VARCHAR", uuid_feature = "VARCHAR", name = "VARCHAR",
     alias_key = "VARCHAR", kind = "VARCHAR", n_seen = "INTEGER",
@@ -137,6 +152,33 @@ test_that("R-23.1 fixture: the pre-117 twin keeps the 19-column shape (lon/lat N
   on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
   expect_false(DBI::dbExistsTable(con, "feature_geometry"))
   expect_gt(DBI::dbGetQuery(con, "SELECT count(*) AS n FROM feature")$n, 0)
+  # 17/18 Nov: before 117 the mask is undated and keyless, and there are no link tables
+  expect_identical(fs_seed_cols(db, "feature_mask")$column_name, c("uuid_feature", "variant", "name"))
+  expect_gt(DBI::dbGetQuery(con, "SELECT count(*) AS n FROM feature_mask")$n, 0)
+  expect_false(DBI::dbExistsTable(con, "feature_predecessor"))
+  expect_false(DBI::dbExistsTable(con, "feature_flow"))
+})
+
+test_that("R-23.29 fixture: the seed's masks have uuids; the common name T.SN01 moves from T.S02 to T.S07 on 2025-01-01, each with a covering alias arm; one predecessor and one flow row", {
+  db <- seed_db(dir = withr::local_tempdir())
+  con <- DBI::dbConnect(duckdb::duckdb(), db, read_only = TRUE)
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
+  m <- DBI::dbGetQuery(con, "SELECT m.*, f.name AS feature FROM feature_mask m JOIN feature f ON f.uuid = m.uuid_feature")
+  expect_false(anyNA(m$uuid))
+  expect_false(anyDuplicated(m$uuid) > 0)
+  cm <- m[m$variant == "common", ]
+  cm <- cm[order(cm$feature), ]
+  expect_identical(cm$feature, c("T.S02", "T.S07"))
+  expect_true(all(cm$name == "T.SN01"))
+  expect_equal(cm$date_end[cm$feature == "T.S02"], as.Date("2024-12-31"))
+  expect_true(is.na(cm$date_start[cm$feature == "T.S02"]))
+  expect_equal(cm$date_start[cm$feature == "T.S07"], as.Date("2025-01-01"))
+  expect_true(is.na(cm$date_end[cm$feature == "T.S07"]))
+  a <- DBI::dbGetQuery(con, "SELECT uuid_feature, kind, date_start, date_end FROM feature_alias WHERE alias_key = 't.sn01'")
+  expect_setequal(a$uuid_feature, c("f-0002", "f-0007"))
+  expect_true(all(a$kind == "historical_code"))
+  expect_equal(DBI::dbGetQuery(con, "SELECT count(*) AS n FROM feature_predecessor")$n, 1)
+  expect_equal(DBI::dbGetQuery(con, "SELECT count(*) AS n FROM feature_flow")$n, 1)
 })
 
 test_that("R-23.1 fixture: the seed enforces name/site NOT NULL on feature, as live does", {
