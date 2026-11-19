@@ -26,7 +26,8 @@ add_feature_geometry(
 
 \item{geom_wkt}{2-D WKT in EPSG:7856 (easting, northing): a \code{POINT} for a
 location, a \code{LINESTRING} or \code{MULTILINESTRING} for a route, a \code{POLYGON} or
-\code{MULTIPOLYGON} for an extent or outline.}
+\code{MULTIPOLYGON} for an extent or outline; an outline may also be an open
+\code{LINESTRING} or \code{MULTILINESTRING} where only a crest or edge is drawn.}
 
 \item{source}{where the drawing came from, as free text; never blank.}
 

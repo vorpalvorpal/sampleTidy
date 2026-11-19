@@ -35,7 +35,8 @@
   location = "POINT",
   route = c("LINESTRING", "MULTILINESTRING"),
   extent = c("POLYGON", "MULTIPOLYGON"),
-  outline = c("POLYGON", "MULTIPOLYGON")
+  # a footprint or boundary, or an open line where only a crest or edge is drawn (D17-68)
+  outline = c("POLYGON", "MULTIPOLYGON", "LINESTRING", "MULTILINESTRING")
 )
 
 #' @keywords internal
@@ -64,11 +65,9 @@
   "wall", "sump", "pit", "pump", "valve", "meter", "pipe", "riser", "aerator",
   "dosing_unit", "tank", "switchboard", "telemetry", "building", "cable",
   # ancillary (provisional)
-  "ancillary",
-  # Dropped from the vocabulary on 17 Nov (a spot that is not a structure is a
-  # `sampling_point`, its `flow` says seep, flowing or still), but kept here
-  # until the 16 Nov vocabulary test that still pins them is revised.
-  "surface_point", "seep"
+  "ancillary"
+  # `seep` and `surface_point` were dropped on 17 Nov: a spot that is not a
+  # structure is a `sampling_point`, and its `flow` says seep, flowing or still.
 )
 
 #' How each feature drives water along a `feature_flow` link.
@@ -303,7 +302,7 @@ FROM t3 JOIN feature f ON f.uuid = t3.uuid_feature;)---"
     table = paste(
       "One row per drawn piece of a feature, as 2-D WKT in EPSG:7856 metres. Roles:",
       "location (a POINT), route (a line), extent (an area), outline (a footprint or",
-      "boundary). A row is never edited in place: only superseded and date_end are",
+      "boundary, or an open line for a crest or edge). A row is never edited in place: only superseded and date_end are",
       "stamped, once. A correction adds a row naming its predecessor in supersedes;",
       "a change on the ground end-dates the old row and adds a new one."),
     columns = c(
@@ -628,7 +627,8 @@ FROM t3 JOIN feature f ON f.uuid = t3.uuid_feature;)---"
 #' @param role one of `"location"`, `"extent"`, `"route"`, `"outline"`.
 #' @param geom_wkt 2-D WKT in EPSG:7856 (easting, northing): a `POINT` for a
 #'   location, a `LINESTRING` or `MULTILINESTRING` for a route, a `POLYGON` or
-#'   `MULTIPOLYGON` for an extent or outline.
+#'   `MULTIPOLYGON` for an extent or outline; an outline may also be an open
+#'   `LINESTRING` or `MULTILINESTRING` where only a crest or edge is drawn.
 #' @param source where the drawing came from, as free text; never blank.
 #' @param source_crs the coordinate reference system the source was in before
 #'   conversion: `"EPSG:<digits>"` or `"unknown"`.
