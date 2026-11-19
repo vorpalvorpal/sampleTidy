@@ -722,10 +722,14 @@ add_feature <- function(name, site, class = NA_character_, flow = NA_character_,
         hit <- existing$name[.st_feature_name_key(existing$name) == .st_feature_name_key(name)]
         if (length(hit) > 0L) {
           clash_with <- hit[[1]]
+          # cli reads a leading `.` in `{...}` as an inline class, so the key
+          # is computed here, not inside the template. Named `canon_key` so
+          # it cannot be confused with the alias `key` used below.
+          canon_key <- .st_feature_name_key(name)
           cli::cli_abort(
             paste0(
               "add_feature(): name {.val {name}} reduces to the same canonical key ",
-              "({.val {.st_feature_name_key(name)}}) as the existing feature ",
+              "({.val {canon_key}}) as the existing feature ",
               "{.val {clash_with}}. Two names for one point would be ambiguous; use ",
               "the existing feature or choose a distinct name."
             ),
