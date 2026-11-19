@@ -54,10 +54,46 @@
 #' @keywords internal
 #' @noRd
 .st_feature_classes <- c(
-  "bore", "gas_well", "gas_point", "dust_gauge", "weather_station", "surface_point",
-  "seep", "tap", "dam", "pond", "cell", "landfill", "gas_field", "wall", "sump", "pit",
-  "pump", "valve", "meter", "pipe", "drain", "culvert", "inlet", "headwall", "aerator",
-  "dosing_unit", "tank", "switchboard", "telemetry", "building", "cable"
+  # places and systems
+  "site", "landfill", "cell", "gas_field", "network", "road",
+  # monitoring points
+  "bore", "gas_well", "gas_point", "dust_gauge", "weather_station", "sampling_point", "tap",
+  # water structures
+  "dam", "pond", "drain", "watercourse", "spillway", "headwall", "inlet", "culvert",
+  # plant
+  "wall", "sump", "pit", "pump", "valve", "meter", "pipe", "riser", "aerator",
+  "dosing_unit", "tank", "switchboard", "telemetry", "building", "cable",
+  # ancillary (provisional)
+  "ancillary",
+  # Dropped from the vocabulary on 17 Nov (a spot that is not a structure is a
+  # `sampling_point`, its `flow` says seep, flowing or still), but kept here
+  # until the 16 Nov vocabulary test that still pins them is revised.
+  "surface_point", "seep"
+)
+
+#' How each feature drives water along a `feature_flow` link.
+#' @keywords internal
+#' @noRd
+.st_flow_drives <- c("gravity", "pumped")
+
+#' Class and flow agree (PLAN-23 2.4): class -> the non-NULL `feature.flow`
+#' values it allows. A NULL flow always passes (an unsampled structure has
+#' none); a class not listed is unconstrained; an empty entry allows no flow at
+#' all.
+#' @keywords internal
+#' @noRd
+.st_feature_class_flow <- list(
+  bore = "groundwater",
+  gas_point = character(0),
+  gas_well = character(0),
+  dust_gauge = character(0),
+  weather_station = character(0),
+  dam = c("still", "flowing", "seep"),
+  pond = c("still", "flowing", "seep"),
+  drain = c("still", "flowing", "seep"),
+  watercourse = c("still", "flowing", "seep"),
+  spillway = c("still", "flowing", "seep"),
+  sampling_point = .st_feature_flows
 )
 
 # ---- DDL (executed by migration 117; one string per table, `;`-separated) -----
@@ -90,12 +126,53 @@ CREATE INDEX idx_feature_site ON feature(site)"
 #' @noRd
 .st_core_ddl_feature_mask <- "
 CREATE TABLE feature_mask (
+  uuid         VARCHAR PRIMARY KEY,
   uuid_feature VARCHAR NOT NULL REFERENCES feature(uuid),
   variant      VARCHAR NOT NULL,
   name         VARCHAR,
-  PRIMARY KEY (uuid_feature, variant)
+  date_start   DATE,
+  date_end     DATE,
+  comments     VARCHAR,
+  CHECK (date_start IS NULL OR date_end IS NULL OR date_end >= date_start)
 );
+CREATE INDEX idx_feature_mask_feature ON feature_mask(uuid_feature, variant);
 CREATE INDEX idx_feature_mask_variant ON feature_mask(variant)"
+
+# The two link tables (PLAN-23 2.6). No foreign keys, for the same reason as
+# feature_geometry: `orphan_feature_link` checks them instead.
+#' @keywords internal
+#' @noRd
+.st_core_ddl_feature_predecessor <- "
+CREATE TABLE feature_predecessor (
+  uuid             VARCHAR PRIMARY KEY,
+  uuid_feature     VARCHAR NOT NULL,
+  uuid_predecessor VARCHAR NOT NULL,
+  date_break       DATE,
+  source           VARCHAR NOT NULL,
+  comments         VARCHAR,
+  CHECK (uuid_feature <> uuid_predecessor)
+);
+CREATE INDEX idx_feature_predecessor_feature ON feature_predecessor(uuid_feature);
+CREATE INDEX idx_feature_predecessor_pred    ON feature_predecessor(uuid_predecessor)"
+
+#' @keywords internal
+#' @noRd
+.st_core_ddl_feature_flow <- "
+CREATE TABLE feature_flow (
+  uuid       VARCHAR PRIMARY KEY,
+  uuid_from  VARCHAR NOT NULL,
+  uuid_to    VARCHAR NOT NULL,
+  carries    VARCHAR,
+  drive      VARCHAR NOT NULL,
+  date_start DATE,
+  date_end   DATE,
+  source     VARCHAR NOT NULL,
+  comments   VARCHAR,
+  CHECK (uuid_from <> uuid_to),
+  CHECK (date_start IS NULL OR date_end IS NULL OR date_end >= date_start)
+);
+CREATE INDEX idx_feature_flow_from ON feature_flow(uuid_from);
+CREATE INDEX idx_feature_flow_to   ON feature_flow(uuid_to)"
 
 # No foreign key to `feature` on purpose: it would drag this table into the
 # next `feature` rebuild. `orphan_feature_geometry` checks the link instead.
@@ -175,6 +252,116 @@ SELECT t3.uuid_feature, f.name, f.site, f.class, t3.uuid_geometry,
          + (4279 * n^4 / 630)                               * sin(8 * t3.chi)) AS lat,
        t3.quality, t3.source, t3.source_crs, t3.date_start, t3.date_end, t3.recorded
 FROM t3 JOIN feature f ON f.uuid = t3.uuid_feature;)---"
+
+# ---- the register's own documentation (PLAN-23 2.6) -----------------------------
+#
+# Every register table and column carries a DuckDB comment. A rebuild drops
+# them, so a migration executes these statements after every CREATE TABLE of
+# the five tables; `register_comments_present` reports a table that lost its
+# comment. Plain text only (it is quoted below).
+
+.st_register_doc <- list(
+  feature = list(
+    table = paste(
+      "One row per site feature: a monitoring point, a structure, a part of one, or a",
+      "system. It carries no coordinates (see feature_geometry). Provenance is the",
+      "change_log reason and comments. A feature ends with its self alias arm."),
+    columns = c(
+      uuid = "The feature's own key.",
+      name = "The systematic name. Never reused; former codes are alias arms.",
+      site = "The site the feature belongs to.",
+      class = "What the physical object is (the feature class vocabulary); NULL = not yet classified.",
+      flow = "The water at the feature's canonical sampling point: groundwater, still, seep or flowing; NULL when unsampled.",
+      matrix = "The sample matrix usually taken here.",
+      depth = "Depth, for a bore.",
+      installed_by = "Who installed it.",
+      permanent = "TRUE for a permanent point. The truth, whatever the name's prefix says.",
+      reference = "TRUE for a reference (background) point.",
+      date_start = "First day the feature existed; NULL = unknown.",
+      date_end = "Last day the feature existed (inclusive); NULL = in use. Its self arm ends on the same day.",
+      cypher = "Legacy cypher code.",
+      elevation = "Elevation of the feature.",
+      uuid_project = "The project that created it, if any.",
+      comments = "Free text, including provenance.",
+      virtual = "TRUE for a non-physical feature (for example a field QC code).")),
+  feature_mask = list(
+    table = paste(
+      "Other names a feature goes by, one variant per row: long (a descriptive name),",
+      "gas_report (the gas report name), common (the code on site signs and field",
+      "sheets, also an alias arm), and a deployment's own such as EPA (a licence",
+      "point number). A row applies on the dates of its window, both ends inclusive,",
+      "NULL ends open; at most one row per feature and variant holds any date."),
+    columns = c(
+      uuid = "The mask row's own key.",
+      uuid_feature = "The feature this name belongs to.",
+      variant = "Which kind of name: long, gas_report, common, or a deployment variant such as EPA.",
+      name = "The name itself.",
+      date_start = "First day the name applies; NULL = since the beginning.",
+      date_end = "Last day the name applies (inclusive); NULL = still applies.",
+      comments = "Free text, including provenance.")),
+  feature_geometry = list(
+    table = paste(
+      "One row per drawn piece of a feature, as 2-D WKT in EPSG:7856 metres. Roles:",
+      "location (a POINT), route (a line), extent (an area), outline (a footprint or",
+      "boundary). A row is never edited in place: only superseded and date_end are",
+      "stamped, once. A correction adds a row naming its predecessor in supersedes;",
+      "a change on the ground end-dates the old row and adds a new one."),
+    columns = c(
+      uuid = "The piece's own key.",
+      uuid_feature = "The feature it belongs to (no foreign key; see orphan_feature_geometry).",
+      role = "location, route, extent or outline.",
+      geom_wkt = "2-D WKT in EPSG:7856 (easting, northing).",
+      source = "Where the drawing came from; never blank.",
+      source_crs = "The CRS of the source before conversion: EPSG:<n> or unknown.",
+      quality = "surveyed, field_gps, plan, imagery, inferred or approximate.",
+      date_start = "First day the piece existed on the ground; NULL = unknown.",
+      date_end = "Last day the piece existed on the ground (inclusive); NULL = in use.",
+      recorded = "When the row was entered (UTC).",
+      supersedes = "The row this one corrects; a row is corrected at most once.",
+      superseded = "When a correction or withdrawal replaced this row; NULL = current.",
+      comments = "Free text.")),
+  feature_predecessor = list(
+    table = paste(
+      "An earlier, different feature whose record this feature extends from",
+      "date_break. A feature's own former codes are alias arms, never predecessors."),
+    columns = c(
+      uuid = "The link's own key.",
+      uuid_feature = "The later feature.",
+      uuid_predecessor = "The earlier, different feature whose record it continues.",
+      date_break = "First day of the later feature's record; NULL = unknown.",
+      source = "The document the link rests on; never blank.",
+      comments = "Free text.")),
+  feature_flow = list(
+    table = paste(
+      "Water goes from uuid_from to uuid_to over the window, by gravity or pumped.",
+      "Links join structures and points, not the pipes that carry them (a pipe is",
+      "named in comments). A change on the ground ends the row and adds a new one."),
+    columns = c(
+      uuid = "The link's own key.",
+      uuid_from = "The feature the water leaves.",
+      uuid_to = "The feature the water reaches.",
+      carries = "What flows: leachate, stormwater, groundwater and so on.",
+      drive = "gravity or pumped.",
+      date_start = "First day of the link; NULL = unknown.",
+      date_end = "Last day of the link (inclusive); NULL = in use.",
+      source = "The document the link rests on; never blank.",
+      comments = "Free text, including the pipe that carries it."))
+)
+
+.st_comment_sql <- function(target, text) {
+  paste0("COMMENT ON ", target, " IS ", DBI::dbQuoteString(DBI::ANSI(), text))
+}
+
+#' The `COMMENT ON TABLE` / `COMMENT ON COLUMN` statements for the five register
+#' tables, one statement per element (PLAN-23 2.6).
+#' @keywords internal
+#' @noRd
+.st_core_comments <- unlist(lapply(names(.st_register_doc), function(t) {
+  d <- .st_register_doc[[t]]
+  c(.st_comment_sql(paste("TABLE", t), d$table),
+    vapply(names(d$columns), function(col) .st_comment_sql(paste0("COLUMN ", t, ".", col), d$columns[[col]]),
+           character(1), USE.NAMES = FALSE))
+}), use.names = FALSE)
 
 #' Has this database been through migration 117?
 #'

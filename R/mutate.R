@@ -51,8 +51,9 @@
   "asset_filing",
   # PLAN-21 phase (a) (ops-schema v11): the database's own metadata.
   "db_meta",
-  # PLAN-23 (migration 117): one row per drawn piece of a feature (R/feature-geometry.R).
-  "feature_geometry"
+  # PLAN-23 (migration 117): one row per drawn piece of a feature (R/feature-geometry.R),
+  # and the predecessor and flow links between features (R/feature-register.R).
+  "feature_geometry", "feature_predecessor", "feature_flow"
 )
 
 #' @keywords internal
@@ -360,8 +361,10 @@ db_append <- function(con, table, df, actor, reason, source_hash = NA) {
 #'
 #' Alternate/composite key: `key` (PLAN-14 R-14.1) --------------------------
 #'
-#' `analyte_mask`/`feature_mask` have no `uuid` column - they are keyed by
-#' `(uuid_analyte, variant)` / `(uuid_feature, variant)`. `db_update()` and
+#' `analyte_mask` has no `uuid` column - it is keyed by
+#' `(uuid_analyte, variant)`; so was `feature_mask` before PLAN-23's migration
+#' 117 gave it a `uuid` (its writes are keyed by that now; the composite path
+#' stays for back-compat). `db_update()` and
 #' `db_delete()` accept EITHER the original scalar `uuid` (back-compat: every
 #' existing caller is byte-for-byte unchanged - internally this is just
 #' `key = list(uuid = uuid)`) OR a named-list `key` giving the WHERE as the

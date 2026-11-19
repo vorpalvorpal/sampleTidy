@@ -88,6 +88,12 @@
   feature_classes_extra = function() {
     character(0)
   },
+  # Extra `feature_mask.variant` names `set_feature_mask()` accepts beyond the
+  # core `long`, `gas_report`, `common` (PLAN-23), such as a deployment's `EPA`:
+  # a character vector, default none. List-valued, so no env var.
+  mask_variants_extra = function() {
+    character(0)
+  },
   # The time zone of "local" calendar days: sample dates, "today" in the
   # flags, report and status stamps. Read at call time via `.st_tz()`, which
   # validates it against `OlsonNames()`. The default is UTC; a deployment
@@ -160,7 +166,7 @@
 #' @noRd
 .st_config_list_keys <- c("field_analytes", "acirl_transcription_labels", "archive_settle",
                           "content_fingerprinters", "checks", "site_keywords", "inbox_batches", "gas_template_slots",
-                          "writer_check", "feature_classes_extra")
+                          "writer_check", "feature_classes_extra", "mask_variants_extra")
 
 #' Get or set a sampleTidy configuration value
 #'
