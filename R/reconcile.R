@@ -754,55 +754,64 @@
   u
 }
 
-#' SELF-PRECEDENCE (PLAN-15 E.2/E.7, rulings R1/R2): when a key reaches SEVERAL
-#' live candidate features and EXACTLY ONE of the surviving arms is the
-#' `kind = 'self'` alias, that arm WINS and the row resolves through it.
+#' ARM PRECEDENCE (PLAN-15 E.2/E.7, rulings R1/R2, R1b as generalised
+#' 2026-11-24): when a key reaches SEVERAL live candidate features, decide
+#' whether one arm wins outright. Two rules, in this order.
 #'
-#' A feature is always reachable by its own name: R1 turns every `self` arm on
-#' unconditionally, which is precisely what can push a key from one live arm to
-#' several, so without R2 the repair would push rows into review instead. The
-#' override is not silent - the caller emits a NON-BLOCKING note (E.7) naming
-#' the shadowed features.
+#' R1b (dated beats open): an arm of ANY kind whose EXPLICIT date window
+#' (`date_start` and/or `date_end` set; a start-only window counts) covers
+#' `sample_date` beats every open-ended or undated arm, whatever their kinds
+#' (`self`, `historical_code`, `descriptive`, `mask_long`, ...). It is a
+#' deliberate curation for that visit or period, stronger evidence than a
+#' blanket name. The row resolves through that dated arm and `shadowed` is
+#' NULL (no note). When the dated covering arms reach TWO OR MORE distinct
+#' features, nothing is auto-resolved - not through a dated arm (which
+#' curation would be arbitrary) and not through an open one (they lost to the
+#' dated curation) - so NULL is returned and the row falls back to the
+#' ordinary ambiguous/pending path. Several dated covering arms onto ONE
+#' feature resolve to it, through the radix-first alias uuid. A NA
+#' `sample_date` is no basis to say any window covers the row (E.6), so R1b
+#' never fires then.
 #'
-#' Not applicable, deliberately, when the surviving arms contain ZERO self arms
-#' (an ordinary ambiguity -> review, exactly as today) or MORE THAN ONE (two
-#' features claiming one name by their own names is a registry defect, not
-#' something to resolve arbitrarily).
+#' Migration 118 turns old codes into undated `historical_code` arms; before
+#' the 2026-11-24 generalisation R1b fired only against a `self` arm, so a
+#' dated mislabel arm on such a code stopped winning and its rows went to
+#' review.
 #'
-#' R1b (2026-10-21; amends R1): a NON-self arm whose EXPLICIT date
-#' window (`date_start` and/or `date_end` set) covers `sample_date` beats the
-#' self arm - it is a deliberate curation for that visit or period, stronger
-#' evidence than the blanket "a feature is reachable by its own name". The row
-#' resolves through that dated arm and `shadowed` is NULL (no note: the self
-#' arm did not win). An UNDATED non-self arm still loses to self, with the
-#' note, exactly as R1/R2. A NA `sample_date` is no basis to say any window
-#' covers the row (E.6), so R1b never fires then and R2 applies as before.
-#' When the dated covering arms reach TWO OR MORE distinct features, nothing
-#' is auto-resolved - not through a dated arm (which curation would be
-#' arbitrary) and not through self (it lost to the dated curation) - so NULL
-#' is returned and the row falls back to the ordinary ambiguous/pending path.
+#' R1/R2 (self wins among open arms): with no dated covering arm, when
+#' EXACTLY ONE of the surviving arms is the `kind = 'self'` alias, that arm
+#' wins. A feature is always reachable by its own name: R1 turns every `self`
+#' arm on unconditionally, which is precisely what can push a key from one
+#' live arm to several, so without R2 the repair would push rows into review
+#' instead. The override is not silent - the caller emits a NON-BLOCKING
+#' `self_precedence_note` (E.7) naming the shadowed features. Not applicable
+#' when the open arms contain ZERO self arms (an ordinary ambiguity -> review)
+#' or MORE THAN ONE (two features claiming one name by their own names is a
+#' registry defect, not something to resolve arbitrarily).
+#'
+#' A `self` arm is never treated as a dated curation, even if it carries a
+#' window: its dates describe the feature's own life, and R1/R2 already
+#' decide it. So the self case is exactly as before the generalisation.
 #' @param sample_date the row's `Date` (NA = R1b off).
-#' @return NULL when self-precedence does not apply, else
-#'   `list(uuid_alias, uuid_feature, shadowed)` (`shadowed` NULL when a dated
-#'   arm won under R1b).
+#' @return NULL when no arm wins, else `list(uuid_alias, uuid_feature,
+#'   shadowed)` (`shadowed` NULL when a dated arm won under R1b).
 #' @keywords internal
 #' @noRd
-.rc_self_precedence <- function(cand, registry, sample_date = as.Date(NA)) {
+.rc_arm_precedence <- function(cand, registry, sample_date = as.Date(NA)) {
   if (length(unique(cand$uuid_feature)) < 2) return(NULL)
   fa <- registry$feature_alias
   if (is.null(fa) || nrow(fa) == 0 || !("kind" %in% names(fa))) return(NULL)
   kind <- fa$kind[match(cand$uuid_alias, fa$uuid)]
   is_self <- !is.na(kind) & kind == "self"
-  if (sum(is_self) != 1L) return(NULL)
-  # 2026-10-21 R1b: a dated non-self arm covering the row date beats self.
-  # Coverage is re-checked here (not just trusted from the live filter in
+  # R1b: a dated arm covering the row date beats every open arm. Coverage is
+  # re-checked here (not just trusted from the live filter in
   # `.rc_feature_candidates()`) so a caller passing an unfiltered `cand`
   # cannot let an out-of-window arm win.
   if (length(sample_date) == 1 && !is.na(sample_date)) {
     arms <- fa[match(cand$uuid_alias, fa$uuid), , drop = FALSE]
     ds <- .rc_alias_bound(arms, "date_start", nrow(cand))
     de <- .rc_alias_bound(arms, "date_end", nrow(cand))
-    dated <- !is_self & (!is.na(ds) | !is.na(de)) &
+    dated <- !is_self & !is.na(kind) & (!is.na(ds) | !is.na(de)) &
       .rc_alias_live(arms, sample_date)
     if (any(dated)) {
       dated_feat <- unique(cand$uuid_feature[dated])
@@ -818,6 +827,8 @@
                   shadowed = NULL))
     }
   }
+  # R1/R2: among open arms, exactly one self arm wins, with a note.
+  if (sum(is_self) != 1L) return(NULL)
   i <- which(is_self)
   list(
     uuid_alias = cand$uuid_alias[[i]],
@@ -825,6 +836,9 @@
     shadowed = setdiff(unique(cand$uuid_feature), cand$uuid_feature[[i]])
   )
 }
+
+# The pre-2026-11-24 name, kept because tests and notes refer to it.
+.rc_self_precedence <- .rc_arm_precedence
 
 #' The target feature's SELF alias (B.6). `sample.uuid_feature_alias` is NOT
 #' NULL and the within-batch duplicate guard keys off it, so a structural hit
@@ -1023,7 +1037,7 @@
       # `transcription_error` arm on one feature), the arm written to
       # `sample.uuid_feature_alias` used to be `cand$uuid_alias[[1]]` -
       # whichever DuckDB happened to return first, an arbitrary physical-row-
-      # order artefact. `.rc_self_precedence()` cannot help here (it requires
+      # order artefact. `.rc_arm_precedence()` cannot help here (it requires
       # >=2 DISTINCT features). Prefer the `kind == 'self'` arm - R1's own
       # principle ("the self arm wins"), previously implemented only for the
       # different-feature case - falling back to the first arm only when NO
@@ -1042,9 +1056,10 @@
     # `self` alias -> the self arm wins and the row RESOLVES, with a
     # non-blocking note. Only reachable at >1 distinct live feature, so it can
     # never turn an ordinary single-candidate hit into an annotated one.
-    # R1b (2026-10-21): a dated non-self arm covering the row date wins
-    # instead, with `sp$shadowed` NULL -> no note for this row.
-    sp <- .rc_self_precedence(cand, registry, row_dates[[i]])
+    # R1b (generalised 2026-11-24): a dated arm of any kind covering the row
+    # date wins first, over open arms of any kind, with `sp$shadowed` NULL ->
+    # no note for this row.
+    sp <- .rc_arm_precedence(cand, registry, row_dates[[i]])
     if (!is.null(sp)) {
       uuid_feature[[i]] <- sp$uuid_feature
       uuid_alias[[i]] <- sp$uuid_alias
