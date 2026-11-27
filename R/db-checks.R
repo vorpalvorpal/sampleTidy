@@ -22,9 +22,17 @@
 # feature.flow. v_measurement's fraction preference keys on 'groundwater'.
 .st_feature_flows <- c("groundwater", "still", "seep", "flowing")
 
-# Core mask variants (feature_mask / analyte_mask); a deployment adds its own
-# through db_checks_params(mask_variants =).
-.st_core_mask_variants <- c("long", "old", "gas_report")
+# Core feature mask variants; a deployment adds its own through
+# db_checks_params(mask_variants =) and, for set_feature_mask(),
+# st_config("mask_variants_extra"). PLAN-23 withdraws `old` (predecessors are
+# links in feature_predecessor now, D17-75) and adds `common` (the code on site
+# signs, D17-77).
+.st_core_mask_variants <- c("long", "gas_report", "common")
+
+# analyte_mask keeps the variants it had: PLAN-23 withdraws `old` for FEATURE
+# masks only. vocab_mask_variant accepts these on analyte_mask, plus
+# params$mask_variants (a deployment's own variants apply to both tables).
+.st_core_analyte_mask_variants <- c("long", "old", "gas_report")
 
 .dbc_tiers <- c("hourly", "migration", "on_demand")
 .dbc_severities <- c("error", "warn")
@@ -46,8 +54,7 @@
 #'
 #' @param name a unique check name.
 #' @param sql either one SQL string, in which `{param}` tokens are filled from
-#'   [db_checks_params()] (`{min_date}`, `{tz}`, `{mask_variants}`,
-#'   `{bbox_xmin}`/`{bbox_ymin}`/`{bbox_xmax}`/`{bbox_ymax}`), or a function
+#'   [db_checks_params()] (`{min_date}`, `{tz}`, `{mask_variants}`), or a function
 #'   `function(con, params)` returning a data.frame with a `key` column.
 #' @param description what the check asserts.
 #' @param tier `"hourly"`, `"migration"` or `"on_demand"`.
@@ -83,12 +90,24 @@ db_check <- function(name, sql, description, tier = "hourly", severity = "error"
 #' @param ... named overrides of the defaults:
 #'   * `min_date`: samples dated before this are implausible (default
 #'     `"1980-01-01"`);
-#'   * `bbox`: `c(xmin, ymin, xmax, ymax)` that physical features must lie
-#'     in, or `NULL` (default) for no box - finite coordinates suffice;
+#'   * `bbox`: `c(xmin, ymin, xmax, ymax)` in EPSG:7856 metres that current
+#'     feature geometry must lie in (read by `feature_geometry_in_bbox` only),
+#'     or `NULL` (default): then only the MGA grid range applies;
+#'   * `first_sample_since`: `feature_first_sample` reports features whose
+#'     samples were all inserted at or after this time. `NULL` (default)
+#'     means 14 days before the run; otherwise a `POSIXct`;
+#'   * `feature_classes`: the `feature.class` vocabulary
+#'     `vocab_feature_class` accepts (default the core one; a deployment
+#'     extends it);
 #'   * `tz`: the time zone whose calendar day `sample.date` names (default
 #'     configured time zone, `st_config("timezone")`);
-#'   * `mask_variants`: the registered mask variants (default the core
-#'     `long`, `old`, `gas_report`; a deployment adds its own);
+#'   * `class_flow`: a named list from `feature.class` to the non-NULL
+#'     `feature.flow` values that class allows, read by `feature_class_flow`
+#'     (default the core rule; a class not listed is unconstrained);
+#'   * `mask_variants`: the registered feature mask variants (default the core
+#'     `long`, `gas_report`, `common`; a deployment adds its own, such as
+#'     `EPA`). On `analyte_mask` the check also accepts `long`, `old` and
+#'     `gas_report`;
 #'   * `receipt_max_temp_c`, `receipt_lookback_days`: the SRN receipt
 #'     temperature above which `lab_receipt_warm` warns (default 6), and how
 #'     many days back it looks (default 90).
@@ -98,6 +117,9 @@ db_checks_params <- function(...) {
   p <- list(
     min_date = "1980-01-01",
     bbox = NULL,
+    first_sample_since = NULL,
+    feature_classes = .st_feature_classes,
+    class_flow = .st_feature_class_flow,
     tz = .st_tz(),
     mask_variants = .st_core_mask_variants,
     # R-22.S: lab_receipt_warm flags an SRN whose warmest cooler is above
@@ -131,6 +153,14 @@ db_checks_params <- function(...) {
                      class = "sampletidy_error")
     }
   }
+  if (!is.null(p$first_sample_since)) checkmate::assert_posixct(p$first_sample_since, len = 1, any.missing = FALSE)
+  checkmate::assert_character(p$feature_classes, any.missing = FALSE)
+  if (!is.list(p$class_flow) || (length(p$class_flow) && (is.null(names(p$class_flow)) ||
+      any(!nzchar(names(p$class_flow))) || anyDuplicated(names(p$class_flow)) ||
+      !all(vapply(p$class_flow, function(x) is.character(x) && !anyNA(x), NA))))) {
+    cli::cli_abort("{.arg class_flow} must be a named list of character vectors (class -> allowed flows).",
+                   class = "sampletidy_error")
+  }
   if (!checkmate::test_string(p$tz) || !grepl("^[A-Za-z0-9_/+-]+$", p$tz)) {
     cli::cli_abort("{.arg tz} must be one time-zone name.", class = "sampletidy_error")
   }
@@ -149,16 +179,11 @@ db_checks_params <- function(...) {
 # The text each `{token}` is replaced by. Only these names are tokens, so a
 # regex quantifier such as `{32}` in a check's SQL is left alone.
 .dbc_tokens <- function(params) {
-  b <- params$bbox
-  num <- function(x) if (is.infinite(x)) sprintf("CAST('%sinf' AS DOUBLE)", if (x < 0) "-" else "") else
-    format(x, digits = 15)
-  if (is.null(b)) b <- c(xmin = -Inf, ymin = -Inf, xmax = Inf, ymax = Inf)
   c(
     min_date = as.character(as.Date(params$min_date)),
     tz = params$tz,
     mask_variants = .dbc_sql_list(params$mask_variants),
-    bbox_xmin = num(b[["xmin"]]), bbox_ymin = num(b[["ymin"]]),
-    bbox_xmax = num(b[["xmax"]]), bbox_ymax = num(b[["ymax"]]),
+    analyte_mask_variants = .dbc_sql_list(union(params$mask_variants, .st_core_analyte_mask_variants)),
     core_version = as.character(.dbc_core_version()),
     alias_kinds = .dbc_sql_list(c(.fa_kind_vocabulary, "pending")),
     ingest_states = .dbc_sql_list(unique(c(names(.st_ingest_transitions), unlist(.st_ingest_transitions)))),
@@ -333,13 +358,243 @@ WHERE reason IS NULL OR trim(reason) = ''",
     .dbc_sql_list(.st_source_cells), .dbc_sql_list(.st_treatments)))
 }
 
+# ---- PLAN-23: the site feature register ----------------------------------------------------
+#
+# Every register check returns zero rows on a database migration 117 has not
+# reached (`.st_has_feature_register()` is FALSE), so the core still runs against
+# a pre-117 live database.
+
+.dbc_no_rows <- function() data.frame(key = character(0), stringsAsFactors = FALSE)
+
+# A register check from one SQL string (it may use the `{...}` tokens), guarded.
+.dbc_register_sql <- function(sql) {
+  force(sql)
+  function(con, params) {
+    if (!.st_has_feature_register(con)) return(.dbc_no_rows())
+    DBI::dbGetQuery(con, .dbc_fill(sql, .dbc_tokens(params)))
+  }
+}
+
+# Any feature_geometry row (current or not) whose WKT is malformed or whose
+# type does not suit its role.
+.dbc_feature_geometry_wkt_valid <- function(con, params) {
+  if (!.st_has_feature_register(con)) return(.dbc_no_rows())
+  g <- DBI::dbGetQuery(con, "SELECT uuid, role, geom_wkt FROM feature_geometry ORDER BY uuid")
+  p <- .st_wkt_check(g$geom_wkt, g$role)
+  bad <- !is.na(p)
+  data.frame(key = as.character(g$uuid[bad]), problem = p[bad], stringsAsFactors = FALSE)
+}
+
+# A CURRENT row with a vertex outside the MGA grid range (a point in degrees
+# lands here), or outside params$bbox when one is set. Rows the WKT reader
+# rejects are feature_geometry_wkt_valid's, not this check's.
+.dbc_feature_geometry_in_bbox <- function(con, params) {
+  empty <- data.frame(key = character(0), xmin = numeric(0), ymin = numeric(0),
+                      xmax = numeric(0), ymax = numeric(0), stringsAsFactors = FALSE)
+  if (!.st_has_feature_register(con)) return(empty)
+  g <- DBI::dbGetQuery(con, "SELECT uuid, geom_wkt FROM feature_geometry
+                             WHERE superseded IS NULL ORDER BY uuid")
+  rows <- lapply(seq_len(nrow(g)), function(i) {
+    p <- .st_wkt_parse(g$geom_wkt[[i]])
+    if (!is.na(p$problem) || nrow(p$coords) == 0L) return(NULL)
+    out <- .st_coords_outside(p$coords, .st_geometry_grid_range) ||
+      (!is.null(params$bbox) && .st_coords_outside(p$coords, params$bbox))
+    if (!out) return(NULL)
+    data.frame(key = as.character(g$uuid[[i]]),
+               xmin = min(p$coords[, 1]), ymin = min(p$coords[, 2]),
+               xmax = max(p$coords[, 1]), ymax = max(p$coords[, 2]), stringsAsFactors = FALSE)
+  })
+  rows <- rows[!vapply(rows, is.null, NA)]
+  if (length(rows) == 0L) empty else do.call(rbind, rows)
+}
+
+# Every feature whose canonical name key is shared with another feature (ended
+# ones included), so two clashing features give two rows.
+.dbc_feature_name_canonical_clash <- function(con, params) {
+  if (!.st_has_feature_register(con)) return(.dbc_no_rows())
+  f <- DBI::dbGetQuery(con, "SELECT uuid, name FROM feature ORDER BY name, uuid")
+  key <- .st_feature_name_key(f$name)
+  bad <- !is.na(key) & (duplicated(key) | duplicated(key, fromLast = TRUE))
+  data.frame(key = as.character(f$uuid[bad]), name = f$name[bad], canonical = key[bad],
+             stringsAsFactors = FALSE)
+}
+
+# A non-virtual feature whose samples ALL have a change_log insert row, the
+# earliest at or after `first_sample_since`. "Just received" means the sample
+# row was inserted recently, not that it is dated recently; one sample with no
+# insert row (older than change_log) means the feature's first sample is not
+# new. Samples are reached through every alias arm of the feature.
+.dbc_feature_first_sample <- function(con, params) {
+  if (!.st_has_feature_register(con)) return(.dbc_no_rows())
+  since <- params$first_sample_since
+  if (is.null(since)) since <- Sys.time() - 14 * 86400
+  DBI::dbGetQuery(con, "
+WITH ins AS (
+  SELECT uuid_row, min(\"at\") AS inserted_at FROM change_log
+  WHERE tbl = 'sample' AND action = 'insert' GROUP BY uuid_row),
+s AS (
+  SELECT fa.uuid_feature, ins.inserted_at
+  FROM \"sample\" smp JOIN feature_alias fa ON fa.uuid = smp.uuid_feature_alias
+  LEFT JOIN ins ON ins.uuid_row = smp.uuid
+  WHERE fa.uuid_feature IS NOT NULL)
+SELECT f.uuid AS key, f.name, min(s.inserted_at) AS first_insert_at, count(*) AS n_samples
+FROM s JOIN feature f ON f.uuid = s.uuid_feature
+WHERE NOT coalesce(f.virtual, FALSE)
+GROUP BY f.uuid, f.name
+HAVING count(s.inserted_at) = count(*) AND min(s.inserted_at) >= CAST(? AS TIMESTAMP)
+ORDER BY f.name",
+    params = list(format(since, "%Y-%m-%d %H:%M:%OS6", tz = "UTC")))
+}
+
+.dbc_vocab_feature_class <- function(con, params) {
+  if (!.st_has_feature_register(con)) return(.dbc_no_rows())
+  DBI::dbGetQuery(con, sprintf("
+SELECT uuid AS key, name, class FROM feature
+WHERE class IS NOT NULL AND class NOT IN (%s)", .dbc_sql_list(params$feature_classes)))
+}
+
+# ---- PLAN-23, 17/18 Nov: ended features, class and flow, dated masks, links ----------
+
+# The calendar day (in the `{tz}` zone) a sample is matched on: its datetime,
+# else its date. The rule sample_in_feature_window uses.
+.dbc_sample_day <- "CAST(timezone('{tz}', timezone('UTC', coalesce(s.datetime, s.date))) AS DATE)"
+
+# Do two windows [a1, a2] and [b1, b2] share a day? NULL ends are open. Vectorised.
+.st_windows_overlap <- function(a1, a2, b1, b2) {
+  (is.na(a1) | is.na(b2) | a1 <= b2) & (is.na(b1) | is.na(a2) | b1 <= a2)
+}
+
+# Does [o1, o2] cover [i1, i2]? NULL ends are open (an open inner end needs an
+# open outer end). Vectorised.
+.st_window_covers <- function(o1, o2, i1, i2) {
+  (is.na(o1) | (!is.na(i1) & o1 <= i1)) & (is.na(o2) | (!is.na(i2) & o2 >= i2))
+}
+
+# A feature whose class has a rule in params$class_flow and whose non-NULL flow
+# that rule does not allow.
+.dbc_feature_class_flow <- function(con, params) {
+  empty <- data.frame(key = character(0), name = character(0), class = character(0),
+                      flow = character(0), stringsAsFactors = FALSE)
+  if (!.st_has_feature_register(con)) return(empty)
+  rules <- params$class_flow
+  if (length(rules) == 0L) return(empty)
+  f <- DBI::dbGetQuery(con, sprintf(
+    "SELECT uuid, name, class, flow FROM feature WHERE flow IS NOT NULL AND class IN (%s) ORDER BY name, uuid",
+    .dbc_sql_list(names(rules))))
+  if (nrow(f) == 0L) return(empty)
+  bad <- !vapply(seq_len(nrow(f)), function(i) f$flow[[i]] %in% rules[[f$class[[i]]]], NA)
+  data.frame(key = as.character(f$uuid[bad]), name = f$name[bad], class = f$class[bad],
+             flow = f$flow[bad], stringsAsFactors = FALSE)
+}
+
+# A `common` mask row whose name key (.st_feature_name_key) equals another
+# feature's systematic name key (ended features included), or is held by
+# another feature's `common` row on an overlapping window. Every such row is
+# reported (both rows of a clashing pair), with the first other feature.
+.dbc_feature_common_unique <- function(con, params) {
+  empty <- data.frame(key = character(0), name = character(0), other_feature = character(0),
+                      stringsAsFactors = FALSE)
+  if (!.st_has_feature_register(con)) return(empty)
+  m <- DBI::dbGetQuery(con, "SELECT uuid, uuid_feature, name, date_start, date_end FROM feature_mask
+                             WHERE variant = 'common' AND name IS NOT NULL ORDER BY uuid")
+  if (nrow(m) == 0L) return(empty)
+  f <- DBI::dbGetQuery(con, "SELECT uuid, name FROM feature")
+  fkey <- .st_feature_name_key(f$name)
+  mkey <- .st_feature_name_key(m$name)
+  other <- vapply(seq_len(nrow(m)), function(i) {
+    if (is.na(mkey[[i]])) return(NA_character_)
+    hit <- f$uuid[!is.na(fkey) & fkey == mkey[[i]] & f$uuid != m$uuid_feature[[i]]]
+    if (length(hit)) return(hit[[1]])
+    j <- which(!is.na(mkey) & mkey == mkey[[i]] & m$uuid_feature != m$uuid_feature[[i]] &
+                 .st_windows_overlap(m$date_start[[i]], m$date_end[[i]], m$date_start, m$date_end))
+    if (length(j)) m$uuid_feature[[j[[1]]]] else NA_character_
+  }, character(1))
+  bad <- !is.na(other)
+  data.frame(key = as.character(m$uuid[bad]), name = m$name[bad], other_feature = other[bad],
+             stringsAsFactors = FALSE)
+}
+
+# A `common` mask row with no alias arm of the same alias key on the same
+# feature whose window covers the mask row's.
+.dbc_feature_common_alias <- function(con, params) {
+  empty <- data.frame(key = character(0), name = character(0), stringsAsFactors = FALSE)
+  if (!.st_has_feature_register(con)) return(empty)
+  m <- DBI::dbGetQuery(con, "SELECT uuid, uuid_feature, name, date_start, date_end FROM feature_mask
+                             WHERE variant = 'common' AND name IS NOT NULL ORDER BY uuid")
+  if (nrow(m) == 0L) return(empty)
+  a <- DBI::dbGetQuery(con, "SELECT uuid_feature, alias_key, date_start, date_end FROM feature_alias
+                             WHERE uuid_feature IS NOT NULL")
+  key <- .rc_feature_key(m$name)
+  ok <- vapply(seq_len(nrow(m)), function(i) {
+    arm <- a[a$uuid_feature == m$uuid_feature[[i]] & a$alias_key %in% key[[i]], , drop = FALSE]
+    nrow(arm) > 0L && any(.st_window_covers(arm$date_start, arm$date_end, m$date_start[[i]], m$date_end[[i]]))
+  }, NA)
+  data.frame(key = as.character(m$uuid[!ok]), name = m$name[!ok], stringsAsFactors = FALSE)
+}
+
+# Every feature_predecessor row on a loop: following uuid_predecessor from the
+# row's predecessor leads back to the row's feature.
+.dbc_feature_predecessor_cycle <- function(con, params) {
+  if (!.st_has_feature_register(con)) return(.dbc_no_rows())
+  p <- DBI::dbGetQuery(con, "SELECT uuid, uuid_feature, uuid_predecessor FROM feature_predecessor ORDER BY uuid")
+  on_loop <- vapply(seq_len(nrow(p)), function(i) {
+    .st_reaches(p$uuid_feature, p$uuid_predecessor, from = p$uuid_predecessor[[i]], to = p$uuid_feature[[i]])
+  }, NA)
+  data.frame(key = as.character(p$uuid[on_loop]), uuid_feature = p$uuid_feature[on_loop],
+             uuid_predecessor = p$uuid_predecessor[on_loop], stringsAsFactors = FALSE)
+}
+
+# Is `to` reachable from `from` along the edges child -> parent?
+.st_reaches <- function(child, parent, from, to) {
+  seen <- character(0)
+  frontier <- from
+  while (length(frontier)) {
+    if (to %in% frontier) return(TRUE)
+    seen <- c(seen, frontier)
+    frontier <- setdiff(unique(parent[child %in% frontier]), seen)
+  }
+  FALSE
+}
+
+# A predecessor row whose date_break is before the predecessor's date_start, or
+# on or before the last day the predecessor still has a sample (through any of
+# its arms). Only samples inside the predecessor's own life count: one dated
+# after its date_end is feature_sample_after_end's error, not reported twice.
+.dbc_feature_predecessor_dates_sql <- paste0("
+WITH last AS (
+  SELECT fa.uuid_feature, max(", .dbc_sample_day, ") AS last_day
+  FROM \"sample\" s JOIN feature_alias fa ON fa.uuid = s.uuid_feature_alias
+  JOIN feature pf ON pf.uuid = fa.uuid_feature
+  WHERE pf.date_end IS NULL OR ", .dbc_sample_day, " <= pf.date_end
+  GROUP BY fa.uuid_feature)
+SELECT p.uuid AS key, p.date_break, f.date_start AS predecessor_date_start,
+       l.last_day AS last_predecessor_sample
+FROM feature_predecessor p JOIN feature f ON f.uuid = p.uuid_predecessor
+LEFT JOIN last l ON l.uuid_feature = p.uuid_predecessor
+WHERE p.date_break IS NOT NULL
+  AND ((f.date_start IS NOT NULL AND p.date_break < f.date_start)
+       OR (l.last_day IS NOT NULL AND p.date_break <= l.last_day))
+ORDER BY p.uuid")
+
+# A register table with no table comment (or missing altogether).
+.dbc_register_comments_present <- function(con, params) {
+  if (!.st_has_feature_register(con)) return(.dbc_no_rows())
+  tabs <- names(.st_register_doc)
+  tc <- DBI::dbGetQuery(con, sprintf(
+    "SELECT table_name, comment FROM duckdb_tables()
+     WHERE NOT temporary AND database_name = current_database() AND table_name IN (%s)",
+    .dbc_sql_list(tabs)))
+  has <- tc$table_name[!is.na(tc$comment) & nzchar(trimws(tc$comment))]
+  data.frame(key = setdiff(tabs, has), stringsAsFactors = FALSE)
+}
+
 # ---- the core catalogue ----------------------------------------------------------------
 
 #' The generic standing database checks
 #'
 #' The checks every sampleTidy database should satisfy (PLAN-22 A2):
 #' orphan references the DB does not enforce, duplicates, alias invariants,
-#' vocabularies, value and hash shape, date and coordinate sanity, the core
+#' vocabularies, value and hash shape, date and feature-geometry sanity, the core
 #' schema version, and (migration tier) view coverage and expected
 #' constraints. A deployment adds its own through `db_checks(extra =)`.
 #'
@@ -377,13 +632,38 @@ WITH want(table_name, constraint_type, col) AS (VALUES
   ('review_queue_candidate','FOREIGN KEY','uuid_review'),
   ('analysis','PRIMARY KEY','uuid'), ('sample','PRIMARY KEY','uuid'), ('feature','PRIMARY KEY','uuid'),
   ('feature_alias','PRIMARY KEY','uuid'), ('lab_method','PRIMARY KEY','uuid'), ('analyte','PRIMARY KEY','uuid'),
-  ('ingest_file','PRIMARY KEY','hash'), ('lab_qc_report','UNIQUE','uuid_asset'))
-SELECT w.table_name || '.' || w.col || ' ' || w.constraint_type AS key FROM want w WHERE NOT EXISTS (
-  SELECT 1 FROM duckdb_constraints() c WHERE c.table_name = w.table_name
+  ('ingest_file','PRIMARY KEY','hash'), ('lab_qc_report','UNIQUE','uuid_asset')),
+-- The PLAN-23 register keys come first (ord 1; they are conditional on the
+-- table or column existing), so they head the check's sample.
+miss AS (
+-- PLAN-23: the dated mask's and the link tables' keys, once the column exists
+-- (a pre-117 feature_mask has no uuid; the link tables arrive with 117).
+SELECT w.table_name || '.' || w.col || ' ' || w.constraint_type AS key, 1 AS ord
+FROM (VALUES ('feature_mask','PRIMARY KEY','uuid'), ('feature_predecessor','PRIMARY KEY','uuid'),
+             ('feature_flow','PRIMARY KEY','uuid')) w(table_name, constraint_type, col)
+WHERE EXISTS (SELECT 1 FROM duckdb_columns() k WHERE k.table_name = w.table_name AND k.column_name = w.col
+                AND k.database_name = current_database())
+  AND NOT EXISTS (
+    SELECT 1 FROM duckdb_constraints() c WHERE c.database_name = current_database() AND c.table_name = w.table_name
+     AND c.constraint_type = w.constraint_type AND list_contains(c.constraint_column_names, w.col))
+UNION ALL
+SELECT w.table_name || '.' || w.col || ' ' || w.constraint_type AS key, 1 AS ord
+FROM (VALUES ('feature_geometry','PRIMARY KEY','uuid'), ('feature_geometry','FOREIGN KEY','supersedes'))
+  w(table_name, constraint_type, col)
+WHERE EXISTS (SELECT 1 FROM duckdb_tables() t
+              WHERE t.database_name = current_database() AND t.table_name = w.table_name)
+  AND NOT EXISTS (
+    SELECT 1 FROM duckdb_constraints() c WHERE c.database_name = current_database() AND c.table_name = w.table_name
+     AND c.constraint_type = w.constraint_type AND list_contains(c.constraint_column_names, w.col))
+UNION ALL
+SELECT w.table_name || '.' || w.col || ' ' || w.constraint_type AS key, 2 AS ord FROM want w WHERE NOT EXISTS (
+  SELECT 1 FROM duckdb_constraints() c WHERE c.database_name = current_database() AND c.table_name = w.table_name
    AND c.constraint_type = w.constraint_type AND list_contains(c.constraint_column_names, w.col))
 UNION ALL
-SELECT 'ux_sample_identity' AS key
-WHERE NOT EXISTS (SELECT 1 FROM duckdb_indexes() WHERE index_name = 'ux_sample_identity')",
+SELECT 'ux_sample_identity' AS key, 3 AS ord
+WHERE NOT EXISTS (SELECT 1 FROM duckdb_indexes()
+                  WHERE database_name = current_database() AND index_name = 'ux_sample_identity'))
+SELECT key FROM miss ORDER BY ord, key",
        "Constraints and indexes the code relies on still exist (a table rebuild can silently drop them).",
        "migration", "error"),
     # ---- schema markers
@@ -564,8 +844,9 @@ WHERE status IS NULL OR status NOT IN ({review_statuses})
 SELECT 'feature_mask:' || variant AS key, count(*) AS n FROM feature_mask
 WHERE variant NOT IN ({mask_variants}) GROUP BY variant
 UNION ALL SELECT 'analyte_mask:' || variant, count(*) FROM analyte_mask
-WHERE variant NOT IN ({mask_variants}) GROUP BY variant",
-       "Mask variants are registered (core: long, old, gas_report; a deployment adds its own).",
+WHERE variant NOT IN ({analyte_mask_variants}) GROUP BY variant",
+       paste("Mask variants are registered (feature masks: long, gas_report, common;",
+             "analyte masks also long, old, gas_report; a deployment adds its own)."),
        "hourly", "warn"),
     ck("vocab_feature_flow", "
 SELECT uuid AS key, name, flow FROM feature WHERE flow IS NOT NULL AND flow NOT IN ({flows})",
@@ -590,7 +871,7 @@ WHERE source_hash IS NOT NULL AND NOT regexp_full_match(source_hash, '[0-9a-f]{3
 SELECT uuid AS key, tbl, action, actor FROM change_log
 WHERE actor IS NULL OR reason IS NULL OR action IS NULL
    OR action NOT IN ('insert', 'update', 'delete', 'provenance')
-   OR tbl IS NULL OR tbl NOT IN (SELECT table_name FROM duckdb_tables())
+   OR tbl IS NULL OR tbl NOT IN (SELECT table_name FROM duckdb_tables() WHERE database_name = current_database())
    OR (source_hash IS NOT NULL AND NOT regexp_full_match(source_hash, '[0-9a-f]{32}'))",
        "change_log rows carry actor and reason, a known action and table, and xxHash provenance.",
        "on_demand", "warn"),
@@ -622,18 +903,124 @@ UNION ALL SELECT uuid, 'feature_alias' FROM feature_alias WHERE date_start > dat
 UNION ALL SELECT uuid_feature, 'qc_feature' FROM qc_feature WHERE date_start > date_end
 UNION ALL SELECT uuid, 'project' FROM project WHERE date_start > date_end",
        "No transposed validity windows.", "hourly", "error"),
-    # ---- coordinates
-    ck("feature_coords", "
-SELECT uuid AS key, name, lon, lat, geom_wkt FROM feature WHERE NOT coalesce(virtual, false) AND (
-     lon IS NULL OR lat IS NULL OR isnan(lon) OR isnan(lat) OR isinf(lon) OR isinf(lat)
-  OR NOT (lon BETWEEN {bbox_xmin} AND {bbox_xmax} AND lat BETWEEN {bbox_ymin} AND {bbox_ymax}))",
-       "Physical features have finite coordinates, inside the bbox when one is configured.", "hourly", "warn"),
-    ck("feature_geom_matches_lonlat", "
-SELECT uuid AS key, name, lon, lat, geom_wkt FROM feature
-WHERE NOT isnan(lon) AND NOT isnan(lat) AND (geom_wkt IS NULL OR
-  abs(CAST(regexp_extract(geom_wkt, 'POINT \\(([-0-9.eE]+) ', 1) AS DOUBLE) - lon) > 1e-4 OR
-  abs(CAST(regexp_extract(geom_wkt, ' ([-0-9.eE]+)\\)$', 1) AS DOUBLE) - lat) > 1e-4)",
-       "geom_wkt and lon/lat agree to 1e-4 degrees.", "on_demand", "warn")
+    # ---- the site feature register (PLAN-23): positions, lines and areas live in
+    # feature_geometry (EPSG:7856); these replace the retired feature_coords and
+    # feature_geom_matches_lonlat.
+    ck("feature_geometry_wkt_valid", .dbc_feature_geometry_wkt_valid,
+       "Every feature_geometry row (current or not) holds well-formed WKT of a type its role allows.",
+       "hourly", "error"),
+    ck("feature_geometry_in_bbox", .dbc_feature_geometry_in_bbox,
+       "Current feature geometry lies inside the MGA grid range (a point in degrees does not) and inside the configured bbox (EPSG:7856 metres), when one is set.",
+       "hourly", "error"),
+    ck("feature_location_unique", .dbc_register_sql("
+SELECT uuid_feature AS key, count(*) AS n FROM feature_geometry
+WHERE role = 'location' AND superseded IS NULL AND date_end IS NULL
+GROUP BY uuid_feature HAVING count(*) > 1"),
+       "A feature has at most one in-use location (current, with no date_end).", "hourly", "error"),
+    ck("feature_name_canonical_clash", .dbc_feature_name_canonical_clash,
+       "No two features have names that reduce to the same canonical key (upper case, leading zeros dropped); every feature sharing a key is reported.",
+       "hourly", "error"),
+    ck("feature_first_sample", .dbc_feature_first_sample,
+       "Reports features that have just received their first samples (all inserted since params$first_sample_since); virtual features are excluded.",
+       "hourly", "warn"),
+    ck("orphan_feature_geometry", .dbc_register_sql("
+SELECT uuid AS key, uuid_feature FROM feature_geometry
+WHERE uuid_feature NOT IN (SELECT uuid FROM feature)"),
+       "feature_geometry.uuid_feature points at a feature.", "hourly", "error"),
+    ck("feature_geometry_history", .dbc_register_sql("
+SELECT g.uuid AS key, g.supersedes FROM feature_geometry g
+LEFT JOIN feature_geometry p ON p.uuid = g.supersedes
+WHERE (g.supersedes IS NOT NULL AND (p.superseded IS NULL
+         OR p.uuid_feature <> g.uuid_feature OR p.role <> g.role))
+   OR (g.superseded IS NOT NULL AND g.superseded < g.recorded)"),
+       "A correction's predecessor is superseded and has the same feature and role; no row was superseded before it was recorded.",
+       "hourly", "error"),
+    ck("vocab_feature_geometry", .dbc_register_sql(sprintf("
+SELECT uuid AS key, role, quality, source_crs FROM feature_geometry
+WHERE coalesce(role, '') NOT IN (%s) OR coalesce(quality, '') NOT IN (%s)
+   OR NOT (regexp_full_match(coalesce(source_crs, ''), 'EPSG:[0-9]+') OR source_crs = 'unknown')
+   OR trim(coalesce(source, '')) = ''",
+       .dbc_sql_list(.st_geometry_roles), .dbc_sql_list(.st_geometry_qualities))),
+       "feature_geometry role, quality and source_crs are in their vocabularies and source is not blank.",
+       "hourly", "error"),
+    ck("vocab_feature_class", .dbc_vocab_feature_class,
+       "feature.class is NULL or in the feature class vocabulary (params$feature_classes).", "hourly", "warn"),
+    # ---- the register, 17/18 Nov: ended features, class and flow, dated masks and
+    # common names, the predecessor and flow links.
+    ck("feature_class_flow", .dbc_feature_class_flow,
+       "A feature's flow is one its class allows (params$class_flow); a NULL flow and a class with no rule pass.",
+       "hourly", "warn"),
+    ck("feature_sample_after_end", .dbc_register_sql(paste0("
+SELECT s.uuid AS key, f.uuid AS uuid_feature, f.name, f.date_end, fa.name AS alias_name,
+       ", .dbc_sample_day, " AS sample_day
+FROM \"sample\" s JOIN feature_alias fa ON fa.uuid = s.uuid_feature_alias
+JOIN feature f ON f.uuid = fa.uuid_feature
+WHERE f.date_end IS NOT NULL AND ", .dbc_sample_day, " > f.date_end
+ORDER BY s.uuid")),
+       "No sample, through any alias arm, is dated after its feature's date_end (an ended feature takes no samples).",
+       "hourly", "error"),
+    ck("feature_self_arm_end", .dbc_register_sql("
+SELECT DISTINCT f.uuid AS key, f.name, f.date_end, fa.date_end AS self_date_end
+FROM feature f JOIN feature_alias fa ON fa.uuid_feature = f.uuid AND fa.kind = 'self'
+WHERE fa.date_end IS DISTINCT FROM f.date_end
+ORDER BY f.uuid"),
+       "A feature's self alias arm ends with it: an ended feature's self arm has the same date_end, a live feature's none.",
+       "hourly", "warn"),
+    ck("feature_mask_overlap", .dbc_register_sql("
+SELECT a.uuid AS key, a.uuid_feature, a.variant, b.uuid AS other
+FROM feature_mask a JOIN feature_mask b
+  ON a.uuid_feature = b.uuid_feature AND a.variant = b.variant AND a.uuid < b.uuid
+WHERE coalesce(a.date_start, DATE '0001-01-01') <= coalesce(b.date_end, DATE '9999-12-31')
+  AND coalesce(b.date_start, DATE '0001-01-01') <= coalesce(a.date_end, DATE '9999-12-31')
+ORDER BY a.uuid, b.uuid"),
+       "At most one feature_mask row per feature and variant on any date (each overlapping pair reported once).",
+       "hourly", "error"),
+    ck("feature_common_unique", .dbc_feature_common_unique,
+       "A common name is held by one feature at a time and is never another feature's systematic name (by canonical key, ended features included).",
+       "hourly", "error"),
+    ck("feature_common_alias", .dbc_feature_common_alias,
+       "Every common name is also an alias arm of the same feature whose window covers the mask row's.",
+       "hourly", "warn"),
+    ck("orphan_feature_link", .dbc_register_sql("
+SELECT uuid AS key, 'feature_predecessor' AS tbl FROM feature_predecessor
+WHERE uuid_feature NOT IN (SELECT uuid FROM feature) OR uuid_predecessor NOT IN (SELECT uuid FROM feature)
+UNION ALL
+SELECT uuid, 'feature_flow' FROM feature_flow
+WHERE uuid_from NOT IN (SELECT uuid FROM feature) OR uuid_to NOT IN (SELECT uuid FROM feature)"),
+       "feature_predecessor and feature_flow rows point at features at both ends.", "hourly", "error"),
+    ck("feature_predecessor_cycle", .dbc_feature_predecessor_cycle,
+       "No predecessor chain loops (every row on a loop is reported).", "hourly", "error"),
+    ck("feature_predecessor_dates", .dbc_register_sql(.dbc_feature_predecessor_dates_sql),
+       "A predecessor's date_break is not before the predecessor began and falls after its last sample.",
+       "hourly", "warn"),
+    ck("feature_flow_overlap", .dbc_register_sql("
+SELECT a.uuid AS key, a.uuid_from, a.uuid_to, b.uuid AS other
+FROM feature_flow a JOIN feature_flow b
+  ON a.uuid_from = b.uuid_from AND a.uuid_to = b.uuid_to AND a.uuid < b.uuid
+WHERE coalesce(a.date_start, DATE '0001-01-01') <= coalesce(b.date_end, DATE '9999-12-31')
+  AND coalesce(b.date_start, DATE '0001-01-01') <= coalesce(a.date_end, DATE '9999-12-31')
+ORDER BY a.uuid, b.uuid"),
+       "At most one feature_flow link per direction between two features on any date (each overlapping pair reported once).",
+       "hourly", "error"),
+    # `vocab_feature_flow` is the feature.flow check above, so the link vocabulary
+    # check takes the `_link` name.
+    ck("vocab_feature_flow_link", .dbc_register_sql(sprintf("
+SELECT uuid AS key, drive, source FROM feature_flow
+WHERE coalesce(drive, '') NOT IN (%s) OR trim(coalesce(source, '')) = ''", .dbc_sql_list(.st_flow_drives))),
+       "feature_flow.drive is gravity or pumped and source is not blank.", "hourly", "error"),
+    ck("feature_flow_dates", .dbc_register_sql("
+SELECT w.uuid AS key, w.date_start, w.date_end
+FROM feature_flow w JOIN feature a ON a.uuid = w.uuid_from JOIN feature b ON b.uuid = w.uuid_to
+WHERE (w.date_start IS NOT NULL AND ((a.date_start IS NOT NULL AND w.date_start < a.date_start)
+                                  OR (b.date_start IS NOT NULL AND w.date_start < b.date_start)))
+   OR (a.date_end IS NOT NULL AND coalesce(w.date_end, DATE '9999-12-31') > a.date_end)
+   OR (b.date_end IS NOT NULL AND coalesce(w.date_end, DATE '9999-12-31') > b.date_end)
+ORDER BY w.uuid"),
+       "A flow link's window lies inside both ends' lives (an open link to an ended feature runs past it).",
+       "hourly", "warn"),
+    ck("register_comments_present", .dbc_register_comments_present,
+       "Each register table (feature, feature_mask, feature_geometry, feature_predecessor, feature_flow) keeps its table comment.",
+       "migration", "warn")
   )
 }
 

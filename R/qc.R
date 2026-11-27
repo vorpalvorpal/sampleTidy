@@ -686,7 +686,8 @@
 }
 
 # Licence-required pollutants per (feature): data.frame(feature, uuid_analyte,
-# pollutant), from the requirements and points tables and the EPA masks.
+# pollutant, date_start, date_end), from the requirements and points tables and
+# the EPA masks; the dates are the EPA mask row's window (NA = open).
 .qc_licence_required <- function(img, checks) {
   if (is.null(checks$requirements) || is.null(checks$points)) return(NULL)
   req <- .flags_table(checks$requirements, "requirements", c("site", "epa_point", "pollutant"))
@@ -695,16 +696,17 @@
   req <- req[!is.na(req$pollutant) & paste(req$site, req$epa_point) %in% paste(pts$site, pts$epa_point), ,
              drop = FALSE]
   if (nrow(req) == 0) return(NULL)
-  fmap <- DBI::dbGetQuery(img$con, "
-    SELECT f.name AS feature, f.site AS site, trim(fm.name) AS epa_point
+  # Mask rows are dated (PLAN-23): the result carries each row's window.
+  fmap <- DBI::dbGetQuery(img$con, paste0("
+    SELECT f.name AS feature, f.site AS site, trim(fm.name) AS epa_point, ", .st_mask_window_cols(img$con), "
       FROM feature_mask fm JOIN feature f ON f.uuid = fm.uuid_feature
-     WHERE fm.variant = 'EPA' AND fm.name IS NOT NULL AND trim(fm.name) <> ''")
+     WHERE fm.variant = 'EPA' AND fm.name IS NOT NULL AND trim(fm.name) <> ''"))
   amap <- DBI::dbGetQuery(img$con, "
     SELECT uuid_analyte, trim(name) AS pollutant FROM analyte_mask
      WHERE variant = 'EPA' AND name IS NOT NULL AND trim(name) <> ''")
   x <- merge(fmap, req[, c("site", "epa_point", "pollutant")], by = c("site", "epa_point"))
   x <- merge(x, amap, by = "pollutant")
-  unique(x[, c("feature", "uuid_analyte", "pollutant")])
+  unique(x[, c("feature", "uuid_analyte", "pollutant", "date_start", "date_end")])
 }
 
 .flags_holding_time <- function(img, checks, today) {
@@ -763,8 +765,12 @@
     rs <- character(0)
     if (!is.null(lic) && nrow(res)) {
       fld <- paste(a$sample, a$uuid_analyte)[a$kind %in% "field"]
-      need <- res[paste(res$feature, res$uuid_analyte) %in% paste(lic$feature, lic$uuid_analyte) &
-                    !paste(res$sample, res$uuid_analyte) %in% fld, , drop = FALSE]
+      # licence-required on the sample's date: the EPA row's window holds it
+      at_point <- vapply(seq_len(nrow(res)), function(j) {
+        any(lic$feature == res$feature[[j]] & lic$uuid_analyte == res$uuid_analyte[[j]] &
+              .st_in_window(res$date[[j]], lic$date_start, lic$date_end))
+      }, NA)
+      need <- res[at_point & !paste(res$sample, res$uuid_analyte) %in% fld, , drop = FALSE]
       rs <- unique(sprintf("%s for %s", need$feature, need$analyte))
     }
     mname <- x$method_name[[1]]

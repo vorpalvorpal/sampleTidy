@@ -58,8 +58,7 @@ mk_event <- function(results, work_order = "XX1234567", orphan = FALSE) {
 adp_feature <- function(con, uuid, name, date_start = NA, date_end = NA) {
   lit <- function(d) if (is.na(d)) "NULL" else sprintf("DATE '%s'", d)
   DBI::dbExecute(con, sprintf(
-    "INSERT INTO feature (uuid, name, site, flow, matrix, date_start, date_end, lon, lat)
-     VALUES ('%s', '%s', 'T', 'surface', 'water', %s, %s, 150.5, -33.5)",
+    "INSERT INTO feature (uuid, name, site, flow, matrix, date_start, date_end) VALUES ('%s', '%s', 'T', 'surface', 'water', %s, %s)",
     uuid, name, lit(date_start), lit(date_end)))
 }
 

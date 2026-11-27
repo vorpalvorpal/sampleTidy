@@ -69,8 +69,8 @@ register_filing <- function(db = st_config("live_db"), uuid_asset, system, exter
     }
     # asset_filing is ops-schema v10: bring an older DB up to date, as
     # ingest_dir() does on every import (R-22.E precedent: no operator migration).
-    if (!"asset_filing" %in% DBI::dbListTables(con)) ensure_schema(con)
-    if (!"asset_filing" %in% DBI::dbListTables(con)) {
+    if (!"asset_filing" %in% .st_main_tables(con)) ensure_schema(con)
+    if (!"asset_filing" %in% .st_main_tables(con)) {
       .af_abort("The {.field asset_filing} table does not exist although ensure_schema() records ops-schema version 10; the schema_version ladder is damaged.")
     }
     cur <- DBI::dbGetQuery(
@@ -128,7 +128,7 @@ filed_assets <- function(db = st_config("live_db"), system = NULL) {
     con <- st_connect(db, read_only = TRUE)
     on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
   }
-  if (!"asset_filing" %in% DBI::dbListTables(con)) return(.af_empty())
+  if (!"asset_filing" %in% .st_main_tables(con)) return(.af_empty())
   out <- DBI::dbGetQuery(con, sprintf(
     "SELECT %s FROM asset_filing ORDER BY system, filed_at, uuid_asset",
     paste(.af_cols, collapse = ", ")))

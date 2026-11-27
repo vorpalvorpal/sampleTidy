@@ -32,46 +32,53 @@
 .st_test_core_ddl <- list(
   feature = "
     CREATE TABLE feature (
-      -- Column set, order and types mirror the live `feature` table (19 cols;
-      -- pinned by test-fixture-schema.R, 2026-10-25). NOT NULL is declared on
-      -- lon/lat only: live also has name/site NOT NULL, which the fixture does
-      -- not enforce.
+      -- PLAN-23 section 2.1 (the post-migration-117 register shape, 17
+      -- columns, pinned by test-fixture-schema.R). `lon`, `lat` and
+      -- `geom_wkt` are GONE (positions live in `feature_geometry`, read them
+      -- through `v_feature_location`). `class` is new. name and site are NOT
+      -- NULL, as live. This is a LITERAL copy of `.st_core_ddl_feature`,
+      -- kept here so that every test that does not concern the register
+      -- builds on a working fixture; test-feature-register-ddl.R pins that
+      -- the two agree.
       uuid VARCHAR PRIMARY KEY,
-      name VARCHAR,
-      site VARCHAR,
-      -- Live vocabulary (db_checks vocab_feature_flow): groundwater, still,
-      -- seep, flowing. Live matrix values: freshwater, stormwater, leachate,
-      -- air. The seeded rows below predate this and use 'surface'/'water'/
-      -- 'groundwater'; tests that need live-like values set them explicitly.
+      name VARCHAR NOT NULL,
+      site VARCHAR NOT NULL,
+      class VARCHAR,
       flow VARCHAR,
       matrix VARCHAR,
       depth DOUBLE,
       installed_by VARCHAR,
       permanent BOOLEAN,
-      -- TRUE marks a reference (background) site; used by derived products.
       reference BOOLEAN,
-      -- date_start/date_end DO exist live (CONTRACT.md, corrected block) and
-      -- were missing from the test DDL (plan-11 cold review C11). With
-      -- site-narrowing deferred (D9), date_end is the ONLY narrowing rule
-      -- left in R-11.4 - without this column that criterion is unreachable.
       date_start DATE,
       date_end DATE,
       cypher VARCHAR,
       elevation DOUBLE,
       uuid_project VARCHAR,
-      -- lon/lat ARE DOUBLE NOT NULL live (R-11.17); the earlier omission is
-      -- what let a broken add_feature() (missing lon/lat args) stay green.
-      lon DOUBLE NOT NULL,
-      lat DOUBLE NOT NULL,
-      geom_wkt VARCHAR,
       comments VARCHAR,
-      -- `virtual` IS part of the live shape (A67; live default FALSE) - the
-      -- earlier 'TEST-ONLY drift' claim was measured against the dashboard's
-      -- DERIVED copy, not the authoritative DB. Marks a non-physical feature
-      -- (e.g. WEM.data SILO-grid weather stations), which still carry real
-      -- (grid-centre) lon/lat - not a placeholder mechanism.
       virtual BOOLEAN DEFAULT FALSE
-    )",
+    );
+    CREATE INDEX idx_feature_site ON feature(site)",
+  # PLAN-23 section 2.2: one row per drawn piece; no FK to feature.
+  feature_geometry = "
+    CREATE TABLE feature_geometry (
+      uuid         VARCHAR PRIMARY KEY,
+      uuid_feature VARCHAR NOT NULL,
+      role         VARCHAR NOT NULL,
+      geom_wkt     VARCHAR NOT NULL,
+      source       VARCHAR NOT NULL,
+      source_crs   VARCHAR NOT NULL,
+      quality      VARCHAR NOT NULL,
+      date_start   DATE,
+      date_end     DATE,
+      recorded     TIMESTAMP NOT NULL,
+      supersedes   VARCHAR UNIQUE REFERENCES feature_geometry(uuid),
+      superseded   TIMESTAMP,
+      comments     VARCHAR,
+      CHECK (date_start IS NULL OR date_end IS NULL OR date_end >= date_start),
+      CHECK (supersedes IS NULL OR supersedes <> uuid)
+    );
+    CREATE INDEX idx_feature_geometry_feature ON feature_geometry(uuid_feature)",
   feature_alias = "
     CREATE TABLE feature_alias (
       uuid VARCHAR PRIMARY KEY,
@@ -107,12 +114,55 @@
     -- the same string may legitimately map to different features at
     -- different times. Identity is the alias's own uuid.
   ",
+  # PLAN-23 section 2.1 (17/18 Nov revision, D17-64): the DATED mask. A copy
+  # of `.st_core_ddl_feature_mask` EXCEPT for its foreign key to feature: the
+  # seed declares no FKs (helper-db-checks.R's `.dbc_add_fks()` adds this one,
+  # as for analysis/sample/lab_method), so tests that rebuild `feature` (the
+  # pre-117 twin) can drop it. test-feature-register-ddl.R pins that this copy
+  # and the constant agree on everything else.
   feature_mask = "
     CREATE TABLE feature_mask (
-      uuid_feature VARCHAR,
-      variant VARCHAR,
-      name VARCHAR
-    )",
+      uuid         VARCHAR PRIMARY KEY,
+      uuid_feature VARCHAR NOT NULL,
+      variant      VARCHAR NOT NULL,
+      name         VARCHAR,
+      date_start   DATE,
+      date_end     DATE,
+      comments     VARCHAR,
+      CHECK (date_start IS NULL OR date_end IS NULL OR date_end >= date_start)
+    );
+    CREATE INDEX idx_feature_mask_feature ON feature_mask(uuid_feature, variant);
+    CREATE INDEX idx_feature_mask_variant ON feature_mask(variant)",
+  # PLAN-23 section 2.6: the two link tables (no FK, by design), literal copies
+  # of `.st_core_ddl_feature_predecessor` / `.st_core_ddl_feature_flow`.
+  feature_predecessor = "
+    CREATE TABLE feature_predecessor (
+      uuid             VARCHAR PRIMARY KEY,
+      uuid_feature     VARCHAR NOT NULL,
+      uuid_predecessor VARCHAR NOT NULL,
+      date_break       DATE,
+      source           VARCHAR NOT NULL,
+      comments         VARCHAR,
+      CHECK (uuid_feature <> uuid_predecessor)
+    );
+    CREATE INDEX idx_feature_predecessor_feature ON feature_predecessor(uuid_feature);
+    CREATE INDEX idx_feature_predecessor_pred    ON feature_predecessor(uuid_predecessor)",
+  feature_flow = "
+    CREATE TABLE feature_flow (
+      uuid       VARCHAR PRIMARY KEY,
+      uuid_from  VARCHAR NOT NULL,
+      uuid_to    VARCHAR NOT NULL,
+      carries    VARCHAR,
+      drive      VARCHAR NOT NULL,
+      date_start DATE,
+      date_end   DATE,
+      source     VARCHAR NOT NULL,
+      comments   VARCHAR,
+      CHECK (uuid_from <> uuid_to),
+      CHECK (date_start IS NULL OR date_end IS NULL OR date_end >= date_start)
+    );
+    CREATE INDEX idx_feature_flow_from ON feature_flow(uuid_from);
+    CREATE INDEX idx_feature_flow_to   ON feature_flow(uuid_to)",
   analyte = "
     CREATE TABLE analyte (
       uuid VARCHAR PRIMARY KEY,
@@ -236,6 +286,42 @@
     )"
 )
 
+# The pre-117 `feature` shape (19 columns, `lon`/`lat` DOUBLE NOT NULL, `geom_wkt`,
+# no `class`), kept for the schema-guard tests: a database the rebuild
+# (migration 117) has not reached. Used by `local_pre117_db()`
+# (helper-feature-register.R) and by test-fixture-schema.R.
+.st_test_core_ddl_pre117 <- list(
+  feature = "
+    CREATE TABLE feature (
+      uuid VARCHAR PRIMARY KEY,
+      name VARCHAR,
+      site VARCHAR,
+      flow VARCHAR,
+      matrix VARCHAR,
+      depth DOUBLE,
+      installed_by VARCHAR,
+      permanent BOOLEAN,
+      reference BOOLEAN,
+      date_start DATE,
+      date_end DATE,
+      cypher VARCHAR,
+      elevation DOUBLE,
+      uuid_project VARCHAR,
+      lon DOUBLE NOT NULL,
+      lat DOUBLE NOT NULL,
+      geom_wkt VARCHAR,
+      comments VARCHAR,
+      virtual BOOLEAN DEFAULT FALSE
+    )",
+  # The pre-117 (undated, keyless) feature_mask: no uuid, no dates.
+  feature_mask = "
+    CREATE TABLE feature_mask (
+      uuid_feature VARCHAR,
+      variant VARCHAR,
+      name VARCHAR
+    )"
+)
+
 # Indexes that live databases carry once the operator-run migrations have been
 # applied. Kept SEPARATE from `.st_test_core_ddl` rather than appended to the
 # `sample` CREATE TABLE, because they are not part of the table's declaration:
@@ -319,20 +405,63 @@ seed_db <- function(dir = NULL) {
   # live rule rather than an empty branch. It carries a self-alias like every
   # other feature, so a prefix-parsing implementation WOULD auto-resolve the
   # raw 'Q S01' - which is exactly what the B.1 test now forbids.
-  DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix, date_end, lon, lat) VALUES
-    ('f-0001', 'T.S01', 'T', 'surface', 'water', NULL, 150.0001, -33.0001),
-    ('f-0002', 'T.S02', 'T', 'surface', 'water', NULL, 150.0002, -33.0002),
-    ('f-0003', 'T.MW01', 'T', NULL, 'groundwater', NULL, 150.0003, -33.0003),
-    ('f-0004', 'T.S04', 'T', 'surface', 'water', NULL, 150.0004, -33.0004),
-    ('f-0005', 'T.S05', 'T', 'surface', 'water', NULL, 150.0005, -33.0005),
-    ('f-0006', 'T.S06', 'T', 'surface', 'water', DATE '2020-06-30', 150.0006, -33.0006),
-    ('f-0007', 'T.S07', 'T', 'surface', 'water', NULL, 150.0007, -33.0007),
-    ('f-0008', 'TH.S01', 'TH', 'surface', 'water', NULL, 150.1008, -33.1008),
-    ('f-0009', 'TH.MW02A', 'TH', NULL, 'groundwater', NULL, 150.1009, -33.1009),
-    ('f-0010', 'T.G001', 'T', 'surface', 'water', NULL, 150.1010, -33.1010),
-    ('f-0011', 'TH.G01', 'TH', 'surface', 'water', NULL, 150.1011, -33.1011),
-    ('f-0012', 'T.S08', 'T', 'surface', 'water', NULL, 150.1012, -33.1012),
-    ('f-0013', 'Q.S01', 'Z', 'surface', 'water', NULL, 150.1013, -33.1013)")
+  DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, class, flow, matrix, date_end) VALUES
+    ('f-0001', 'T.S01', 'T', NULL, 'surface', 'water', NULL),
+    ('f-0002', 'T.S02', 'T', NULL, 'surface', 'water', NULL),
+    ('f-0003', 'T.MW01', 'T', 'bore', NULL, 'groundwater', NULL),
+    ('f-0004', 'T.S04', 'T', NULL, 'surface', 'water', NULL),
+    ('f-0005', 'T.S05', 'T', NULL, 'surface', 'water', NULL),
+    ('f-0006', 'T.S06', 'T', NULL, 'surface', 'water', DATE '2020-06-30'),
+    ('f-0007', 'T.S07', 'T', NULL, 'surface', 'water', NULL),
+    ('f-0008', 'TH.S01', 'TH', NULL, 'surface', 'water', NULL),
+    ('f-0009', 'TH.MW02A', 'TH', NULL, NULL, 'groundwater', NULL),
+    ('f-0010', 'T.G001', 'T', NULL, 'surface', 'water', NULL),
+    ('f-0011', 'TH.G01', 'TH', NULL, 'surface', 'water', NULL),
+    ('f-0012', 'T.S08', 'T', NULL, 'surface', 'water', NULL),
+    ('f-0013', 'Q.S01', 'Z', NULL, 'surface', 'water', NULL)")
+
+  # PLAN-23 section 3.8: feature_geometry seed, synthetic grid coordinates
+  # near E 300000 / N 6300000 (EPSG:7856), source 'fixture'. One in-use
+  # `location` for every feature except f-0013 (Q.S01), which stays
+  # UNLOCATED. NB each generation of a supersedes chain is its OWN INSERT
+  # statement, oldest first: a predecessor and its successor in one statement
+  # fail with a misleading FK error (PLAN-23 section 2.2 trap).
+  gseed <- function(uuid, feat, role, wkt, rec, date_start = "NULL", date_end = "NULL",
+                    supersedes = "NULL", superseded = "NULL") {
+    DBI::dbExecute(con, sprintf(
+      "INSERT INTO feature_geometry (uuid, uuid_feature, role, geom_wkt, source, source_crs,
+         quality, date_start, date_end, recorded, supersedes, superseded)
+       VALUES ('%s', '%s', '%s', '%s', 'fixture', 'EPSG:7856', 'surveyed', %s, %s,
+               TIMESTAMP '%s', %s, %s)",
+      uuid, feat, role, wkt, date_start, date_end, rec, supersedes, superseded))
+  }
+  # f-0001: a superseded location and its in-use successor (a correction).
+  gseed("g-0001", "f-0001", "location", "POINT (300100.000 6300100.000)", "2026-01-01 00:00:00",
+        superseded = "TIMESTAMP '2026-02-01 00:00:00'")
+  gseed("g-0002", "f-0001", "location", "POINT (300110.000 6300110.000)", "2026-02-01 00:00:00",
+        supersedes = "'g-0001'")
+  gseed("g-0003", "f-0002", "location", "POINT (300200.000 6300200.000)", "2026-01-01 00:00:00")
+  gseed("g-0004", "f-0003", "location", "POINT (300300.000 6300300.000)", "2026-01-01 00:00:00")
+  # f-0004: an end-dated location and its in-use successor (a move on the ground).
+  gseed("g-0005", "f-0004", "location", "POINT (300400.000 6300400.000)", "2026-01-01 00:00:00",
+        date_start = "DATE '2020-01-01'", date_end = "DATE '2022-12-31'")
+  gseed("g-0006", "f-0004", "location", "POINT (300410.000 6300410.000)", "2026-01-01 00:00:00",
+        date_start = "DATE '2023-01-01'")
+  # f-0005: a location, a route and an outline.
+  gseed("g-0007", "f-0005", "location", "POINT (300500.000 6300500.000)", "2026-01-01 00:00:00")
+  gseed("g-0008", "f-0005", "route", "LINESTRING (300500.000 6300500.000, 300550.000 6300550.000)",
+        "2026-01-01 00:00:00")
+  gseed("g-0009", "f-0005", "outline",
+        "POLYGON ((300490 6300490, 300510 6300490, 300510 6300510, 300490 6300510, 300490 6300490))",
+        "2026-01-01 00:00:00")
+  # the rest: one in-use location each (f-0013 deliberately absent).
+  gseed("g-0010", "f-0006", "location", "POINT (300600.000 6300600.000)", "2026-01-01 00:00:00")
+  gseed("g-0011", "f-0007", "location", "POINT (300700.000 6300700.000)", "2026-01-01 00:00:00")
+  gseed("g-0012", "f-0008", "location", "POINT (300800.000 6300800.000)", "2026-01-01 00:00:00")
+  gseed("g-0013", "f-0009", "location", "POINT (300900.000 6300900.000)", "2026-01-01 00:00:00")
+  gseed("g-0014", "f-0010", "location", "POINT (301000.000 6301000.000)", "2026-01-01 00:00:00")
+  gseed("g-0015", "f-0011", "location", "POINT (301100.000 6301100.000)", "2026-01-01 00:00:00")
+  gseed("g-0016", "f-0012", "location", "POINT (301200.000 6301200.000)", "2026-01-01 00:00:00")
 
   # feature_alias. Every feature gets a self-alias (fa-0001..fa-0003,
   # fa-0011..fa-0014; kind = 'self'), uniform with no special case for
@@ -428,14 +557,39 @@ seed_db <- function(dir = NULL) {
     ('fa-0024', 'f-0013', 'Q.S01', 'q.s01', 'self', 0, TRUE,
      TIMESTAMP '2025-01-01 00:00:00', TIMESTAMP '2025-01-01 00:00:00', NULL)")
 
+  # PLAN-23 3.8 (2.5 rule 5): the common name T.SN01 MOVES between two features
+  # on a fixed date by dated rows - f-0002 (T.S02) holds it until 2024-12-31,
+  # f-0007 (T.S07) from 2025-01-01. Each holder has a historical_code alias arm
+  # of the same key whose window covers its mask row's (feature_common_alias),
+  # and the two arms are disjoint (alias_window_ambiguous).
+  DBI::dbExecute(con, "INSERT INTO feature_alias
+    (uuid, uuid_feature, name, alias_key, kind, n_seen, auto_assign, confirmed_by, date_start, date_end) VALUES
+    ('fa-0025', 'f-0002', 'T.SN01', 't.sn01', 'historical_code', 0, TRUE, NULL, NULL, DATE '2024-12-31'),
+    ('fa-0026', 'f-0007', 'T.SN01', 't.sn01', 'historical_code', 0, TRUE, NULL, DATE '2025-01-01', NULL)")
+
   # feature_mask (f-0001/long is an alias; f-0002/epa and f-0003/long both
   # resolve the string "AMBIG" - the deliberate ambiguity fixture). Untouched
   # by plan 11: R-11.4 stops joining feature_mask for candidate matching, but
   # the table and these rows stay for other plans' pre-existing tests.
-  DBI::dbExecute(con, "INSERT INTO feature_mask (uuid_feature, variant, name) VALUES
-    ('f-0001', 'long', 'Test Surface 01'),
-    ('f-0002', 'epa', 'AMBIG'),
-    ('f-0003', 'long', 'AMBIG')")
+  # PLAN-23 (D17-64): mask rows have their own uuid and a date window (NULL
+  # ends open); fm-0004/fm-0005 are the common-name move above.
+  DBI::dbExecute(con, "INSERT INTO feature_mask (uuid, uuid_feature, variant, name, date_start, date_end) VALUES
+    ('fm-0001', 'f-0001', 'long', 'Test Surface 01', NULL, NULL),
+    ('fm-0002', 'f-0002', 'epa', 'AMBIG', NULL, NULL),
+    ('fm-0003', 'f-0003', 'long', 'AMBIG', NULL, NULL),
+    ('fm-0004', 'f-0002', 'common', 'T.SN01', NULL, DATE '2024-12-31'),
+    ('fm-0005', 'f-0007', 'common', 'T.SN01', DATE '2025-01-01', NULL)")
+
+  # PLAN-23 2.6 / 3.8: one row in each link table. T.S07 (f-0007) continues the
+  # record of the ended T.S06 (f-0006, which has no samples) from 2020-07-01;
+  # water goes from T.S05 to T.S07 by gravity from 2024-01-01 (both ends have
+  # open windows, so feature_flow_dates has nothing to report).
+  DBI::dbExecute(con, "INSERT INTO feature_predecessor
+    (uuid, uuid_feature, uuid_predecessor, date_break, source, comments) VALUES
+    ('fp-0001', 'f-0007', 'f-0006', DATE '2020-07-01', 'fixture', NULL)")
+  DBI::dbExecute(con, "INSERT INTO feature_flow
+    (uuid, uuid_from, uuid_to, carries, drive, date_start, date_end, source, comments) VALUES
+    ('ff-0001', 'f-0005', 'f-0007', 'stormwater', 'gravity', DATE '2024-01-01', NULL, 'fixture', NULL)")
 
   # REVISED 2026-07-24 (PLAN-15 E.1): `feature_alias` gains `date_start DATE`
   # and `date_end DATE` (both NULLABLE, unbounded on NULL) in the CREATE

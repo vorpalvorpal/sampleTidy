@@ -50,7 +50,10 @@
   # PLAN-20 phase 1 (ops-schema v10): external filing records.
   "asset_filing",
   # PLAN-21 phase (a) (ops-schema v11): the database's own metadata.
-  "db_meta"
+  "db_meta",
+  # PLAN-23 (migration 117): one row per drawn piece of a feature (R/feature-geometry.R),
+  # and the predecessor and flow links between features (R/feature-register.R).
+  "feature_geometry", "feature_predecessor", "feature_flow"
 )
 
 #' @keywords internal
@@ -358,8 +361,10 @@ db_append <- function(con, table, df, actor, reason, source_hash = NA) {
 #'
 #' Alternate/composite key: `key` (PLAN-14 R-14.1) --------------------------
 #'
-#' `analyte_mask`/`feature_mask` have no `uuid` column - they are keyed by
-#' `(uuid_analyte, variant)` / `(uuid_feature, variant)`. `db_update()` and
+#' `analyte_mask` has no `uuid` column - it is keyed by
+#' `(uuid_analyte, variant)`; so was `feature_mask` before PLAN-23's migration
+#' 117 gave it a `uuid` (its writes are keyed by that now; the composite path
+#' stays for back-compat). `db_update()` and
 #' `db_delete()` accept EITHER the original scalar `uuid` (back-compat: every
 #' existing caller is byte-for-byte unchanged - internally this is just
 #' `key = list(uuid = uuid)`) OR a named-list `key` giving the WHERE as the
@@ -570,6 +575,10 @@ db_delete <- function(con, table, uuid = NULL, actor, reason, key = NULL) {
 #' (A16) - human-callable, no `con` argument. Thin wrapper over `db_append()`
 #' with a fresh `uuid::UUIDgenerate()` for the new row.
 #'
+#' A feature carries no coordinates (PLAN-23): its position is a
+#' `feature_geometry` row, added afterwards with [add_feature_geometry()]. A
+#' feature with no position yet simply has none.
+#'
 #' PLAN-15 F.9/S-15.8: post-001, `sample.uuid_feature_alias` is the ONLY path
 #' from a sample to a feature, and migration 001 gave every then-existing
 #' feature a `kind = 'self'` alias. A feature created by this function alone
@@ -592,31 +601,75 @@ db_delete <- function(con, table, uuid = NULL, actor, reason, key = NULL) {
 #' `auto_assign` alone (`R/reconcile.R:388-398`); it never reads
 #' `confirmed_by` at all.
 #'
+#' Refused (`sampletidy_error`, nothing written): a name with no letter or
+#' digit; a `class` outside the vocabulary (`.st_feature_classes` plus
+#' `st_config("feature_classes_extra")`); a name whose canonical key (upper
+#' case, leading zeros dropped from each digit run) equals that of an existing
+#' feature, ended ones included (`X.S1` against `X.S01`, but `X.MW102` does not
+#' clash with `X.MW12`); a name whose alias key an existing alias already
+#' holds; `lon`, `lat` or `geom_wkt` (coordinates are gone: see
+#' [add_feature_geometry()]) or any other extra argument; and a database that
+#' migration 117 has not reached.
+#'
 #' @param name feature name.
 #' @param site site name.
-#' @param lon longitude, `DOUBLE NOT NULL` on the live schema.
-#' @param lat latitude, `DOUBLE NOT NULL` on the live schema.
+#' @param class what kind of thing the feature is: one of the feature class
+#'   vocabulary (for example `"bore"`, `"pump"`, `"tank"`), or `NA` when not
+#'   yet classified. A deployment adds its own through
+#'   `st_config("feature_classes_extra")`.
 #' @param flow flow type (e.g. `"surface"`), optional.
 #' @param matrix sample matrix (e.g. `"water"`), optional.
-#' @param geom_wkt optional WKT geometry string.
+#' @param date_start the date the feature came into being, optional (`Date`).
 #' @param virtual optional logical flag, defaults to `FALSE`.
+#' @param ... must be empty. Passing `lon`, `lat` or `geom_wkt` aborts naming
+#'   [add_feature_geometry()]; anything else aborts too.
 #' @param actor who is making this change.
 #' @param reason free-text reason, stored on the `change_log` row.
 #' @return the new feature's uuid, invisibly.
+#' @seealso [add_feature_geometry()]
 #' @export
-add_feature <- function(name, site, lon, lat, flow = NA_character_,
-                         matrix = NA_character_, geom_wkt = NA_character_,
-                         virtual = FALSE, actor, reason) {
+add_feature <- function(name, site, class = NA_character_, flow = NA_character_,
+                        matrix = NA_character_, date_start = as.Date(NA),
+                        virtual = FALSE, ..., actor, reason) {
   checkmate::assert_string(name)
   checkmate::assert_string(site)
-  if (missing(lon) || missing(lat)) {
+  dots <- list(...)
+  if (length(dots) > 0L) {
+    nm <- names(dots)
+    if (is.null(nm)) nm <- rep("", length(dots))
+    if (any(nm %in% c("lon", "lat", "geom_wkt"))) {
+      cli::cli_abort(
+        paste0(
+          "add_feature(): a feature carries no coordinates. Add its position with ",
+          "{.fn add_feature_geometry} (EPSG:7856 WKT) once the feature exists."
+        ),
+        class = "sampletidy_error"
+      )
+    }
     cli::cli_abort(
-      "add_feature() requires both {.arg lon} and {.arg lat}.",
+      "add_feature(): unused argument{?s} {.val {ifelse(nzchar(nm), nm, '<unnamed>')}}.",
       class = "sampletidy_error"
     )
   }
-  checkmate::assert_number(lon)
-  checkmate::assert_number(lat)
+  checkmate::assert_string(class, na.ok = TRUE)
+  checkmate::assert_string(flow, na.ok = TRUE)
+  checkmate::assert_string(matrix, na.ok = TRUE)
+  checkmate::assert_date(date_start, len = 1L, any.missing = TRUE)
+  checkmate::assert_flag(virtual)
+  checkmate::assert_string(actor)
+  checkmate::assert_string(reason)
+  if (!is.na(class)) {
+    extra <- st_config("feature_classes_extra")
+    if (!class %in% c(.st_feature_classes, extra)) {
+      cli::cli_abort(
+        paste0(
+          "add_feature(): {.arg class} {.val {class}} is not in the feature class ",
+          "vocabulary ({.val {c(.st_feature_classes, extra)}})."
+        ),
+        class = "sampletidy_error"
+      )
+    }
+  }
   new_uuid <- uuid::UUIDgenerate()
   key <- .rc_feature_key(name)
   # An empty/whitespace-only (or all-punctuation) `name` normalises to NA
@@ -637,8 +690,8 @@ add_feature <- function(name, site, lon, lat, flow = NA_character_,
     )
   }
   row <- tibble::tibble(
-    uuid = new_uuid, name = name, site = site, lon = lon, lat = lat,
-    flow = flow, matrix = matrix, geom_wkt = geom_wkt, virtual = virtual
+    uuid = new_uuid, name = name, site = site, class = class,
+    flow = flow, matrix = matrix, date_start = date_start, virtual = virtual
   )
   now <- Sys.time()
   alias_row <- tibble::tibble(
@@ -657,7 +710,32 @@ add_feature <- function(name, site, lon, lat, flow = NA_character_,
   )
   with_db_write(
     function(con) {
+      # PLAN-23: a database migration 117 has not reached still has `lon`/`lat`
+      # NOT NULL, so the insert below would die on a raw NOT NULL error.
+      .st_require_feature_register(con, "add_feature()")
       db_transaction(con, function(con) {
+        # PLAN-23 3.2: two names that reduce to the same canonical key
+        # (`X.S1` / `X.S01`, `X.MW2A` / `X.MW02A`) are the same point to the
+        # label matcher's structural rules. Every feature counts, ended ones
+        # included.
+        existing <- DBI::dbGetQuery(con, "SELECT name FROM feature")
+        hit <- existing$name[.st_feature_name_key(existing$name) == .st_feature_name_key(name)]
+        if (length(hit) > 0L) {
+          clash_with <- hit[[1]]
+          # cli reads a leading `.` in `{...}` as an inline class, so the key
+          # is computed here, not inside the template. Named `canon_key` so
+          # it cannot be confused with the alias `key` used below.
+          canon_key <- .st_feature_name_key(name)
+          cli::cli_abort(
+            paste0(
+              "add_feature(): name {.val {name}} reduces to the same canonical key ",
+              "({.val {canon_key}}) as the existing feature ",
+              "{.val {clash_with}}. Two names for one point would be ambiguous; use ",
+              "the existing feature or choose a distinct name."
+            ),
+            class = "sampletidy_error"
+          )
+        }
         # Phase-7b round-2 item 10: a name whose `.rc_feature_key()` is
         # ALREADY carried by an existing feature_alias row would mint a
         # SECOND 'self'/auto_assign=TRUE arm sharing that key -

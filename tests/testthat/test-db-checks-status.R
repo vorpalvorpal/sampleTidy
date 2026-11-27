@@ -45,16 +45,15 @@ test_that("import_status(): error-severity failures are Problems; warn failures 
     # error: dup_asset_hash
     dbc_exec(con, "INSERT INTO asset (uuid, name, uuid_project, hash) VALUES
                    ('as-x1', 'a.pdf', 'p-0001', ?), ('as-x2', 'b.pdf', 'p-0001', ?)", dbc_hex(904), dbc_hex(904))
-    # warn x2: vocab_feature_flow, feature_coords
+    # warn x2: vocab_feature_flow, vocab_feature_class (feature_coords is retired, PLAN-23)
     DBI::dbExecute(con, "UPDATE feature SET flow = 'river' WHERE uuid = 'f-0002'")
-    DBI::dbExecute(con, "UPDATE feature SET lon = 'NaN'::DOUBLE, lat = 'NaN'::DOUBLE, geom_wkt = 'POINT EMPTY'
-                         WHERE uuid = 'f-0003'")
+    DBI::dbExecute(con, "UPDATE feature SET class = 'widget' WHERE uuid = 'f-0003'")
   })
   st <- dbc_status(db)
 
   jp <- vapply(st$json$problems, as.character, "")
   expect_true(any(grepl("dup_asset_hash", jp, fixed = TRUE)))
-  expect_false(any(grepl("vocab_feature_flow|feature_coords", jp)))
+  expect_false(any(grepl("vocab_feature_flow|vocab_feature_class", jp)))
 
   jc <- dbc_json_checks(st$json)
   sev <- vapply(st$json$db_checks, function(r) as.character(r$severity), "")
@@ -62,7 +61,7 @@ test_that("import_status(): error-severity failures are Problems; warn failures 
   expect_setequal(jc$name, dbc_hourly_names)
   expect_identical(jc$status[jc$name == "dup_asset_hash"], "fail")
   expect_identical(jc$status[jc$name == "vocab_feature_flow"], "fail")
-  expect_identical(jc$status[jc$name == "feature_coords"], "fail")
+  expect_identical(jc$status[jc$name == "vocab_feature_class"], "fail")
   rec <- st$json$db_checks[[which(jc$name == "dup_asset_hash")]]
   expect_equal(as.integer(rec$n), 1L)
   expect_identical(as.character(rec$severity), "error")

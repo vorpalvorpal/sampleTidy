@@ -52,15 +52,15 @@ fl_feature <- function(con, name, site = sub("\\..*$", "", name), matrix = "fres
   u <- fl_one(con, "SELECT uuid FROM feature WHERE name = ?", name)
   if (!is.na(u)) return(u)
   u <- fl_uuid()
-  DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, matrix, lon, lat)
-                       VALUES (?, ?, ?, ?, 150, -33.7)",
+  DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, matrix) VALUES (?, ?, ?, ?)",
                  params = list(u, name, site, matrix))
   DBI::dbExecute(con, "INSERT INTO feature_alias (uuid, uuid_feature, name, alias_key, kind, auto_assign)
                        VALUES (?, ?, ?, ?, 'self', TRUE)",
                  params = list(fl_uuid(), u, name, tolower(name)))
   if (!is.null(epa)) {
-    DBI::dbExecute(con, "INSERT INTO feature_mask (uuid_feature, variant, name) VALUES (?, 'EPA', ?)",
-                   params = list(u, as.character(epa)))
+    # PLAN-23: mask rows have their own uuid (and an open date window here).
+    DBI::dbExecute(con, "INSERT INTO feature_mask (uuid, uuid_feature, variant, name) VALUES (?, ?, 'EPA', ?)",
+                   params = list(fl_uuid(), u, as.character(epa)))
   }
   u
 }

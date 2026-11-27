@@ -11,7 +11,7 @@
   }
 }
 
-.dm_has_table <- function(con) "db_meta" %in% DBI::dbListTables(con)
+.dm_has_table <- function(con) "db_meta" %in% .st_main_tables(con)
 
 #' Read, write and list the database's own metadata
 #'

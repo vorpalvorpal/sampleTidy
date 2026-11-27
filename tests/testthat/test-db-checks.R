@@ -50,7 +50,7 @@ test_that("db_check(): rejects a bad tier, a bad severity, an empty name and a n
 
 # ---- db_checks_core() / db_checks_params() ---------------------------------------------------
 
-test_that("db_checks_core(): the 46 generic checks, uniquely named, with their pinned tiers and severities", {
+test_that("db_checks_core(): the generic checks, uniquely named, with their pinned tiers and severities (PLAN-23: nine register checks added, two retired)", {
   core <- db_checks_core()
   expect_s3_class(core, "data.frame")
   expect_true(all(c("name", "sql", "description", "tier", "severity") %in% names(core)))
@@ -67,15 +67,24 @@ test_that("db_checks_core(): the 46 generic checks, uniquely named, with their p
   expect_setequal(names(sev_of)[sev_of == "warn"], dbc_warn_names)
   expect_setequal(names(sev_of)[sev_of == "error"], setdiff(dbc_all_names, dbc_warn_names))
   expect_true(all(nzchar(core$description)))
+  # R-23.18: the retired pair is gone, the nine new ones are in.
+  expect_false(any(dbc_retired_names %in% core$name))
+  expect_true(all(c("feature_geometry_wkt_valid", "feature_geometry_in_bbox", "feature_location_unique",
+                    "feature_name_canonical_clash", "feature_first_sample", "orphan_feature_geometry",
+                    "feature_geometry_history", "vocab_feature_geometry", "vocab_feature_class") %in% core$name))
 })
 
 test_that("db_checks_params(): defaults, and named overrides", {
   p <- db_checks_params()
   expect_type(p, "list")
-  expect_true(all(c("min_date", "bbox", "tz", "mask_variants") %in% names(p)))
+  expect_true(all(c("min_date", "bbox", "tz", "mask_variants",
+                    "first_sample_since", "feature_classes") %in% names(p)))  # PLAN-23 3.5
+  expect_null(p$first_sample_since)
+  expect_identical(p$feature_classes, .st_feature_classes)
   expect_null(p$bbox)
   expect_identical(p$tz, "Australia/Sydney")
-  expect_setequal(p$mask_variants, c("long", "old", "gas_report"))
+  # PLAN-23 (D17-75, D17-77): `old` leaves the core variants, `common` arrives.
+  expect_setequal(p$mask_variants, c("long", "gas_report", "common"))
   expect_length(p$min_date, 1L)
 
   b <- c(xmin = 150, ymin = -34, xmax = 151, ymax = -33)
@@ -132,13 +141,15 @@ for (cs in dbc_violation_cases) local({
     params <- do.call(db_checks_params, if (is.null(cs$params)) list() else cs$params)
     res <- dbc_with(db, function(con) {
       cs$seed(con)
-      db_checks(con, tier = "all", params = params)
+      # a case may name a narrower tier (PLAN-23: feature_sample_after_end,
+      # whose offender the on_demand sample_in_feature_window also reports)
+      db_checks(con, tier = if (is.null(cs$tier)) "all" else cs$tier, params = params)
     })
-    dbc_expect_only(res, cs$check, cs$key)
+    dbc_expect_only(res, cs$check, cs$key, n = dbc_violation_n(cs))
   })
 })
 
-test_that("the bbox case passes when no bbox is configured (finite coordinates suffice)", {
+test_that("the bbox case passes when no bbox is configured (only the grid range applies; PLAN-23: bbox is EPSG:7856 metres)", {
   cs <- Filter(function(x) !is.null(x$params$bbox), dbc_violation_cases)[[1]]
   db <- dbc_db()
   res <- dbc_with(db, function(con) {
@@ -313,9 +324,10 @@ test_that("db_checks(params): tz sets the day sample.date and sample.datetime mu
 test_that("db_checks(params): mask_variants registers a deployment's own variant", {
   db <- dbc_db()
   dbc_with(db, function(con) {
-    DBI::dbExecute(con, "INSERT INTO feature_mask VALUES ('f-0002', 'epa', 'Licence point 1')")
+    DBI::dbExecute(con, "INSERT INTO feature_mask (uuid, uuid_feature, variant, name)
+                         VALUES ('fm-lic', 'f-0001', 'epa', 'Licence point 1')")
     expect_identical(dbc_row(db_checks(con), "vocab_mask_variant")$status, "fail")
-    p <- db_checks_params(mask_variants = c("long", "old", "gas_report", "epa"))
+    p <- db_checks_params(mask_variants = c("long", "gas_report", "common", "epa"))
     expect_identical(dbc_row(db_checks(con, params = p), "vocab_mask_variant")$status, "pass")
   })
 })

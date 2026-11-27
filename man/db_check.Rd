@@ -10,8 +10,7 @@ db_check(name, sql, description, tier = "hourly", severity = "error")
 \item{name}{a unique check name.}
 
 \item{sql}{either one SQL string, in which \code{{param}} tokens are filled from
-\code{\link[=db_checks_params]{db_checks_params()}} (\code{{min_date}}, \code{{tz}}, \code{{mask_variants}},
-\code{{bbox_xmin}}/\code{{bbox_ymin}}/\code{{bbox_xmax}}/\code{{bbox_ymax}}), or a function
+\code{\link[=db_checks_params]{db_checks_params()}} (\code{{min_date}}, \code{{tz}}, \code{{mask_variants}}), or a function
 \verb{function(con, params)} returning a data.frame with a \code{key} column.}
 
 \item{description}{what the check asserts.}

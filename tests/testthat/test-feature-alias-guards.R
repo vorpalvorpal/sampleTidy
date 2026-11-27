@@ -254,8 +254,8 @@ test_that("Phase-7b round-3 A5 regression guard: an E.8-shaped torn trail (a mer
   con <- setup$con
   withr::defer(DBI::dbDisconnect(con, shutdown = TRUE))
 
-  DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix, lon, lat) VALUES
-    ('f-torn-e8', 'Z.TORNE8A5', 'Z', 'surface', 'water', 150.9860, -33.9860)")
+  DBI::dbExecute(con, "INSERT INTO feature (uuid, name, site, flow, matrix) VALUES
+    ('f-torn-e8', 'Z.TORNE8A5', 'Z', 'surface', 'water')")
   DBI::dbExecute(con, "INSERT INTO feature_alias
     (uuid, uuid_feature, name, alias_key, kind, n_seen, auto_assign,
      first_seen, last_seen, confirmed_by) VALUES

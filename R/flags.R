@@ -554,10 +554,12 @@
   req$water <- !paste(req$site, req$epa_point) %in% own_round
 
   # EPA point -> features, pollutant -> analytes (as the EPA return script).
-  fmap <- DBI::dbGetQuery(img$con, "
-    SELECT f.name AS feature, f.site AS site, trim(fm.name) AS epa_point
+  # Mask rows are dated (PLAN-23): a feature holds a point number only on the
+  # dates of its row's window, so the map carries the window.
+  fmap <- DBI::dbGetQuery(img$con, paste0("
+    SELECT f.name AS feature, f.site AS site, trim(fm.name) AS epa_point, ", .st_mask_window_cols(img$con), "
       FROM feature_mask fm JOIN feature f ON f.uuid = fm.uuid_feature
-     WHERE fm.variant = 'EPA' AND fm.name IS NOT NULL AND trim(fm.name) <> ''")
+     WHERE fm.variant = 'EPA' AND fm.name IS NOT NULL AND trim(fm.name) <> ''"))
   amap <- DBI::dbGetQuery(img$con, "
     SELECT uuid_analyte, trim(name) AS pollutant FROM analyte_mask
      WHERE variant = 'EPA' AND name IS NOT NULL AND trim(name) <> ''")
@@ -586,7 +588,8 @@
       site <- cand$site[[k]]
       d <- cand$date[[k]]
       m <- cand$ym[[k]]
-      points <- fmap$epa_point[fmap$feature == f & fmap$site %in% site]
+      points <- fmap$epa_point[fmap$feature == f & fmap$site %in% site &
+                                 .st_in_window(d, fmap$date_start, fmap$date_end)]
       r <- req[req$site %in% site & req$epa_point %in% points & req$water == water, , drop = FALSE]
       if (nrow(r) == 0) next
       r <- r[!duplicated(paste(r$pollutant, r$frequency)), , drop = FALSE]

@@ -11,12 +11,24 @@ db_checks_params(...)
 \itemize{
 \item \code{min_date}: samples dated before this are implausible (default
 \code{"1980-01-01"});
-\item \code{bbox}: \code{c(xmin, ymin, xmax, ymax)} that physical features must lie
-in, or \code{NULL} (default) for no box - finite coordinates suffice;
+\item \code{bbox}: \code{c(xmin, ymin, xmax, ymax)} in EPSG:7856 metres that current
+feature geometry must lie in (read by \code{feature_geometry_in_bbox} only),
+or \code{NULL} (default): then only the MGA grid range applies;
+\item \code{first_sample_since}: \code{feature_first_sample} reports features whose
+samples were all inserted at or after this time. \code{NULL} (default)
+means 14 days before the run; otherwise a \code{POSIXct};
+\item \code{feature_classes}: the \code{feature.class} vocabulary
+\code{vocab_feature_class} accepts (default the core one; a deployment
+extends it);
 \item \code{tz}: the time zone whose calendar day \code{sample.date} names (default
 configured time zone, \code{st_config("timezone")});
-\item \code{mask_variants}: the registered mask variants (default the core
-\code{long}, \code{old}, \code{gas_report}; a deployment adds its own);
+\item \code{class_flow}: a named list from \code{feature.class} to the non-NULL
+\code{feature.flow} values that class allows, read by \code{feature_class_flow}
+(default the core rule; a class not listed is unconstrained);
+\item \code{mask_variants}: the registered feature mask variants (default the core
+\code{long}, \code{gas_report}, \code{common}; a deployment adds its own, such as
+\code{EPA}). On \code{analyte_mask} the check also accepts \code{long}, \code{old} and
+\code{gas_report};
 \item \code{receipt_max_temp_c}, \code{receipt_lookback_days}: the SRN receipt
 temperature above which \code{lab_receipt_warm} warns (default 6), and how
 many days back it looks (default 90).
